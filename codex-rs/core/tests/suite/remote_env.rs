@@ -7,6 +7,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -21,6 +22,7 @@ use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -46,6 +48,22 @@ async fn unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
             result.is_ok(),
             "unified exec should enable for test: {result:?}",
         );
+    });
+    builder.build_remote_aware(server).await
+}
+
+async fn io_tool_test(server: &wiremock::MockServer) -> Result<TestCodex> {
+    let mut builder = test_codex().with_config(|config| {
+        let mut model_catalog =
+            bundled_models_response().expect("bundled models.json should parse");
+        let model = model_catalog
+            .models
+            .iter_mut()
+            .find(|model| model.slug == "gpt-5.4")
+            .expect("gpt-5.4 exists in bundled models.json");
+        model.experimental_supported_tools = vec!["io".to_string()];
+        config.model = Some("gpt-5.4".to_string());
+        config.model_catalog = Some(model_catalog);
     });
     builder.build_remote_aware(server).await
 }
@@ -242,6 +260,105 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn io_read_file_routes_to_selected_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let test = io_tool_test(&server).await?;
+    let local_cwd = TempDir::new()?;
+    fs::write(local_cwd.path().join("marker.txt"), "local-routing")?;
+    let local_selection = TurnEnvironmentSelection {
+        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: local_cwd.path().abs(),
+    };
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-io-routing-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    test.fs()
+        .create_directory(
+            &remote_cwd,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &remote_cwd.join("marker.txt"),
+            b"remote-routing".to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let call_id = "call-io-read-file";
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-io-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    "io",
+                    "read_file",
+                    &serde_json::to_string(&json!({
+                        "path": "env://current/marker.txt",
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    }))?,
+                ),
+                ev_completed("resp-io-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-io-2"),
+                ev_assistant_message("msg-io-1", "done"),
+                ev_completed("resp-io-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn_with_environments(
+        "read remote marker through io",
+        Some(vec![
+            local_selection,
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd.clone(),
+            },
+        ]),
+    )
+    .await?;
+
+    let output = response_mock
+        .function_call_output_text(call_id)
+        .with_context(|| format!("missing function_call_output for {call_id}"))?;
+    assert!(
+        output.contains("remote-routing"),
+        "unexpected io output: {output}",
+    );
+    assert!(
+        !output.contains("local-routing"),
+        "io read should not route to local: {output}",
     );
 
     test.fs()

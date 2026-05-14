@@ -3,6 +3,7 @@ use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::goal_spec::create_create_goal_tool;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
+use crate::tools::handlers::io_spec::IO_NAMESPACE;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
@@ -227,6 +228,68 @@ fn exec_command_spec_includes_environment_id_only_for_multiple_selected_environm
         "exec_command",
         /*expected_present*/ true,
     );
+}
+
+#[test]
+fn io_namespace_registers_for_experimental_supported_tool() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools = vec!["io".to_string()];
+    let available_models = Vec::new();
+    let features = Features::with_defaults();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_environment_mode(ToolEnvironmentMode::Multiple);
+
+    let (tools, registry) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_eq!(
+        namespace_function_names(&tools, IO_NAMESPACE),
+        vec![
+            "read_file",
+            "write_file",
+            "edit_file",
+            "create_directory",
+            "list_directory",
+            "get_file_info",
+            "list_allowed_directories",
+        ]
+    );
+    for name in [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "list_directory",
+        "get_file_info",
+        "list_allowed_directories",
+    ] {
+        assert!(
+            registry.has_handler(&ToolName::namespaced(IO_NAMESPACE, name)),
+            "io handler {name} should be registered"
+        );
+    }
+
+    let read_file = find_namespace_function_tool(&tools, IO_NAMESPACE, "read_file");
+    let (read_file_properties, _) = expect_object_schema(&read_file.parameters);
+    assert!(read_file_properties.contains_key("environment_id"));
+
+    let list_allowed =
+        find_namespace_function_tool(&tools, IO_NAMESPACE, "list_allowed_directories");
+    let (list_allowed_properties, _) = expect_object_schema(&list_allowed.parameters);
+    assert!(list_allowed_properties.contains_key("environment_id"));
 }
 
 #[test]

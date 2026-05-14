@@ -8,6 +8,7 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::IoToolHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::LocalShellHandler;
@@ -27,6 +28,10 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::io::IoToolKind;
+use crate::tools::handlers::io_spec::IO_EXPERIMENTAL_TOOL;
+use crate::tools::handlers::io_spec::IoToolOptions;
+use crate::tools::handlers::io_spec::create_io_tool_namespace;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -267,6 +272,27 @@ pub fn build_tool_registry_builder(
         .any(|tool| tool == "test_sync_tool")
     {
         builder.register_handler(Arc::new(TestSyncHandler));
+    }
+
+    if config.environment_mode.has_environment()
+        && config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == IO_EXPERIMENTAL_TOOL)
+    {
+        let include_environment_id =
+            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
+        for kind in IoToolKind::ALL {
+            builder.register_handler(Arc::new(IoToolHandler::new(kind)));
+        }
+        if config.namespace_tools {
+            builder.push_spec(
+                create_io_tool_namespace(IoToolOptions {
+                    include_environment_id,
+                }),
+                /*supports_parallel_tool_calls*/ false,
+            );
+        }
     }
 
     if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
