@@ -4,6 +4,7 @@ mod macos;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
+use crate::ProfileV2Name;
 use crate::cloud_requirements::CloudRequirementsLoader;
 use crate::config_requirements::ConfigRequirementsToml;
 use crate::config_requirements::ConfigRequirementsWithSources;
@@ -228,7 +229,7 @@ pub async fn load_config_layers_state(
             load_user_config_layer(
                 fs,
                 &active_user_file,
-                active_user_profile,
+                active_user_profile.as_ref(),
                 ignore_user_config,
                 strict_config,
             )
@@ -366,10 +367,11 @@ pub async fn load_config_layers_state(
 async fn load_user_config_layer(
     fs: &dyn ExecutorFileSystem,
     user_file: &AbsolutePathBuf,
-    profile: Option<String>,
+    profile: Option<&ProfileV2Name>,
     ignore_user_config: bool,
     strict_config: bool,
 ) -> io::Result<ConfigLayerEntry> {
+    let profile = profile.map(ToString::to_string);
     if ignore_user_config {
         return Ok(ConfigLayerEntry::new(
             ConfigLayerSource::User {

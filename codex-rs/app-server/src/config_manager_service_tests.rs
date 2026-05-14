@@ -466,7 +466,7 @@ async fn write_value_defaults_to_selected_user_config_path() {
         LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml"));
     loader_overrides.user_config_path =
         Some(AbsolutePathBuf::from_absolute_path(&selected_path).expect("selected config path"));
-    loader_overrides.user_config_profile = Some("work".to_string());
+    loader_overrides.user_config_profile = Some("work".parse().expect("profile-v2 name"));
     let service = ConfigManager::new_for_tests(
         tmp.path().to_path_buf(),
         vec![],
@@ -506,7 +506,7 @@ async fn load_default_config_preserves_selected_user_config_path_after_load_erro
     let mut loader_overrides =
         LoaderOverrides::with_managed_config_path_for_tests(tmp.path().join("managed_config.toml"));
     loader_overrides.user_config_path = Some(selected_file.clone());
-    loader_overrides.user_config_profile = Some("work".to_string());
+    loader_overrides.user_config_profile = Some("work".parse().expect("profile-v2 name"));
     let service = ConfigManager::new_for_tests(
         tmp.path().to_path_buf(),
         vec![],

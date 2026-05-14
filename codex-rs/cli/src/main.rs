@@ -1542,11 +1542,8 @@ fn loader_overrides_for_profile(
         Some(profile_v2) => {
             let codex_home = find_codex_home()?;
             Ok(LoaderOverrides {
-                user_config_path: Some(resolve_profile_v2_config_path(
-                    &codex_home,
-                    profile_v2.as_str(),
-                )?),
-                user_config_profile: Some(profile_v2.to_string()),
+                user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)),
+                user_config_profile: Some(profile_v2.clone()),
                 ..Default::default()
             })
         }

@@ -6,9 +6,10 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 
-fn user_config_path(file_name: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("codex-test").join(file_name))
+fn user_config_path(temp_dir: &TempDir, file_name: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(temp_dir.path().join(file_name))
         .expect("test user config path should be absolute")
 }
 
@@ -24,14 +25,15 @@ fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
 
 #[test]
 fn configured_plugins_from_stack_merges_user_layers() {
+    let temp_dir = TempDir::new().expect("tempdir");
     let stack = ConfigLayerStack::new(
         vec![
             user_layer(
-                user_config_path("config.toml"),
+                user_config_path(&temp_dir, "config.toml"),
                 "[plugins.base]\nenabled = true\n",
             ),
             user_layer(
-                user_config_path("work.config.toml"),
+                user_config_path(&temp_dir, "work.config.toml"),
                 "[plugins.profile]\nenabled = false\n",
             ),
         ],

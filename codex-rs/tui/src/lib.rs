@@ -844,10 +844,10 @@ pub async fn run_main(
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
     let mut loader_overrides = loader_overrides;
-    if let Some(profile_v2) = cli.config_profile_v2.as_deref() {
-        let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2)?;
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
         loader_overrides.user_config_path = Some(user_config_path);
-        loader_overrides.user_config_profile = Some(profile_v2.to_string());
+        loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
 
     #[allow(clippy::print_stderr)]

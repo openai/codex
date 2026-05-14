@@ -18,6 +18,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
+use codex_config::ProfileV2Name;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -1295,25 +1296,12 @@ impl Config {
 
 pub fn resolve_profile_v2_config_path(
     codex_home: &Path,
-    profile_name: &str,
-) -> std::io::Result<AbsolutePathBuf> {
-    if profile_name.is_empty()
-        || !profile_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "invalid --profile-v2 value `{profile_name}`; pass a plain name such as `work`"
-            ),
-        ));
-    }
-
-    Ok(AbsolutePathBuf::resolve_path_against_base(
+    profile_name: &ProfileV2Name,
+) -> AbsolutePathBuf {
+    AbsolutePathBuf::resolve_path_against_base(
         format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}"),
         codex_home,
-    ))
+    )
 }
 
 /// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working

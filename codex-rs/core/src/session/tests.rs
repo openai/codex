@@ -1229,7 +1229,7 @@ async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
         .codex_home(codex_home.to_path_buf())
         .loader_overrides(LoaderOverrides {
             user_config_path: Some(profile_config_path.abs()),
-            user_config_profile: Some("work".to_string()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
             ..LoaderOverrides::without_managed_config_for_tests()
         })
         .build()

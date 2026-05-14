@@ -5,6 +5,7 @@ use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
 use super::key_aliases::normalized_with_key_aliases;
 use super::merge::merge_toml_values;
+use crate::ProfileV2Name;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -35,7 +36,7 @@ impl From<LoaderOverrides> for ConfigLoadOptions {
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub user_config_path: Option<AbsolutePathBuf>,
-    pub user_config_profile: Option<String>,
+    pub user_config_profile: Option<ProfileV2Name>,
     pub managed_config_path: Option<PathBuf>,
     pub system_config_path: Option<PathBuf>,
     pub system_requirements_path: Option<PathBuf>,
@@ -280,7 +281,10 @@ impl ConfigLayerStack {
 
     /// Returns the active raw user config layer, if any.
     ///
-    /// This does not merge other config layers or apply any requirements.
+    /// This does not merge other config layers or apply any requirements. When
+    /// a profile-v2 layer is active, this returns that profile layer rather than
+    /// the base `$CODEX_HOME/config.toml` layer because the active layer is the
+    /// writable target for profile-aware edits.
     pub fn get_active_user_layer(&self) -> Option<&ConfigLayerEntry> {
         self.user_layer_index
             .and_then(|index| self.layers.get(index))
@@ -294,7 +298,11 @@ impl ConfigLayerStack {
         Some(file)
     }
 
-    /// Returns all user config layers in precedence order.
+    /// Returns all user config layers in the requested precedence order.
+    ///
+    /// With profile-v2 enabled, `LowestPrecedenceFirst` returns the base user
+    /// config before the profile overlay, while `HighestPrecedenceFirst` returns
+    /// the profile overlay before the base user config.
     pub fn get_user_layers(
         &self,
         ordering: ConfigLayerStackOrdering,
@@ -334,28 +342,32 @@ impl ConfigLayerStack {
         &self.requirements_toml
     }
 
-    /// Creates a new [ConfigLayerStack] using the specified values to inject a
-    /// "user layer" into the stack. If such a layer already exists, it is
-    /// replaced; otherwise, it is inserted into the stack at the appropriate
-    /// position based on precedence rules.
+    /// Creates a new [ConfigLayerStack] using the specified values to inject one
+    /// user layer into the stack. If such a layer already exists, it is replaced;
+    /// otherwise, it is inserted into the stack at the appropriate position
+    /// based on precedence rules. When the stack has both base and profile-v2
+    /// user layers, this updates only the layer whose file matches
+    /// `config_toml`.
     pub fn with_user_config(&self, config_toml: &AbsolutePathBuf, user_config: TomlValue) -> Self {
         let profile = self.layers.iter().find_map(|layer| match &layer.name {
-            ConfigLayerSource::User { file, profile } if file == config_toml => profile.clone(),
+            ConfigLayerSource::User { file, profile } if file == config_toml => profile
+                .as_deref()
+                .and_then(|profile| profile.parse::<ProfileV2Name>().ok()),
             _ => None,
         });
-        self.with_user_config_profile(config_toml, profile, user_config)
+        self.with_user_config_profile(config_toml, profile.as_ref(), user_config)
     }
 
     pub fn with_user_config_profile(
         &self,
         config_toml: &AbsolutePathBuf,
-        profile: Option<String>,
+        profile: Option<&ProfileV2Name>,
         user_config: TomlValue,
     ) -> Self {
         let user_layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: config_toml.clone(),
-                profile,
+                profile: profile.map(ToString::to_string),
             },
             user_config,
         );

@@ -7,6 +7,7 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -5507,7 +5508,7 @@ async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
         .codex_home(codex_home.path().to_path_buf())
         .loader_overrides(LoaderOverrides {
             user_config_path: Some(selected_config.abs()),
-            user_config_profile: Some("work".to_string()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
             ..LoaderOverrides::without_managed_config_for_tests()
         })
         .build()
@@ -5531,28 +5532,13 @@ async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
 }
 
 #[test]
-fn profile_v2_config_path_accepts_only_plain_names() -> anyhow::Result<()> {
+fn profile_v2_config_path_resolves_validated_names() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
+    let profile_name: ProfileV2Name = "work".parse()?;
     assert_eq!(
-        resolve_profile_v2_config_path(codex_home.path(), "work")?,
+        resolve_profile_v2_config_path(codex_home.path(), &profile_name),
         codex_home.path().join("work.config.toml").abs()
     );
-
-    for invalid in [
-        "",
-        ".",
-        "..",
-        "nested/work",
-        "nested\\work",
-        "work.toml",
-        "work.name",
-    ] {
-        assert!(
-            resolve_profile_v2_config_path(codex_home.path(), invalid).is_err(),
-            "{invalid:?} should be rejected"
-        );
-    }
-
     Ok(())
 }
 

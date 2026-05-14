@@ -1491,11 +1491,9 @@ impl Session {
                     /*include_disabled*/ true,
                 )
                 .into_iter()
-                .filter_map(|layer| {
-                    let ConfigLayerSource::User { file, .. } = &layer.name else {
-                        return None;
-                    };
-                    Some(file.clone())
+                .filter_map(|layer| match &layer.name {
+                    ConfigLayerSource::User { file, .. } => Some(file.clone()),
+                    _ => None,
                 })
                 .collect::<Vec<_>>();
             if user_config_paths.is_empty() {

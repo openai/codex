@@ -634,7 +634,7 @@ approval_policy = "on-failure"
     let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
     overrides.user_config_path =
         Some(AbsolutePathBuf::from_absolute_path(&selected_config).expect("selected config path"));
-    overrides.user_config_profile = Some("work".to_string());
+    overrides.user_config_profile = Some("work".parse().expect("profile-v2 name"));
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let layers = load_config_layers_state(

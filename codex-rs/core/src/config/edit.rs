@@ -1039,19 +1039,19 @@ pub fn apply_blocking(
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    apply_blocking_to_path(&config_path, profile, edits)
+    apply_blocking_to_resolved_file(&config_path, profile, edits)
 }
 
-fn apply_blocking_to_path(
-    config_path: &Path,
-    profile: Option<&str>,
+fn apply_blocking_to_resolved_file(
+    resolved_config_file: &Path,
+    legacy_profile: Option<&str>,
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
     if edits.is_empty() {
         return Ok(());
     }
 
-    let write_paths = resolve_symlink_write_paths(config_path)?;
+    let write_paths = resolve_symlink_write_paths(resolved_config_file)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -1067,7 +1067,7 @@ fn apply_blocking_to_path(
         serialized.parse::<DocumentMut>()?
     };
 
-    let profile = profile.map(ToOwned::to_owned).or_else(|| {
+    let profile = legacy_profile.map(ToOwned::to_owned).or_else(|| {
         doc.get("profile")
             .and_then(|item| item.as_str())
             .map(ToOwned::to_owned)
@@ -1095,6 +1095,10 @@ fn apply_blocking_to_path(
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.
+///
+/// `profile` selects a legacy `[profiles.<name>]` section inside
+/// `$CODEX_HOME/config.toml`; profile-v2 callers should resolve their target
+/// file before constructing a [ConfigEditsBuilder].
 pub async fn apply(
     codex_home: &Path,
     profile: Option<&str>,
@@ -1103,9 +1107,11 @@ pub async fn apply(
     let codex_home = codex_home.to_path_buf();
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let profile = profile.map(ToOwned::to_owned);
-    task::spawn_blocking(move || apply_blocking_to_path(&config_path, profile.as_deref(), &edits))
-        .await
-        .context("config persistence task panicked")?
+    task::spawn_blocking(move || {
+        apply_blocking_to_resolved_file(&config_path, profile.as_deref(), &edits)
+    })
+    .await
+    .context("config persistence task panicked")?
 }
 
 /// Fluent builder to batch config edits and apply them atomically.
@@ -1391,13 +1397,13 @@ impl ConfigEditsBuilder {
 
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
-        apply_blocking_to_path(&self.config_path, self.profile.as_deref(), &self.edits)
+        apply_blocking_to_resolved_file(&self.config_path, self.profile.as_deref(), &self.edits)
     }
 
     /// Apply edits asynchronously via a blocking offload.
     pub async fn apply(self) -> anyhow::Result<()> {
         task::spawn_blocking(move || {
-            apply_blocking_to_path(&self.config_path, self.profile.as_deref(), &self.edits)
+            apply_blocking_to_resolved_file(&self.config_path, self.profile.as_deref(), &self.edits)
         })
         .await
         .context("config persistence task panicked")?

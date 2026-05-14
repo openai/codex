@@ -174,7 +174,7 @@ impl ConfigManager {
             let user_config_path = self.loader_overrides.user_config_path(self.codex_home())?;
             config.config_layer_stack = config.config_layer_stack.with_user_config_profile(
                 &user_config_path,
-                self.loader_overrides.user_config_profile.clone(),
+                self.loader_overrides.user_config_profile.as_ref(),
                 TomlValue::Table(toml::map::Map::new()),
             );
         }
