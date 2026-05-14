@@ -2688,6 +2688,55 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
 }
 
 #[tokio::test]
+async fn forced_chatgpt_workspace_id_empty_values_disable_runtime_restriction()
+-> std::io::Result<()> {
+    let cases: Vec<(&str, &str, Option<Vec<&str>>)> = vec![
+        ("unset", "", None),
+        ("empty string", r#"forced_chatgpt_workspace_id = """#, None),
+        (
+            "whitespace string",
+            r#"forced_chatgpt_workspace_id = "   ""#,
+            None,
+        ),
+        ("empty list", r#"forced_chatgpt_workspace_id = []"#, None),
+        (
+            "blank list entries",
+            r#"forced_chatgpt_workspace_id = ["", "  "]"#,
+            None,
+        ),
+        (
+            "mixed list entries",
+            r#"forced_chatgpt_workspace_id = ["", " 123e4567-e89b-42d3-a456-426614174000 ", "123e4567-e89b-42d3-a456-426614174001"]"#,
+            Some(vec![
+                "123e4567-e89b-42d3-a456-426614174000",
+                "123e4567-e89b-42d3-a456-426614174001",
+            ]),
+        ),
+    ];
+
+    for (name, toml, expected) in cases {
+        let cfg_toml: ConfigToml = toml::from_str(toml)
+            .unwrap_or_else(|err| panic!("{name} should parse forced_chatgpt_workspace_id: {err}"));
+        let config = Config::load_from_base_config_with_overrides(
+            cfg_toml,
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").abs(),
+        )
+        .await?;
+
+        let expected = expected.map(|values| {
+            values
+                .into_iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(config.forced_chatgpt_workspace_id, expected, "{name}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_remote_thread_store_endpoint_is_rejected() {
     let cfg: ConfigToml =
         toml::from_str(r#"experimental_thread_store_endpoint = "https://example.com""#)
