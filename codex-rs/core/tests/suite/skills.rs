@@ -50,7 +50,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     let mut builder = test_codex().with_workspace_setup(move |cwd, fs| async move {
         write_repo_skill(cwd, fs, "demo", "demo skill", skill_body).await
     });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
 
     let skill_path = test
         .config

@@ -152,7 +152,7 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
         .context("failed to load configuration")?;
     let configured_marketplaces = config
         .config_layer_stack
-        .get_user_layer()
+        .get_active_user_layer()
         .and_then(|layer| layer.config.get("marketplaces"))
         .and_then(toml::Value::as_table);
     let Some(configured_marketplaces) = configured_marketplaces else {
