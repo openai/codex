@@ -2,6 +2,7 @@ mod archive_thread;
 mod create_thread;
 mod helpers;
 mod list_threads;
+mod list_turns;
 mod live_writer;
 mod read_thread;
 mod unarchive_thread;
@@ -24,6 +25,7 @@ use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
+use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
@@ -34,6 +36,7 @@ use crate::ThreadPage;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+use crate::TurnPage;
 use crate::UpdateThreadMetadataParams;
 
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
@@ -261,6 +264,10 @@ impl ThreadStore for LocalThreadStore {
         list_threads::list_threads(self, params).await
     }
 
+    async fn list_turns(&self, params: ListTurnsParams) -> ThreadStoreResult<TurnPage> {
+        list_turns::list_turns(self, params).await
+    }
+
     async fn update_thread_metadata(
         &self,
         params: UpdateThreadMetadataParams,
@@ -286,15 +293,23 @@ mod tests {
 
     use codex_protocol::ThreadId;
     use codex_protocol::models::BaseInstructions;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
+    use codex_protocol::protocol::TurnCompleteEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ListTurnsParams;
     use crate::LiveThread;
+    use crate::SortDirection;
+    use crate::StoredTurnItemsView;
     use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
@@ -1009,6 +1024,110 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn list_turns_filters_items_view_locally() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![
+                    RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                        turn_id: "turn-1".to_string(),
+                        started_at: Some(1),
+                        model_context_window: None,
+                        collaboration_mode_kind: Default::default(),
+                    })),
+                    RolloutItem::ResponseItem(ResponseItem::Message {
+                        id: None,
+                        role: "assistant".to_string(),
+                        content: vec![ContentItem::OutputText {
+                            text: "response assistant".to_string(),
+                        }],
+                        phase: None,
+                    }),
+                    user_message_item("event user"),
+                    RolloutItem::Compacted(CompactedItem {
+                        message: "summary".to_string(),
+                        replacement_history: None,
+                    }),
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: "turn-1".to_string(),
+                        last_agent_message: None,
+                        completed_at: Some(2),
+                        duration_ms: Some(1000),
+                        time_to_first_token_ms: None,
+                    })),
+                ],
+            })
+            .await
+            .expect("append items");
+        store.flush_thread(thread_id).await.expect("flush thread");
+
+        let response_items =
+            list_single_turn(&store, thread_id, StoredTurnItemsView::ResponseItems)
+                .await
+                .items;
+        assert_eq!(
+            response_items
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::ResponseItem(_)))
+                .count(),
+            1
+        );
+        assert!(
+            response_items
+                .iter()
+                .all(|item| { matches!(item, RolloutItem::ResponseItem(_)) })
+        );
+
+        let event_items = list_single_turn(&store, thread_id, StoredTurnItemsView::EventItems)
+            .await
+            .items;
+        assert_eq!(
+            event_items
+                .iter()
+                .filter(|item| matches!(item, RolloutItem::EventMsg(_)))
+                .count(),
+            3
+        );
+        assert!(
+            event_items
+                .iter()
+                .all(|item| matches!(item, RolloutItem::EventMsg(_)))
+        );
+
+        let response_and_event_items = list_single_turn(
+            &store,
+            thread_id,
+            StoredTurnItemsView::ResponseAndEventItems,
+        )
+        .await
+        .items;
+        assert_eq!(response_and_event_items.len(), 4);
+        assert!(
+            !response_and_event_items
+                .iter()
+                .any(|item| matches!(item, RolloutItem::Compacted(_)))
+        );
+
+        let full_items = list_single_turn(&store, thread_id, StoredTurnItemsView::Full)
+            .await
+            .items;
+        assert_eq!(full_items.len(), 5);
+        assert!(
+            full_items
+                .iter()
+                .any(|item| matches!(item, RolloutItem::Compacted(_)))
+        );
+    }
+
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         CreateThreadParams {
             thread_id,
@@ -1037,6 +1156,26 @@ mod tests {
             local_images: Vec::new(),
             text_elements: Vec::new(),
         }))
+    }
+
+    async fn list_single_turn(
+        store: &LocalThreadStore,
+        thread_id: ThreadId,
+        items_view: StoredTurnItemsView,
+    ) -> crate::StoredTurn {
+        let page = store
+            .list_turns(ListTurnsParams {
+                thread_id,
+                include_archived: true,
+                cursor: None,
+                page_size: 10,
+                sort_direction: SortDirection::Asc,
+                items_view,
+            })
+            .await
+            .expect("list turns");
+        assert_eq!(page.turns.len(), 1);
+        page.turns.into_iter().next().expect("turn")
     }
 
     async fn assert_rollout_contains_message(path: &std::path::Path, expected: &str) {

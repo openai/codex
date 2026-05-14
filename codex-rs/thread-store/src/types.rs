@@ -218,6 +218,31 @@ pub enum StoredTurnItemsView {
     Summary,
     /// Return every persisted item available for each turn.
     Full,
+    /// Return only persisted Responses API items for each turn.
+    ResponseItems,
+    /// Return only persisted app-server event items for each turn.
+    EventItems,
+    /// Return persisted Responses API items and app-server event items for each turn.
+    ResponseAndEventItems,
+}
+
+impl StoredTurnItemsView {
+    /// Returns whether this view includes the persisted rollout item verbatim.
+    ///
+    /// `Summary` is intentionally not handled here because it is a projected display view rather
+    /// than a simple rollout-item filter.
+    pub fn includes_persisted_item(self, item: &RolloutItem) -> bool {
+        match self {
+            StoredTurnItemsView::NotLoaded | StoredTurnItemsView::Summary => false,
+            StoredTurnItemsView::Full => true,
+            StoredTurnItemsView::ResponseItems => matches!(item, RolloutItem::ResponseItem(_)),
+            StoredTurnItemsView::EventItems => matches!(item, RolloutItem::EventMsg(_)),
+            StoredTurnItemsView::ResponseAndEventItems => matches!(
+                item,
+                RolloutItem::ResponseItem(_) | RolloutItem::EventMsg(_)
+            ),
+        }
+    }
 }
 
 /// Store-owned status for a persisted turn.
@@ -626,6 +651,10 @@ pub struct ArchiveThreadParams {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -734,5 +763,43 @@ mod tests {
                 origin_url: Some(None),
             })
         );
+    }
+
+    #[test]
+    fn stored_turn_items_view_filters_persisted_rollout_item_kinds() {
+        let response_item = RolloutItem::ResponseItem(ResponseItem::Other);
+        let event_item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }));
+        let compacted_item = RolloutItem::Compacted(CompactedItem {
+            message: "summary".to_string(),
+            replacement_history: None,
+        });
+
+        let cases = [
+            (StoredTurnItemsView::NotLoaded, [false, false, false]),
+            (StoredTurnItemsView::Summary, [false, false, false]),
+            (StoredTurnItemsView::Full, [true, true, true]),
+            (StoredTurnItemsView::ResponseItems, [true, false, false]),
+            (StoredTurnItemsView::EventItems, [false, true, false]),
+            (
+                StoredTurnItemsView::ResponseAndEventItems,
+                [true, true, false],
+            ),
+        ];
+
+        for (view, expected) in cases {
+            assert_eq!(
+                [
+                    view.includes_persisted_item(&response_item),
+                    view.includes_persisted_item(&event_item),
+                    view.includes_persisted_item(&compacted_item),
+                ],
+                expected
+            );
+        }
     }
 }
