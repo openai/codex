@@ -10459,6 +10459,18 @@
             },
             "type": "array"
           },
+          "SubagentStart": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "SubagentStop": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "UserPromptSubmit": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -10486,6 +10498,8 @@
           "PreToolUse",
           "SessionStart",
           "Stop",
+          "SubagentStart",
+          "SubagentStop",
           "UserPromptSubmit"
         ],
         "type": "object"
