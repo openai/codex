@@ -2453,6 +2453,7 @@ mod tests {
     fn serialize_thread_turn_context_response_and_notification() -> Result<()> {
         let cwd = absolute_path("/tmp");
         let turn_context = sample_thread_turn_context(cwd);
+        let turn_context_json = serde_json::to_value(&turn_context)?;
         let response = ClientResponse::ThreadTurnContextUpdate {
             request_id: RequestId::Integer(11),
             response: v2::ThreadTurnContextUpdateResponse {
@@ -2465,32 +2466,6 @@ mod tests {
                 turn_context,
             },
         );
-        let turn_context_json = json!({
-            "model": "gpt-5",
-            "modelProvider": "openai",
-            "serviceTier": null,
-            "cwd": absolute_path_string("tmp"),
-            "approvalPolicy": "on-failure",
-            "approvalsReviewer": "user",
-            "sandboxPolicy": {
-                "type": "dangerFullAccess"
-            },
-            "permissionProfile": {
-                "type": "disabled"
-            },
-            "activePermissionProfile": null,
-            "effort": null,
-            "summary": null,
-            "personality": null,
-            "collaborationMode": {
-                "mode": "default",
-                "settings": {
-                    "model": "gpt-5",
-                    "reasoning_effort": null,
-                    "developer_instructions": null
-                }
-            }
-        });
 
         assert_eq!(
             json!({
