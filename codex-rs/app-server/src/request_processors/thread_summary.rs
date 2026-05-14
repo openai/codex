@@ -179,19 +179,23 @@ pub(super) fn apply_permission_profile_selection_to_config_overrides(
     overrides: &mut ConfigOverrides,
     permissions: Option<PermissionProfileSelectionParams>,
 ) {
-    let Some(PermissionProfileSelectionParams::Profile { id, modifications }) = permissions else {
+    let Some(selection) = permissions else {
         return;
     };
-    overrides.default_permissions = Some(id);
-    overrides
-        .additional_writable_roots
-        .extend(modifications.unwrap_or_default().into_iter().map(
-            |modification| match modification {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path } => {
-                    path.to_path_buf()
-                }
-            },
-        ));
+    overrides.default_permissions = Some(selection.id().to_string());
+    if selection.legacy_additional_writable_roots().is_empty() {
+        return;
+    }
+
+    let legacy_roots = selection
+        .legacy_additional_writable_roots()
+        .iter()
+        .map(AbsolutePathBuf::to_path_buf);
+    if let Some(workspace_roots) = overrides.workspace_roots.as_mut() {
+        workspace_roots.extend(legacy_roots);
+    } else {
+        overrides.additional_writable_roots.extend(legacy_roots);
+    }
 }
 
 pub(super) fn thread_response_sandbox_policy(

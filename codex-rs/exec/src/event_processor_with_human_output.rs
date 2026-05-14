@@ -420,6 +420,7 @@ fn config_summary_entries(
     config: &Config,
     session_configured_event: &SessionConfiguredEvent,
 ) -> Vec<(&'static str, String)> {
+    let permission_profile = config.permissions.effective_permission_profile();
     let mut entries = vec![
         ("workdir", config.cwd.display().to_string()),
         ("model", session_configured_event.model.clone()),
@@ -434,9 +435,9 @@ fn config_summary_entries(
         (
             "sandbox",
             summarize_permission_profile(
-                &config.permissions.effective_permission_profile(),
+                &permission_profile,
                 &config.cwd,
-                config.permissions.user_visible_workspace_roots(),
+                config.effective_workspace_roots().as_slice(),
             ),
         ),
     ];

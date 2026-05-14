@@ -33,11 +33,11 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
-        if !self.config.workspace_roots_explicit {
-            let workspace_roots = vec![session.cwd.clone()];
-            self.config.workspace_roots = workspace_roots.clone();
-            self.config.permissions.set_workspace_roots(workspace_roots);
-        }
+        let runtime_workspace_roots = session.runtime_workspace_roots.clone();
+        self.config.workspace_roots = runtime_workspace_roots.clone();
+        self.config
+            .permissions
+            .set_workspace_roots(runtime_workspace_roots);
         self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
             .config
@@ -52,7 +52,7 @@ impl ChatWidget {
         let permission_sync = self
             .config
             .permissions
-            .set_permission_profile_with_active_profile(
+            .set_permission_profile_from_session_snapshot(
                 session.permission_profile.clone(),
                 session.active_permission_profile.clone(),
             );
@@ -60,10 +60,11 @@ impl ChatWidget {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
             self.config
                 .permissions
-                .set_constrained_permission_profile_with_active_profile(
+                .replace_permission_profile_from_session_snapshot(
                     Constrained::allow_only(session.permission_profile.clone()),
                     session.active_permission_profile.clone(),
-                );
+                )
+                .expect("allow-only snapshot should satisfy its own constraint");
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
