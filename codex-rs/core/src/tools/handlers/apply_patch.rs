@@ -297,6 +297,7 @@ async fn effective_patch_permissions(
     )
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
     type Output = ApplyPatchToolOutput;
 

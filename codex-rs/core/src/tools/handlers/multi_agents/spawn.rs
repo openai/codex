@@ -22,6 +22,7 @@ impl Handler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     type Output = SpawnAgentResult;
 
@@ -33,11 +34,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         Some(create_spawn_agent_tool_v1(self.options.clone()))
     }
 
-    fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
-        Box::pin(handle_spawn_agent(invocation))
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_spawn_agent(invocation).await
     }
 }
 

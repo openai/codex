@@ -171,6 +171,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
             "-lc".to_string(),
             "echo before".to_string(),
         ],
+        shell_type: crate::shell::ShellType::Sh,
         hook_command: "echo before".to_string(),
         process_id: 123,
         yield_time_ms: 1000,

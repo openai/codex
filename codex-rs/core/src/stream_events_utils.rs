@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
@@ -20,6 +21,7 @@ use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::memory_citation::MemoryCitation;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
@@ -31,6 +33,7 @@ use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
+use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
@@ -128,21 +131,49 @@ pub(crate) async fn record_completed_response_item(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
+    record_completed_response_item_with_finalized_facts(
+        sess,
+        turn_context,
+        item,
+        /*finalized_facts*/ None,
+    )
+    .await;
+}
+
+pub(crate) async fn record_completed_response_item_with_finalized_facts(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+    finalized_facts: Option<&FinalizedTurnItemFacts>,
+) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
-    if completed_item_defers_mailbox_delivery_to_next_turn(
-        item,
-        turn_context.collaboration_mode.mode == ModeKind::Plan,
-    ) {
+    let defers_mailbox_delivery = finalized_facts.map_or_else(
+        || {
+            completed_item_defers_mailbox_delivery_to_next_turn(
+                item,
+                turn_context.collaboration_mode.mode == ModeKind::Plan,
+            )
+        },
+        |facts| facts.defers_mailbox_delivery_to_next_turn,
+    );
+    if defers_mailbox_delivery {
         sess.defer_mailbox_delivery_to_next_turn(&turn_context.sub_id)
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    let has_memory_citation = record_stage1_output_usage_and_detect_memory_citation(
-        sess.services.state_db.as_ref(),
-        item,
-    )
-    .await;
+    let has_memory_citation = if let Some(memory_citation) =
+        finalized_facts.and_then(|facts| facts.memory_citation.as_ref())
+    {
+        record_stage1_output_usage_for_memory_citation(
+            sess.services.state_db.as_ref(),
+            memory_citation,
+        )
+        .await
+    } else {
+        record_stage1_output_usage_and_detect_memory_citation(sess.services.state_db.as_ref(), item)
+            .await
+    };
     if has_memory_citation {
         sess.record_memory_citation_for_turn(&turn_context.sub_id)
             .await;
@@ -188,7 +219,14 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
     let Some(memory_citation) = parse_memory_citation(citations) else {
         return false;
     };
-    let thread_ids = thread_ids_from_memory_citation(&memory_citation);
+    record_stage1_output_usage_for_memory_citation(state_db_ctx, &memory_citation).await
+}
+
+async fn record_stage1_output_usage_for_memory_citation(
+    state_db_ctx: Option<&state_db::StateDbHandle>,
+    memory_citation: &MemoryCitation,
+) -> bool {
+    let thread_ids = thread_ids_from_memory_citation(memory_citation);
     if thread_ids.is_empty() {
         return true;
     }
@@ -215,8 +253,89 @@ pub(crate) struct OutputItemResult {
 pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
+    pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
+}
+
+async fn apply_turn_item_contributors(
+    sess: &Session,
+    turn_store: &ExtensionData,
+    item: &mut TurnItem,
+) {
+    let contributors = sess.services.extensions.turn_item_contributors().to_vec();
+    for contributor in contributors {
+        if let Err(err) = contributor
+            .contribute(&sess.services.thread_extension_data, turn_store, item)
+            .await
+        {
+            warn!("turn item contributor failed: {err}");
+        }
+    }
+}
+
+pub(crate) enum TurnItemContributorPolicy<'a> {
+    Skip,
+    Run(&'a ExtensionData),
+}
+
+pub(crate) struct FinalizedTurnItem {
+    pub(crate) turn_item: TurnItem,
+    pub(crate) facts: FinalizedTurnItemFacts,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct FinalizedTurnItemFacts {
+    pub(crate) memory_citation: Option<MemoryCitation>,
+    pub(crate) last_agent_message: Option<String>,
+    pub(crate) defers_mailbox_delivery_to_next_turn: bool,
+}
+
+pub(crate) async fn finalize_non_tool_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    contributor_policy: TurnItemContributorPolicy<'_>,
+    item: &ResponseItem,
+    plan_mode: bool,
+) -> Option<FinalizedTurnItem> {
+    let turn_item =
+        handle_non_tool_response_item(sess, turn_context, contributor_policy, item, plan_mode)
+            .await?;
+    let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
+        match &turn_item {
+            TurnItem::AgentMessage(agent_message) => {
+                let combined = agent_message
+                    .content
+                    .iter()
+                    .map(|entry| match entry {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<String>();
+                let last_agent_message = if combined.trim().is_empty() {
+                    None
+                } else {
+                    Some(combined)
+                };
+                let defers_mailbox_delivery_to_next_turn =
+                    !matches!(agent_message.phase, Some(MessagePhase::Commentary))
+                        && last_agent_message.is_some();
+                (
+                    agent_message.memory_citation.clone(),
+                    last_agent_message,
+                    defers_mailbox_delivery_to_next_turn,
+                )
+            }
+            TurnItem::ImageGeneration(_) => (None, None, true),
+            _ => (None, None, false),
+        };
+    Some(FinalizedTurnItem {
+        turn_item,
+        facts: FinalizedTurnItemFacts {
+            memory_citation,
+            last_agent_message,
+            defers_mailbox_delivery_to_next_turn,
+        },
+    })
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -258,16 +377,20 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let turn_item = handle_non_tool_response_item(
+            let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
+                TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
             )
             .await;
-            if let Some(turn_item) = turn_item {
+            let finalized_facts = finalized_turn_item
+                .as_ref()
+                .map(|finalized| finalized.facts.clone());
+            if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
-                    let mut started_item = turn_item.clone();
+                    let mut started_item = finalized_turn_item.turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
                         item.status = "in_progress".to_string();
                         item.revised_prompt = None;
@@ -280,14 +403,18 @@ pub(crate) async fn handle_output_item_done(
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed(&ctx.turn_context, turn_item)
+                    .emit_turn_item_completed(&ctx.turn_context, finalized_turn_item.turn_item)
                     .await;
             }
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
-            let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
+            record_completed_response_item_with_finalized_facts(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                finalized_facts.as_ref(),
+            )
+            .await;
 
-            output.last_agent_message = last_agent_message;
+            output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }
         // The tool request should be answered directly (or was denied); push that response into the transcript.
         Err(FunctionCallError::RespondToModel(message)) => {
@@ -323,6 +450,7 @@ pub(crate) async fn handle_output_item_done(
 pub(crate) async fn handle_non_tool_response_item(
     sess: &Session,
     turn_context: &TurnContext,
+    contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
@@ -334,6 +462,9 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
+            if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
+                apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
+            }
             if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
                     .content
@@ -346,7 +477,9 @@ pub(crate) async fn handle_non_tool_response_item(
                     strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
-                agent_message.memory_citation = memory_citation;
+                if agent_message.memory_citation.is_none() {
+                    agent_message.memory_citation = memory_citation;
+                }
             }
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
                 let session_id = sess.conversation_id.to_string();

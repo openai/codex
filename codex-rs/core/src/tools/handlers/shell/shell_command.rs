@@ -127,6 +127,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     type Output = FunctionToolOutput;
 
@@ -184,10 +185,12 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             session.conversation_id,
             turn.tools_config.allow_login_shell,
         )?;
+        let shell_type = Some(session.user_shell().shell_type.clone());
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
             hook_command: params.command,
+            shell_type,
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,

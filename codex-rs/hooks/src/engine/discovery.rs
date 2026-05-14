@@ -352,7 +352,7 @@ fn load_toml_hooks_from_layer(
 fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
     match &layer.name {
         ConfigLayerSource::System { file }
-        | ConfigLayerSource::User { file }
+        | ConfigLayerSource::User { file, .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
         ConfigLayerSource::Project { dot_codex_folder } => layer
             .hooks_config_folder()
@@ -873,6 +873,7 @@ mod tests {
         let layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: test_path_buf("/tmp/config.toml").abs(),
+                profile: None,
             },
             config_with_malformed_state_and_session_start_hook(),
         );
@@ -972,6 +973,7 @@ mod tests {
         assert_eq!(
             super::hook_metadata_for_config_layer_source(&ConfigLayerSource::User {
                 file: config_file.clone(),
+                profile: None,
             }),
             (HookSource::User, false),
         );

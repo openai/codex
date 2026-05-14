@@ -8,6 +8,7 @@ struct TestHandler {
     tool_name: codex_tools::ToolName,
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
     type Output = crate::tools::context::FunctionToolOutput;
 
@@ -65,9 +66,9 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[test]
-fn register_handler_adds_handler_and_spec() {
+fn register_tool_adds_executor_and_spec() {
     let mut builder = ToolRegistryBuilder::new();
-    builder.register_handler(Arc::new(GetGoalHandler));
+    builder.register_tool(Arc::new(GetGoalHandler));
 
     let (specs, registry) = builder.build();
 

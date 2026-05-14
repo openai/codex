@@ -16,6 +16,9 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_sandbox_summary::summarize_permission_profile;
@@ -587,7 +590,7 @@ fn status_permissions_label(
         count => format!(" + {count} writable roots"),
     };
     match active_id {
-        Some(":read-only") => {
+        Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY) => {
             let label = if sandbox == "read-only with network access" {
                 "Read Only with network access"
             } else {
@@ -595,14 +598,16 @@ fn status_permissions_label(
             };
             return format!("{label}{modification_suffix} ({approval})");
         }
-        Some(":workspace") => match sandbox {
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE) => match sandbox {
             "workspace" => return format!("Workspace{modification_suffix} ({approval})"),
             "workspace with network access" => {
                 return format!("Workspace with network access{modification_suffix} ({approval})");
             }
             _ => {}
         },
-        Some(":danger-no-sandbox") if permission_profile == &PermissionProfile::Disabled => {
+        Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS)
+            if permission_profile == &PermissionProfile::Disabled =>
+        {
             return if approval_policy == AskForApproval::Never {
                 "Full Access".to_string()
             } else {

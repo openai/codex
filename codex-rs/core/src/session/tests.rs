@@ -12,6 +12,7 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::LoaderOverrides;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
@@ -1208,6 +1209,70 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 
     assert!(!app.enabled);
     assert_eq!(app.destructive_enabled, Some(false));
+}
+
+#[tokio::test]
+async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let base_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let profile_config_path = codex_home.join("work.config.toml");
+    std::fs::write(
+        &base_config_path,
+        "model = \"base\"\napproval_policy = \"on-failure\"\n",
+    )
+    .expect("write base user config");
+    std::fs::write(&profile_config_path, "model = \"profile-old\"\n")
+        .expect("write profile user config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(profile_config_path.abs()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await
+        .expect("load profile config");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    std::fs::write(
+        &base_config_path,
+        "model = \"base\"\napproval_policy = \"never\"\n",
+    )
+    .expect("update base user config");
+    std::fs::write(&profile_config_path, "model = \"profile-new\"\n")
+        .expect("update profile user config");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(
+        config
+            .config_layer_stack
+            .get_user_config_file()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::as_path),
+        Some(profile_config_path.as_path())
+    );
+    let effective_user_config = config
+        .config_layer_stack
+        .effective_user_config()
+        .expect("merged user config");
+    assert_eq!(
+        effective_user_config
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("profile-new")
+    );
+    assert_eq!(
+        effective_user_config
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("never")
+    );
 }
 
 #[tokio::test]
@@ -3763,7 +3828,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
         !updated
             .file_system_sandbox_policy()
             .can_write_path_with_cwd(next_cwd.as_path(), updated.cwd.as_path()),
-        "cwd-only update must not reinterpret an absolute old-cwd grant as :project_roots"
+        "cwd-only update must not reinterpret an absolute old-cwd grant as :workspace_roots"
     );
 }
 
@@ -6493,10 +6558,10 @@ async fn make_multi_agent_v2_usage_hint_test_session(
     (session, turn_context)
 }
 
-struct GitAttributionTestContributor;
-struct GitAttributionTestState;
+struct PromptExtensionTestContributor;
+struct PromptExtensionTestState;
 
-impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
+impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
     fn contribute<'a>(
         &'a self,
         _session_store: &'a codex_extension_api::ExtensionData,
@@ -6506,11 +6571,11 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     > {
         Box::pin(async move {
             thread_store
-                .get::<GitAttributionTestState>()
+                .get::<PromptExtensionTestState>()
                 .is_some()
                 .then(|| {
                     codex_extension_api::PromptFragment::developer_policy(
-                        "git attribution extension enabled",
+                        "prompt extension enabled",
                     )
                 })
                 .into_iter()
@@ -6519,21 +6584,21 @@ impl codex_extension_api::ContextContributor for GitAttributionTestContributor {
     }
 }
 
-fn git_attribution_test_registry()
+fn prompt_extension_test_registry()
 -> Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>> {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-    builder.prompt_contributor(Arc::new(GitAttributionTestContributor));
+    builder.prompt_contributor(Arc::new(PromptExtensionTestContributor));
     Arc::new(builder.build())
 }
 
 #[tokio::test]
-async fn build_initial_context_includes_git_attribution_from_extensions() {
+async fn build_initial_context_includes_prompt_fragments_from_extensions() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
     session
         .services
         .thread_extension_data
-        .insert(GitAttributionTestState);
+        .insert(PromptExtensionTestState);
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6542,15 +6607,15 @@ async fn build_initial_context_includes_git_attribution_from_extensions() {
         developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "expected git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "expected prompt extension developer text, got {developer_messages:?}"
     );
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() {
+async fn build_initial_context_omits_prompt_fragments_without_extension_state() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.extensions = git_attribution_test_registry();
+    session.services.extensions = prompt_extension_test_registry();
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -6559,8 +6624,8 @@ async fn build_initial_context_omits_git_attribution_when_feature_is_disabled() 
         !developer_messages
             .iter()
             .flatten()
-            .any(|text| *text == "git attribution extension enabled"),
-        "did not expect git attribution developer text, got {developer_messages:?}"
+            .any(|text| *text == "prompt extension enabled"),
+        "did not expect prompt extension developer text, got {developer_messages:?}"
     );
 }
 
@@ -6944,6 +7009,9 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
+            turn_context.sub_id.clone(),
+        )),
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
@@ -6996,6 +7064,9 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
+            turn_context.sub_id.clone(),
+        )),
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
@@ -8883,6 +8954,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
         turn_context: Arc::clone(&tc),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
         cancellation_token: CancellationToken::new(),
     };

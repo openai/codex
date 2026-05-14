@@ -62,6 +62,7 @@ enum ViewImageDetail {
     Original,
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ViewImageHandler {
     type Output = ViewImageOutput;
 

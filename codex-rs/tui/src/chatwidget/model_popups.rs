@@ -213,51 +213,6 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.model_catalog.as_ref());
-        if presets.is_empty() {
-            self.add_info_message(
-                "No collaboration modes are available right now.".to_string(),
-                /*hint*/ None,
-            );
-            return;
-        }
-
-        let current_kind = self
-            .active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.mode)
-            .or_else(|| {
-                collaboration_modes::default_mask(self.model_catalog.as_ref())
-                    .and_then(|mask| mask.mode)
-            });
-        let items: Vec<SelectionItem> = presets
-            .into_iter()
-            .map(|mask| {
-                let name = mask.name.clone();
-                let is_current = current_kind == mask.mode;
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
-                })];
-                SelectionItem {
-                    name,
-                    is_current,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Collaboration Mode".to_string()),
-            subtitle: Some("Pick a collaboration preset.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
-    }
-
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,

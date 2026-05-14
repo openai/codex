@@ -8,16 +8,18 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolOutput;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::default_namespace_description;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -42,40 +44,48 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
 
 struct ExtensionEchoExecutor;
 
-impl ExtensionToolExecutor for ExtensionEchoExecutor {
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
+    type Output = codex_tools::JsonToolOutput;
+
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("extension_echo")
+        ToolName::namespaced("extension/", "echo")
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(ToolSpec::Function(ResponsesApiTool {
-            name: "extension_echo".to_string(),
-            description: "Echoes arguments through an extension tool.".to_string(),
-            strict: true,
-            parameters: codex_extension_api::parse_tool_input_schema(&json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" },
-                },
-                "required": ["message"],
-                "additionalProperties": false,
-            }))
-            .expect("extension schema should parse"),
-            output_schema: None,
-            defer_loading: None,
+        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "extension/".to_string(),
+            description: default_namespace_description("extension/"),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "echo".to_string(),
+                description: "Echoes arguments through an extension tool.".to_string(),
+                strict: true,
+                parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }))
+                .expect("extension schema should parse"),
+                output_schema: None,
+                defer_loading: None,
+            })],
         }))
     }
 
-    fn handle(&self, call: ExtensionToolCall) -> codex_extension_api::ExtensionToolFuture<'_> {
-        Box::pin(async move {
-            let arguments: serde_json::Value = serde_json::from_str(call.function_arguments()?)
-                .expect("test arguments should parse");
-            Ok(ExtensionToolOutput::new(json!({
-                "arguments": arguments,
-                "callId": call.call_id.clone(),
-                "ok": true,
-            })))
-        })
+    async fn handle(
+        &self,
+        call: ExtensionToolCall,
+    ) -> Result<Self::Output, codex_tools::FunctionCallError> {
+        let arguments: serde_json::Value =
+            serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
+        Ok(codex_tools::JsonToolOutput::new(json!({
+            "arguments": arguments,
+            "callId": call.call_id,
+            "ok": true,
+        })))
     }
 }
 
@@ -333,17 +343,21 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     );
 
     assert!(
-        router
-            .model_visible_specs()
-            .iter()
-            .any(|spec| spec.name() == "extension_echo"),
+        router.model_visible_specs().iter().any(
+            |spec| matches!(spec, ToolSpec::Namespace(namespace)
+            if namespace.name == "extension/"
+                && namespace.tools.iter().any(|tool| matches!(
+                    tool,
+                    ResponsesApiNamespaceTool::Function(tool) if tool.name == "echo"
+                )))
+        ),
         "expected extension-provided tool to be visible to the model"
     );
 
     let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
         id: None,
-        name: "extension_echo".to_string(),
-        namespace: None,
+        name: "echo".to_string(),
+        namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: "call-extension".to_string(),
     })?

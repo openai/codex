@@ -711,7 +711,6 @@ impl BottomPane {
             if has_pasted_text {
                 self.record_composer_activity_at(Instant::now());
             }
-            self.composer.sync_popups();
             if needs_redraw {
                 self.request_redraw();
             }
@@ -720,7 +719,6 @@ impl BottomPane {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
-        self.composer.sync_popups();
         self.request_redraw();
     }
 
