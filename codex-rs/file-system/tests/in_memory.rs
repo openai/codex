@@ -12,11 +12,12 @@ use std::io;
 use std::path::PathBuf;
 
 fn path(unix_path: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::try_from(test_path_buf(unix_path)).expect("test path should be absolute")
+    AbsolutePathBuf::try_from(test_path_buf(unix_path))
+        .unwrap_or_else(|err| panic!("test path should be absolute: {err}"))
 }
 
 fn path_buf(path: PathBuf) -> AbsolutePathBuf {
-    AbsolutePathBuf::try_from(path).expect("path should be absolute")
+    AbsolutePathBuf::try_from(path).unwrap_or_else(|err| panic!("path should be absolute: {err}"))
 }
 
 fn sandbox_context() -> FileSystemSandboxContext {

@@ -61,7 +61,7 @@ impl InMemoryFileSystem {
     }
 
     pub fn seed_directory(&self, path: &AbsolutePathBuf) -> io::Result<()> {
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         create_directory_all(&mut state, path)
     }
 
@@ -70,7 +70,7 @@ impl InMemoryFileSystem {
         path: &AbsolutePathBuf,
         contents: impl Into<Vec<u8>>,
     ) -> io::Result<()> {
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         ensure_parent_directories(&mut state, path)?;
         if is_directory(&state, path) {
             return Err(io::Error::new(
@@ -91,12 +91,12 @@ impl InMemoryFileSystem {
     }
 
     pub fn exists(&self, path: &AbsolutePathBuf) -> bool {
-        let state = self.state.read().expect("in-memory fs read lock");
-        entry_exists(&state, path)
+        self.read_state()
+            .is_ok_and(|state| entry_exists(&state, path))
     }
 
     pub fn file_contents(&self, path: &AbsolutePathBuf) -> Option<Vec<u8>> {
-        let state = self.state.read().expect("in-memory fs read lock");
+        let state = self.read_state().ok()?;
         match state.entries.get(path) {
             Some(Entry {
                 kind: EntryKind::File(contents),
@@ -109,6 +109,18 @@ impl InMemoryFileSystem {
             | None => None,
         }
     }
+
+    fn read_state(&self) -> io::Result<std::sync::RwLockReadGuard<'_, State>> {
+        self.state
+            .read()
+            .map_err(|_| io::Error::other("in-memory fs read lock poisoned"))
+    }
+
+    fn write_state(&self) -> io::Result<std::sync::RwLockWriteGuard<'_, State>> {
+        self.state
+            .write()
+            .map_err(|_| io::Error::other("in-memory fs write lock poisoned"))
+    }
 }
 
 #[async_trait]
@@ -119,7 +131,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         reject_sandbox_context(sandbox)?;
-        let state = self.state.read().expect("in-memory fs read lock");
+        let state = self.read_state()?;
         match state.entries.get(path) {
             Some(Entry {
                 kind: EntryKind::File(contents),
@@ -146,7 +158,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         ensure_file_parent_exists(&state, path)?;
         if is_directory(&state, path) {
             return Err(io::Error::new(
@@ -178,7 +190,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         if is_root(path) {
             return if options.recursive {
                 Ok(())
@@ -216,7 +228,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
-        let state = self.state.read().expect("in-memory fs read lock");
+        let state = self.read_state()?;
         if is_root(path) {
             return Ok(directory_metadata(
                 /*created_at_ms*/ 0, /*modified_at_ms*/ 0,
@@ -247,7 +259,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         reject_sandbox_context(sandbox)?;
-        let state = self.state.read().expect("in-memory fs read lock");
+        let state = self.read_state()?;
         if !is_root(path) && !is_directory(&state, path) {
             return if state.entries.contains_key(path) {
                 Err(io::Error::new(
@@ -290,7 +302,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
             ));
         }
 
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         let Some(entry) = state.entries.get(path).cloned() else {
             return if options.force {
                 Ok(())
@@ -336,7 +348,7 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         reject_sandbox_context(sandbox)?;
         if destination_path == source_path || destination_path.starts_with(source_path) {
             let source_is_directory = {
-                let state = self.state.read().expect("in-memory fs read lock");
+                let state = self.read_state()?;
                 is_root(source_path) || is_directory(&state, source_path)
             };
             if source_is_directory {
@@ -348,11 +360,11 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         }
 
         let snapshot = {
-            let state = self.state.read().expect("in-memory fs read lock");
+            let state = self.read_state()?;
             snapshot_entry(&state, source_path)?
         };
 
-        let mut state = self.state.write().expect("in-memory fs write lock");
+        let mut state = self.write_state()?;
         match snapshot {
             SnapshotEntry::File { contents } => {
                 ensure_file_parent_exists(&state, destination_path)?;
