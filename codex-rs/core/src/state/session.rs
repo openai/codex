@@ -32,6 +32,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    pending_subagent_start: bool,
     granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -51,6 +52,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            pending_subagent_start: false,
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -216,6 +218,16 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn set_pending_subagent_start(&mut self, value: bool) {
+        self.pending_subagent_start = value;
+    }
+
+    pub(crate) fn take_pending_subagent_start(&mut self) -> bool {
+        let pending = self.pending_subagent_start;
+        self.pending_subagent_start = false;
+        pending
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {

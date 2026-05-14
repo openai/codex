@@ -3363,6 +3363,11 @@ impl Session {
         state.take_pending_session_start_source()
     }
 
+    pub(crate) async fn take_pending_subagent_start(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.take_pending_subagent_start()
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }

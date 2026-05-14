@@ -36,6 +36,7 @@ use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -160,6 +161,11 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) async fn thread_rollout_path(&self, thread_id: ThreadId) -> Option<PathBuf> {
+        let state = self.upgrade().ok()?;
+        state.get_thread(thread_id).await.ok()?.rollout_path()
     }
 
     /// Spawn a new agent thread and submit the initial prompt.

@@ -18,6 +18,9 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::subagent_start::SubagentStartOutcome;
+use crate::events::subagent_start::SubagentStartRequest;
+use crate::events::subagent_stop::SubagentStopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -70,6 +73,8 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
+            codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
     }
@@ -250,6 +255,26 @@ impl ClaudeHooksEngine {
         outcome
     }
 
+    pub(crate) fn preview_subagent_start(
+        &self,
+        request: &SubagentStartRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::subagent_start::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_subagent_start(
+        &self,
+        request: SubagentStartRequest,
+    ) -> SubagentStartOutcome {
+        let session_id = request.session_id;
+        let mut outcome =
+            crate::events::subagent_start::run(&self.handlers, &self.shell, request).await;
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
+        outcome
+    }
+
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
         crate::events::stop::preview(&self.handlers, request)
     }
@@ -257,6 +282,23 @@ impl ClaudeHooksEngine {
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         let session_id = request.session_id;
         let mut outcome = crate::events::stop::run(&self.handlers, &self.shell, request).await;
+        outcome.continuation_fragments = self
+            .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
+            .await;
+        outcome
+    }
+
+    pub(crate) fn preview_subagent_stop(
+        &self,
+        request: &SubagentStopRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::subagent_stop::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_subagent_stop(&self, request: SubagentStopRequest) -> StopOutcome {
+        let session_id = request.session_id;
+        let mut outcome =
+            crate::events::subagent_stop::run(&self.handlers, &self.shell, request).await;
         outcome.continuation_fragments = self
             .maybe_spill_prompt_fragments(session_id, outcome.continuation_fragments)
             .await;

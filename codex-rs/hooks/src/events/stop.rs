@@ -42,12 +42,12 @@ pub struct StopOutcome {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct StopHandlerData {
-    should_stop: bool,
-    stop_reason: Option<String>,
-    should_block: bool,
-    block_reason: Option<String>,
-    continuation_fragments: Vec<HookPromptFragment>,
+pub(super) struct StopHandlerData {
+    pub(super) should_stop: bool,
+    pub(super) stop_reason: Option<String>,
+    pub(super) should_block: bool,
+    pub(super) block_reason: Option<String>,
+    pub(super) continuation_fragments: Vec<HookPromptFragment>,
 }
 
 pub(crate) fn preview(
@@ -121,11 +121,46 @@ pub(crate) async fn run(
     }
 }
 
-fn parse_completed(
+pub(super) fn parse_completed(
     handler: &ConfiguredHandler,
     run_result: CommandRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<StopHandlerData> {
+    parse_stop_completed(
+        handler,
+        run_result,
+        turn_id,
+        "Stop",
+        output_parser::parse_stop,
+    )
+}
+
+pub(super) fn parse_subagent_stop_completed(
+    handler: &ConfiguredHandler,
+    run_result: CommandRunResult,
+    turn_id: Option<String>,
+) -> dispatcher::ParsedHandler<StopHandlerData> {
+    parse_stop_completed(
+        handler,
+        run_result,
+        turn_id,
+        "SubagentStop",
+        output_parser::parse_subagent_stop,
+    )
+}
+
+fn parse_stop_completed(
+    handler: &ConfiguredHandler,
+    run_result: CommandRunResult,
+    turn_id: Option<String>,
+    hook_name: &str,
+    parse_output: fn(&str) -> Option<output_parser::StopOutput>,
+) -> dispatcher::ParsedHandler<StopHandlerData> {
+    let invalid_json_hook_name = if hook_name == "Stop" {
+        "stop"
+    } else {
+        hook_name
+    };
     let mut entries = Vec::new();
     let mut status = HookRunStatus::Completed;
     let mut should_stop = false;
@@ -146,7 +181,7 @@ fn parse_completed(
             Some(0) => {
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = output_parser::parse_stop(&run_result.stdout) {
+                } else if let Some(parsed) = parse_output(&run_result.stdout) {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -186,9 +221,9 @@ fn parse_completed(
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Error,
-                                text:
-                                    "Stop hook returned decision:block without a non-empty reason"
-                                        .to_string(),
+                                text: format!(
+                                    "{hook_name} hook returned decision:block without a non-empty reason"
+                                ),
                             });
                         }
                     }
@@ -196,7 +231,9 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: "hook returned invalid stop hook JSON output".to_string(),
+                        text: format!(
+                            "hook returned invalid {invalid_json_hook_name} hook JSON output"
+                        ),
                     });
                 }
             }
@@ -214,9 +251,9 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text:
-                            "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
-                                .to_string(),
+                        text: format!(
+                            "{hook_name} hook exited with code 2 but did not write a continuation prompt to stderr"
+                        ),
                     });
                 }
             }
@@ -263,7 +300,7 @@ fn parse_completed(
     }
 }
 
-fn aggregate_results<'a>(
+pub(super) fn aggregate_results<'a>(
     results: impl IntoIterator<Item = &'a StopHandlerData>,
 ) -> StopHandlerData {
     let results = results.into_iter().collect::<Vec<_>>();
@@ -299,7 +336,7 @@ fn aggregate_results<'a>(
     }
 }
 
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOutcome {
+pub(super) fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOutcome {
     StopOutcome {
         hook_events,
         should_stop: false,

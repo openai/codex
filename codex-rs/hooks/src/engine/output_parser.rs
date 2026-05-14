@@ -10,6 +10,7 @@ pub(crate) struct UniversalOutput {
 pub(crate) struct SessionStartOutput {
     pub universal: UniversalOutput,
     pub additional_context: Option<String>,
+    pub invalid_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +87,8 @@ use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
+use crate::schema::SubagentStartCommandOutputWire;
+use crate::schema::SubagentStopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
@@ -96,6 +99,24 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
         additional_context,
+        invalid_reason: None,
+    })
+}
+
+pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
+    let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_subagent_start_universal(&universal);
+    let additional_context = if invalid_reason.is_none() {
+        wire.hook_specific_output
+            .and_then(|output| output.additional_context)
+    } else {
+        None
+    };
+    Some(SessionStartOutput {
+        universal,
+        additional_context,
+        invalid_reason,
     })
 }
 
@@ -263,22 +284,46 @@ pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitO
 
 pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
     let wire: StopCommandOutputWire = parse_json(stdout)?;
-    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    Some(stop_output_from_parts(
+        "Stop",
+        wire.decision,
+        wire.reason,
+        wire.universal,
+    ))
+}
+
+pub(crate) fn parse_subagent_stop(stdout: &str) -> Option<StopOutput> {
+    let wire: SubagentStopCommandOutputWire = parse_json(stdout)?;
+    Some(stop_output_from_parts(
+        "SubagentStop",
+        wire.decision,
+        wire.reason,
+        wire.universal,
+    ))
+}
+
+fn stop_output_from_parts(
+    event_name: &str,
+    decision: Option<BlockDecisionWire>,
+    reason: Option<String>,
+    universal_wire: HookUniversalOutputWire,
+) -> StopOutput {
+    let should_block = matches!(decision, Some(BlockDecisionWire::Block));
     let invalid_block_reason = if should_block
-        && match wire.reason.as_deref() {
+        && match reason.as_deref() {
             Some(reason) => reason.trim().is_empty(),
             None => true,
         } {
-        Some(invalid_block_message("Stop"))
+        Some(invalid_block_message(event_name))
     } else {
         None
     };
-    Some(StopOutput {
-        universal: UniversalOutput::from(wire.universal),
+    StopOutput {
+        universal: UniversalOutput::from(universal_wire),
         should_block: should_block && invalid_block_reason.is_none(),
-        reason: wire.reason,
+        reason,
         invalid_block_reason,
-    })
+    }
 }
 
 impl From<HookUniversalOutputWire> for UniversalOutput {
@@ -343,6 +388,18 @@ fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Opti
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
     if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
+fn unsupported_subagent_start_universal(universal: &UniversalOutput) -> Option<String> {
+    if !universal.continue_processing {
+        Some("SubagentStart hook returned unsupported continue:false".to_string())
+    } else if universal.stop_reason.is_some() {
+        Some("SubagentStart hook returned unsupported stopReason".to_string())
+    } else if universal.suppress_output {
+        Some("SubagentStart hook returned unsupported suppressOutput".to_string())
     } else {
         None
     }

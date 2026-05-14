@@ -19,6 +19,9 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::subagent_start::SubagentStartOutcome;
+use crate::events::subagent_start::SubagentStartRequest;
+use crate::events::subagent_stop::SubagentStopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
@@ -193,6 +196,17 @@ impl Hooks {
         self.engine.run_user_prompt_submit(request).await
     }
 
+    pub fn preview_subagent_start(
+        &self,
+        request: &SubagentStartRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_subagent_start(request)
+    }
+
+    pub async fn run_subagent_start(&self, request: SubagentStartRequest) -> SubagentStartOutcome {
+        self.engine.run_subagent_start(request).await
+    }
+
     pub fn preview_stop(
         &self,
         request: &StopRequest,
@@ -202,6 +216,17 @@ impl Hooks {
 
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
+    }
+
+    pub fn preview_subagent_stop(
+        &self,
+        request: &SubagentStopRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_subagent_stop(request)
+    }
+
+    pub async fn run_subagent_stop(&self, request: SubagentStopRequest) -> StopOutcome {
+        self.engine.run_subagent_stop(request).await
     }
 }
 

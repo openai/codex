@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
+use codex_hooks::SubagentStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
@@ -28,6 +30,8 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -63,6 +67,19 @@ pub(crate) enum PendingInputRecord {
     ConversationItem {
         response_item: ResponseItem,
     },
+}
+
+pub(crate) struct StopHookOutcome {
+    pub should_stop: bool,
+    pub should_block: bool,
+    pub continuation_fragments: Vec<codex_protocol::items::HookPromptFragment>,
+}
+
+struct SubagentHookMetadata {
+    agent_id: String,
+    agent_type: String,
+    parent_transcript_path: Option<PathBuf>,
+    agent_transcript_path: Option<PathBuf>,
 }
 
 struct ContextInjectingHookOutcome {
@@ -106,6 +123,22 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
     }
 }
 
+impl From<SubagentStartOutcome> for ContextInjectingHookOutcome {
+    fn from(value: SubagentStartOutcome) -> Self {
+        let SubagentStartOutcome {
+            hook_events,
+            additional_contexts,
+        } = value;
+        Self {
+            hook_events,
+            outcome: HookRuntimeOutcome {
+                should_stop: false,
+                additional_contexts,
+            },
+        }
+    }
+}
+
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -134,6 +167,41 @@ pub(crate) async fn run_pending_session_start_hooks(
     .await
     .record_additional_contexts(sess, turn_context)
     .await
+}
+
+pub(crate) async fn run_pending_subagent_start_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) {
+    if !sess.take_pending_subagent_start().await {
+        return;
+    }
+
+    let Some(metadata) = subagent_hook_metadata(sess, turn_context).await else {
+        return;
+    };
+    let request = codex_hooks::SubagentStartRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: metadata.parent_transcript_path,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        agent_id: metadata.agent_id,
+        agent_type: metadata.agent_type,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_subagent_start(&request);
+    run_context_injecting_hook(
+        sess,
+        turn_context,
+        preview_runs,
+        hooks.run_subagent_start(request),
+    )
+    .await
+    .record_additional_contexts(sess, turn_context)
+    .await;
 }
 
 /// Runs matching `PreToolUse` hooks before a tool executes.
@@ -270,6 +338,54 @@ pub(crate) async fn run_post_tool_use_hooks(
     let outcome = hooks.run_post_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
+}
+
+pub(crate) async fn run_turn_stop_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    stop_hook_active: bool,
+    last_assistant_message: Option<String>,
+) -> StopHookOutcome {
+    let hooks = sess.hooks();
+    let outcome = if let Some(metadata) = subagent_hook_metadata(sess, turn_context).await {
+        let request = codex_hooks::SubagentStopRequest {
+            session_id: sess.session_id().into(),
+            turn_id: turn_context.sub_id.clone(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            transcript_path: metadata.parent_transcript_path,
+            model: turn_context.model_info.slug.clone(),
+            permission_mode: hook_permission_mode(turn_context),
+            stop_hook_active,
+            agent_id: metadata.agent_id,
+            agent_type: metadata.agent_type,
+            agent_transcript_path: metadata.agent_transcript_path,
+            last_assistant_message,
+        };
+        emit_hook_started_events(sess, turn_context, hooks.preview_subagent_stop(&request)).await;
+        hooks.run_subagent_stop(request).await
+    } else {
+        let request = codex_hooks::StopRequest {
+            session_id: sess.session_id().into(),
+            turn_id: turn_context.sub_id.clone(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            transcript_path: sess.hook_transcript_path().await,
+            model: turn_context.model_info.slug.clone(),
+            permission_mode: hook_permission_mode(turn_context),
+            stop_hook_active,
+            last_assistant_message,
+        };
+        emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+        hooks.run_stop(request).await
+    };
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+
+    StopHookOutcome {
+        should_stop: outcome.should_stop,
+        should_block: outcome.should_block,
+        continuation_fragments: outcome.continuation_fragments,
+    }
 }
 
 pub(crate) async fn run_pre_compact_hooks(
@@ -555,6 +671,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     };
     let hook_source = match run.source {
@@ -593,6 +711,52 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
+}
+
+async fn subagent_hook_metadata(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+) -> Option<SubagentHookMetadata> {
+    let SessionSource::SubAgent(subagent_source) = &turn_context.session_source else {
+        return None;
+    };
+
+    let parent_thread_id = match subagent_source {
+        SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        } => Some(*parent_thread_id),
+        SubAgentSource::Review
+        | SubAgentSource::Compact
+        | SubAgentSource::MemoryConsolidation
+        | SubAgentSource::Other(_) => None,
+    };
+    let parent_transcript_path = if let Some(parent_thread_id) = parent_thread_id {
+        sess.services
+            .agent_control
+            .thread_rollout_path(parent_thread_id)
+            .await
+    } else {
+        None
+    };
+
+    Some(SubagentHookMetadata {
+        agent_id: sess.thread_id().to_string(),
+        agent_type: subagent_hook_agent_type(subagent_source),
+        parent_transcript_path,
+        agent_transcript_path: sess.hook_transcript_path().await,
+    })
+}
+
+fn subagent_hook_agent_type(subagent_source: &SubAgentSource) -> String {
+    match subagent_source {
+        SubAgentSource::ThreadSpawn { agent_role, .. } => agent_role
+            .clone()
+            .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string()),
+        SubAgentSource::Review => "review".to_string(),
+        SubAgentSource::Compact => "compact".to_string(),
+        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
+        SubAgentSource::Other(value) => value.clone(),
+    }
 }
 
 fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
