@@ -310,45 +310,15 @@ impl ExecPolicyManager {
         let match_options = MatchOptions {
             resolve_host_executables: true,
         };
-        let mut evaluation = exec_policy.check_multiple_with_options(
-            commands.iter(),
+        let evaluation = apply_arbitrary_command_guard(
+            exec_policy.check_multiple_with_options(
+                commands.iter(),
+                &exec_policy_fallback,
+                &match_options,
+            ),
+            &commands,
             &exec_policy_fallback,
-            &match_options,
         );
-        if evaluation.decision == Decision::Allow {
-            let mut arbitrary_command_matches = commands
-                .iter()
-                .filter_map(|command| {
-                    if !command_can_execute_arbitrary_command(command)
-                        || arbitrary_command_execution_is_explicitly_allowed(
-                            command,
-                            &evaluation.matched_rules,
-                        )
-                    {
-                        return None;
-                    }
-
-                    let decision = exec_policy_fallback(command);
-                    (decision != Decision::Allow).then(|| RuleMatch::HeuristicsRuleMatch {
-                        command: command.clone(),
-                        decision,
-                    })
-                })
-                .collect::<Vec<_>>();
-            if !arbitrary_command_matches.is_empty() {
-                evaluation.decision = if arbitrary_command_matches
-                    .iter()
-                    .any(|rule_match| rule_match.decision() == Decision::Forbidden)
-                {
-                    Decision::Forbidden
-                } else {
-                    Decision::Prompt
-                };
-                evaluation
-                    .matched_rules
-                    .append(&mut arbitrary_command_matches);
-            }
-        }
 
         let requested_amendment = if auto_amendment_allowed {
             derive_requested_execpolicy_amendment_from_prefix_rule(
@@ -526,6 +496,60 @@ fn arbitrary_command_execution_is_explicitly_allowed(
 
         command.starts_with(matched_prefix) && command_can_execute_arbitrary_command(matched_prefix)
     })
+}
+
+fn apply_arbitrary_command_guard<F>(
+    evaluation: Evaluation,
+    commands: &[Vec<String>],
+    exec_policy_fallback: &F,
+) -> Evaluation
+where
+    F: Fn(&[String]) -> Decision,
+{
+    if evaluation.decision != Decision::Allow {
+        return evaluation;
+    }
+
+    let arbitrary_command_matches = commands
+        .iter()
+        .filter_map(|command| {
+            if !command_can_execute_arbitrary_command(command)
+                || arbitrary_command_execution_is_explicitly_allowed(
+                    command,
+                    &evaluation.matched_rules,
+                )
+            {
+                return None;
+            }
+
+            let decision = exec_policy_fallback(command);
+            (decision != Decision::Allow).then(|| RuleMatch::HeuristicsRuleMatch {
+                command: command.clone(),
+                decision,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if arbitrary_command_matches.is_empty() {
+        return evaluation;
+    }
+
+    let decision = if arbitrary_command_matches
+        .iter()
+        .any(|rule_match| rule_match.decision() == Decision::Forbidden)
+    {
+        Decision::Forbidden
+    } else {
+        Decision::Prompt
+    };
+    let Evaluation {
+        mut matched_rules, ..
+    } = evaluation;
+    matched_rules.extend(arbitrary_command_matches);
+    Evaluation {
+        decision,
+        matched_rules,
+    }
 }
 
 impl Default for ExecPolicyManager {
