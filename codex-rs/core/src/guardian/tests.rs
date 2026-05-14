@@ -2163,7 +2163,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
             }),
             ..Default::default()
         }),
-        parent_config.permissions.permission_profile().get(),
+        parent_config.permissions.permission_profile(),
     )
     .expect("network proxy spec");
     parent_config.permissions.network = Some(network.clone());
@@ -2191,9 +2191,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
     );
     assert_eq!(
         guardian_config.permissions.permission_profile(),
-        &Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_read_only_policy(),
-        ))
+        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy())
     );
 }
 
@@ -2230,7 +2228,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         NetworkProxySpec::from_config_and_constraints(
             parent_network,
             /*requirements*/ None,
-            parent_config.permissions.permission_profile().get(),
+            parent_config.permissions.permission_profile(),
         )
         .expect("parent network proxy spec"),
     );

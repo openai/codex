@@ -868,8 +868,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         state
             .session_configuration
-            .permission_profile
-            .set(PermissionProfile::from_legacy_sandbox_policy(
+            .set_permission_profile_for_tests(PermissionProfile::from_legacy_sandbox_policy(
                 &initial_policy,
             ))
             .expect("test setup should allow permission profile");
@@ -2887,8 +2886,7 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2991,8 +2989,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3464,8 +3461,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3528,13 +3524,15 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
         },
     ]);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    session_configuration.permission_profile = codex_config::Constrained::allow_any(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        ),
-    );
+    session_configuration
+        .set_permission_profile_for_tests(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+            ),
+        )
+        .expect("set permission profile");
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -3569,13 +3567,15 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         );
     existing_file_system_policy.glob_scan_max_depth = Some(2);
     existing_file_system_policy.entries.push(deny_entry.clone());
-    session_configuration.permission_profile = codex_config::Constrained::allow_any(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&workspace_policy),
-            &existing_file_system_policy,
-            NetworkSandboxPolicy::Restricted,
-        ),
-    );
+    session_configuration
+        .set_permission_profile_for_tests(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&workspace_policy),
+                &existing_file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+        )
+        .expect("set permission profile");
 
     let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &workspace_policy,
@@ -3750,13 +3750,15 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
         &sandbox_policy,
         &session_configuration.cwd,
     );
-    session_configuration.permission_profile = codex_config::Constrained::allow_any(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        ),
-    );
+    session_configuration
+        .set_permission_profile_for_tests(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&sandbox_policy),
+            ),
+        )
+        .expect("set permission profile");
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -3802,13 +3804,15 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
             access: FileSystemAccessMode::Write,
         },
     ]);
-    session_configuration.permission_profile = codex_config::Constrained::allow_any(
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::Managed,
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::Restricted,
-        ),
-    );
+    session_configuration
+        .set_permission_profile_for_tests(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::Managed,
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::Restricted,
+            ),
+        )
+        .expect("set permission profile");
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -3997,8 +4001,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4106,8 +4109,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4151,10 +4153,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
-            &config.permissions.approval_policy,
-            config.permissions.permission_profile(),
-        ))),
+        mcp_connection_manager: Arc::new(RwLock::new(
+            McpConnectionManager::new_uninitialized_with_permission_profile(
+                &config.permissions.approval_policy,
+                config.permissions.permission_profile(),
+            ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -4338,8 +4342,7 @@ async fn make_session_with_config_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4441,8 +4444,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -5958,8 +5960,7 @@ where
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        permission_profile: config.permissions.permission_profile().clone(),
-        active_permission_profile: config.permissions.active_permission_profile(),
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -6003,10 +6004,12 @@ where
     );
 
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
-            &config.permissions.approval_policy,
-            config.permissions.permission_profile(),
-        ))),
+        mcp_connection_manager: Arc::new(RwLock::new(
+            McpConnectionManager::new_uninitialized_with_permission_profile(
+                &config.permissions.approval_policy,
+                config.permissions.permission_profile(),
+            ),
+        )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
