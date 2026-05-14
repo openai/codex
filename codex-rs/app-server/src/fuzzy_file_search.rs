@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchResult;
@@ -26,6 +27,7 @@ pub(crate) async fn run_fuzzy_file_search(
     if roots.is_empty() {
         return Vec::new();
     }
+    let started_at = Instant::now();
 
     #[expect(clippy::expect_used)]
     let limit = NonZero::new(MATCH_LIMIT).expect("MATCH_LIMIT should be a valid non-zero usize");
@@ -87,6 +89,11 @@ pub(crate) async fn run_fuzzy_file_search(
         _,
     >(|f| f.score, |f| f.path.as_str()));
 
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        file_count = files.len(),
+        "fuzzy file search completed"
+    );
     files
 }
 
@@ -104,6 +111,11 @@ impl FuzzyFileSearchSession {
             #[expect(clippy::unwrap_used)]
             let mut latest_query = self.shared.latest_query.lock().unwrap();
             *latest_query = query.clone();
+        }
+        {
+            #[expect(clippy::unwrap_used)]
+            let mut latest_query_started_at = self.shared.latest_query_started_at.lock().unwrap();
+            *latest_query_started_at = Some(Instant::now());
         }
         self.session.update_query(&query);
     }
@@ -133,6 +145,7 @@ pub(crate) fn start_fuzzy_file_search_session(
 
     let shared = Arc::new(SessionShared {
         session_id,
+        latest_query_started_at: Mutex::new(None),
         latest_query: Mutex::new(String::new()),
         outgoing,
         runtime: tokio::runtime::Handle::current(),
@@ -159,6 +172,7 @@ pub(crate) fn start_fuzzy_file_search_session(
 
 struct SessionShared {
     session_id: String,
+    latest_query_started_at: Mutex<Option<Instant>>,
     latest_query: Mutex<String>,
     outgoing: Arc<OutgoingMessageSender>,
     runtime: tokio::runtime::Handle,
@@ -179,6 +193,14 @@ impl SessionReporterImpl {
             #[expect(clippy::unwrap_used)]
             self.shared.latest_query.lock().unwrap().clone()
         };
+        let elapsed_ms = {
+            #[expect(clippy::unwrap_used)]
+            self.shared
+                .latest_query_started_at
+                .lock()
+                .unwrap()
+                .map(|started_at| started_at.elapsed().as_millis())
+        };
         if snapshot.query != query {
             return;
         }
@@ -188,6 +210,13 @@ impl SessionReporterImpl {
         } else {
             collect_files(snapshot)
         };
+        tracing::info!(
+            elapsed_ms = ?elapsed_ms,
+            session_id = %self.shared.session_id,
+            query_len = query.len(),
+            file_count = files.len(),
+            "fuzzy file search session snapshot delivered"
+        );
 
         let notification = ServerNotification::FuzzyFileSearchSessionUpdated(
             FuzzyFileSearchSessionUpdatedNotification {

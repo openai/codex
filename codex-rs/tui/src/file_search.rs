@@ -9,6 +9,7 @@ use codex_file_search as file_search;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -21,6 +22,7 @@ pub(crate) struct FileSearchManager {
 
 struct SearchState {
     latest_query: String,
+    latest_query_started_at: Option<Instant>,
     session: Option<file_search::FileSearchSession>,
     session_token: usize,
 }
@@ -30,6 +32,7 @@ impl FileSearchManager {
         Self {
             state: Arc::new(Mutex::new(SearchState {
                 latest_query: String::new(),
+                latest_query_started_at: None,
                 session: None,
                 session_token: 0,
             })),
@@ -47,6 +50,7 @@ impl FileSearchManager {
         let mut st = self.state.lock().unwrap();
         st.session.take();
         st.latest_query.clear();
+        st.latest_query_started_at = None;
     }
 
     /// Call whenever the user edits the `@` token.
@@ -58,21 +62,33 @@ impl FileSearchManager {
         }
         st.latest_query.clear();
         st.latest_query.push_str(&query);
+        st.latest_query_started_at = Some(Instant::now());
 
         if query.is_empty() {
+            tracing::info!("TUI @ file search query cleared");
+            st.latest_query_started_at = None;
             st.session.take();
             return;
         }
 
-        if st.session.is_none() {
+        let session_was_missing = st.session.is_none();
+        if session_was_missing {
             self.start_session_locked(&mut st);
         }
         if let Some(session) = st.session.as_ref() {
+            let update_started_at = Instant::now();
             session.update_query(&query);
+            tracing::info!(
+                elapsed_us = update_started_at.elapsed().as_micros(),
+                query_len = query.len(),
+                session_was_missing,
+                "TUI @ file search query dispatched"
+            );
         }
     }
 
     fn start_session_locked(&self, st: &mut SearchState) {
+        let started_at = Instant::now();
         st.session_token = st.session_token.wrapping_add(1);
         let session_token = st.session_token;
         let reporter = Arc::new(TuiSessionReporter {
@@ -90,9 +106,21 @@ impl FileSearchManager {
             /*cancel_flag*/ None,
         );
         match session {
-            Ok(session) => st.session = Some(session),
+            Ok(session) => {
+                tracing::info!(
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    session_token,
+                    root_count = 1,
+                    "TUI @ file search session started"
+                );
+                st.session = Some(session);
+            }
             Err(err) => {
-                tracing::warn!("file search session failed to start: {err}");
+                tracing::warn!(
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    root_count = 1,
+                    "file search session failed to start: {err}"
+                );
                 st.session = None;
             }
         }
@@ -109,6 +137,9 @@ impl TuiSessionReporter {
     fn send_snapshot(&self, snapshot: &file_search::FileSearchSnapshot) {
         #[expect(clippy::unwrap_used)]
         let st = self.state.lock().unwrap();
+        let elapsed_ms = st
+            .latest_query_started_at
+            .map(|started_at| started_at.elapsed().as_millis());
         if st.session_token != self.session_token
             || st.latest_query.is_empty()
             || snapshot.query.is_empty()
@@ -116,7 +147,14 @@ impl TuiSessionReporter {
             return;
         }
         let query = snapshot.query.clone();
+        let match_count = snapshot.matches.len();
         drop(st);
+        tracing::info!(
+            elapsed_ms = ?elapsed_ms,
+            query_len = query.len(),
+            match_count,
+            "TUI @ file search snapshot delivered"
+        );
         self.app_tx.send(AppEvent::FileSearchResult {
             query,
             matches: snapshot.matches.clone(),

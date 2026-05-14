@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
@@ -45,6 +46,13 @@ impl SearchRequestProcessor {
             roots,
             cancellation_token,
         } = params;
+        let started_at = Instant::now();
+        tracing::info!(
+            query_len = query.len(),
+            root_count = roots.len(),
+            has_cancellation_token = cancellation_token.is_some(),
+            "fuzzyFileSearch request started"
+        );
 
         let cancel_flag = match cancellation_token.clone() {
             Some(token) => {
@@ -75,6 +83,11 @@ impl SearchRequestProcessor {
             }
         }
 
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            file_count = results.len(),
+            "fuzzyFileSearch request completed"
+        );
         Ok(FuzzyFileSearchResponse { files: results })
     }
 
@@ -87,6 +100,12 @@ impl SearchRequestProcessor {
             return Err(invalid_request("sessionId must not be empty"));
         }
 
+        let started_at = Instant::now();
+        tracing::info!(
+            session_id = %session_id,
+            root_count = roots.len(),
+            "fuzzyFileSearch session start requested"
+        );
         let session =
             start_fuzzy_file_search_session(session_id.clone(), roots, self.outgoing.clone())
                 .map_err(|err| {
@@ -96,6 +115,10 @@ impl SearchRequestProcessor {
             .lock()
             .await
             .insert(session_id, session);
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "fuzzyFileSearch session started"
+        );
         Ok(FuzzyFileSearchSessionStartResponse {})
     }
 
@@ -104,6 +127,8 @@ impl SearchRequestProcessor {
         params: FuzzyFileSearchSessionUpdateParams,
     ) -> Result<FuzzyFileSearchSessionUpdateResponse, JSONRPCErrorError> {
         let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
+        let started_at = Instant::now();
+        let query_len = query.len();
         let found = {
             let sessions = self.fuzzy_search_sessions.lock().await;
             if let Some(session) = sessions.get(&session_id) {
@@ -119,6 +144,12 @@ impl SearchRequestProcessor {
             )));
         }
 
+        tracing::info!(
+            elapsed_us = started_at.elapsed().as_micros(),
+            session_id = %session_id,
+            query_len,
+            "fuzzyFileSearch session query dispatched"
+        );
         Ok(FuzzyFileSearchSessionUpdateResponse {})
     }
 
@@ -127,8 +158,14 @@ impl SearchRequestProcessor {
         params: FuzzyFileSearchSessionStopParams,
     ) -> Result<FuzzyFileSearchSessionStopResponse, JSONRPCErrorError> {
         let FuzzyFileSearchSessionStopParams { session_id } = params;
+        let started_at = Instant::now();
         self.fuzzy_search_sessions.lock().await.remove(&session_id);
 
+        tracing::info!(
+            elapsed_us = started_at.elapsed().as_micros(),
+            session_id = %session_id,
+            "fuzzyFileSearch session stopped"
+        );
         Ok(FuzzyFileSearchSessionStopResponse {})
     }
 }

@@ -1100,13 +1100,13 @@ impl MessageProcessor {
                 self.marketplace_processor.marketplace_upgrade(params).await
             }
             ClientRequest::PluginList { params, .. } => {
-                self.plugin_processor.plugin_list(params).await
+                self.plugin_processor.plugin_list(&request_id, params).await
             }
             ClientRequest::PluginInstalled { params, .. } => {
                 self.plugin_processor.plugin_installed(params).await
             }
             ClientRequest::PluginRead { params, .. } => {
-                self.plugin_processor.plugin_read(params).await
+                self.plugin_processor.plugin_read(&request_id, params).await
             }
             ClientRequest::PluginSkillRead { params, .. } => {
                 self.plugin_processor.plugin_skill_read(params).await

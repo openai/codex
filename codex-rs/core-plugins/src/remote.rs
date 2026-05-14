@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 use url::Url;
 
 mod remote_installed_plugin_sync;
@@ -485,6 +486,12 @@ pub async fn fetch_remote_marketplaces(
     auth: Option<&CodexAuth>,
     sources: &[RemoteMarketplaceSource],
 ) -> Result<Vec<RemoteMarketplace>, RemotePluginCatalogError> {
+    let started_at = Instant::now();
+    tracing::info!(
+        source_count = sources.len(),
+        sources = ?sources,
+        "remote plugin marketplace fetch started"
+    );
     let auth = ensure_chatgpt_auth(auth)?;
     let mut marketplaces = Vec::new();
     let needs_workspace_installed = sources.iter().any(|source| {
@@ -494,12 +501,21 @@ pub async fn fetch_remote_marketplaces(
         )
     });
     let workspace_installed_plugins = if needs_workspace_installed {
-        Some(fetch_installed_plugins_for_scope(config, auth, RemotePluginScope::Workspace).await?)
+        let workspace_installed_started_at = Instant::now();
+        let plugins =
+            fetch_installed_plugins_for_scope(config, auth, RemotePluginScope::Workspace).await?;
+        tracing::info!(
+            elapsed_ms = workspace_installed_started_at.elapsed().as_millis(),
+            plugin_count = plugins.len(),
+            "remote plugin workspace installed prerequisite fetched"
+        );
+        Some(plugins)
     } else {
         None
     };
 
     for source in sources {
+        let source_started_at = Instant::now();
         match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
@@ -507,6 +523,8 @@ pub async fn fetch_remote_marketplaces(
                     fetch_directory_plugins_for_scope(config, auth, scope),
                     fetch_installed_plugins_for_scope(config, auth, scope),
                 )?;
+                let directory_plugin_count = directory_plugins.len();
+                let installed_plugin_count = installed_plugins.len();
                 if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
@@ -514,13 +532,34 @@ pub async fn fetch_remote_marketplaces(
                     installed_plugins,
                     /*include_installed_only*/ true,
                 )? {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        directory_plugin_count,
+                        installed_plugin_count,
+                        plugin_count = marketplace.plugins.len(),
+                        "remote plugin marketplace source fetched"
+                    );
                     marketplaces.push(marketplace);
+                } else {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        directory_plugin_count,
+                        installed_plugin_count,
+                        plugin_count = 0,
+                        "remote plugin marketplace source fetched empty"
+                    );
                 }
             }
             RemoteMarketplaceSource::WorkspaceDirectory => {
                 let scope = RemotePluginScope::Workspace;
                 let directory_plugins =
                     fetch_directory_plugins_for_scope(config, auth, scope).await?;
+                let directory_plugin_count = directory_plugins.len();
+                let installed_plugin_count = workspace_installed_plugins
+                    .as_ref()
+                    .map_or(0, std::vec::Vec::len);
                 if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
@@ -528,7 +567,24 @@ pub async fn fetch_remote_marketplaces(
                     workspace_installed_plugins.clone().unwrap_or_default(),
                     /*include_installed_only*/ false,
                 )? {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        directory_plugin_count,
+                        installed_plugin_count,
+                        plugin_count = marketplace.plugins.len(),
+                        "remote plugin marketplace source fetched"
+                    );
                     marketplaces.push(marketplace);
+                } else {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        directory_plugin_count,
+                        installed_plugin_count,
+                        plugin_count = 0,
+                        "remote plugin marketplace source fetched empty"
+                    );
                 }
             }
             RemoteMarketplaceSource::SharedWithMe => {
@@ -536,6 +592,7 @@ pub async fn fetch_remote_marketplaces(
                 // with the user. Installed unlisted plugins that are not returned there are
                 // link-installed and stay in the separate unlisted bucket.
                 let shared_plugins = fetch_shared_workspace_plugins(config, auth).await?;
+                let shared_plugin_count = shared_plugins.len();
                 let shared_plugin_ids = shared_plugins
                     .iter()
                     .map(|plugin| plugin.id.clone())
@@ -558,6 +615,14 @@ pub async fn fetch_remote_marketplaces(
                     workspace_installed_plugins.clone().unwrap_or_default(),
                     /*include_installed_only*/ false,
                 )? {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        shared_plugin_count,
+                        plugin_count = marketplace.plugins.len(),
+                        marketplace_name = %REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+                        "remote plugin shared marketplace bucket fetched"
+                    );
                     marketplaces.push(marketplace);
                 }
 
@@ -586,12 +651,36 @@ pub async fn fetch_remote_marketplaces(
                     unlisted_installed_plugins,
                     /*include_installed_only*/ true,
                 )? {
+                    tracing::info!(
+                        elapsed_ms = source_started_at.elapsed().as_millis(),
+                        source = ?source,
+                        shared_plugin_count,
+                        plugin_count = marketplace.plugins.len(),
+                        marketplace_name = %REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+                        "remote plugin shared marketplace bucket fetched"
+                    );
                     marketplaces.push(marketplace);
                 }
+                tracing::info!(
+                    elapsed_ms = source_started_at.elapsed().as_millis(),
+                    source = ?source,
+                    shared_plugin_count,
+                    "remote plugin marketplace source fetched"
+                );
             }
         }
     }
 
+    let plugin_count: usize = marketplaces
+        .iter()
+        .map(|marketplace| marketplace.plugins.len())
+        .sum();
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        marketplace_count = marketplaces.len(),
+        plugin_count,
+        "remote plugin marketplace fetch completed"
+    );
     Ok(marketplaces)
 }
 
@@ -1175,17 +1264,35 @@ async fn fetch_directory_plugins_for_scope(
     auth: &CodexAuth,
     scope: RemotePluginScope,
 ) -> Result<Vec<RemotePluginDirectoryItem>, RemotePluginCatalogError> {
+    let started_at = Instant::now();
     let mut plugins = Vec::new();
     let mut page_token = None;
+    let mut page_count = 0usize;
     loop {
+        let page_started_at = Instant::now();
         let response =
             get_remote_plugin_list_page(config, auth, scope, page_token.as_deref()).await?;
+        page_count += 1;
+        tracing::info!(
+            elapsed_ms = page_started_at.elapsed().as_millis(),
+            scope = ?scope,
+            page_plugin_count = response.plugins.len(),
+            has_next_page = response.pagination.next_page_token.is_some(),
+            "remote plugin directory page fetched"
+        );
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
         };
         page_token = Some(next_page_token);
     }
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        scope = ?scope,
+        page_count,
+        plugin_count = plugins.len(),
+        "remote plugin directory fetched"
+    );
     Ok(plugins)
 }
 
@@ -1193,17 +1300,33 @@ async fn fetch_shared_workspace_plugins(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
 ) -> Result<Vec<RemotePluginDirectoryItem>, RemotePluginCatalogError> {
+    let started_at = Instant::now();
     let mut plugins = Vec::new();
     let mut page_token = None;
+    let mut page_count = 0usize;
     loop {
+        let page_started_at = Instant::now();
         let response =
             get_remote_shared_workspace_plugins_page(config, auth, page_token.as_deref()).await?;
+        page_count += 1;
+        tracing::info!(
+            elapsed_ms = page_started_at.elapsed().as_millis(),
+            page_plugin_count = response.plugins.len(),
+            has_next_page = response.pagination.next_page_token.is_some(),
+            "remote shared workspace plugin page fetched"
+        );
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
         };
         page_token = Some(next_page_token);
     }
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        page_count,
+        plugin_count = plugins.len(),
+        "remote shared workspace plugins fetched"
+    );
     Ok(plugins)
 }
 
@@ -1224,9 +1347,12 @@ async fn fetch_installed_plugins_for_scope_with_download_url(
     scope: RemotePluginScope,
     include_download_urls: bool,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
+    let started_at = Instant::now();
     let mut plugins = Vec::new();
     let mut page_token = None;
+    let mut page_count = 0usize;
     loop {
+        let page_started_at = Instant::now();
         let response = get_remote_plugin_installed_page(
             config,
             auth,
@@ -1235,12 +1361,29 @@ async fn fetch_installed_plugins_for_scope_with_download_url(
             include_download_urls,
         )
         .await?;
+        page_count += 1;
+        tracing::info!(
+            elapsed_ms = page_started_at.elapsed().as_millis(),
+            scope = ?scope,
+            include_download_urls,
+            page_plugin_count = response.plugins.len(),
+            has_next_page = response.pagination.next_page_token.is_some(),
+            "remote installed plugin page fetched"
+        );
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
         };
         page_token = Some(next_page_token);
     }
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        scope = ?scope,
+        include_download_urls,
+        page_count,
+        plugin_count = plugins.len(),
+        "remote installed plugins fetched"
+    );
     Ok(plugins)
 }
 
@@ -1359,16 +1502,51 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
     request: RequestBuilder,
     url: &str,
 ) -> Result<T, RemotePluginCatalogError> {
-    let response = request
-        .send()
-        .await
-        .map_err(|source| RemotePluginCatalogError::Request {
-            url: url.to_string(),
-            source,
-        })?;
+    let started_at = Instant::now();
+    let url_path = Url::parse(url)
+        .map(|url| url.path().to_string())
+        .unwrap_or_else(|_| "<invalid-url>".to_string());
+    let response = match request.send().await {
+        Ok(response) => {
+            tracing::info!(
+                elapsed_ms = started_at.elapsed().as_millis(),
+                url_path = %url_path,
+                status = %response.status(),
+                "remote plugin HTTP response received"
+            );
+            response
+        }
+        Err(source) => {
+            tracing::warn!(
+                elapsed_ms = started_at.elapsed().as_millis(),
+                url_path = %url_path,
+                "remote plugin HTTP request failed: {source}"
+            );
+            return Err(RemotePluginCatalogError::Request {
+                url: url.to_string(),
+                source,
+            });
+        }
+    };
     let status = response.status();
+    let body_started_at = Instant::now();
     let body = response.text().await.unwrap_or_default();
+    tracing::info!(
+        elapsed_ms = body_started_at.elapsed().as_millis(),
+        total_elapsed_ms = started_at.elapsed().as_millis(),
+        url_path = %url_path,
+        status = %status,
+        body_bytes = body.len(),
+        "remote plugin HTTP body read"
+    );
     if !status.is_success() {
+        tracing::warn!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            url_path = %url_path,
+            status = %status,
+            body_bytes = body.len(),
+            "remote plugin HTTP request returned unexpected status"
+        );
         return Err(RemotePluginCatalogError::UnexpectedStatus {
             url: url.to_string(),
             status,
@@ -1376,8 +1554,26 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
         });
     }
 
-    serde_json::from_str(&body).map_err(|source| RemotePluginCatalogError::Decode {
-        url: url.to_string(),
-        source,
-    })
+    let decode_started_at = Instant::now();
+    let decoded = serde_json::from_str(&body).map_err(|source| {
+        tracing::warn!(
+            elapsed_ms = decode_started_at.elapsed().as_millis(),
+            total_elapsed_ms = started_at.elapsed().as_millis(),
+            url_path = %url_path,
+            body_bytes = body.len(),
+            "remote plugin HTTP response decode failed: {source}"
+        );
+        RemotePluginCatalogError::Decode {
+            url: url.to_string(),
+            source,
+        }
+    })?;
+    tracing::info!(
+        elapsed_ms = decode_started_at.elapsed().as_millis(),
+        total_elapsed_ms = started_at.elapsed().as_millis(),
+        url_path = %url_path,
+        body_bytes = body.len(),
+        "remote plugin HTTP response decoded"
+    );
+    Ok(decoded)
 }

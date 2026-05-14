@@ -19,6 +19,7 @@ use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::time::Instant;
 
 impl App {
     pub(super) fn fetch_mcp_inventory(
@@ -658,17 +659,38 @@ pub(super) async fn request_plugin_list(
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
-    let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
-    request_handle
+    let request_id = format!("plugin-list-{}", Uuid::new_v4());
+    let started_at = Instant::now();
+    tracing::info!(
+        request_id = %request_id,
+        root_count = 1,
+        "plugin/list TUI request started"
+    );
+    let response: PluginListResponse = request_handle
         .request_typed(ClientRequest::PluginList {
-            request_id,
+            request_id: RequestId::String(request_id.clone()),
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
                 marketplace_kinds: None,
             },
         })
         .await
-        .wrap_err("plugin/list failed in TUI")
+        .wrap_err("plugin/list failed in TUI")?;
+    let plugin_count: usize = response
+        .marketplaces
+        .iter()
+        .map(|marketplace| marketplace.plugins.len())
+        .sum();
+    tracing::info!(
+        request_id = %request_id,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        marketplace_count = response.marketplaces.len(),
+        plugin_count,
+        marketplace_load_error_count = response.marketplace_load_errors.len(),
+        featured_plugin_id_count = response.featured_plugin_ids.len(),
+        "plugin/list TUI request completed"
+    );
+    Ok(response)
 }
 
 pub(super) async fn fetch_plugin_detail(

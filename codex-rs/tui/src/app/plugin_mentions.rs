@@ -12,6 +12,7 @@ use codex_app_server_protocol::PluginSummary;
 use codex_core_plugins::PluginsManager;
 use codex_plugin::PluginCapabilitySummary;
 use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 struct PluginMentionEntry {
@@ -41,14 +42,47 @@ pub(super) async fn fetch_plugin_mentions(
     request_handle: AppServerRequestHandle,
     config: crate::legacy_core::config::Config,
 ) -> Result<Vec<PluginCapabilitySummary>> {
+    let started_at = Instant::now();
+    let list_started_at = Instant::now();
     let response = request_plugin_list(request_handle, config.cwd.to_path_buf()).await?;
+    let list_elapsed_ms = list_started_at.elapsed().as_millis();
+    let marketplace_count = response.marketplaces.len();
+    let list_plugin_count: usize = response
+        .marketplaces
+        .iter()
+        .map(|marketplace| marketplace.plugins.len())
+        .sum();
+    tracing::info!(
+        elapsed_ms = list_elapsed_ms,
+        marketplace_count,
+        plugin_count = list_plugin_count,
+        marketplace_load_error_count = response.marketplace_load_errors.len(),
+        featured_plugin_id_count = response.featured_plugin_ids.len(),
+        "plugin mention plugin/list phase completed"
+    );
     let mention_entries = plugin_mention_entries_from_list_response(response);
+    tracing::info!(
+        mention_entry_count = mention_entries.len(),
+        "plugin mention list response filtered"
+    );
+    let capabilities_started_at = Instant::now();
     let capabilities_by_config_name = load_plugin_mention_capabilities(&config).await;
+    tracing::info!(
+        elapsed_ms = capabilities_started_at.elapsed().as_millis(),
+        capability_count = capabilities_by_config_name.len(),
+        "plugin mention local capability phase completed"
+    );
 
-    Ok(mention_entries
+    let plugins = mention_entries
         .into_iter()
         .filter_map(|entry| entry.capability_summary(&capabilities_by_config_name))
-        .collect())
+        .collect::<Vec<_>>();
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        mention_count = plugins.len(),
+        "plugin mentions fetched"
+    );
+    Ok(plugins)
 }
 
 async fn load_plugin_mention_capabilities(
