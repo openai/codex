@@ -131,7 +131,7 @@ pub async fn run_plugin_list(
         codex_home.as_path(),
         &plugins_input,
         &outcome.errors,
-        None,
+        /*marketplace_name*/ None,
     )?;
 
     let marketplaces = outcome
