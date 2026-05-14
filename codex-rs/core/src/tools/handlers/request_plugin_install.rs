@@ -50,6 +50,7 @@ impl RequestPluginInstallHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     type Output = FunctionToolOutput;
 

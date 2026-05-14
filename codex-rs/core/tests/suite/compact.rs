@@ -26,7 +26,6 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::hooks::trust_discovered_hooks;
-use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
@@ -77,6 +76,14 @@ const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+
+fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
+    ev_function_call(
+        call_id,
+        "shell_command",
+        &json!({ "command": command }).to_string(),
+    )
+}
 
 fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
@@ -954,7 +961,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // first chunk of work
     let model_reasoning_response_1_sse = sse(vec![
         reasoning_response_1.clone(),
-        ev_local_shell_call("r1-shell", "completed", vec!["echo", "make-react"]),
+        ev_shell_command_call("r1-shell", "echo make-react"),
         ev_completed_with_tokens("r1", token_count_used),
     ]);
 
@@ -972,7 +979,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // second chunk of work
     let model_reasoning_response_2_sse = sse(vec![
         reasoning_response_2.clone(),
-        ev_local_shell_call("r3-shell", "completed", vec!["echo", "make-node"]),
+        ev_shell_command_call("r3-shell", "echo make-node"),
         ev_completed_with_tokens("r3", token_count_used),
     ]);
 
@@ -990,7 +997,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
         ev_reasoning_item("m6", &["I will create a python app"], &[]),
-        ev_local_shell_call("r6-shell", "completed", vec!["echo", "make-python"]),
+        ev_shell_command_call("r6-shell", "echo make-python"),
         ev_completed_with_tokens("r6", token_count_used),
     ]);
 
@@ -1186,20 +1193,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         "type": "reasoning"
       },
       {
-        "action": {
-          "command": [
-            "echo",
-            "make-react"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
+        "arguments": "{\"command\":\"echo make-react\"}",
         "call_id": "r1-shell",
-        "status": "completed",
-        "type": "local_shell_call"
+        "name": "shell_command",
+        "type": "function_call"
       },
       {
         "call_id": "r1-shell",
@@ -1296,20 +1293,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         "type": "reasoning"
       },
       {
-        "action": {
-          "command": [
-            "echo",
-            "make-node"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
+        "arguments": "{\"command\":\"echo make-node\"}",
         "call_id": "r3-shell",
-        "status": "completed",
-        "type": "local_shell_call"
+        "name": "shell_command",
+        "type": "function_call"
       },
       {
         "call_id": "r3-shell",
@@ -1406,20 +1393,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         "type": "reasoning"
       },
       {
-        "action": {
-          "command": [
-            "echo",
-            "make-python"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
+        "arguments": "{\"command\":\"echo make-python\"}",
         "call_id": "r6-shell",
-        "status": "completed",
-        "type": "local_shell_call"
+        "name": "shell_command",
+        "type": "function_call"
       },
       {
         "call_id": "r6-shell",

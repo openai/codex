@@ -4,12 +4,17 @@ use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::default_namespace_description;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::MEMORY_TOOLS_NAMESPACE;
 use crate::backend::MemoriesBackend;
 use crate::backend::MemoriesBackendError;
 use crate::schema;
@@ -33,8 +38,15 @@ where
     ]
 }
 
-fn function_tool<I: JsonSchema, O: JsonSchema>(name: &str, description: &str) -> ToolSpec {
-    ToolSpec::Function(ResponsesApiTool {
+pub(super) fn memory_tool_name(name: &str) -> ToolName {
+    ToolName::namespaced(MEMORY_TOOLS_NAMESPACE, name)
+}
+
+pub(super) fn memory_function_tool<I: JsonSchema, O: JsonSchema>(
+    name: &str,
+    description: &str,
+) -> ToolSpec {
+    let tool = ResponsesApiTool {
         name: name.to_string(),
         description: description.to_string(),
         strict: false,
@@ -42,6 +54,12 @@ fn function_tool<I: JsonSchema, O: JsonSchema>(name: &str, description: &str) ->
         parameters: parse_tool_input_schema(&schema::input_schema_for::<I>())
             .unwrap_or_else(|err| panic!("generated input schema for {name} should parse: {err}")),
         output_schema: Some(schema::output_schema_for::<O>()),
+    };
+
+    ToolSpec::Namespace(ResponsesApiNamespace {
+        name: MEMORY_TOOLS_NAMESPACE.to_string(),
+        description: default_namespace_description(MEMORY_TOOLS_NAMESPACE),
+        tools: vec![ResponsesApiNamespaceTool::Function(tool)],
     })
 }
 

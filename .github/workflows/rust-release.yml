@@ -10,6 +10,13 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: "Sign and notarize macOS release artifacts."
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,9 +32,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
+        env:
+          SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${SIGN_MACOS}" == "true" ]]; then
+            echo "❌  Manual rust-release runs must set sign_macos=false"
+            exit 1
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -64,11 +78,36 @@ jobs:
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -95,7 +134,7 @@ jobs:
             binaries: "codex-app-server"
             build_dmg: "false"
 
-    steps: &rust_release_build_steps
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -271,6 +310,39 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
+      - if: ${{ runner.os == 'macOS' }}
+        name: Stage unsigned macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dest="unsigned-dist/${target}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            unsigned_name="${binary}-${target}-unsigned"
+            unsigned_path="${dest}/${unsigned_name}"
+            if [[ ! -f "${binary_path}" ]]; then
+              echo "Binary ${binary_path} not found"
+              exit 1
+            fi
+
+            cp "${binary_path}" "${unsigned_path}"
+            tar -C "$dest" -czf "${unsigned_path}.tar.gz" "${unsigned_name}"
+            zstd -T0 -19 --rm "${unsigned_path}"
+          done
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Upload unsigned macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: codex-rs/unsigned-dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
@@ -279,7 +351,7 @@ jobs:
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
           binaries: ${{ matrix.binaries }}
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS == 'true' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -293,7 +365,7 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
         name: Build macOS dmg
         shell: bash
         run: |
@@ -333,7 +405,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -347,6 +419,7 @@ jobs:
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
       - name: Stage artifacts
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
@@ -376,7 +449,7 @@ jobs:
           fi
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -427,7 +500,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -435,6 +508,7 @@ jobs:
           if-no-files-found: error
 
       - name: Compress artifacts
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
@@ -471,61 +545,13 @@ jobs:
           done
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         with:
           name: ${{ matrix.artifact_name }}
           # Upload the per-binary .zst files, .tar.gz equivalents, and any
           # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
-
-  build-macos:
-    needs: tag-check
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Release builds can take a long time, so leave some headroom to avoid
-    # having to restart the full workflow due to a timeout.
-    timeout-minutes: 90
-    environment: macos-signing
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      # Preserve the LTO setting from the original combined release build matrix.
-      # Linux ARM is why this currently resolves to thin for every target.
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: primary
-            artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: app-server
-            artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: primary
-            artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: app-server
-            artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-
-    steps: *rust_release_build_steps
 
   build-windows:
     needs: tag-check
@@ -549,7 +575,6 @@ jobs:
   release:
     needs:
       - build
-      - build-macos
       - build-windows
       - argument-comment-lint-release-assets
       - zsh-release-assets
@@ -558,9 +583,12 @@ jobs:
     permissions:
       contents: write
       actions: read
+    env:
+      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
     outputs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
+      sign_macos: ${{ steps.release_mode.outputs.sign_macos }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
       should_publish_python_runtime: ${{ steps.python_runtime_publish_settings.outputs.should_publish }}
@@ -570,6 +598,11 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Define release mode
+        id: release_mode
+        run: |
+          echo "sign_macos=${SIGN_MACOS}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -597,6 +630,24 @@ jobs:
 
       - name: List
         run: ls -R dist/
+
+      - name: Prune artifacts excluded from unsigned macOS release
+        if: ${{ env.SIGN_MACOS == 'false' }}
+        run: |
+          find dist -mindepth 1 -maxdepth 1 -type d \
+            ! -name '*-apple-darwin*-unsigned' \
+            ! -name 'aarch64-unknown-linux-musl' \
+            ! -name 'aarch64-unknown-linux-musl-app-server' \
+            ! -name 'x86_64-unknown-linux-musl' \
+            ! -name 'x86_64-unknown-linux-musl-app-server' \
+            ! -name 'aarch64-pc-windows-msvc' \
+            ! -name 'x86_64-pc-windows-msvc' \
+            -exec rm -rf {} +
+
+          if ! find dist -type f -name '*-apple-darwin*-unsigned*' | grep -q .; then
+            echo "No unsigned macOS artifacts found in downloaded workflow artifacts."
+            exit 1
+          fi
 
       - name: Delete entries from dist/ that should not go in the release
         run: |
@@ -629,6 +680,12 @@ jobs:
           set -euo pipefail
           version="${VERSION}"
 
+          if [[ "${SIGN_MACOS}" != "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
@@ -648,6 +705,11 @@ jobs:
           set -euo pipefail
           version="${VERSION}"
 
+          if [[ "${SIGN_MACOS}" != "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
           elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
@@ -657,21 +719,25 @@ jobs:
           fi
 
       - name: Setup pnpm
+        if: ${{ env.SIGN_MACOS == 'true' }}
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
+        if: ${{ env.SIGN_MACOS == 'true' }}
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
 
       - name: Install dependencies
+        if: ${{ env.SIGN_MACOS == 'true' }}
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       - name: Stage npm packages
+        if: ${{ env.SIGN_MACOS == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
@@ -683,6 +749,7 @@ jobs:
             --package codex-sdk
 
       - name: Stage installer scripts
+        if: ${{ env.SIGN_MACOS == 'true' }}
         run: |
           cp scripts/install/install.sh dist/install.sh
           cp scripts/install/install.ps1 dist/install.ps1
@@ -694,25 +761,37 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
+          make_latest: ${{ env.SIGN_MACOS == 'true' && !contains(steps.release_name.outputs.name, '-') }}
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - if: ${{ env.SIGN_MACOS == 'true' }}
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
 
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - if: ${{ env.SIGN_MACOS == 'false' }}
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-unsigned-config.json
+
+      - if: ${{ env.SIGN_MACOS == 'true' }}
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-zsh-config.json
 
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - if: ${{ env.SIGN_MACOS == 'true' }}
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -722,7 +801,7 @@ jobs:
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.
         # The deploy is used to update the developers.openai.com website with the new config schema json file.
-        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        if: ${{ env.SIGN_MACOS == 'true' && !contains(steps.release_name.outputs.name, '-') }}
         continue-on-error: true
         env:
           DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
@@ -936,7 +1015,7 @@ jobs:
     needs: release
     # Only publish stable/mainline releases to WinGet; pre-releases include a
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    if: ${{ needs.release.outputs.sign_macos == 'true' && !contains(needs.release.outputs.version, '-') }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
@@ -956,6 +1035,7 @@ jobs:
 
   update-branch:
     name: Update latest-alpha-cli branch
+    if: ${{ needs.release.outputs.sign_macos == 'true' }}
     permissions:
       contents: write
     needs: release

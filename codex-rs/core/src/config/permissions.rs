@@ -23,6 +23,9 @@ use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -34,9 +37,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ProjectConfig;
 
-pub(crate) const BUILT_IN_READ_ONLY_PROFILE: &str = ":read-only";
-pub(crate) const BUILT_IN_WORKSPACE_PROFILE: &str = ":workspace";
-pub(crate) const BUILT_IN_DANGER_NO_SANDBOX_PROFILE: &str = ":danger-no-sandbox";
+pub(crate) const BUILT_IN_READ_ONLY_PROFILE: &str = BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+pub(crate) const BUILT_IN_WORKSPACE_PROFILE: &str = BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+pub(crate) const BUILT_IN_DANGER_FULL_ACCESS_PROFILE: &str =
+    BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 
 pub(crate) fn default_builtin_permission_profile_name(
     active_project: &ProjectConfig,
@@ -56,7 +60,7 @@ pub(crate) fn is_builtin_permission_profile_name(profile_name: &str) -> bool {
         profile_name,
         BUILT_IN_READ_ONLY_PROFILE
             | BUILT_IN_WORKSPACE_PROFILE
-            | BUILT_IN_DANGER_NO_SANDBOX_PROFILE
+            | BUILT_IN_DANGER_FULL_ACCESS_PROFILE
     )
 }
 
@@ -84,7 +88,7 @@ pub(crate) fn builtin_permission_profile(
             ),
             None => PermissionProfile::workspace_write(),
         }),
-        BUILT_IN_DANGER_NO_SANDBOX_PROFILE => Some(PermissionProfile::Disabled),
+        BUILT_IN_DANGER_FULL_ACCESS_PROFILE => Some(PermissionProfile::Disabled),
         _ => None,
     }
 }
@@ -489,7 +493,7 @@ fn compile_scoped_filesystem_pattern(
 
     match parse_special_path(path) {
         Some(FileSystemSpecialPath::ProjectRoots { .. }) => {
-            // `:project_roots` is represented as a special path, but current
+            // `:workspace_roots` is represented as a special path, but current
             // filesystem-policy resolution defines it relative to the session
             // cwd. Use the same policy cwd here so glob entries and exact
             // scoped entries resolve consistently.
@@ -616,7 +620,7 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":project_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        ":workspace_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
         _ if path.starts_with(':') => {
             Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))

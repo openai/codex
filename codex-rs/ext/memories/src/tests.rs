@@ -62,15 +62,15 @@ fn tools_are_contributed_when_enabled() {
     let tool_names = extension
         .tools(&ExtensionData::new("session"), &thread_store)
         .into_iter()
-        .map(|tool| tool.tool_name().to_string())
+        .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
 
     assert_eq!(
         tool_names,
         vec![
-            "memory_list".to_string(),
-            "memory_read".to_string(),
-            "memory_search".to_string()
+            memory_tool_name(crate::LIST_TOOL_NAME),
+            memory_tool_name(crate::READ_TOOL_NAME),
+            memory_tool_name(crate::SEARCH_TOOL_NAME),
         ]
     );
 }
@@ -135,7 +135,7 @@ async fn read_tool_reads_memory_file() {
     let output = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
-            tool_name: ToolName::plain(crate::READ_TOOL_NAME),
+            tool_name: memory_tool_name(crate::READ_TOOL_NAME),
             payload: payload.clone(),
         })
         .await
@@ -177,7 +177,7 @@ async fn search_tool_accepts_multiple_queries() {
     let output = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
-            tool_name: ToolName::plain(crate::SEARCH_TOOL_NAME),
+            tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             payload: payload.clone(),
         })
         .await
@@ -245,7 +245,7 @@ async fn search_tool_accepts_windowed_all_match_mode() {
     let output = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
-            tool_name: ToolName::plain(crate::SEARCH_TOOL_NAME),
+            tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             payload: payload.clone(),
         })
         .await
@@ -293,7 +293,7 @@ async fn search_tool_rejects_legacy_single_query() {
     let err = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
-            tool_name: ToolName::plain(crate::SEARCH_TOOL_NAME),
+            tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             payload,
         })
         .await
@@ -304,8 +304,13 @@ async fn search_tool_rejects_legacy_single_query() {
 }
 
 fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ExtensionToolExecutor> {
+    let expected_tool_name = memory_tool_name(tool_name);
     crate::tools::memory_tools(LocalMemoriesBackend::from_memory_root(memory_root))
         .into_iter()
-        .find(|tool| tool.tool_name().to_string() == tool_name)
+        .find(|tool| tool.tool_name() == expected_tool_name)
         .unwrap_or_else(|| panic!("{tool_name} tool should be registered"))
+}
+
+fn memory_tool_name(tool_name: &str) -> ToolName {
+    ToolName::namespaced(crate::MEMORY_TOOLS_NAMESPACE, tool_name)
 }

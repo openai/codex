@@ -61,6 +61,7 @@ fn build_permissions_update_item(
             next.approval_policy.value(),
             next.config.approvals_reviewer,
             exec_policy,
+            #[allow(deprecated)]
             &next.cwd,
             next.features.enabled(Feature::ExecPermissionApprovals),
             next.features.enabled(Feature::RequestPermissionsTool),

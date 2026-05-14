@@ -375,6 +375,7 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);

@@ -413,6 +413,26 @@ pub(crate) fn gather_write_roots(
     out
 }
 
+pub(crate) fn effective_write_roots_for_setup(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    write_roots_override: Option<&[PathBuf]>,
+) -> Vec<PathBuf> {
+    let write_roots = if let Some(roots) = write_roots_override {
+        canonical_existing(roots)
+    } else {
+        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+    };
+    let write_roots = expand_user_profile_root(write_roots);
+    let write_roots = filter_user_profile_root(write_roots);
+    let write_roots = filter_user_profile_root_exclusions(write_roots);
+    let write_roots = filter_ssh_config_dependency_roots(write_roots);
+    filter_sensitive_write_roots(write_roots, codex_home)
+}
+
 #[derive(Serialize)]
 struct ElevationPayload {
     version: u32,
@@ -761,21 +781,14 @@ fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
-        canonical_existing(roots)
-    } else {
-        gather_write_roots(
-            request.policy,
-            request.policy_cwd,
-            request.command_cwd,
-            request.env_map,
-        )
-    };
-    let write_roots = expand_user_profile_root(write_roots);
-    let write_roots = filter_user_profile_root(write_roots);
-    let write_roots = filter_user_profile_root_exclusions(write_roots);
-    let write_roots = filter_ssh_config_dependency_roots(write_roots);
-    let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let write_roots = effective_write_roots_for_setup(
+        request.policy,
+        request.policy_cwd,
+        request.command_cwd,
+        request.env_map,
+        request.codex_home,
+        overrides.write_roots.as_deref(),
+    );
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
         // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
@@ -1403,6 +1416,66 @@ mod tests {
                 .into_iter()
                 .all(|path| !read_roots.contains(&path))
         );
+    }
+
+    #[test]
+    fn effective_write_roots_match_payload_filtering_for_overrides() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let extra_root = tmp.path().join("extra-root");
+        let sandbox_root = super::sandbox_dir(&codex_home);
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&extra_root).expect("create extra root");
+        fs::create_dir_all(&sandbox_root).expect("create sandbox root");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let override_roots = vec![
+            command_cwd.clone(),
+            extra_root.clone(),
+            codex_home.clone(),
+            sandbox_root.clone(),
+        ];
+        let request = super::SandboxSetupRequest {
+            policy: &policy,
+            policy_cwd: &command_cwd,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+        let overrides = super::SetupRootOverrides {
+            read_roots: None,
+            read_roots_include_platform_defaults: false,
+            write_roots: Some(override_roots.clone()),
+            deny_read_paths: None,
+            deny_write_paths: None,
+        };
+
+        let effective_write_roots = super::effective_write_roots_for_setup(
+            &policy,
+            &command_cwd,
+            &command_cwd,
+            &HashMap::new(),
+            &codex_home,
+            Some(&override_roots),
+        );
+        let (_read_roots, payload_write_roots) = build_payload_roots(&request, &overrides);
+
+        let expected_workspace = dunce::canonicalize(&command_cwd).expect("canonical workspace");
+        let expected_extra = dunce::canonicalize(&extra_root).expect("canonical extra root");
+        let forbidden_codex_home = dunce::canonicalize(&codex_home).expect("canonical codex home");
+        let forbidden_sandbox = dunce::canonicalize(&sandbox_root).expect("canonical sandbox root");
+        assert_eq!(effective_write_roots, payload_write_roots);
+        assert!(effective_write_roots.contains(&expected_workspace));
+        assert!(effective_write_roots.contains(&expected_extra));
+        assert!(!effective_write_roots.contains(&forbidden_codex_home));
+        assert!(!effective_write_roots.contains(&forbidden_sandbox));
     }
 
     #[test]

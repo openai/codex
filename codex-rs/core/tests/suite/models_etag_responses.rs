@@ -15,8 +15,8 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::skip_if_no_network;
@@ -32,7 +32,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
 
     const ETAG_1: &str = "\"models-etag-1\"";
     const ETAG_2: &str = "\"models-etag-2\"";
-    const CALL_ID: &str = "local-shell-call-1";
+    const CALL_ID: &str = "shell-command-call-1";
 
     let server = MockServer::start().await;
 
@@ -81,7 +81,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     // It also includes a mismatched X-Models-Etag, which should trigger a /models refresh.
     let first_response_body = sse(vec![
         ev_response_created("resp-1"),
-        ev_local_shell_call(CALL_ID, "completed", vec!["/bin/echo", "etag ok"]),
+        ev_shell_command_call(CALL_ID, "/bin/echo 'etag ok'"),
         ev_completed("resp-1"),
     ]);
     responses::mount_response_once(

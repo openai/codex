@@ -1,4 +1,6 @@
 use super::*;
+use crate::app_event::ConnectorsSnapshot;
+use crate::chatwidget::connectors::ConnectorsCacheState;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HooksListEntry;

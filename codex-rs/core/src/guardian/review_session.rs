@@ -708,6 +708,7 @@ async fn run_review_on_session(
         Box::pin(review_session.codex.submit(Op::UserTurn {
             environments: None,
             items: prompt_items.items,
+            #[allow(deprecated)]
             cwd: params.parent_turn.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
@@ -1086,6 +1087,7 @@ mod tests {
         let reasoning_effort = turn.reasoning_effort;
         let reasoning_summary = turn.reasoning_summary;
         let personality = turn.personality;
+        #[allow(deprecated)]
         let cwd = turn.cwd.clone();
         let spawn_config = build_guardian_review_session_config(
             turn.config.as_ref(),

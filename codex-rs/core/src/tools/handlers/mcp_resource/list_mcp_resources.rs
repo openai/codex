@@ -26,6 +26,7 @@ use super::serialize_function_output;
 
 pub struct ListMcpResourcesHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     type Output = FunctionToolOutput;
 
