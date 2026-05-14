@@ -507,6 +507,7 @@ impl ServerHandler for TestToolServer {
                         ));
                     }
                 };
+
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
                 let env_name = args.env_var.as_deref().unwrap_or("MCP_TEST_VALUE");
                 let structured_content = json!({
