@@ -7092,6 +7092,13 @@
               }
             ]
           },
+          "app_settings": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "approval_policy": {
             "anyOf": [
               {

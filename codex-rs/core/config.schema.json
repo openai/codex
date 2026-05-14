@@ -3964,6 +3964,12 @@
       ],
       "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
     },
+    "app_settings": {
+      "additionalProperties": true,
+      "default": null,
+      "description": "Opaque desktop app settings stored alongside the rest of config.toml.",
+      "type": "object"
+    },
     "approval_policy": {
       "allOf": [
         {

@@ -56,6 +56,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -422,6 +423,10 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// Opaque desktop app settings stored alongside the rest of config.toml.
+    #[serde(default)]
+    pub app_settings: Option<HashMap<String, JsonValue>>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,
