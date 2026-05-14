@@ -357,11 +357,11 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         Some("Bearer Access Token")
     );
     assert_eq!(
-        compact_request.header("session_id").as_deref(),
+        compact_request.header("session-id").as_deref(),
         Some(session_id.as_str())
     );
     assert_eq!(
-        compact_request.header("thread_id").as_deref(),
+        compact_request.header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
     let compact_body = compact_request.body_json();
@@ -479,10 +479,9 @@ async fn assert_remote_manual_compact_request_parity(
                 responses::ev_completed("turn-three-final-response"),
             ]),
             responses::sse(vec![
-                responses::ev_local_shell_call(
-                    "turn-four-local-shell",
-                    "completed",
-                    vec!["/bin/echo", "TURN_FOUR_LOCAL_SHELL"],
+                responses::ev_shell_command_call(
+                    "turn-four-shell-command",
+                    "echo TURN_FOUR_LOCAL_SHELL",
                 ),
                 responses::ev_completed("turn-four-local-shell-response"),
             ]),
@@ -589,7 +588,7 @@ async fn assert_remote_manual_compact_request_parity(
     assert_eq!(
         response_requests.len(),
         7,
-        "expected five turns with one unsupported tool continuation and one local shell continuation"
+        "expected five turns with one unsupported tool continuation and one shell command continuation"
     );
     assert_eq!(
         compact_mock.requests().len(),
@@ -1046,12 +1045,12 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     assert_eq!(
         compact_mock
             .single_request()
-            .header("session_id")
+            .header("session-id")
             .as_deref(),
         Some(session_id.as_str())
     );
     assert_eq!(
-        compact_mock.single_request().header("thread_id").as_deref(),
+        compact_mock.single_request().header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
     let follow_up_request = responses_mock.single_request();

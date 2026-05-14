@@ -18,7 +18,6 @@ use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -66,12 +65,12 @@ fn custom_call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> {
+async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("test-local-shell-json");
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
     let TestCodex {
         codex,
         cwd,
@@ -79,11 +78,15 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         ..
     } = builder.build(&server).await?;
 
-    let call_id = "shell-tool-call";
-    let command = vec!["/bin/echo", "tool harness"];
+    let call_id = "shell-command-tool-call";
+    let command_args = json!({
+        "command": "echo tool harness",
+        "login": false,
+    })
+    .to_string();
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_local_shell_call(call_id, "completed", command),
+        ev_function_call(call_id, "shell_command", &command_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;

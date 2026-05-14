@@ -35,6 +35,7 @@ impl ExtensionToolHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ExtensionToolHandler {
     type Output = ExtensionToolOutput;
 
@@ -115,7 +116,10 @@ mod tests {
 
     struct StubExtensionExecutor;
 
-    impl codex_extension_api::ExtensionToolExecutor for StubExtensionExecutor {
+    #[async_trait::async_trait]
+    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for StubExtensionExecutor {
+        type Output = codex_tools::JsonToolOutput;
+
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
         }
@@ -141,11 +145,11 @@ mod tests {
             ))
         }
 
-        fn handle(
+        async fn handle(
             &self,
             _call: codex_tools::ToolCall,
-        ) -> codex_extension_api::ExtensionToolFuture<'_> {
-            Box::pin(async { Ok(codex_tools::JsonToolOutput::new(json!({ "ok": true }))) })
+        ) -> Result<Self::Output, codex_tools::FunctionCallError> {
+            Ok(codex_tools::JsonToolOutput::new(json!({ "ok": true })))
         }
     }
 

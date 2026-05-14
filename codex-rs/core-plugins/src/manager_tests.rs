@@ -331,7 +331,7 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_config() {
+async fn remote_installed_cache_adds_plugin_skill_roots_without_remote_plugin_flag() {
     let codex_home = TempDir::new().unwrap();
     let plugin_base = codex_home
         .path()
@@ -341,7 +341,6 @@ async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_conf
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 

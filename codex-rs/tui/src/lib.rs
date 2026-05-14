@@ -8,8 +8,9 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_loader_overrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
@@ -282,6 +283,7 @@ async fn start_embedded_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -293,6 +295,7 @@ async fn start_embedded_app_server(
         config,
         cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -453,6 +456,7 @@ async fn start_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -465,6 +469,7 @@ async fn start_app_server(
             config,
             cli_kv_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             feedback,
             log_db,
@@ -489,6 +494,7 @@ pub(crate) async fn start_app_server_for_picker(
         config.clone(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
@@ -519,6 +525,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -545,6 +552,7 @@ where
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -759,6 +767,7 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
@@ -834,13 +843,22 @@ pub async fn run_main(
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
+    let mut loader_overrides = loader_overrides;
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
+        loader_overrides.user_config_path = Some(user_config_path);
+        loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_load_options(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
-        loader_overrides.clone(),
+        codex_config::ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
     )
     .await
     {
@@ -935,7 +953,9 @@ pub async fn run_main(
     let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         cloud_requirements.clone(),
+        strict_config,
     )
     .await;
 
@@ -990,7 +1010,9 @@ pub async fn run_main(
                     config = load_config_or_exit(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
+                        loader_overrides.clone(),
                         cloud_requirements.clone(),
+                        strict_config,
                     )
                     .await;
                 }
@@ -1133,6 +1155,7 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        strict_config,
         app_server_target,
         remote_cwd_override,
         config,
@@ -1154,6 +1177,7 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
@@ -1217,6 +1241,7 @@ async fn run_ratatui_app(
         initial_config.clone(),
         cli_kv_overrides.clone(),
         loader_overrides.clone(),
+        strict_config,
         cloud_requirements.clone(),
         feedback.clone(),
         log_db.clone(),
@@ -1303,7 +1328,9 @@ async fn run_ratatui_app(
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
             )
             .await
         } else {
@@ -1505,7 +1532,9 @@ async fn run_ratatui_app(
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
                 fallback_cwd,
             )
             .await
@@ -1514,7 +1543,9 @@ async fn run_ratatui_app(
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
             )
             .await
         }
@@ -1555,7 +1586,8 @@ async fn run_ratatui_app(
             arg0_paths,
             config.clone(),
             cli_kv_overrides.clone(),
-            loader_overrides,
+            loader_overrides.clone(),
+            strict_config,
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
@@ -1586,6 +1618,7 @@ async fn run_ratatui_app(
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         active_profile,
         prompt,
         images,
@@ -1696,12 +1729,16 @@ async fn get_login_status(
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    strict_config: bool,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
+        loader_overrides,
         cloud_requirements,
+        strict_config,
         /*fallback_cwd*/ None,
     )
     .await
@@ -1710,13 +1747,17 @@ async fn load_config_or_exit(
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()
@@ -1788,6 +1829,7 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -2353,6 +2395,7 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,

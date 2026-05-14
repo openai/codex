@@ -19,6 +19,7 @@ pub struct RequestUserInputHandler {
     pub available_modes: Vec<ModeKind>,
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
     type Output = FunctionToolOutput;
 

@@ -2023,10 +2023,11 @@ fn marketplace_display_name(marketplace: &PluginMarketplaceEntry) -> String {
 }
 
 fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bool {
-    config
-        .config_layer_stack
-        .get_user_layer()
-        .and_then(|user_layer| user_layer.config.get("marketplaces"))
+    let Some(user_config) = config.config_layer_stack.effective_user_config() else {
+        return false;
+    };
+    user_config
+        .get("marketplaces")
         .and_then(toml::Value::as_table)
         .is_some_and(|marketplaces| marketplaces.contains_key(marketplace_name))
 }
@@ -2034,7 +2035,7 @@ fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bo
 fn marketplace_is_user_configured_git(config: &Config, marketplace_name: &str) -> bool {
     config
         .config_layer_stack
-        .get_user_layer()
+        .get_active_user_layer()
         .and_then(|user_layer| user_layer.config.get("marketplaces"))
         .and_then(toml::Value::as_table)
         .and_then(|marketplaces| marketplaces.get(marketplace_name))

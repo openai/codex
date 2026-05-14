@@ -289,7 +289,7 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
                 FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
             ),
             (
-                ":project_roots".to_string(),
+                ":workspace_roots".to_string(),
                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                     ("**/*.env".to_string(), FileSystemAccessMode::None),
                     ("docs/**".to_string(), FileSystemAccessMode::Read),
@@ -303,7 +303,7 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
         unsupported_read_write_glob_paths(&filesystem),
         vec![
             "/tmp/**/*.log".to_string(),
-            ":project_roots/src/**/*.rs".to_string()
+            ":workspace_roots/src/**/*.rs".to_string()
         ],
         "`none` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
     );
@@ -314,7 +314,7 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,
         entries: BTreeMap::from([(
-            ":project_roots".to_string(),
+            ":workspace_roots".to_string(),
             FilesystemPermissionToml::Scoped(BTreeMap::from([
                 ("**/*.env".to_string(), FileSystemAccessMode::None),
                 ("*.pem".to_string(), FileSystemAccessMode::None),
@@ -324,7 +324,7 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
 
     assert_eq!(
         unbounded_unreadable_globstar_paths(&filesystem),
-        vec![":project_roots/**/*.env".to_string()]
+        vec![":workspace_roots/**/*.env".to_string()]
     );
 
     let configured_filesystem = FilesystemPermissionsToml {
@@ -362,7 +362,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
                         entries: BTreeMap::from([(
-                            ":project_roots".to_string(),
+                            ":workspace_roots".to_string(),
                             FilesystemPermissionToml::Scoped(BTreeMap::from([(
                                 "docs/**".to_string(),
                                 FileSystemAccessMode::Read,

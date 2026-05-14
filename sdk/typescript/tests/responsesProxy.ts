@@ -181,15 +181,14 @@ export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_
 }
 
 export function shell_call(): SseEvent {
-  const command = ["bash", "-lc", "echo 'Hello, world!'"];
   return {
     type: "response.output_item.done",
     item: {
       type: "function_call",
       call_id: `call_id${Math.random().toString(36).slice(2)}`,
-      name: "shell",
+      name: "shell_command",
       arguments: JSON.stringify({
-        command,
+        command: "echo 'Hello, world!'",
         timeout_ms: 100,
       }),
     },

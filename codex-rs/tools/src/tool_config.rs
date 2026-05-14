@@ -117,11 +117,14 @@ pub struct ToolsConfig {
     pub collab_tools: bool,
     pub goal_tools: bool,
     pub multi_agent_v2: bool,
+    pub multi_agent_v2_non_code_mode_only: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
+    pub wait_agent_max_timeout_ms: Option<i64>,
+    pub wait_agent_default_timeout_ms: Option<i64>,
     pub request_user_input_available_modes: Vec<ModeKind>,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -203,6 +206,9 @@ impl ToolsConfig {
             ConfigShellToolType::UnifiedExec if !unified_exec_enabled => {
                 ConfigShellToolType::ShellCommand
             }
+            ConfigShellToolType::Default | ConfigShellToolType::Local => {
+                ConfigShellToolType::ShellCommand
+            }
             other => other,
         };
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -254,11 +260,14 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             goal_tools: include_goal_tools,
             multi_agent_v2: include_multi_agent_v2,
+            multi_agent_v2_non_code_mode_only: false,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
+            wait_agent_max_timeout_ms: None,
+            wait_agent_default_timeout_ms: None,
             request_user_input_available_modes: request_user_input_available_modes(features),
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
@@ -311,6 +320,15 @@ impl ToolsConfig {
         self
     }
 
+    pub fn with_multi_agent_v2_non_code_mode_only(
+        mut self,
+        multi_agent_v2_non_code_mode_only: bool,
+    ) -> Self {
+        self.multi_agent_v2_non_code_mode_only =
+            self.multi_agent_v2 && multi_agent_v2_non_code_mode_only;
+        self
+    }
+
     pub fn with_goal_tools_allowed(mut self, allowed: bool) -> Self {
         self.goal_tools = self.goal_tools && allowed;
         self
@@ -329,6 +347,22 @@ impl ToolsConfig {
         wait_agent_min_timeout_ms: Option<i64>,
     ) -> Self {
         self.wait_agent_min_timeout_ms = wait_agent_min_timeout_ms;
+        self
+    }
+
+    pub fn with_wait_agent_max_timeout_ms(
+        mut self,
+        wait_agent_max_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_max_timeout_ms = wait_agent_max_timeout_ms;
+        self
+    }
+
+    pub fn with_wait_agent_default_timeout_ms(
+        mut self,
+        wait_agent_default_timeout_ms: Option<i64>,
+    ) -> Self {
+        self.wait_agent_default_timeout_ms = wait_agent_default_timeout_ms;
         self
     }
 

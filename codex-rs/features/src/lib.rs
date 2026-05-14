@@ -130,7 +130,7 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
-    /// Enable git commit attribution guidance via model instructions.
+    /// Removed legacy git commit attribution guidance flag.
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
@@ -286,7 +286,6 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
 }
 
@@ -294,17 +293,11 @@ pub struct FeatureOverrides {
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
     pub include_apply_patch_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
-        LegacyFeatureToggles {
-            include_apply_patch_tool: self.include_apply_patch_tool,
-            ..Default::default()
-        }
-        .apply(features);
         if let Some(enabled) = self.web_search_request {
             if enabled {
                 features.enable(Feature::WebSearchRequest);
@@ -428,6 +421,9 @@ impl Features {
                 "js_repl_tools_only" => {
                     continue;
                 }
+                "remote_control" => {
+                    continue;
+                }
                 "image_detail_original" => {
                     continue;
                 }
@@ -470,7 +466,6 @@ impl Features {
         for source in [base, profile] {
             LegacyFeatureToggles {
                 include_apply_patch_tool: source.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
@@ -784,11 +779,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Removed,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -976,8 +970,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PluginHooks,
         key: "plugin_hooks",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::InAppBrowser,

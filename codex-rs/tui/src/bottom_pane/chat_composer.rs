@@ -213,14 +213,18 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
-use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
 
+mod attachment_state;
 mod history_search;
+mod popup_state;
 
+use self::attachment_state::AttachmentState;
 use self::history_search::HistorySearchSession;
+use self::popup_state::ActivePopup;
+use self::popup_state::PopupState;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
@@ -299,12 +303,6 @@ pub enum QueuedInputAction {
     RunShell,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-struct AttachedImage {
-    placeholder: String,
-    path: PathBuf,
-}
-
 /// Feature flags for reusing the chat composer in other bottom-pane surfaces.
 ///
 /// The default keeps today's behavior intact. Other call sites can opt out of
@@ -347,21 +345,17 @@ pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
     is_bash_mode: bool,
-    active_popup: ActivePopup,
+    popups: PopupState,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     quit_shortcut_expires_at: Option<Instant>,
     quit_shortcut_key: KeyBinding,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
-    dismissed_file_popup_token: Option<String>,
-    current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     has_focus: bool,
     frame_requester: Option<FrameRequester>,
-    /// Invariant: attached images are labeled in vec order as
-    /// `[Image #M+1]..[Image #N]`, where `M` is the number of remote images.
-    attached_images: Vec<AttachedImage>,
+    attachments: AttachmentState,
     placeholder_text: String,
     is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
@@ -378,10 +372,6 @@ pub(crate) struct ChatComposer {
     /// Eligibility is decided by `ChatWidget`; the composer only owns presentation so enabling
     /// the nudge never changes layout height or reimplements mode-selection policy here.
     plan_mode_nudge_visible: bool,
-    remote_image_urls: Vec<String>,
-    /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
-    /// can highlight and remove remote attachments from the composer UI.
-    selected_remote_image_index: Option<usize>,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -396,7 +386,6 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
-    dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
     collaboration_modes_enabled: bool,
@@ -460,15 +449,6 @@ struct ComposerDraft {
 struct ComposerMentionBinding {
     mention: String,
     path: String,
-}
-
-/// Popup state – at most one can be visible at any time.
-enum ActivePopup {
-    None,
-    Command(CommandPopup),
-    File(FileSearchPopup),
-    Skill(SkillPopup),
-    MentionV2(MentionV2Popup),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -546,19 +526,17 @@ impl ChatComposer {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             is_bash_mode: false,
-            active_popup: ActivePopup::None,
+            popups: PopupState::default(),
             app_event_tx,
             history: ChatComposerHistory::new(),
             quit_shortcut_expires_at: None,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             esc_backtrack_hint: false,
             use_shift_enter_hint,
-            dismissed_file_popup_token: None,
-            current_file_query: None,
             pending_pastes: Vec::new(),
             has_focus: has_input_focus,
             frame_requester: None,
-            attached_images: Vec::new(),
+            attachments: AttachmentState::default(),
             placeholder_text,
             is_task_running: false,
             input_enabled: true,
@@ -568,8 +546,6 @@ impl ChatComposer {
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             plan_mode_nudge_visible: false,
-            remote_image_urls: Vec::new(),
-            selected_remote_image_index: None,
             pending_slash_command_history: None,
             footer_flash: None,
             context_window_percent: None,
@@ -579,7 +555,6 @@ impl ChatComposer {
             skills: None,
             plugins: None,
             connectors_snapshot: None,
-            dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
             collaboration_modes_enabled: false,
@@ -809,7 +784,7 @@ impl ChatComposer {
             .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        let popup_constraint = match &self.active_popup {
+        let popup_constraint = match &self.popups.active {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
@@ -831,7 +806,8 @@ impl ChatComposer {
             /*right*/ 1u16.saturating_add(textarea_right_reserve),
         ));
         let remote_images_height = self
-            .remote_images_lines(textarea_rect.width)
+            .attachments
+            .remote_image_lines()
             .len()
             .try_into()
             .unwrap_or(u16::MAX)
@@ -866,7 +842,7 @@ impl ChatComposer {
         area: Rect,
         textarea_right_reserve: u16,
     ) -> Option<(u16, u16)> {
-        if !self.input_enabled || self.selected_remote_image_index.is_some() {
+        if !self.input_enabled || self.attachments.selected_remote_image_index.is_some() {
             return None;
         }
 
@@ -881,10 +857,7 @@ impl ChatComposer {
     }
     /// Returns true if the composer currently contains no user-entered input.
     pub(crate) fn is_empty(&self) -> bool {
-        self.textarea.is_empty()
-            && !self.is_bash_mode
-            && self.attached_images.is_empty()
-            && self.remote_image_urls.is_empty()
+        self.textarea.is_empty() && !self.is_bash_mode && self.attachments.is_empty()
     }
 
     /// Record local persistent-history metadata so the composer can navigate
@@ -1029,7 +1002,12 @@ impl ChatComposer {
 
         // Count placeholder occurrences in the new text.
         let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
-        for placeholder in self.attached_images.iter().map(|img| &img.placeholder) {
+        for placeholder in self
+            .attachments
+            .local_images
+            .iter()
+            .map(|image| &image.placeholder)
+        {
             if placeholder_counts.contains_key(placeholder) {
                 continue;
             }
@@ -1041,7 +1019,7 @@ impl ChatComposer {
 
         // Keep attachments only while we have matching occurrences left.
         let mut kept_images = Vec::new();
-        for img in self.attached_images.drain(..) {
+        for img in self.attachments.local_images.drain(..) {
             if let Some(count) = placeholder_counts.get_mut(&img.placeholder)
                 && *count > 0
             {
@@ -1049,12 +1027,12 @@ impl ChatComposer {
                 kept_images.push(img);
             }
         }
-        self.attached_images = kept_images;
+        self.attachments.local_images = kept_images;
 
         // Rebuild textarea so placeholders become elements again.
         self.textarea.set_text_clearing_elements("");
         let mut remaining: HashMap<&str, usize> = HashMap::new();
-        for img in &self.attached_images {
+        for img in &self.attachments.local_images {
             *remaining.entry(img.placeholder.as_str()).or_insert(0) += 1;
         }
 
@@ -1087,7 +1065,7 @@ impl ChatComposer {
 
         // Keep local image placeholders normalized in attachment order after the
         // remote-image prefix.
-        self.relabel_attached_images_and_update_placeholders();
+        self.attachments.relabel_local_images(&mut self.textarea);
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
     }
@@ -1223,20 +1201,17 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
-        self.remote_image_urls = urls;
-        self.selected_remote_image_index = None;
-        self.relabel_attached_images_and_update_placeholders();
+        self.attachments
+            .set_remote_image_urls(urls, &mut self.textarea);
         self.sync_popups();
     }
 
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
-        self.remote_image_urls.clone()
+        self.attachments.remote_image_urls()
     }
 
     pub(crate) fn take_remote_image_urls(&mut self) -> Vec<String> {
-        let urls = std::mem::take(&mut self.remote_image_urls);
-        self.selected_remote_image_index = None;
-        self.relabel_attached_images_and_update_placeholders();
+        let urls = self.attachments.take_remote_image_urls(&mut self.textarea);
         self.sync_popups();
         urls
     }
@@ -1298,21 +1273,14 @@ impl ChatComposer {
         self.textarea.set_text_clearing_elements("");
         self.is_bash_mode = false;
         self.pending_pastes.clear();
-        self.attached_images.clear();
         self.mention_bindings.clear();
 
         let (text, text_elements) = self.imported_text_for_textarea(text, text_elements);
         self.textarea.set_text_with_elements(&text, &text_elements);
-
-        for (idx, path) in local_image_paths.into_iter().enumerate() {
-            let placeholder = local_image_label_text(self.remote_image_urls.len() + idx + 1);
-            self.attached_images
-                .push(AttachedImage { placeholder, path });
-        }
+        self.attachments
+            .reset_local_images(local_image_paths, &mut self.textarea);
 
         self.bind_mentions_from_snapshot(mention_bindings);
-        self.relabel_attached_images_and_update_placeholders();
-        self.selected_remote_image_index = None;
         self.textarea.set_cursor(/*pos*/ 0);
         self.sync_popups();
     }
@@ -1367,12 +1335,8 @@ impl ChatComposer {
         ComposerDraft {
             text: self.current_text(),
             text_elements: self.current_text_elements(),
-            local_image_paths: self
-                .attached_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect(),
-            remote_image_urls: self.remote_image_urls.clone(),
+            local_image_paths: self.attachments.local_image_paths(),
+            remote_image_urls: self.attachments.remote_image_urls(),
             mention_bindings: self.snapshot_mention_bindings(),
             pending_pastes: self.pending_pastes.clone(),
             cursor: self.current_cursor(),
@@ -1452,17 +1416,12 @@ impl ChatComposer {
         }
         let previous = self.current_text();
         let text_elements = self.current_text_elements();
-        let local_image_paths = self
-            .attached_images
-            .iter()
-            .map(|img| img.path.clone())
-            .collect();
+        let local_image_paths = self.attachments.local_image_paths();
         let pending_pastes = std::mem::take(&mut self.pending_pastes);
-        let remote_image_urls = self.remote_image_urls.clone();
+        let remote_image_urls = self.attachments.remote_image_urls();
         let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
-        self.remote_image_urls.clear();
-        self.selected_remote_image_index = None;
+        self.attachments.clear_remote_image_urls();
         self.history.reset_navigation();
         self.history.record_local_submission(HistoryEntry {
             text: previous.clone(),
@@ -1517,10 +1476,7 @@ impl ChatComposer {
 
     #[cfg(test)]
     pub(crate) fn local_image_paths(&self) -> Vec<PathBuf> {
-        self.attached_images
-            .iter()
-            .map(|img| img.path.clone())
-            .collect()
+        self.attachments.local_image_paths()
     }
 
     #[cfg(test)]
@@ -1534,13 +1490,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {
-        self.attached_images
-            .iter()
-            .map(|img| LocalImageAttachment {
-                placeholder: img.placeholder.clone(),
-                path: img.path.clone(),
-            })
-            .collect()
+        self.attachments.local_images()
     }
 
     pub(crate) fn mention_bindings(&self) -> Vec<MentionBinding> {
@@ -1561,44 +1511,19 @@ impl ChatComposer {
         }
     }
 
-    fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
-        if self.attached_images.is_empty() {
-            return;
-        }
-        let image_placeholders: HashSet<&str> = text_elements
-            .iter()
-            .filter_map(|elem| elem.placeholder(text))
-            .collect();
-        self.attached_images
-            .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
-    }
-
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number = self.remote_image_urls.len() + self.attached_images.len() + 1;
-        let placeholder = local_image_label_text(image_number);
-        // Insert as an element to match large paste placeholder behavior:
-        // styled distinctly and treated atomically for cursor/mutations.
-        self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.attachments.attach_image(&mut self.textarea, path);
     }
 
     #[cfg(test)]
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
-        let images = std::mem::take(&mut self.attached_images);
-        images.into_iter().map(|img| img.path).collect()
+        self.attachments.take_recent_submission_images()
     }
 
     pub fn take_recent_submission_images_with_placeholders(&mut self) -> Vec<LocalImageAttachment> {
-        let images = std::mem::take(&mut self.attached_images);
-        images
-            .into_iter()
-            .map(|img| LocalImageAttachment {
-                placeholder: img.placeholder,
-                path: img.path,
-            })
-            .collect()
+        self.attachments
+            .take_recent_submission_images_with_placeholders()
     }
 
     /// Flushes any due paste-burst state.
@@ -1646,7 +1571,7 @@ impl ChatComposer {
             return;
         }
 
-        match &mut self.active_popup {
+        match &mut self.popups.active {
             ActivePopup::File(popup) => {
                 popup.set_matches(&query, matches);
             }
@@ -1736,7 +1661,7 @@ impl ChatComposer {
             return self.begin_history_search();
         }
 
-        let result = match &mut self.active_popup {
+        let result = match &mut self.popups.active {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
@@ -1751,7 +1676,7 @@ impl ChatComposer {
 
     /// Return true if either the slash-command popup or the file-search popup is active.
     pub(crate) fn popup_active(&self) -> bool {
-        self.history_search.is_some() || !matches!(self.active_popup, ActivePopup::None)
+        self.history_search.is_some() || self.popups.active()
     }
 
     /// Handle key event when the slash-command popup is visible.
@@ -1768,7 +1693,7 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        let ActivePopup::Command(popup) = &mut self.active_popup else {
+        let ActivePopup::Command(popup) = &mut self.popups.active else {
             unreachable!();
         };
 
@@ -1800,7 +1725,7 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 // Dismiss the slash popup; keep the current input untouched.
-                self.active_popup = ActivePopup::None;
+                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -1999,7 +1924,7 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        let ActivePopup::File(popup) = &mut self.active_popup else {
+        let ActivePopup::File(popup) = &mut self.popups.active else {
             unreachable!();
         };
 
@@ -2032,9 +1957,9 @@ impl ChatComposer {
             } => {
                 // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_file_popup_token = Some(tok);
+                    self.popups.dismissed_file_token = Some(tok);
                 }
-                self.active_popup = ActivePopup::None;
+                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -2046,7 +1971,7 @@ impl ChatComposer {
                 ..
             } => {
                 let Some(sel) = popup.selected_match() else {
-                    self.active_popup = ActivePopup::None;
+                    self.popups.active = ActivePopup::None;
                     return if key_event.code == KeyCode::Enter {
                         self.handle_key_event_without_popup(key_event)
                     } else {
@@ -2102,7 +2027,7 @@ impl ChatComposer {
                     // Non-image: inserting file path.
                     self.insert_selected_path(&sel_path);
                 }
-                self.active_popup = ActivePopup::None;
+                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
@@ -2115,7 +2040,7 @@ impl ChatComposer {
         }
         self.footer_mode = reset_mode_after_activity(self.footer_mode);
 
-        let ActivePopup::Skill(popup) = &mut self.active_popup else {
+        let ActivePopup::Skill(popup) = &mut self.popups.active else {
             unreachable!();
         };
 
@@ -2150,9 +2075,9 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 if let Some(tok) = self.current_mention_token() {
-                    self.dismissed_mention_popup_token = Some(tok);
+                    self.popups.dismissed_mention_token = Some(tok);
                 }
-                self.active_popup = ActivePopup::None;
+                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -2176,7 +2101,7 @@ impl ChatComposer {
             if let Some((insert_text, path)) = selected_mention {
                 self.insert_selected_mention(&insert_text, path.as_deref());
             }
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
         }
 
         result
@@ -2191,7 +2116,7 @@ impl ChatComposer {
         }
         self.footer_mode = reset_mode_after_activity(self.footer_mode);
 
-        let ActivePopup::MentionV2(popup) = &mut self.active_popup else {
+        let ActivePopup::MentionV2(popup) = &mut self.popups.active else {
             unreachable!();
         };
 
@@ -2242,9 +2167,9 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 if let Some(tok) = self.current_mentions_v2_token() {
-                    self.dismissed_mention_popup_token = Some(tok);
+                    self.popups.dismissed_mention_token = Some(tok);
                 }
-                self.active_popup = ActivePopup::None;
+                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -2273,7 +2198,7 @@ impl ChatComposer {
                     }
                 }
             }
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
         }
 
         result
@@ -2784,11 +2709,7 @@ impl ChatComposer {
         let original_input = text.clone();
         let original_text_elements = self.current_text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();
-        let original_local_image_paths = self
-            .attached_images
-            .iter()
-            .map(|img| img.path.clone())
-            .collect::<Vec<_>>();
+        let original_local_image_paths = self.attachments.local_image_paths();
         let original_pending_pastes = self.pending_pastes.clone();
         let mut text_elements = original_text_elements.clone();
         let input_starts_with_space = original_input.starts_with(' ');
@@ -2858,26 +2779,18 @@ impl ChatComposer {
             self.textarea.set_cursor(original_input.len());
             return None;
         }
-        self.prune_attached_images_for_submission(&text, &text_elements);
-        if text.is_empty() && self.attached_images.is_empty() && self.remote_image_urls.is_empty() {
+        self.attachments
+            .prune_local_images_for_submission(&text, &text_elements);
+        if text.is_empty() && self.attachments.is_empty() {
             return None;
         }
         self.recent_submission_mention_bindings = original_mention_bindings.clone();
-        if record_history
-            && (!text.is_empty()
-                || !self.attached_images.is_empty()
-                || !self.remote_image_urls.is_empty())
-        {
-            let local_image_paths = self
-                .attached_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect();
+        if record_history && (!text.is_empty() || !self.attachments.is_empty()) {
             self.history.record_local_submission(HistoryEntry {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
-                local_image_paths,
-                remote_image_urls: self.remote_image_urls.clone(),
+                local_image_paths: self.attachments.local_image_paths(),
+                remote_image_urls: self.attachments.remote_image_urls(),
                 mention_bindings: original_mention_bindings,
                 pending_pastes: Vec::new(),
             });
@@ -2953,7 +2866,7 @@ impl ChatComposer {
         // Do not treat as paste inside a slash-command context.
         let in_slash_context = self.slash_commands_enabled()
             && !self.is_bash_mode
-            && (matches!(self.active_popup, ActivePopup::Command(_))
+            && (matches!(self.popups.active, ActivePopup::Command(_))
                 || self
                     .textarea
                     .text()
@@ -2984,11 +2897,7 @@ impl ChatComposer {
         let original_input = self.current_text();
         let original_text_elements = self.current_text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();
-        let original_local_image_paths = self
-            .attached_images
-            .iter()
-            .map(|img| img.path.clone())
-            .collect::<Vec<_>>();
+        let original_local_image_paths = self.attachments.local_image_paths();
         let original_pending_pastes = self.pending_pastes.clone();
         if let Some(result) = self.try_dispatch_slash_command_with_args() {
             return (result, true);
@@ -3007,7 +2916,8 @@ impl ChatComposer {
                     true,
                 )
             } else {
-                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
+                // Do not clear local attachments here; ChatWidget drains them via
+                // take_recent_submission_images().
                 (
                     InputResult::Submitted {
                         text,
@@ -3202,12 +3112,8 @@ impl ChatComposer {
         self.pending_slash_command_history = Some(HistoryEntry {
             text,
             text_elements: self.textarea.text_elements(),
-            local_image_paths: self
-                .attached_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect(),
-            remote_image_urls: self.remote_image_urls.clone(),
+            local_image_paths: self.attachments.local_image_paths(),
+            remote_image_urls: self.attachments.remote_image_urls(),
             mention_bindings: self.snapshot_mention_bindings(),
             pending_pastes: self.pending_pastes.clone(),
         });
@@ -3241,85 +3147,12 @@ impl ChatComposer {
             .collect()
     }
 
-    fn remote_images_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.remote_image_urls
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| {
-                let label = local_image_label_text(idx + 1);
-                if self.selected_remote_image_index == Some(idx) {
-                    label.cyan().reversed().into()
-                } else {
-                    label.cyan().into()
-                }
-            })
-            .collect()
-    }
-
-    fn clear_remote_image_selection(&mut self) {
-        self.selected_remote_image_index = None;
-    }
-
-    fn remove_selected_remote_image(&mut self, selected_index: usize) {
-        if selected_index >= self.remote_image_urls.len() {
-            self.clear_remote_image_selection();
-            return;
-        }
-        self.remote_image_urls.remove(selected_index);
-        self.selected_remote_image_index = if self.remote_image_urls.is_empty() {
-            None
-        } else {
-            Some(selected_index.min(self.remote_image_urls.len() - 1))
-        };
-        self.relabel_attached_images_and_update_placeholders();
-        self.sync_popups();
-    }
-
     fn handle_remote_image_selection_key(
         &mut self,
         key_event: &KeyEvent,
     ) -> Option<(InputResult, bool)> {
-        if self.remote_image_urls.is_empty()
-            || key_event.modifiers != KeyModifiers::NONE
-            || key_event.kind != KeyEventKind::Press
-        {
-            return None;
-        }
-
-        match key_event.code {
-            KeyCode::Up => {
-                if let Some(selected) = self.selected_remote_image_index {
-                    self.selected_remote_image_index = Some(selected.saturating_sub(1));
-                    Some((InputResult::None, true))
-                } else if self.textarea.cursor() == 0 {
-                    self.selected_remote_image_index = Some(self.remote_image_urls.len() - 1);
-                    Some((InputResult::None, true))
-                } else {
-                    None
-                }
-            }
-            KeyCode::Down => {
-                if let Some(selected) = self.selected_remote_image_index {
-                    if selected + 1 < self.remote_image_urls.len() {
-                        self.selected_remote_image_index = Some(selected + 1);
-                    } else {
-                        self.clear_remote_image_selection();
-                    }
-                    Some((InputResult::None, true))
-                } else {
-                    None
-                }
-            }
-            KeyCode::Delete | KeyCode::Backspace => {
-                if let Some(selected) = self.selected_remote_image_index {
-                    self.remove_selected_remote_image(selected);
-                    Some((InputResult::None, true))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+        self.attachments
+            .handle_remote_image_selection_key(key_event, &mut self.textarea)
     }
 
     /// Handle key event when no popup is visible.
@@ -3327,8 +3160,8 @@ impl ChatComposer {
         if let Some((result, redraw)) = self.handle_remote_image_selection_key(&key_event) {
             return (result, redraw);
         }
-        if self.selected_remote_image_index.is_some() {
-            self.clear_remote_image_selection();
+        if self.attachments.selected_remote_image_index.is_some() {
+            self.attachments.clear_remote_image_selection();
         }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
@@ -3601,10 +3434,7 @@ impl ChatComposer {
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
-        let elements_before = if self.pending_pastes.is_empty()
-            && self.attached_images.is_empty()
-            && self.remote_image_urls.is_empty()
-        {
+        let elements_before = if self.pending_pastes.is_empty() && self.attachments.is_empty() {
             None
         } else {
             Some(self.textarea.element_payloads())
@@ -3659,39 +3489,15 @@ impl ChatComposer {
         let elements_after: HashSet<String> =
             self.textarea.element_payloads().into_iter().collect();
 
-        let mut removed_any_image = false;
-        for removed in elements_before
+        let removed_payloads = elements_before
             .into_iter()
             .filter(|payload| !elements_after.contains(payload))
-        {
-            self.pending_pastes.retain(|(ph, _)| ph != &removed);
-
-            if let Some(idx) = self
-                .attached_images
-                .iter()
-                .position(|img| img.placeholder == removed)
-            {
-                self.attached_images.remove(idx);
-                removed_any_image = true;
-            }
+            .collect::<Vec<_>>();
+        for removed in &removed_payloads {
+            self.pending_pastes.retain(|(ph, _)| ph != removed);
         }
-
-        if removed_any_image {
-            self.relabel_attached_images_and_update_placeholders();
-        }
-    }
-
-    fn relabel_attached_images_and_update_placeholders(&mut self) {
-        for idx in 0..self.attached_images.len() {
-            let expected = local_image_label_text(self.remote_image_urls.len() + idx + 1);
-            let current = self.attached_images[idx].placeholder.clone();
-            if current == expected {
-                continue;
-            }
-
-            self.attached_images[idx].placeholder = expected.clone();
-            let _renamed = self.textarea.replace_element_payload(&current, &expected);
-        }
+        self.attachments
+            .remove_deleted_local_placeholders(&removed_payloads, &mut self.textarea);
     }
 
     /// Handle the dedicated shortcut-overlay toggle key(s).
@@ -3807,18 +3613,18 @@ impl ChatComposer {
     pub(crate) fn sync_popups(&mut self) {
         self.sync_slash_command_elements();
         if self.history_search.is_some() {
-            if self.current_file_query.is_some() {
+            if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
+                self.popups.current_file_query = None;
             }
-            self.active_popup = ActivePopup::None;
-            self.dismissed_file_popup_token = None;
-            self.dismissed_mention_popup_token = None;
+            self.popups.active = ActivePopup::None;
+            self.popups.dismissed_file_token = None;
+            self.popups.dismissed_mention_token = None;
             return;
         }
         if !self.popups_enabled() {
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
             return;
         }
         let mentions_v2_token = self.current_mentions_v2_token();
@@ -3833,12 +3639,12 @@ impl ChatComposer {
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
-            if self.current_file_query.is_some() {
+            if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
+                self.popups.current_file_query = None;
             }
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
             return;
         }
         let mention_token = self.current_mention_token();
@@ -3850,14 +3656,14 @@ impl ChatComposer {
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
-            if self.current_file_query.is_some() {
+        if matches!(self.popups.active, ActivePopup::Command(_)) {
+            if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
+                self.popups.current_file_query = None;
             }
-            self.dismissed_file_popup_token = None;
-            self.dismissed_mention_popup_token = None;
+            self.popups.dismissed_file_token = None;
+            self.popups.dismissed_mention_token = None;
             return;
         }
 
@@ -3867,32 +3673,32 @@ impl ChatComposer {
         }
 
         if let Some(token) = mention_token {
-            if self.current_file_query.is_some() {
+            if self.popups.current_file_query.is_some() {
                 self.app_event_tx
                     .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
+                self.popups.current_file_query = None;
             }
             self.sync_mention_popup(token);
             return;
         }
-        self.dismissed_mention_popup_token = None;
+        self.popups.dismissed_mention_token = None;
 
         if let Some(token) = file_token {
             self.sync_file_search_popup(token);
             return;
         }
 
-        if self.current_file_query.is_some() {
+        if self.popups.current_file_query.is_some() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(String::new()));
-            self.current_file_query = None;
+            self.popups.current_file_query = None;
         }
-        self.dismissed_file_popup_token = None;
+        self.popups.dismissed_file_token = None;
         if matches!(
-            self.active_popup,
+            self.popups.active,
             ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::MentionV2(_)
         ) {
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
         }
     }
 
@@ -4018,8 +3824,8 @@ impl ChatComposer {
     /// the text so the popup is shown/updated/hidden as appropriate.
     fn sync_command_popup(&mut self, allow: bool) {
         if !allow {
-            if matches!(self.active_popup, ActivePopup::Command(_)) {
-                self.active_popup = ActivePopup::None;
+            if matches!(self.popups.active, ActivePopup::Command(_)) {
+                self.popups.active = ActivePopup::None;
             }
             return;
         }
@@ -4038,17 +3844,17 @@ impl ChatComposer {
         // file-search popup over the slash popup so users can insert a file path
         // as an argument to the command (e.g., "/review @docs/...").
         if Self::current_at_token(&self.textarea).is_some() {
-            if matches!(self.active_popup, ActivePopup::Command(_)) {
-                self.active_popup = ActivePopup::None;
+            if matches!(self.popups.active, ActivePopup::Command(_)) {
+                self.popups.active = ActivePopup::None;
             }
             return;
         }
-        match &mut self.active_popup {
+        match &mut self.popups.active {
             ActivePopup::Command(popup) => {
                 if is_editing_slash_command_name {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
-                    self.active_popup = ActivePopup::None;
+                    self.popups.active = ActivePopup::None;
                 }
             }
             _ => {
@@ -4077,17 +3883,17 @@ impl ChatComposer {
                         self.service_tier_commands.clone(),
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
-                    self.active_popup = ActivePopup::Command(command_popup);
+                    self.popups.active = ActivePopup::Command(command_popup);
                 }
             }
         }
     }
 
     /// Synchronize `self.file_search_popup` with the current text in the textarea.
-    /// Note this is only called when self.active_popup is NOT Command.
+    /// Note this is only called when the active popup is NOT Command.
     fn sync_file_search_popup(&mut self, query: String) {
         // If user dismissed popup for this exact query, don't reopen until text changes.
-        if self.dismissed_file_popup_token.as_ref() == Some(&query) {
+        if self.popups.dismissed_file_token.as_ref() == Some(&query) {
             return;
         }
 
@@ -4099,7 +3905,7 @@ impl ChatComposer {
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
 
-        match &mut self.active_popup {
+        match &mut self.popups.active {
             ActivePopup::File(popup) => {
                 if query.is_empty() {
                     popup.set_empty_prompt();
@@ -4114,30 +3920,30 @@ impl ChatComposer {
                 } else {
                     popup.set_query(&query);
                 }
-                self.active_popup = ActivePopup::File(popup);
+                self.popups.active = ActivePopup::File(popup);
             }
         }
 
         if query.is_empty() {
-            self.current_file_query = None;
+            self.popups.current_file_query = None;
         } else {
-            self.current_file_query = Some(query);
+            self.popups.current_file_query = Some(query);
         }
-        self.dismissed_file_popup_token = None;
+        self.popups.dismissed_file_token = None;
     }
 
     fn sync_mention_popup(&mut self, query: String) {
-        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+        if self.popups.dismissed_mention_token.as_ref() == Some(&query) {
             return;
         }
 
         let mentions = self.mention_items();
         if mentions.is_empty() {
-            self.active_popup = ActivePopup::None;
+            self.popups.active = ActivePopup::None;
             return;
         }
 
-        match &mut self.active_popup {
+        match &mut self.popups.active {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
                 popup.set_mentions(mentions);
@@ -4145,24 +3951,24 @@ impl ChatComposer {
             _ => {
                 let mut popup = SkillPopup::new(mentions);
                 popup.set_query(&query);
-                self.active_popup = ActivePopup::Skill(popup);
+                self.popups.active = ActivePopup::Skill(popup);
             }
         }
     }
 
     fn sync_mentions_v2_popup(&mut self, query: String) {
-        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+        if self.popups.dismissed_mention_token.as_ref() == Some(&query) {
             return;
         }
 
         if query.is_empty() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(String::new()));
-            self.current_file_query = None;
+            self.popups.current_file_query = None;
         } else {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
-            self.current_file_query = Some(query.clone());
+            self.popups.current_file_query = Some(query.clone());
         }
 
         let candidates = super::mentions_v2::build_search_catalog(
@@ -4170,7 +3976,7 @@ impl ChatComposer {
             self.plugins.as_deref(),
         );
 
-        match &mut self.active_popup {
+        match &mut self.popups.active {
             ActivePopup::MentionV2(popup) => {
                 popup.set_query(&query);
                 popup.set_candidates(candidates);
@@ -4178,11 +3984,11 @@ impl ChatComposer {
             _ => {
                 let mut popup = MentionV2Popup::new(candidates);
                 popup.set_query(&query);
-                self.active_popup = ActivePopup::MentionV2(popup);
+                self.popups.active = ActivePopup::MentionV2(popup);
             }
         }
 
-        self.dismissed_mention_popup_token = None;
+        self.popups.dismissed_mention_token = None;
     }
 
     fn mention_items(&self) -> Vec<MentionItem> {
@@ -4311,8 +4117,8 @@ impl ChatComposer {
         self.input_disabled_placeholder = if enabled { None } else { placeholder };
 
         // Avoid leaving interactive popups open while input is blocked.
-        if !enabled && !matches!(self.active_popup, ActivePopup::None) {
-            self.active_popup = ActivePopup::None;
+        if !enabled && self.popups.active() {
+            self.popups.active = ActivePopup::None;
         }
     }
 
@@ -4507,7 +4313,8 @@ impl ChatComposer {
         let inner_width =
             width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
         let remote_images_height: u16 = self
-            .remote_images_lines(inner_width)
+            .attachments
+            .remote_image_lines()
             .len()
             .try_into()
             .unwrap_or(u16::MAX);
@@ -4516,7 +4323,7 @@ impl ChatComposer {
             + remote_images_height
             + remote_images_separator
             + 2
-            + match &self.active_popup {
+            + match &self.popups.active {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
@@ -4542,7 +4349,7 @@ impl ChatComposer {
     ) {
         let [composer_rect, remote_images_rect, textarea_rect, popup_rect] =
             self.layout_areas_with_textarea_right_reserve(area, textarea_right_reserve);
-        match &self.active_popup {
+        match &self.popups.active {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
@@ -4786,7 +4593,7 @@ impl ChatComposer {
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
         if !remote_images_rect.is_empty() {
-            Paragraph::new(self.remote_images_lines(remote_images_rect.width))
+            Paragraph::new(self.attachments.remote_image_lines())
                 .style(style)
                 .render_ref(remote_images_rect, buf);
         }
@@ -4853,6 +4660,7 @@ impl ChatComposer {
 
 #[cfg(test)]
 mod tests {
+    use super::attachment_state::AttachedImage;
     use super::*;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
@@ -4867,9 +4675,9 @@ mod tests {
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
-    use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
+    use codex_protocol::models::local_image_label_text;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -5608,7 +5416,7 @@ mod tests {
         assert!(!composer.is_empty());
         assert_eq!(composer.current_text(), "d");
         assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -5678,7 +5486,7 @@ mod tests {
         assert!(needs_redraw);
         assert_eq!(composer.textarea.text(), "/");
         assert_eq!(composer.textarea.cursor(), "/".len());
-        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
         assert_eq!(
             composer.vim_mode_indicator_span(),
             Some("Vim: Insert".green())
@@ -5706,7 +5514,7 @@ mod tests {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         assert_eq!(composer.textarea.text(), "/diff");
-        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -5740,7 +5548,7 @@ mod tests {
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         composer.set_text_content("/plan investigate this".to_string(), Vec::new(), Vec::new());
-        composer.active_popup = ActivePopup::None;
+        composer.popups.active = ActivePopup::None;
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -5814,7 +5622,7 @@ mod tests {
         assert!(composer.is_bash_mode);
         assert_eq!(composer.current_text(), "!echo");
         assert_eq!(composer.textarea.text(), "echo");
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 
     #[test]
@@ -6376,7 +6184,7 @@ mod tests {
         );
         composer.set_connectors_enabled(/*enabled*/ true);
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
 
         let connectors = vec![AppInfo {
             id: "connector_1".to_string(),
@@ -6395,7 +6203,7 @@ mod tests {
         }];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
-        let ActivePopup::Skill(popup) = &composer.active_popup else {
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
             panic!("expected mention popup to open after connectors update");
         };
         let mention = popup
@@ -6418,7 +6226,7 @@ mod tests {
         );
         composer.set_connectors_enabled(/*enabled*/ true);
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
 
         let connectors = vec![AppInfo {
             id: "connector_1".to_string(),
@@ -6438,7 +6246,7 @@ mod tests {
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
         assert!(
-            matches!(composer.active_popup, ActivePopup::None),
+            matches!(composer.popups.active, ActivePopup::None),
             "disabled connectors should not appear in the mention popup"
         );
     }
@@ -6455,7 +6263,7 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
 
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
@@ -6466,7 +6274,7 @@ mod tests {
             app_connector_ids: Vec::new(),
         }]));
 
-        let ActivePopup::Skill(popup) = &composer.active_popup else {
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
             panic!("expected mention popup to open after plugin update");
         };
         let mention = popup
@@ -6488,7 +6296,7 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
 
         let skill_path = test_path_buf("/tmp/skill/SKILL.md").abs();
         composer.set_skill_mentions(Some(vec![SkillMetadata {
@@ -6503,7 +6311,7 @@ mod tests {
             plugin_id: None,
         }]));
 
-        let ActivePopup::Skill(popup) = &composer.active_popup else {
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
             panic!("expected mention popup to open after skills update");
         };
         let mention = popup
@@ -6700,7 +6508,7 @@ mod tests {
         }];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
-        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 
     #[test]
@@ -6974,7 +6782,7 @@ mod tests {
         composer.textarea.set_cursor(input.len());
         composer.sync_popups();
 
-        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
+        assert!(matches!(composer.popups.active, ActivePopup::File(_)));
 
         let (result, consumed) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -7718,7 +7526,7 @@ mod tests {
         );
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
 
-        match &composer.active_popup {
+        match &composer.popups.active {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "model")
@@ -7774,7 +7582,7 @@ mod tests {
         );
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
 
-        match &composer.active_popup {
+        match &composer.popups.active {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "resume")
@@ -7828,7 +7636,7 @@ mod tests {
         );
         type_chars_humanlike(&mut composer, &['/', 'p', 'e', 't']);
 
-        match &composer.active_popup {
+        match &composer.popups.active {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "pets")
@@ -9692,7 +9500,7 @@ mod tests {
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0], path);
-        assert!(composer.attached_images.is_empty());
+        assert!(composer.attachments.local_images.is_empty());
     }
 
     #[test]
@@ -9714,8 +9522,14 @@ mod tests {
         let text = composer.textarea.text().to_string();
         assert!(text.contains("[Image #1]"));
         assert!(text.contains("[Image #2]"));
-        assert_eq!(composer.attached_images[0].placeholder, "[Image #1]");
-        assert_eq!(composer.attached_images[1].placeholder, "[Image #2]");
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            "[Image #1]"
+        );
+        assert_eq!(
+            composer.attachments.local_images[1].placeholder,
+            "[Image #2]"
+        );
     }
 
     #[test]
@@ -9731,7 +9545,7 @@ mod tests {
         );
         let path = PathBuf::from("/tmp/image3.png");
         composer.attach_image(path.clone());
-        let placeholder = composer.attached_images[0].placeholder.clone();
+        let placeholder = composer.attachments.local_images[0].placeholder.clone();
 
         // Case 1: backspace at end
         composer
@@ -9739,18 +9553,18 @@ mod tests {
             .move_cursor_to_end_of_line(/*move_down_at_eol*/ false);
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert!(!composer.textarea.text().contains(&placeholder));
-        assert!(composer.attached_images.is_empty());
+        assert!(composer.attachments.local_images.is_empty());
 
         // Re-add and ensure backspace at element start does not delete the placeholder.
         composer.attach_image(path);
-        let placeholder2 = composer.attached_images[0].placeholder.clone();
+        let placeholder2 = composer.attachments.local_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
             let mid_pos = start_pos + (placeholder2.len() / 2);
             composer.textarea.set_cursor(mid_pos);
             composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
             assert!(composer.textarea.text().contains(&placeholder2));
-            assert_eq!(composer.attached_images.len(), 1);
+            assert_eq!(composer.attachments.local_images.len(), 1);
         } else {
             panic!("Placeholder not found in textarea");
         }
@@ -9782,7 +9596,7 @@ mod tests {
         // without panicking and leave the placeholder intact.
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
-        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attachments.local_images.len(), 1);
         assert!(composer.textarea.text().starts_with("[Image #1]"));
     }
 
@@ -9806,8 +9620,8 @@ mod tests {
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone());
 
-        let placeholder1 = composer.attached_images[0].placeholder.clone();
-        let placeholder2 = composer.attached_images[1].placeholder.clone();
+        let placeholder1 = composer.attachments.local_images[0].placeholder.clone();
+        let placeholder2 = composer.attachments.local_images[1].placeholder.clone();
         let text = composer.textarea.text().to_string();
         let start1 = text.find(&placeholder1).expect("first placeholder present");
         let end1 = start1 + placeholder1.len();
@@ -9837,7 +9651,7 @@ mod tests {
                 path: path2,
                 placeholder: "[Image #1]".to_string()
             }],
-            composer.attached_images,
+            composer.attachments.local_images,
             "one image mapping remains"
         );
     }
@@ -9900,7 +9714,7 @@ mod tests {
                 path: path2,
                 placeholder: placeholder1
             }],
-            composer.attached_images,
+            composer.attachments.local_images,
             "attachment renumbered after deletion"
         );
     }
@@ -9928,16 +9742,19 @@ mod tests {
         composer.attach_image(path1);
         composer.attach_image(path2.clone());
         assert_eq!(composer.textarea.text(), "[Image #1][Image #2]");
-        assert_eq!(composer.attached_images.len(), 2);
+        assert_eq!(composer.attachments.local_images.len(), 2);
 
         // Delete the first element using normal textarea editing (forward Delete at cursor start).
         composer.textarea.set_cursor(/*pos*/ 0);
         composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
         // Remaining image should be renumbered and the textarea element updated.
-        assert_eq!(composer.attached_images.len(), 1);
-        assert_eq!(composer.attached_images[0].path, path2);
-        assert_eq!(composer.attached_images[0].placeholder, "[Image #1]");
+        assert_eq!(composer.attachments.local_images.len(), 1);
+        assert_eq!(composer.attachments.local_images[0].path, path2);
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            "[Image #1]"
+        );
         assert_eq!(composer.textarea.text(), "[Image #1]");
     }
 
@@ -10202,7 +10019,7 @@ mod tests {
 
         // After set_text_content -> sync_popups is called; popup should NOT be Command.
         assert!(
-            matches!(composer.active_popup, ActivePopup::None),
+            matches!(composer.popups.active, ActivePopup::None),
             "expected no slash popup for '/ test'"
         );
 
@@ -10230,21 +10047,21 @@ mod tests {
         // Case 1: bare "/"
         composer.set_text_content("/".to_string(), Vec::new(), Vec::new());
         assert!(
-            matches!(composer.active_popup, ActivePopup::Command(_)),
+            matches!(composer.popups.active, ActivePopup::Command(_)),
             "bare '/' should activate slash popup"
         );
 
         // Case 2: valid prefix "/re" (matches /review, /resume, etc.)
         composer.set_text_content("/re".to_string(), Vec::new(), Vec::new());
         assert!(
-            matches!(composer.active_popup, ActivePopup::Command(_)),
+            matches!(composer.popups.active, ActivePopup::Command(_)),
             "'/re' should activate slash popup via prefix match"
         );
 
         // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
         composer.set_text_content("/ac".to_string(), Vec::new(), Vec::new());
         assert!(
-            matches!(composer.active_popup, ActivePopup::Command(_)),
+            matches!(composer.popups.active, ActivePopup::Command(_)),
             "'/ac' should activate slash popup via fuzzy match"
         );
 
@@ -10253,7 +10070,7 @@ mod tests {
         // Verify that explicitly.
         composer.set_text_content("/zzz".to_string(), Vec::new(), Vec::new());
         assert!(
-            matches!(composer.active_popup, ActivePopup::None),
+            matches!(composer.popups.active, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
     }
@@ -10322,7 +10139,7 @@ mod tests {
         composer.set_collaboration_modes_enabled(/*enabled*/ true);
 
         composer.set_text_content("/plan investigate this".to_string(), Vec::new(), Vec::new());
-        composer.active_popup = ActivePopup::None;
+        composer.popups.active = ActivePopup::None;
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -10356,7 +10173,7 @@ mod tests {
 
         let placeholder = local_image_label_text(/*label_number*/ 1);
         composer.textarea.insert_element(&placeholder);
-        composer.attached_images.push(AttachedImage {
+        composer.attachments.local_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
         });
@@ -10371,8 +10188,11 @@ mod tests {
             format!("Edited {placeholder} text")
         );
         assert!(composer.pending_pastes.is_empty());
-        assert_eq!(composer.attached_images.len(), 1);
-        assert_eq!(composer.attached_images[0].placeholder, placeholder);
+        assert_eq!(composer.attachments.local_images.len(), 1);
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            placeholder
+        );
         assert_eq!(composer.textarea.cursor(), composer.current_text().len());
     }
 
@@ -10450,7 +10270,7 @@ mod tests {
 
         let placeholder = local_image_label_text(/*label_number*/ 1);
         composer.textarea.insert_element(&placeholder);
-        composer.attached_images.push(AttachedImage {
+        composer.attachments.local_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
         });
@@ -10458,7 +10278,7 @@ mod tests {
         composer.apply_external_edit("No images here".to_string());
 
         assert_eq!(composer.current_text(), "No images here".to_string());
-        assert!(composer.attached_images.is_empty());
+        assert!(composer.attachments.local_images.is_empty());
     }
 
     #[test]
@@ -10483,8 +10303,11 @@ mod tests {
 
         let placeholder1 = local_image_label_text(/*label_number*/ 1);
         assert_eq!(composer.current_text(), format!("Keep {placeholder1}"));
-        assert_eq!(composer.attached_images.len(), 1);
-        assert_eq!(composer.attached_images[0].placeholder, placeholder1);
+        assert_eq!(composer.attachments.local_images.len(), 1);
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            placeholder1
+        );
         assert_eq!(composer.local_image_paths(), vec![second_path]);
         assert_eq!(composer.textarea.element_payloads(), vec![placeholder1]);
     }
@@ -10555,7 +10378,7 @@ mod tests {
 
         let placeholder = local_image_label_text(/*label_number*/ 1);
         composer.textarea.insert_element(&placeholder);
-        composer.attached_images.push(AttachedImage {
+        composer.attachments.local_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
         });
@@ -10566,7 +10389,7 @@ mod tests {
             composer.current_text(),
             format!("{placeholder} extra {placeholder}")
         );
-        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attachments.local_images.len(), 1);
     }
 
     #[test]
@@ -10608,7 +10431,10 @@ mod tests {
         ]);
         composer.attach_image(PathBuf::from("/tmp/local.png"));
 
-        assert_eq!(composer.attached_images[0].placeholder, "[Image #3]");
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            "[Image #3]"
+        );
         assert_eq!(composer.current_text(), "[Image #3]");
     }
 
@@ -10695,13 +10521,19 @@ mod tests {
             vec!["https://example.com/one.png".to_string()]
         );
         assert_eq!(composer.current_text(), "[Image #2]");
-        assert_eq!(composer.attached_images[0].placeholder, "[Image #2]");
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            "[Image #2]"
+        );
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(composer.remote_image_urls(), Vec::<String>::new());
         assert_eq!(composer.current_text(), "[Image #1]");
-        assert_eq!(composer.attached_images[0].placeholder, "[Image #1]");
+        assert_eq!(
+            composer.attachments.local_images[0].placeholder,
+            "[Image #1]"
+        );
     }
 
     #[test]

@@ -401,7 +401,7 @@ mod tests {
             message("assistant", "final", Some(MessagePhase::FinalAnswer)),
             ResponseItem::FunctionCall {
                 id: None,
-                name: "shell".to_string(),
+                name: "shell_command".to_string(),
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call_1".to_string(),

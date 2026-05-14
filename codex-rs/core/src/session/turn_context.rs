@@ -69,6 +69,7 @@ pub struct TurnContext {
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
+    #[deprecated(note = "use the selected turn environment cwd instead")]
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
@@ -118,6 +119,7 @@ impl TurnContext {
             &self.permission_profile,
             &file_system_sandbox_policy,
             network_sandbox_policy,
+            #[allow(deprecated)]
             &self.cwd,
         )
     }
@@ -218,6 +220,7 @@ impl TurnContext {
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(self.tools_config.goal_tools)
         .with_max_concurrent_threads_per_session(
             config
@@ -230,6 +233,18 @@ impl TurnContext {
                 .features
                 .enabled(Feature::MultiAgentV2)
                 .then_some(config.multi_agent_v2.min_wait_timeout_ms),
+        )
+        .with_wait_agent_max_timeout_ms(
+            config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(config.multi_agent_v2.max_wait_timeout_ms),
+        )
+        .with_wait_agent_default_timeout_ms(
+            config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(config.multi_agent_v2.default_wait_timeout_ms),
         )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &config.agent_roles,
@@ -252,6 +267,7 @@ impl TurnContext {
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
             environments: self.environments.clone(),
+            #[allow(deprecated)]
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -287,7 +303,9 @@ impl TurnContext {
         }
     }
 
+    #[deprecated(note = "resolve paths from the selected turn environment cwd instead")]
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
+        #[allow(deprecated)]
         path.as_ref()
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
@@ -295,6 +313,7 @@ impl TurnContext {
     pub(crate) fn file_system_sandbox_context(
         &self,
         additional_permissions: Option<AdditionalPermissionProfile>,
+        cwd: &AbsolutePathBuf,
     ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
             self.permission_profile.to_runtime_permissions();
@@ -313,7 +332,7 @@ impl TurnContext {
         );
         FileSystemSandboxContext {
             permissions,
-            cwd: Some(self.cwd.clone()),
+            cwd: Some(cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -331,6 +350,7 @@ impl TurnContext {
         let legacy_file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 &self.sandbox_policy(),
+                #[allow(deprecated)]
                 &self.cwd,
             );
         let file_system_sandbox_policy = self.file_system_sandbox_policy();
@@ -348,6 +368,7 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
+            #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -512,6 +533,7 @@ impl Session {
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_multi_agent_v2_non_code_mode_only(per_turn_config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(goal_tools_supported)
         .with_max_concurrent_threads_per_session(
             per_turn_config
@@ -528,6 +550,18 @@ impl Session {
                 .features
                 .enabled(Feature::MultiAgentV2)
                 .then_some(per_turn_config.multi_agent_v2.min_wait_timeout_ms),
+        )
+        .with_wait_agent_max_timeout_ms(
+            per_turn_config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(per_turn_config.multi_agent_v2.max_wait_timeout_ms),
+        )
+        .with_wait_agent_default_timeout_ms(
+            per_turn_config
+                .features
+                .enabled(Feature::MultiAgentV2)
+                .then_some(per_turn_config.multi_agent_v2.default_wait_timeout_ms),
         )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
@@ -564,6 +598,7 @@ impl Session {
             session_source,
             thread_source: session_configuration.thread_source,
             environments,
+            #[allow(deprecated)]
             cwd,
             current_date: Some(current_date),
             timezone: Some(timezone),
