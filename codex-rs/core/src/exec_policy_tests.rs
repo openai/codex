@@ -261,6 +261,26 @@ async fn returns_empty_policy_when_no_policy_files_exist() {
 }
 
 #[tokio::test]
+async fn rules_path_file_returns_read_dir_error() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let rules_path = temp_dir.path().join(RULES_DIR_NAME);
+    fs::write(&rules_path, "rules should be a directory").expect("write malformed rules path");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+
+    let err = load_exec_policy(&config_stack)
+        .await
+        .expect_err("rules file should fail policy loading");
+
+    assert!(
+        matches!(
+            err,
+            ExecPolicyError::ReadDir { ref dir, .. } if dir == &rules_path
+        ),
+        "expected malformed rules path to surface as ReadDir, got {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn collect_policy_files_returns_empty_when_dir_missing() {
     let temp_dir = tempdir().expect("create temp dir");
 

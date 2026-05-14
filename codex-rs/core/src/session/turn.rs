@@ -366,6 +366,7 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
+    #[allow(deprecated)]
     let display_root = get_git_repo_root(turn_context.cwd.as_path())
         .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
@@ -524,6 +525,7 @@ pub(crate) async fn run_turn(
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.session_id().into(),
                         turn_id: turn_context.sub_id.clone(),
+                        #[allow(deprecated)]
                         cwd: turn_context.cwd.clone(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
@@ -573,6 +575,7 @@ pub(crate) async fn run_turn(
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.session_id().into(),
+                            #[allow(deprecated)]
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -697,6 +700,7 @@ async fn track_turn_resolved_config_analytics(
             model: turn_context.model_info.slug.clone(),
             model_provider: turn_context.config.model_provider_id.clone(),
             permission_profile: turn_context.permission_profile(),
+            #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
@@ -993,6 +997,7 @@ pub(crate) fn build_prompt(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(deprecated)]
 #[instrument(level = "trace",
     skip_all,
     fields(

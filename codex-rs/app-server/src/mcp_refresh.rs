@@ -207,6 +207,7 @@ mod tests {
             temp_dir.path().to_path_buf(),
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             loader.clone(),

@@ -16,6 +16,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", global = true, default_value_t = false)]
+    pub strict_config: bool,
+
     #[clap(flatten)]
     pub shared: ExecSharedCliOptions,
 
@@ -258,7 +262,7 @@ impl FromArgMatches for ResumeArgs {
     }
 }
 
-#[derive(Parser, Debug)]
+#[derive(Args, Debug)]
 pub struct ReviewArgs {
     /// Review staged, unstaged, and untracked changes.
     #[arg(

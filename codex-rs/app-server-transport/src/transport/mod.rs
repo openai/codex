@@ -32,6 +32,7 @@ mod websocket;
 
 pub use remote_control::RemoteControlHandle;
 pub use remote_control::RemoteControlStartConfig;
+pub use remote_control::RemoteControlUnavailable;
 pub use remote_control::start_remote_control;
 pub use stdio::start_stdio_connection;
 pub use unix_socket::start_control_socket_acceptor;

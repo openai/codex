@@ -15,6 +15,7 @@ use codex_tools::ToolSpec;
 
 pub struct RequestPermissionsHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
 
@@ -47,6 +48,7 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
             }
         };
 
+        #[allow(deprecated)]
         let mut args: RequestPermissionsArgs =
             parse_arguments_with_base_path(&arguments, &turn.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())

@@ -17700,12 +17700,6 @@
       },
       "ToolsV2": {
         "properties": {
-          "view_image": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "web_search": {
             "anyOf": [
               {

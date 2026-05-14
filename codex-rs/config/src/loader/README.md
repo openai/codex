@@ -10,13 +10,14 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_config::loader`:
 
-- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements, thread_config_loader) -> ConfigLayerStack`
+- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, options, cloud_requirements, thread_config_loader) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
   - `layers_high_to_low() -> Vec<ConfigLayer>`
   - `with_user_config(user_config) -> ConfigLayerStack`
 - `ConfigLayerEntry` (one layer’s `{name, config, version, disabled_reason}`; `name` carries source metadata)
+- `ConfigLoadOptions` (user-facing load behavior such as strict config validation)
 - `LoaderOverrides` (test/override hooks for managed config sources)
 - `merge_toml_values(base, overlay)` (public helper used elsewhere)
 

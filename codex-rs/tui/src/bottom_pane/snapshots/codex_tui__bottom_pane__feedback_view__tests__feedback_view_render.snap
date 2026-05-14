@@ -11,7 +11,7 @@ expression: rendered
   <LOG_PATH>
 
 
-› 1. Yes     Share the current Codex session logs with the team for
-             troubleshooting.
+› 1. Yes     Share the current Codex session logs and diagnostics with the team
+             for troubleshooting.
   2. No
   3. Cancel

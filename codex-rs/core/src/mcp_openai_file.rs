@@ -102,6 +102,7 @@ async fn build_uploaded_local_argument_value(
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
+    #[allow(deprecated)]
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
     let Some(auth) = auth else {
         return Err(
@@ -216,7 +217,10 @@ mod tests {
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        #[allow(deprecated)]
+        {
+            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        }
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
@@ -297,7 +301,10 @@ mod tests {
         tokio::fs::write(&local_path, b"hello")
             .await
             .expect("write local file");
-        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        #[allow(deprecated)]
+        {
+            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        }
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
@@ -411,7 +418,10 @@ mod tests {
         tokio::fs::write(dir.path().join("two.csv"), b"two")
             .await
             .expect("write second local file");
-        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        #[allow(deprecated)]
+        {
+            turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+        }
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());

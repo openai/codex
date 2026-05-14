@@ -62,17 +62,17 @@
       "type": "object"
     },
     "AltScreenMode": {
-      "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n**Background:** The alternate screen buffer provides a cleaner fullscreen experience without polluting the terminal's scrollback history. However, it conflicts with terminal multiplexers like Zellij that strictly follow the xterm specification, which defines that alternate screen buffers should not have scrollback.\n\n**Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This is by design and not configurable in Zellij—there is no option to enable scrollback in alternate screen mode.\n\n**Solution:** This setting provides a pragmatic workaround: - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij, disable alternate screen to preserve scrollback. Enable it everywhere else. - `always`: Always use alternate screen mode (original behavior before this fix). - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback in all multiplexers.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
+      "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Use alternate screen mode. - `always`: Always use alternate screen mode. - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
       "oneOf": [
         {
-          "description": "Auto-detect: disable alternate screen in Zellij, enable elsewhere.",
+          "description": "Use alternate screen mode.",
           "enum": [
             "auto"
           ],
           "type": "string"
         },
         {
-          "description": "Always use alternate screen (original behavior).",
+          "description": "Always use alternate screen mode.",
           "enum": [
             "always"
           ],
@@ -347,9 +347,6 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
-        "experimental_use_freeform_apply_patch": {
-          "type": "boolean"
-        },
         "experimental_use_unified_exec_tool": {
           "type": "boolean"
         },
@@ -428,9 +425,6 @@
               "type": "boolean"
             },
             "exec_permission_approvals": {
-              "type": "boolean"
-            },
-            "experimental_use_freeform_apply_patch": {
               "type": "boolean"
             },
             "experimental_use_unified_exec_tool": {
@@ -619,9 +613,6 @@
           },
           "type": "object"
         },
-        "include_apply_patch_tool": {
-          "type": "boolean"
-        },
         "include_apps_instructions": {
           "type": "boolean"
         },
@@ -684,9 +675,6 @@
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
-        },
-        "tools_view_image": {
-          "type": "boolean"
         },
         "tui": {
           "allOf": [
@@ -1468,6 +1456,12 @@
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "default_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -1479,11 +1473,20 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "max_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "min_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
+        },
+        "non_code_mode_only": {
+          "type": "boolean"
         },
         "root_agent_usage_hint_text": {
           "type": "string"
@@ -2344,7 +2347,7 @@
     },
     "ShellEnvironmentPolicyToml": {
       "additionalProperties": false,
-      "description": "Policy for building the `env` when spawning a process via either the `shell` or `local_shell` tool.",
+      "description": "Policy for building the `env` when spawning a process via shell-like tools.",
       "properties": {
         "exclude": {
           "description": "List of regular expressions.",
@@ -2501,11 +2504,6 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
-        "view_image": {
-          "default": null,
-          "description": "Enable the `view_image` tool that lets the agent attach local images.",
-          "type": "boolean"
-        },
         "web_search": {
           "allOf": [
             {
@@ -2536,7 +2534,7 @@
             }
           ],
           "default": "auto",
-          "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Disable alternate screen in Zellij, enable elsewhere. - `always`: Always use alternate screen (original behavior). - `never`: Never use alternate screen (inline mode only, preserves scrollback).\n\nUsing alternate screen provides a cleaner fullscreen experience but prevents scrollback in terminal multiplexers like Zellij that follow the xterm spec."
+          "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n- `auto` (default): Use alternate screen. - `always`: Always use alternate screen. - `never`: Never use alternate screen (inline mode only, preserves scrollback)."
         },
         "animations": {
           "default": true,
@@ -2606,8 +2604,14 @@
             "list": {
               "accept": null,
               "cancel": null,
+              "jump_bottom": null,
+              "jump_top": null,
               "move_down": null,
-              "move_up": null
+              "move_left": null,
+              "move_right": null,
+              "move_up": null,
+              "page_down": null,
+              "page_up": null
             },
             "pager": {
               "close": null,
@@ -3252,8 +3256,14 @@
           "default": {
             "accept": null,
             "cancel": null,
+            "jump_bottom": null,
+            "jump_top": null,
             "move_down": null,
-            "move_up": null
+            "move_left": null,
+            "move_right": null,
+            "move_up": null,
+            "page_down": null,
+            "page_up": null
           }
         },
         "pager": {
@@ -3350,6 +3360,22 @@
           ],
           "description": "Cancel and close selection view."
         },
+        "jump_bottom": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the last list item."
+        },
+        "jump_top": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Jump to the first list item."
+        },
         "move_down": {
           "allOf": [
             {
@@ -3358,6 +3384,22 @@
           ],
           "description": "Move list selection down."
         },
+        "move_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move horizontally left in list pickers that support horizontal actions."
+        },
+        "move_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move horizontally right in list pickers that support horizontal actions."
+        },
         "move_up": {
           "allOf": [
             {
@@ -3365,6 +3407,22 @@
             }
           ],
           "description": "Move list selection up."
+        },
+        "page_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection down by one page."
+        },
+        "page_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move list selection up by one page."
         }
       },
       "type": "object"
@@ -3963,10 +4021,6 @@
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
-    "commit_attribution": {
-      "description": "Optional commit attribution text for commit message co-author trailers. This top-level setting only takes effect when `[features].codex_git_commit` is enabled.\n\nWhen enabled and unset, Codex uses `Codex <noreply@openai.com>`. Set to an empty string to disable automatic commit attribution.",
-      "type": "string"
-    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -4026,9 +4080,6 @@
         }
       ],
       "description": "Experimental / do not use. Selects the thread store implementation."
-    },
-    "experimental_use_freeform_apply_patch": {
-      "type": "boolean"
     },
     "experimental_use_unified_exec_tool": {
       "type": "boolean"
@@ -4108,9 +4159,6 @@
           "type": "boolean"
         },
         "exec_permission_approvals": {
-          "type": "boolean"
-        },
-        "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
         "experimental_use_unified_exec_tool": {

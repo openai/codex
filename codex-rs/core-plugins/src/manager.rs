@@ -494,7 +494,7 @@ impl PluginsManager {
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -542,7 +542,7 @@ impl PluginsManager {
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -585,14 +585,7 @@ impl PluginsManager {
         }
     }
 
-    fn remote_installed_plugin_configs(
-        &self,
-        config: &PluginsConfigInput,
-    ) -> HashMap<String, PluginConfig> {
-        if !config.remote_plugin_enabled {
-            return HashMap::new();
-        }
-
+    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -667,7 +660,7 @@ impl PluginsManager {
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -687,7 +680,7 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -1504,25 +1497,23 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            if config.remote_plugin_enabled {
-                let config = config.clone();
-                let manager = Arc::clone(self);
-                let auth_manager = auth_manager.clone();
-                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
-                tokio::spawn(async move {
-                    let auth = auth_manager.auth().await;
-                    manager.maybe_start_remote_installed_plugins_cache_refresh(
-                        &config,
-                        auth.clone(),
-                        on_effective_plugins_changed.clone(),
-                    );
-                    manager.maybe_start_remote_installed_plugin_bundle_sync(
-                        &config,
-                        auth,
-                        on_effective_plugins_changed,
-                    );
-                });
-            }
+            let config_for_remote_sync = config.clone();
+            let manager = Arc::clone(self);
+            let auth_manager_for_remote_sync = auth_manager.clone();
+            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+            tokio::spawn(async move {
+                let auth = auth_manager_for_remote_sync.auth().await;
+                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                    &config_for_remote_sync,
+                    auth.clone(),
+                    on_effective_plugins_changed.clone(),
+                );
+                manager.maybe_start_remote_installed_plugin_bundle_sync(
+                    &config_for_remote_sync,
+                    auth,
+                    on_effective_plugins_changed,
+                );
+            });
 
             let config = config.clone();
             let manager = Arc::clone(self);

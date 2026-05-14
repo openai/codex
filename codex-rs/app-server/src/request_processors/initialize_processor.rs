@@ -13,7 +13,7 @@ use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
-const DAEMON_PROBE_CLIENT_NAME: &str = "codex_app_server_daemon";
+const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
 
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
@@ -92,7 +92,7 @@ impl InitializeRequestProcessor {
         }
         let originator = name.clone();
         let user_agent_suffix = format!("{name}; {version}");
-        let mutates_global_identity = name != DAEMON_PROBE_CLIENT_NAME;
+        let mutates_global_identity = !NON_ORIGINATING_CLIENT_NAMES.contains(&name.as_str());
         let codex_home = self.config.codex_home.clone();
         if session
             .initialize(InitializedConnectionSessionState {

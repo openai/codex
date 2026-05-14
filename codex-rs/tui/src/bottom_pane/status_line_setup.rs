@@ -35,6 +35,7 @@ use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
+use crate::keymap::ListKeymap;
 use crate::render::renderable::Renderable;
 
 const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors";
@@ -246,6 +247,7 @@ impl StatusLineSetupView {
         use_theme_colors: bool,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
+        list_keymap: ListKeymap,
     ) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = vec![MultiSelectItem {
@@ -284,10 +286,7 @@ impl StatusLineSetupView {
                 Some("Select which items to display in the status line.".to_string()),
                 app_event_tx,
             )
-            .instructions(vec![
-                "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
-                    .into(),
-            ])
+            .list_keymap(list_keymap)
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
@@ -621,6 +620,7 @@ mod tests {
                 ),
             ]),
             AppEventSender::new(tx_raw),
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_snapshot!(render_lines(&view, /*width*/ 72));

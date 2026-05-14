@@ -575,6 +575,11 @@ async fn execute_mcp_tool_call(
     )
     .await
     .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
+    let mcp_call_trace = sess
+        .services
+        .rollout_thread_trace
+        .start_mcp_call_trace(call_id);
+    let request_meta = mcp_call_trace.add_request_meta(request_meta);
     let result = sess
         .call_tool(
             &invocation.server,
@@ -726,6 +731,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         permission_profile: Some(turn_context.permission_profile()),
         sandbox_policy: turn_context.sandbox_policy(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
     })?;

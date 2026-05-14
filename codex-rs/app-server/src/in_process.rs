@@ -119,6 +119,8 @@ pub struct InProcessStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
+    /// Whether config API paths should reject unknown config fields.
+    pub strict_config: bool,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
     /// Loader used to fetch typed thread config sources before a thread starts.
@@ -409,6 +411,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
             args.loader_overrides,
+            args.strict_config,
             args.cloud_requirements,
             args.arg0_paths.clone(),
             args.thread_config_loader,
@@ -430,6 +433,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 auth_manager,
                 installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
+                remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
@@ -764,6 +768,7 @@ mod tests {
             config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),

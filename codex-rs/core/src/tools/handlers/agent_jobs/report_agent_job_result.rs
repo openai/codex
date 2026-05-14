@@ -12,6 +12,7 @@ use super::*;
 
 pub struct ReportAgentJobResultHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
     type Output = FunctionToolOutput;
 
