@@ -3168,7 +3168,9 @@ async fn side_start_block_message_tracks_open_side_conversation() {
 
     assert_eq!(
         app.side_start_block_message(),
-        Some("A side conversation is already open. Press Esc to return before starting another.")
+        Some(
+            "A side conversation is already open. Press Ctrl+C to return before starting another."
+        )
     );
 
     app.side_threads.remove(&side_thread_id);
@@ -5246,4 +5248,51 @@ async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
     assert!(!app.backtrack.primed);
     assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
     assert!(app.should_handle_backtrack_esc(esc));
+}
+
+#[tokio::test]
+async fn side_conversations_reject_backtrack_esc_without_stealing_vim_insert_escape() {
+    let mut app = make_test_app().await;
+    let esc = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+
+    app.chat_widget
+        .set_side_conversation_active(/*active*/ true);
+    assert!(app.chat_widget.composer_is_empty());
+    assert!(!app.should_handle_backtrack_esc(esc));
+    assert!(app.should_reject_side_backtrack_esc(esc));
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget
+        .handle_key_event(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        ));
+
+    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(!app.should_handle_backtrack_esc(esc));
+    assert!(!app.should_reject_side_backtrack_esc(esc));
+}
+
+#[tokio::test]
+async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.backtrack.primed = true;
+
+    app.reject_side_backtrack_esc();
+
+    assert!(!app.backtrack.primed);
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = cell
+        .display_lines(/*width*/ 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_app_snapshot!(
+        "side_backtrack_rejection_reports_unavailable_message",
+        rendered
+    );
 }
