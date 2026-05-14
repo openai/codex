@@ -218,7 +218,9 @@ impl ExecutorFileSystem for InMemoryFileSystem {
         reject_sandbox_context(sandbox)?;
         let state = self.state.read().expect("in-memory fs read lock");
         if is_root(path) {
-            return Ok(directory_metadata(0, 0));
+            return Ok(directory_metadata(
+                /*created_at_ms*/ 0, /*modified_at_ms*/ 0,
+            ));
         }
 
         let entry = state.entries.get(path).ok_or_else(|| {
