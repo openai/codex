@@ -2193,8 +2193,11 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         Constrained::allow_only(AskForApproval::Never)
     );
     assert_eq!(
-        guardian_config.permissions.permission_profile_constraint(),
-        &Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
+        guardian_config
+            .permissions
+            .permission_profile_constraint()
+            .clone(),
+        Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
             &SandboxPolicy::new_read_only_policy(),
         ))
     );

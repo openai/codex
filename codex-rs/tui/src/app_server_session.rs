@@ -34,7 +34,6 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
@@ -108,7 +107,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -576,6 +574,7 @@ impl AppServerSession {
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
+                    runtime_workspace_roots: None,
                     approval_policy: Some(approval_policy),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy,
@@ -1175,19 +1174,7 @@ fn sandbox_mode_from_permission_profile(
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
 ) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
-        .collect::<Vec<_>>();
-    PermissionProfileSelectionParams::Profile {
-        id: active.id,
-        modifications: (!modifications.is_empty()).then_some(modifications),
-    }
+    PermissionProfileSelectionParams::new(active.id)
 }
 
 fn turn_permissions_overrides(
@@ -1253,6 +1240,13 @@ fn thread_start_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(config),
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
+        runtime_workspace_roots: Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect(),
+        ),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox,
@@ -1288,6 +1282,13 @@ fn thread_resume_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
+        runtime_workspace_roots: Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect(),
+        ),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -1320,6 +1321,13 @@ fn thread_fork_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
+        runtime_workspace_roots: Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect(),
+        ),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -1417,6 +1425,7 @@ async fn thread_session_state_from_thread_start_response(
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
+        response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
@@ -1449,6 +1458,7 @@ async fn thread_session_state_from_thread_resume_response(
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
+        response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
@@ -1481,6 +1491,7 @@ async fn thread_session_state_from_thread_fork_response(
         permission_profile,
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
+        response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
         response.reasoning_effort,
         config,
@@ -1523,6 +1534,7 @@ async fn thread_session_state_from_thread_response(
     permission_profile: PermissionProfile,
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: AbsolutePathBuf,
+    runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<AbsolutePathBuf>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
@@ -1550,6 +1562,7 @@ async fn thread_session_state_from_thread_response(
         permission_profile,
         active_permission_profile,
         cwd,
+        runtime_workspace_roots,
         instruction_source_paths,
         reasoning_effort,
         message_history: Some(MessageHistoryMetadata {
@@ -1629,6 +1642,16 @@ mod tests {
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
+        assert_eq!(
+            params.runtime_workspace_roots,
+            Some(
+                config
+                    .workspace_roots
+                    .iter()
+                    .map(AbsolutePathBuf::to_path_buf)
+                    .collect()
+            )
+        );
         assert_eq!(params.sandbox, None);
         assert_eq!(
             params.permissions,
@@ -1726,6 +1749,13 @@ mod tests {
             &config.permissions.permission_profile(),
             config.cwd.as_path(),
         );
+        let expected_runtime_workspace_roots = Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect::<Vec<_>>(),
+        );
 
         let start = thread_start_params_from_config(
             &config,
@@ -1749,6 +1779,18 @@ mod tests {
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
+        assert_eq!(
+            start.runtime_workspace_roots,
+            expected_runtime_workspace_roots
+        );
+        assert_eq!(
+            resume.runtime_workspace_roots,
+            expected_runtime_workspace_roots
+        );
+        assert_eq!(
+            fork.runtime_workspace_roots,
+            expected_runtime_workspace_roots
+        );
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
@@ -2019,6 +2061,10 @@ mod tests {
             model_provider: "openai".to_string(),
             service_tier: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            runtime_workspace_roots: vec![
+                test_path_buf("/tmp/project").abs(),
+                test_path_buf("/tmp/project/extra").abs(),
+            ],
             instruction_sources: vec![test_path_buf("/tmp/project/AGENTS.md").abs()],
             approval_policy: codex_app_server_protocol::AskForApproval::Never,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
@@ -2040,12 +2086,27 @@ mod tests {
         .expect("resume response should map");
         assert_eq!(started.session.forked_from_id, Some(forked_from_id));
         assert_eq!(
+            started.session.runtime_workspace_roots,
+            response.runtime_workspace_roots
+        );
+        assert_eq!(
             started.session.instruction_source_paths,
             response.instruction_sources
         );
         assert_eq!(started.session.permission_profile, read_only_profile);
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
+
+        let mut empty_roots_response = response;
+        empty_roots_response.runtime_workspace_roots = Vec::new();
+        let started = started_thread_from_resume_response(
+            empty_roots_response,
+            &config,
+            ThreadParamsMode::Remote,
+        )
+        .await
+        .expect("resume response should map");
+        assert_eq!(started.session.runtime_workspace_roots, Vec::new());
     }
 
     #[tokio::test]
@@ -2142,6 +2203,7 @@ mod tests {
             /*active_permission_profile*/ None,
             test_path_buf("/tmp/project").abs(),
             Vec::new(),
+            Vec::new(),
             /*reasoning_effort*/ None,
             &config,
         )
@@ -2175,6 +2237,7 @@ mod tests {
             PermissionProfile::read_only(),
             /*active_permission_profile*/ None,
             test_path_buf("/tmp/project").abs(),
+            Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
             &config,
