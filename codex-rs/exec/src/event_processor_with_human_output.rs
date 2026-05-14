@@ -437,7 +437,7 @@ fn config_summary_entries(
         (
             "sandbox",
             summarize_permission_profile(
-                config.permissions.permission_profile.get(),
+                config.permissions.permission_profile_constraint().get(),
                 config.cwd.as_path(),
             ),
         ),

@@ -5,7 +5,6 @@ use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalPro
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
 use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification as CoreActivePermissionProfileModification;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
@@ -437,41 +436,6 @@ pub struct ActivePermissionProfile {
     /// inheritance. This is currently always `null`.
     #[serde(default)]
     pub extends: Option<String>,
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default)]
-    pub modifications: Vec<ActivePermissionProfileModification>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
-}
-
-impl From<CoreActivePermissionProfileModification> for ActivePermissionProfileModification {
-    fn from(value: CoreActivePermissionProfileModification) -> Self {
-        match value {
-            CoreActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                Self::AdditionalWritableRoot { path }
-            }
-        }
-    }
-}
-
-impl From<ActivePermissionProfileModification> for CoreActivePermissionProfileModification {
-    fn from(value: ActivePermissionProfileModification) -> Self {
-        match value {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                Self::AdditionalWritableRoot { path }
-            }
-        }
-    }
 }
 
 impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
@@ -479,11 +443,6 @@ impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
         Self {
             id: value.id,
             extends: value.extends,
-            modifications: value
-                .modifications
-                .into_iter()
-                .map(ActivePermissionProfileModification::from)
-                .collect(),
         }
     }
 }
@@ -493,11 +452,6 @@ impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
         Self {
             id: value.id,
             extends: value.extends,
-            modifications: value
-                .modifications
-                .into_iter()
-                .map(CoreActivePermissionProfileModification::from)
-                .collect(),
         }
     }
 }
