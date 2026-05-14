@@ -57,6 +57,25 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
+    if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
+        let base_cwd = request
+            .cwd
+            .as_deref()
+            .map(|cwd| {
+                AbsolutePathBuf::resolve_path_against_base(cwd, config_snapshot.cwd.as_path())
+            })
+            .unwrap_or_else(|| config_snapshot.cwd.clone());
+        let requested_runtime_workspace_roots = requested_runtime_workspace_roots
+            .iter()
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path()))
+            .collect::<Vec<_>>();
+        if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
+            mismatch_details.push(format!(
+                "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
+                config_snapshot.workspace_roots
+            ));
+        }
+    }
     if let Some(requested_approval) = request.approval_policy.as_ref() {
         let active_approval: AskForApproval = config_snapshot.approval_policy.into();
         if requested_approval != &active_approval {
@@ -802,6 +821,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -835,6 +855,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -1171,6 +1192,7 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd: config_snapshot.cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
@@ -1212,10 +1234,11 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
+        runtime_workspace_roots: Option<Vec<PathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -1225,6 +1248,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
+            workspace_roots: runtime_workspace_roots,
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -2349,6 +2373,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2384,6 +2409,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2521,6 +2547,7 @@ impl ThreadRequestProcessor {
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
+                    runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
@@ -2985,6 +3012,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3050,6 +3078,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3179,6 +3208,7 @@ impl ThreadRequestProcessor {
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),

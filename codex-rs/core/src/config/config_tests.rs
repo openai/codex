@@ -1875,6 +1875,11 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     )
     .await?;
 
+    assert_eq!(
+        config.effective_workspace_roots(),
+        vec![cwd.abs(), runtime_root.abs(), profile_root.abs()]
+    );
+
     let policy = config.permissions.file_system_sandbox_policy();
     for root in [cwd.abs(), runtime_root.abs(), profile_root.abs()] {
         assert!(
@@ -7379,6 +7384,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
                 workspace_roots: vec![fixture.cwd()],
+                profile_workspace_roots: Vec::new(),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -7829,6 +7835,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             workspace_roots: vec![fixture.cwd()],
+            profile_workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -7993,6 +8000,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             workspace_roots: vec![fixture.cwd()],
+            profile_workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -8142,6 +8150,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
             workspace_roots: vec![fixture.cwd()],
+            profile_workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),

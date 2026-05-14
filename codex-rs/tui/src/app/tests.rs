@@ -3857,6 +3857,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             message_history: None,
@@ -4103,6 +4104,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: cwd.abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         message_history: None,
@@ -4678,6 +4680,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,
@@ -4741,6 +4744,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,
@@ -4833,6 +4837,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,
@@ -5068,6 +5073,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
     )];
     let resumed_session = ThreadSessionState {
         cwd: test_path_buf("/tmp/refreshed").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         ..initial_session.clone()
     };
@@ -5232,6 +5238,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,
@@ -5353,6 +5360,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
+            runtime_workspace_roots: Vec::new(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,

@@ -18,45 +18,12 @@
         "id": {
           "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
           "type": "string"
-        },
-        "modifications": {
-          "default": [],
-          "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
-          "items": {
-            "$ref": "#/definitions/ActivePermissionProfileModification"
-          },
-          "type": "array"
         }
       },
       "required": [
         "id"
       ],
       "type": "object"
-    },
-    "ActivePermissionProfileModification": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootActivePermissionProfileModificationType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootActivePermissionProfileModification",
-          "type": "object"
-        }
-      ]
     },
     "AgentPath": {
       "type": "string"
