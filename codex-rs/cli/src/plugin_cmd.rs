@@ -31,46 +31,63 @@ pub struct PluginCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum PluginSubcommand {
-    /// Install a plugin from a marketplace.
+    /// Install a plugin from a configured marketplace snapshot.
+    ///
+    /// Pass either `PLUGIN@MARKETPLACE` or pass `PLUGIN` with
+    /// `--marketplace MARKETPLACE`.
     Add(AddPluginArgs),
 
-    /// List marketplace plugins.
+    /// List plugins available from configured marketplace snapshots.
     List(ListPluginsArgs),
 
-    /// Manage plugin marketplaces for Codex.
+    /// Add, list, upgrade, or remove configured plugin marketplaces.
     Marketplace(MarketplaceCli),
 
-    /// Remove an installed plugin.
+    /// Remove an installed plugin from local config and cache.
+    ///
+    /// Pass either `PLUGIN@MARKETPLACE` or pass `PLUGIN` with
+    /// `--marketplace MARKETPLACE`.
     Remove(RemovePluginArgs),
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin add")]
+#[command(
+    bin_name = "codex plugin add",
+    after_help = "Examples:\n  codex plugin add sample@debug\n  codex plugin add sample --marketplace debug"
+)]
 pub struct AddPluginArgs {
-    /// Plugin to install. Accepts <plugin> with --marketplace or <plugin>@<marketplace>.
+    /// Plugin selector to install: either PLUGIN@MARKETPLACE or PLUGIN with --marketplace.
+    #[arg(value_name = "PLUGIN[@MARKETPLACE]")]
     plugin: String,
 
-    /// Marketplace name containing the plugin.
-    #[arg(long = "marketplace", short = 'm')]
+    /// Configured marketplace name to use when PLUGIN does not include @MARKETPLACE.
+    #[arg(long = "marketplace", short = 'm', value_name = "MARKETPLACE")]
     marketplace_name: Option<String>,
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin list")]
+#[command(
+    bin_name = "codex plugin list",
+    after_help = "Examples:\n  codex plugin list\n  codex plugin list --marketplace debug"
+)]
 pub struct ListPluginsArgs {
-    /// Only list plugins in this marketplace.
-    #[arg(long = "marketplace", short = 'm')]
+    /// Only list plugins from this configured marketplace name.
+    #[arg(long = "marketplace", short = 'm', value_name = "MARKETPLACE")]
     marketplace_name: Option<String>,
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin remove")]
+#[command(
+    bin_name = "codex plugin remove",
+    after_help = "Examples:\n  codex plugin remove sample@debug\n  codex plugin remove sample --marketplace debug"
+)]
 pub struct RemovePluginArgs {
-    /// Plugin to remove. Accepts <plugin> with --marketplace or <plugin>@<marketplace>.
+    /// Plugin selector to remove: either PLUGIN@MARKETPLACE or PLUGIN with --marketplace.
+    #[arg(value_name = "PLUGIN[@MARKETPLACE]")]
     plugin: String,
 
-    /// Marketplace name containing the plugin.
-    #[arg(long = "marketplace", short = 'm')]
+    /// Marketplace name to use when PLUGIN does not include @MARKETPLACE.
+    #[arg(long = "marketplace", short = 'm', value_name = "MARKETPLACE")]
     marketplace_name: Option<String>,
 }
 

@@ -27,22 +27,36 @@ pub struct MarketplaceCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
+    /// Add a local or Git marketplace to the configured marketplace sources.
     Add(AddMarketplaceArgs),
+
+    /// List configured marketplace names and their local snapshot roots.
     List,
+
+    /// Refresh configured Git marketplace snapshots.
+    ///
+    /// Omit MARKETPLACE_NAME to upgrade all configured Git marketplaces.
     Upgrade(UpgradeMarketplaceArgs),
+
+    /// Remove a configured marketplace source by name.
     Remove(RemoveMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace add")]
+#[command(
+    bin_name = "codex plugin marketplace add",
+    after_help = "Examples:\n  codex plugin marketplace add ./path/to/marketplace\n  codex plugin marketplace add owner/repo --ref main\n  codex plugin marketplace add https://github.com/owner/repo --sparse plugins/foo"
+)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, SSH URLs,
-    /// or local marketplace root directories.
+    /// Marketplace source: a local path, owner/repo[@ref], HTTPS Git URL, or SSH Git URL.
+    #[arg(value_name = "SOURCE")]
     source: String,
 
+    /// Git ref to fetch for Git marketplace sources.
     #[arg(long = "ref", value_name = "REF")]
     ref_name: Option<String>,
 
+    /// Sparse checkout path for Git marketplace sources. Can be repeated.
     #[arg(
         long = "sparse",
         value_name = "PATH",
@@ -52,15 +66,24 @@ struct AddMarketplaceArgs {
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace upgrade")]
+#[command(
+    bin_name = "codex plugin marketplace upgrade",
+    after_help = "Examples:\n  codex plugin marketplace upgrade\n  codex plugin marketplace upgrade debug"
+)]
 struct UpgradeMarketplaceArgs {
+    /// Optional configured marketplace name to upgrade. Omit to upgrade all Git marketplaces.
+    #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: Option<String>,
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace remove")]
+#[command(
+    bin_name = "codex plugin marketplace remove",
+    after_help = "Example:\n  codex plugin marketplace remove debug"
+)]
 struct RemoveMarketplaceArgs {
     /// Configured marketplace name to remove.
+    #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: String,
 }
 
