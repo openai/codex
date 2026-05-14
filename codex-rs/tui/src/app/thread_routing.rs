@@ -589,7 +589,9 @@ impl App {
                     let approvals_reviewer =
                         approvals_reviewer.unwrap_or(config.approvals_reviewer);
                     let active_permission_profile =
-                        if config.permissions.permission_profile() == permission_profile.clone() {
+                        if config.permissions.effective_permission_profile()
+                            == permission_profile.clone()
+                        {
                             config.permissions.active_permission_profile()
                         } else {
                             None
@@ -603,6 +605,7 @@ impl App {
                             approvals_reviewer,
                             permission_profile.clone(),
                             active_permission_profile,
+                            config.permissions.user_visible_workspace_roots(),
                             model.to_string(),
                             *effort,
                             *summary,

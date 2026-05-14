@@ -350,6 +350,12 @@ pub enum FileSystemPath {
     },
 }
 
+const PROJECT_ROOTS_GLOB_PATTERN_PREFIX: &str = "codex-project-roots://";
+
+pub fn project_roots_glob_pattern(subpath: &Path) -> String {
+    format!("{PROJECT_ROOTS_GLOB_PATTERN_PREFIX}{}", subpath.display())
+}
+
 impl Default for FileSystemSandboxPolicy {
     fn default() -> Self {
         Self {
@@ -703,15 +709,100 @@ impl FileSystemSandboxPolicy {
     pub fn materialize_project_roots_with_cwd(mut self, cwd: &Path) -> Self {
         let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
         for entry in &mut self.entries {
-            let FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { .. },
-            } = &entry.path
-            else {
-                continue;
-            };
+            match &entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { .. },
+                } => {
+                    if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
+                        entry.path = FileSystemPath::Path { path };
+                    }
+                }
+                FileSystemPath::GlobPattern { pattern } => {
+                    if let (Some(cwd), Some(subpath)) =
+                        (cwd.as_ref(), parse_project_roots_glob_pattern(pattern))
+                    {
+                        entry.path = FileSystemPath::GlobPattern {
+                            pattern: resolve_project_roots_glob_pattern(subpath, cwd),
+                        };
+                    }
+                }
+                FileSystemPath::Special { value: _ } => {}
+                FileSystemPath::Path { .. } => {}
+            }
+        }
+        self
+    }
 
-            if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
-                entry.path = FileSystemPath::Path { path };
+    /// Replaces symbolic `:workspace_roots` entries with concrete entries for
+    /// each workspace root.
+    pub fn materialize_project_roots_with_workspace_roots(
+        mut self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries {
+            match entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { subpath },
+                } => {
+                    entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: match subpath.as_ref() {
+                                Some(subpath) => AbsolutePathBuf::resolve_path_against_base(
+                                    subpath,
+                                    root.as_path(),
+                                ),
+                                None => root.clone(),
+                            },
+                        },
+                        access: entry.access,
+                    }));
+                }
+                FileSystemPath::GlobPattern { pattern } => {
+                    if let Some(subpath) = parse_project_roots_glob_pattern(&pattern) {
+                        entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
+                            path: FileSystemPath::GlobPattern {
+                                pattern: resolve_project_roots_glob_pattern(subpath, root),
+                            },
+                            access: entry.access,
+                        }));
+                    } else {
+                        entries.push(FileSystemSandboxEntry {
+                            path: FileSystemPath::GlobPattern { pattern },
+                            access: entry.access,
+                        });
+                    }
+                }
+                FileSystemPath::Path { path } => {
+                    entries.push(FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path },
+                        access: entry.access,
+                    });
+                }
+                FileSystemPath::Special { value } => {
+                    entries.push(FileSystemSandboxEntry {
+                        path: FileSystemPath::Special { value },
+                        access: entry.access,
+                    });
+                }
+            }
+        }
+        self.entries = entries;
+        self
+    }
+
+    /// Preserves symbolic `:workspace_roots` entries while also adding concrete
+    /// entries for each provided workspace root.
+    pub fn with_materialized_project_roots_for_workspace_roots(
+        mut self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let materialized = self
+            .clone()
+            .materialize_project_roots_with_workspace_roots(workspace_roots);
+        for entry in materialized.entries {
+            if !self.entries.contains(&entry) {
+                self.entries.push(entry);
             }
         }
         self
@@ -1207,6 +1298,18 @@ fn resolve_entry_path(
         } => cwd.map(absolute_root_path_for_cwd),
         _ => resolve_file_system_path(path, cwd),
     }
+}
+
+fn parse_project_roots_glob_pattern(pattern: &str) -> Option<&Path> {
+    pattern
+        .strip_prefix(PROJECT_ROOTS_GLOB_PATTERN_PREFIX)
+        .map(Path::new)
+}
+
+fn resolve_project_roots_glob_pattern(subpath: &Path, root: &AbsolutePathBuf) -> String {
+    AbsolutePathBuf::resolve_path_against_base(subpath, root.as_path())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
@@ -2747,6 +2850,115 @@ mod tests {
                     access: FileSystemAccessMode::Write,
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn materialize_project_roots_with_workspace_roots_expands_exact_and_glob_entries() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let first = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("first"))
+            .expect("resolve first root");
+        let second = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("second"))
+            .expect("resolve second root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: project_roots_glob_pattern(Path::new("**/*.env")),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let actual =
+            policy.materialize_project_roots_with_workspace_roots(&[first.clone(), second.clone()]);
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            first.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            second.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn materialize_project_roots_with_cwd_expands_symbolic_glob_entries() {
+        let cwd = TempDir::new().expect("tempdir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: project_roots_glob_pattern(Path::new("**/*.env")),
+            },
+            access: FileSystemAccessMode::None,
+        }]);
+
+        let actual = policy.materialize_project_roots_with_cwd(cwd.path());
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: AbsolutePathBuf::resolve_path_against_base("**/*.env", cwd.path())
+                        .to_string_lossy()
+                        .into_owned(),
+                },
+                access: FileSystemAccessMode::None,
+            }])
         );
     }
 

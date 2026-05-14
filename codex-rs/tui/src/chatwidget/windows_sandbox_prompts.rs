@@ -72,7 +72,9 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_profile(&p.permission_profile))
-            .unwrap_or_else(|| describe_profile(&self.config.permissions.permission_profile()));
+            .unwrap_or_else(|| {
+                describe_profile(&self.config.permissions.effective_permission_profile())
+            });
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "

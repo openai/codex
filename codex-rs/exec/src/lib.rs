@@ -83,7 +83,6 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
@@ -419,6 +418,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         permission_profile: None,
         default_permissions: None,
         cwd: resolved_cwd,
+        workspace_roots: None,
         model_provider: model_provider.clone(),
         service_tier: None,
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
@@ -760,7 +760,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
         && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+            codex_core::config::system_bwrap_warning(config.permissions.permission_profile().get())
     {
         event_processor.process_warning(message);
     }
@@ -953,7 +953,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         )
     });
@@ -975,7 +975,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
     let permissions = permissions_selection_from_config(config);
     let sandbox = permissions.is_none().then(|| {
         sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         )
     });
@@ -997,20 +997,25 @@ fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfil
     config
         .permissions
         .active_permission_profile()
-        .map(permissions_selection_from_active_profile)
+        .map(|active| {
+            permissions_selection_from_active_profile(
+                active,
+                config.cwd.as_path(),
+                config.permissions.user_visible_workspace_roots(),
+            )
+        })
 }
 
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
+    cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
 ) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
+    let modifications = workspace_roots
+        .iter()
+        .filter(|root| root.as_path() != cwd)
+        .cloned()
+        .map(|path| PermissionProfileModificationParams::AdditionalWritableRoot { path })
         .collect::<Vec<_>>();
     PermissionProfileSelectionParams::Profile {
         id: active.id,
@@ -1091,7 +1096,7 @@ fn session_configured_from_thread_start_response(
             .permission_profile
             .clone()
             .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+            .unwrap_or_else(|| config.permissions.effective_permission_profile()),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -1116,7 +1121,7 @@ fn session_configured_from_thread_resume_response(
             .permission_profile
             .clone()
             .map(Into::into)
-            .unwrap_or_else(|| config.permissions.permission_profile()),
+            .unwrap_or_else(|| config.permissions.effective_permission_profile()),
         response.active_permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,

@@ -5,7 +5,6 @@ export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedN
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { ActivePermissionProfile } from "./ActivePermissionProfile";
-export type { ActivePermissionProfileModification } from "./ActivePermissionProfileModification";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
 export type { AddCreditsNudgeEmailStatus } from "./AddCreditsNudgeEmailStatus";
 export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPermissions";
