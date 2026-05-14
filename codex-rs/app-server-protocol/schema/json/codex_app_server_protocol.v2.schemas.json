@@ -5526,6 +5526,26 @@
           ],
           "title": "InputImageFunctionCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "input_audio": {
+              "$ref": "#/definitions/InputAudio"
+            },
+            "type": {
+              "enum": [
+                "input_audio"
+              ],
+              "title": "InputAudioFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "input_audio",
+            "type"
+          ],
+          "title": "InputAudioFunctionCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
@@ -6474,6 +6494,21 @@
       "title": "InitializeParams",
       "type": "object"
     },
+    "InputAudio": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "format"
+      ],
+      "type": "object"
+    },
     "InputModality": {
       "description": "Canonical user-input modality tags advertised by a model.",
       "oneOf": [
@@ -6488,6 +6523,13 @@
           "description": "Image attachments included in user turns.",
           "enum": [
             "image"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Audio content included in tool payloads.",
+          "enum": [
+            "audio"
           ],
           "type": "string"
         }

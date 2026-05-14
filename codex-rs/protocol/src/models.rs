@@ -1314,6 +1314,98 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    // Do not rename, these are serialized and used directly in the responses API.
+    InputAudio {
+        input_audio: InputAudio,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct InputAudio {
+    pub data: String,
+    pub format: String,
+}
+
+pub fn input_audio_from_data(
+    data: &str,
+    format: Option<&str>,
+    mime_type: Option<&str>,
+) -> Option<InputAudio> {
+    if data.is_empty() {
+        return None;
+    }
+
+    let (data, data_url_format) = if let Some((data, format)) = parse_audio_data_url(data) {
+        (data, Some(format))
+    } else if data
+        .get(.."data:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    } else {
+        (data.to_string(), None)
+    };
+    if data.is_empty() {
+        return None;
+    }
+
+    let mime_type_format = match mime_type {
+        Some(mime_type) => Some(audio_format_from_mime_type(mime_type)?),
+        None => None,
+    };
+
+    let format = format
+        .and_then(normalize_audio_format)
+        .or(data_url_format)
+        .or(mime_type_format)?;
+
+    Some(InputAudio { data, format })
+}
+
+fn parse_audio_data_url(data_url: &str) -> Option<(String, String)> {
+    if data_url.len() < "data:".len()
+        || !data_url
+            .get(.."data:".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    }
+
+    let (metadata, data) = data_url["data:".len()..].split_once(',')?;
+    if !metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+
+    let mime_type = metadata.split(';').next()?;
+    let format = audio_format_from_mime_type(mime_type)?;
+    Some((data.to_string(), format))
+}
+
+fn audio_format_from_mime_type(mime_type: &str) -> Option<String> {
+    let media_type = mime_type.split(';').next()?.trim().to_ascii_lowercase();
+    let subtype = media_type.strip_prefix("audio/")?;
+    normalize_audio_format(subtype)
+}
+
+fn normalize_audio_format(format: &str) -> Option<String> {
+    let format = format.trim().to_ascii_lowercase();
+    if format.is_empty() {
+        return None;
+    }
+    if format.contains('/') {
+        return audio_format_from_mime_type(&format);
+    }
+
+    let format = format.strip_prefix("x-").unwrap_or(&format);
+    let format = match format {
+        "mpeg" => "mp3",
+        "wave" => "wav",
+        _ => format,
+    };
+    Some(format.to_string())
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1321,7 +1413,7 @@ pub enum FunctionCallOutputContentItem {
 ///
 /// This conversion is intentionally lossy:
 /// - only `input_text` items are included
-/// - image items are ignored
+/// - image and audio items are ignored
 ///
 /// We use this helper where callers still need a string representation (for
 /// example telemetry previews or legacy string-only output paths) while keeping
@@ -1337,7 +1429,8 @@ pub fn function_call_output_content_items_to_text(
                 Some(text.as_str())
             }
             FunctionCallOutputContentItem::InputText { .. }
-            | FunctionCallOutputContentItem::InputImage { .. } => None,
+            | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::InputAudio { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -1388,7 +1481,7 @@ impl FunctionCallOutputBody {
     /// human-readable surfaces.
     ///
     /// This conversion is intentionally lossy when the body contains content
-    /// items: image entries are dropped and text entries are joined with
+    /// items: image and audio entries are dropped and text entries are joined with
     /// newlines.
     pub fn to_text(&self) -> Option<String> {
         match self {
@@ -1566,11 +1659,18 @@ fn convert_mcp_content_to_items(
             #[serde(rename = "_meta", default)]
             meta: Option<serde_json::Value>,
         },
+        #[serde(rename = "audio")]
+        Audio {
+            data: String,
+            #[serde(rename = "mimeType", alias = "mime_type")]
+            mime_type: Option<String>,
+        },
         #[serde(other)]
         Unknown,
     }
 
     let mut saw_image = false;
+    let mut saw_audio = false;
     let mut items = Vec::with_capacity(contents.len());
 
     for content in contents {
@@ -1603,6 +1703,19 @@ fn convert_mcp_content_to_items(
                         .or(Some(DEFAULT_IMAGE_DETAIL)),
                 }
             }
+            Ok(McpContent::Audio { data, mime_type }) => {
+                if let Some(input_audio) =
+                    input_audio_from_data(&data, /*format*/ None, mime_type.as_deref())
+                {
+                    saw_audio = true;
+                    FunctionCallOutputContentItem::InputAudio { input_audio }
+                } else {
+                    FunctionCallOutputContentItem::InputText {
+                        text: serde_json::to_string(content)
+                            .unwrap_or_else(|_| "<content>".to_string()),
+                    }
+                }
+            }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
                 text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
             },
@@ -1610,7 +1723,11 @@ fn convert_mcp_content_to_items(
         items.push(item);
     }
 
-    if saw_image { Some(items) } else { None }
+    if saw_image || saw_audio {
+        Some(items)
+    } else {
+        None
+    }
 }
 
 // Implement Display so callers can treat the payload like a plain string when logging or doing
@@ -2246,6 +2363,198 @@ mod tests {
         assert!(output.is_array(), "expected array output");
 
         Ok(())
+    }
+
+    #[test]
+    fn serializes_audio_outputs_as_array() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![
+                serde_json::json!({"type":"text","text":"caption"}),
+                serde_json::json!({"type":"audio","data":"BASE64","mimeType":"audio/mpeg"}),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        assert_eq!(payload.success, Some(true));
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        let items = items.to_vec();
+        assert_eq!(
+            items,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "caption".into(),
+                },
+                FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "BASE64".into(),
+                        format: "mp3".into(),
+                    },
+                },
+            ]
+        );
+
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: payload,
+        };
+
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+
+        assert_eq!(
+            v.get("output").expect("output field"),
+            &serde_json::json!([
+                { "type": "input_text", "text": "caption" },
+                { "type": "input_audio", "input_audio": { "data": "BASE64", "format": "mp3" } }
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_mixed_image_and_audio_outputs_as_array() {
+        let call_tool_result = CallToolResult {
+            content: vec![
+                serde_json::json!({"type":"image","data":"IMAGE","mimeType":"image/png"}),
+                serde_json::json!({"type":"audio","data":"AUDIO","mimeType":"audio/wav"}),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        assert_eq!(
+            items,
+            [
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,IMAGE".into(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
+                FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "AUDIO".into(),
+                        format: "wav".into(),
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn strips_audio_data_urls_and_derives_format() {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "audio",
+                "data": "data:audio/ogg;base64,T2dnUw",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        assert_eq!(
+            items,
+            [FunctionCallOutputContentItem::InputAudio {
+                input_audio: InputAudio {
+                    data: "T2dnUw".into(),
+                    format: "ogg".into(),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn audio_without_derivable_format_falls_back_to_text_payload() {
+        let content = vec![serde_json::json!({
+            "type": "audio",
+            "data": "BASE64",
+        })];
+        let call_tool_result = CallToolResult {
+            content: content.clone(),
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        assert_eq!(
+            payload,
+            FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(serde_json::to_string(&content).unwrap()),
+                success: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_audio_block_falls_back_to_text_inside_structured_payload() {
+        let malformed_audio = serde_json::json!({
+            "type": "audio",
+            "data": "data:image/png;base64,NOT_AUDIO",
+        });
+        let call_tool_result = CallToolResult {
+            content: vec![
+                serde_json::json!({"type":"image","data":"IMAGE","mimeType":"image/png"}),
+                malformed_audio.clone(),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        assert_eq!(
+            items,
+            [
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,IMAGE".into(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: serde_json::to_string(&malformed_audio).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn structured_content_precedence_ignores_audio_content() {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "audio",
+                "data": "BASE64",
+                "mimeType": "audio/wav",
+            })],
+            structured_content: Some(serde_json::json!({ "ok": true })),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        assert_eq!(
+            payload,
+            FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("{\"ok\":true}".to_string()),
+                success: Some(true),
+            }
+        );
     }
 
     #[test]

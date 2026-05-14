@@ -17,6 +17,13 @@
             "image"
           ],
           "type": "string"
+        },
+        {
+          "description": "Audio content included in tool payloads.",
+          "enum": [
+            "audio"
+          ],
+          "type": "string"
         }
       ]
     },

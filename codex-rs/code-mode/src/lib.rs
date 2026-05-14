@@ -5,6 +5,7 @@ mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
+pub use description::ExecToolDescriptionOptions;
 pub use description::ToolDefinition;
 pub use description::ToolNamespaceDescription;
 pub use description::augment_tool_definition;
@@ -18,6 +19,7 @@ pub use description::render_json_schema_to_typescript;
 pub use response::DEFAULT_IMAGE_DETAIL;
 pub use response::FunctionCallOutputContentItem;
 pub use response::ImageDetail;
+pub use response::InputAudio;
 pub use runtime::CodeModeNestedToolCall;
 pub use runtime::DEFAULT_EXEC_YIELD_TIME_MS;
 pub use runtime::DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;

@@ -5,6 +5,7 @@ use super::RuntimeEvent;
 use super::RuntimeState;
 use super::timers;
 use super::value::json_to_v8;
+use super::value::normalize_output_audio;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
 use super::value::throw_type_error;
@@ -125,6 +126,26 @@ pub(super) fn image_callback(
     };
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
+    }
+    retval.set(v8::undefined(scope).into());
+}
+
+pub(super) fn audio_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue<v8::Value>,
+) {
+    let value = if args.length() == 0 {
+        v8::undefined(scope).into()
+    } else {
+        args.get(0)
+    };
+    let audio_item = match normalize_output_audio(scope, value) {
+        Ok(audio_item) => audio_item,
+        Err(()) => return,
+    };
+    if let Some(state) = scope.get_slot::<RuntimeState>() {
+        let _ = state.event_tx.send(RuntimeEvent::ContentItem(audio_item));
     }
     retval.set(v8::undefined(scope).into());
 }

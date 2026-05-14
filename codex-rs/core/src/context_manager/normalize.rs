@@ -10,6 +10,8 @@ use tracing::info;
 
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
+const AUDIO_CONTENT_OMITTED_PLACEHOLDER: &str =
+    "audio content omitted because you do not support audio input";
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     // Collect synthetic outputs to insert immediately after their calls.
@@ -290,14 +292,14 @@ where
     }
 }
 
-/// Strip image content from messages and tool outputs when the model does not support images.
-/// When `input_modalities` contains `InputModality::Image`, no stripping is performed.
-pub(crate) fn strip_images_when_unsupported(
+/// Strip unsupported media content from messages and tool outputs.
+pub(crate) fn strip_unsupported_media_content(
     input_modalities: &[InputModality],
     items: &mut [ResponseItem],
 ) {
     let supports_images = input_modalities.contains(&InputModality::Image);
-    if supports_images {
+    let supports_audio = input_modalities.contains(&InputModality::Audio);
+    if supports_images && supports_audio {
         return;
     }
 
@@ -307,7 +309,7 @@ pub(crate) fn strip_images_when_unsupported(
                 let mut normalized_content = Vec::with_capacity(content.len());
                 for content_item in content.iter() {
                     match content_item {
-                        ContentItem::InputImage { .. } => {
+                        ContentItem::InputImage { .. } if !supports_images => {
                             normalized_content.push(ContentItem::InputText {
                                 text: IMAGE_CONTENT_OMITTED_PLACEHOLDER.to_string(),
                             });
@@ -323,10 +325,19 @@ pub(crate) fn strip_images_when_unsupported(
                     let mut normalized_content_items = Vec::with_capacity(content_items.len());
                     for content_item in content_items.iter() {
                         match content_item {
-                            FunctionCallOutputContentItem::InputImage { .. } => {
+                            FunctionCallOutputContentItem::InputImage { .. }
+                                if !supports_images =>
+                            {
                                 normalized_content_items.push(
                                     FunctionCallOutputContentItem::InputText {
                                         text: IMAGE_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                                    },
+                                );
+                            }
+                            FunctionCallOutputContentItem::InputAudio { .. } if !supports_audio => {
+                                normalized_content_items.push(
+                                    FunctionCallOutputContentItem::InputText {
+                                        text: AUDIO_CONTENT_OMITTED_PLACEHOLDER.to_string(),
                                     },
                                 );
                             }
@@ -336,7 +347,7 @@ pub(crate) fn strip_images_when_unsupported(
                     *content_items = normalized_content_items;
                 }
             }
-            ResponseItem::ImageGenerationCall { result, .. } => {
+            ResponseItem::ImageGenerationCall { result, .. } if !supports_images => {
                 result.clear();
             }
             _ => {}

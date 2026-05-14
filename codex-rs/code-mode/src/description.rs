@@ -9,7 +9,7 @@ use crate::PUBLIC_TOOL_NAME;
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some nested MCP/app tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
 To find one, filter `ALL_TOOLS` by `name` and `description`."#;
-const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
+const EXEC_DESCRIPTION_TEMPLATE_PREFIX: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
 - All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
 - Nested tool methods take either a string or an object as their input argument.
@@ -24,8 +24,9 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - Global helpers:
 - `exit()`: Immediately ends the current script successfully (like an early return from the top level).
 - `text(value: string | number | boolean | undefined | null)`: Appends a text item. Non-string values are stringified with `JSON.stringify(...)` when possible.
-- `image(imageUrlOrItem: string | { image_url: string; detail?: "high" | "original" | null } | ImageContent, detail?: "high" | "original" | null)`: Appends an image item. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument.
-- `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
+- `image(imageUrlOrItem: string | { image_url: string; detail?: "high" | "original" | null } | ImageContent, detail?: "high" | "original" | null)`: Appends an image item. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument."#;
+const AUDIO_HELPER_DESCRIPTION: &str = r#"- `audio(audioItem: { data: string; format?: string | null; mimeType?: string | null; mime_type?: string | null } | AudioContent)`: Appends an audio item. `data` can be raw base64 audio or a base64-encoded `data:audio/...` URL. To forward an MCP tool audio block, pass an individual `AudioContent` block from `result.content`, for example `audio(result.content[0])`."#;
+const EXEC_DESCRIPTION_TEMPLATE_SUFFIX: &str = r#"- `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
 - `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
@@ -41,7 +42,7 @@ const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` return
 - If the cell is still running, `wait` may yield again with the same `cell_id`.
 - If the cell has already finished, `wait` returns the completed result and closes the cell."#;
 // Based off of https://modelcontextprotocol.io/specification/draft/schema#calltoolresult
-const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type Role = "user" | "assistant";
+const MCP_TYPESCRIPT_PREAMBLE_PREFIX: &str = r#"type Role = "user" | "assistant";
 type MetaObject = Record<string, unknown>;
 type Annotations = {
   audience?: Role[];
@@ -79,14 +80,16 @@ type ImageContent = {
   annotations?: Annotations;
   _meta?: MetaObject;
 };
-type AudioContent = {
+"#;
+const MCP_AUDIO_CONTENT_TYPE: &str = r#"type AudioContent = {
   type: "audio";
   data: string;
   mimeType: string;
   annotations?: Annotations;
   _meta?: MetaObject;
 };
-type ResourceLink = {
+"#;
+const MCP_TYPESCRIPT_PREAMBLE_SUFFIX: &str = r#"type ResourceLink = {
   icons?: Icon[];
   name: string;
   title?: string;
@@ -106,8 +109,10 @@ type EmbeddedResource = {
 };
 type ContentBlock =
   | TextContent
-  | ImageContent
-  | AudioContent
+  | ImageContent"#;
+const MCP_AUDIO_CONTENT_BLOCK_VARIANT: &str = r#"
+  | AudioContent"#;
+const MCP_TYPESCRIPT_PREAMBLE_END: &str = r#"
   | ResourceLink
   | EmbeddedResource;
 type CallToolResult<TStructured = { [key: string]: unknown }> = {
@@ -141,6 +146,13 @@ pub struct ToolDefinition {
 pub struct ToolNamespaceDescription {
     pub name: String,
     pub description: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecToolDescriptionOptions {
+    pub code_mode_only: bool,
+    pub deferred_tools_available: bool,
+    pub supports_audio_input: bool,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -250,15 +262,21 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
 pub fn build_exec_tool_description(
     enabled_tools: &[ToolDefinition],
     namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
-    code_mode_only: bool,
-    deferred_tools_available: bool,
+    options: ExecToolDescriptionOptions,
 ) -> String {
     let mut sections = Vec::new();
-    sections.push(EXEC_DESCRIPTION_TEMPLATE.to_string());
-    if deferred_tools_available {
+    let mut exec_description = String::from(EXEC_DESCRIPTION_TEMPLATE_PREFIX);
+    if options.supports_audio_input {
+        exec_description.push('\n');
+        exec_description.push_str(AUDIO_HELPER_DESCRIPTION);
+    }
+    exec_description.push('\n');
+    exec_description.push_str(EXEC_DESCRIPTION_TEMPLATE_SUFFIX);
+    sections.push(exec_description);
+    if options.deferred_tools_available {
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
     }
-    if !code_mode_only {
+    if !options.code_mode_only {
         return sections.join("\n\n");
     }
 
@@ -305,8 +323,18 @@ pub fn build_exec_tool_description(
         }
 
         if has_mcp_tools {
+            let mut mcp_typescript_preamble = String::from(MCP_TYPESCRIPT_PREAMBLE_PREFIX);
+            if options.supports_audio_input {
+                mcp_typescript_preamble.push_str(MCP_AUDIO_CONTENT_TYPE);
+            }
+            mcp_typescript_preamble.push_str(MCP_TYPESCRIPT_PREAMBLE_SUFFIX);
+            if options.supports_audio_input {
+                mcp_typescript_preamble.push_str(MCP_AUDIO_CONTENT_BLOCK_VARIANT);
+            }
+            mcp_typescript_preamble.push_str(MCP_TYPESCRIPT_PREAMBLE_END);
+
             sections.push(format!(
-                "Shared MCP Types:\n```ts\n{MCP_TYPESCRIPT_PREAMBLE}\n```"
+                "Shared MCP Types:\n```ts\n{mcp_typescript_preamble}\n```"
             ));
         }
         let nested_tool_reference = nested_tool_sections.join("\n\n");
@@ -706,6 +734,7 @@ fn render_json_schema_literal(value: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::CodeModeToolKind;
+    use super::ExecToolDescriptionOptions;
     use super::ParsedExecSource;
     use super::ToolDefinition;
     use super::ToolNamespaceDescription;
@@ -863,8 +892,11 @@ mod tests {
                 output_schema: None,
             }],
             &BTreeMap::new(),
-            /*code_mode_only*/ true,
-            /*deferred_tools_available*/ false,
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
         );
         assert!(description.contains(
             "### `foo`
@@ -878,11 +910,39 @@ bar"
         let description = build_exec_tool_description(
             &[],
             &BTreeMap::new(),
-            /*code_mode_only*/ false,
-            /*deferred_tools_available*/ false,
+            ExecToolDescriptionOptions {
+                code_mode_only: false,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
         );
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+    }
+
+    #[test]
+    fn exec_description_gates_audio_helper_on_audio_input_support() {
+        let unsupported_description = build_exec_tool_description(
+            &[],
+            &BTreeMap::new(),
+            ExecToolDescriptionOptions {
+                code_mode_only: false,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
+        );
+        assert!(!unsupported_description.contains("`audio(audioItem"));
+
+        let supported_description = build_exec_tool_description(
+            &[],
+            &BTreeMap::new(),
+            ExecToolDescriptionOptions {
+                code_mode_only: false,
+                deferred_tools_available: false,
+                supports_audio_input: true,
+            },
+        );
+        assert!(supported_description.contains("`audio(audioItem"));
     }
 
     #[test]
@@ -930,8 +990,11 @@ bar"
                 },
             ],
             &namespace_descriptions,
-            /*code_mode_only*/ true,
-            /*deferred_tools_available*/ false,
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
         );
         assert_eq!(description.matches("## mcp__sample").count(), 1);
         assert!(description.contains("## mcp__sample\nShared namespace guidance."));
@@ -970,8 +1033,11 @@ bar"
                 }))),
             }],
             &namespace_descriptions,
-            /*code_mode_only*/ true,
-            /*deferred_tools_available*/ false,
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
         );
 
         assert!(!description.contains("## mcp__sample"));
@@ -1069,8 +1135,11 @@ bar"
                 },
             ],
             &BTreeMap::new(),
-            /*code_mode_only*/ true,
-            /*deferred_tools_available*/ false,
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
         );
 
         assert_eq!(
@@ -1083,12 +1152,59 @@ bar"
     }
 
     #[test]
+    fn code_mode_only_description_gates_mcp_audio_type_on_audio_input_support() {
+        let tools = vec![ToolDefinition {
+            name: "mcp__sample__audio".to_string(),
+            tool_name: ToolName::namespaced("mcp__sample__", "audio"),
+            description: "Audio tool".to_string(),
+            kind: CodeModeToolKind::Function,
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+            output_schema: Some(mcp_call_tool_result_schema(json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }))),
+        }];
+
+        let unsupported_description = build_exec_tool_description(
+            &tools,
+            &BTreeMap::new(),
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: false,
+            },
+        );
+        assert!(!unsupported_description.contains("type AudioContent"));
+        assert!(!unsupported_description.contains("| AudioContent"));
+
+        let supported_description = build_exec_tool_description(
+            &tools,
+            &BTreeMap::new(),
+            ExecToolDescriptionOptions {
+                code_mode_only: true,
+                deferred_tools_available: false,
+                supports_audio_input: true,
+            },
+        );
+        assert!(supported_description.contains("type AudioContent"));
+        assert!(supported_description.contains("| AudioContent"));
+    }
+
+    #[test]
     fn exec_description_mentions_deferred_nested_tools_when_available() {
         let description = build_exec_tool_description(
             &[],
             &BTreeMap::new(),
-            /*code_mode_only*/ false,
-            /*deferred_tools_available*/ true,
+            ExecToolDescriptionOptions {
+                code_mode_only: false,
+                deferred_tools_available: true,
+                supports_audio_input: false,
+            },
         );
 
         assert!(description.contains("Some nested MCP/app tools may be omitted"));

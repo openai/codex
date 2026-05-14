@@ -7,7 +7,10 @@ use crate::truncate_function_output_items_with_policy;
 use crate::truncate_text;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::InputAudio;
 use pretty_assertions::assert_eq;
+
+const SMALL_AUDIO_SERIALIZED_BYTES: usize = 71;
 
 #[test]
 fn truncate_bytes_less_than_placeholder_returns_placeholder() {
@@ -249,6 +252,141 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         ]
     );
     assert_eq!(original_token_count, Some(4));
+}
+
+#[test]
+fn formatted_truncate_text_content_items_with_policy_preserves_audio_when_budget_allows() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcd".to_string(),
+        },
+        FunctionCallOutputContentItem::InputAudio {
+            input_audio: InputAudio {
+                data: "UklGRg==".to_string(),
+                format: "wav".to_string(),
+            },
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: "efgh".to_string(),
+        },
+    ];
+
+    let (output, original_token_count) = formatted_truncate_text_content_items_with_policy(
+        &items,
+        TruncationPolicy::Bytes(SMALL_AUDIO_SERIALIZED_BYTES + "abcd\nefgh".len()),
+    );
+
+    assert_eq!(output, items);
+    assert_eq!(original_token_count, None);
+}
+
+#[test]
+fn formatted_truncate_text_content_items_with_policy_omits_audio_when_budget_is_spent() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcd".to_string(),
+        },
+        FunctionCallOutputContentItem::InputAudio {
+            input_audio: InputAudio {
+                data: "UklGRg==".to_string(),
+                format: "wav".to_string(),
+            },
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: "efgh".to_string(),
+        },
+    ];
+
+    let (output, original_token_count) =
+        formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(4));
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "Total output lines: 2\n\nab…5 chars truncated…gh".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text:
+                    "[omitted 1 audio item because its size exceeds the output truncation budget]"
+                        .to_string(),
+            },
+        ]
+    );
+    assert_eq!(original_token_count, Some(3));
+}
+
+#[test]
+fn formatted_truncate_text_content_items_with_policy_omits_audio_only_over_budget() {
+    let items = vec![FunctionCallOutputContentItem::InputAudio {
+        input_audio: InputAudio {
+            data: "A".repeat(200),
+            format: "wav".to_string(),
+        },
+    }];
+
+    let (output, original_token_count) =
+        formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(32));
+
+    assert_eq!(
+        output,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: "[omitted 1 audio item because its size exceeds the output truncation budget]"
+                .to_string(),
+        }]
+    );
+    assert_eq!(original_token_count, None);
+}
+
+#[test]
+fn truncate_function_output_items_with_policy_omits_audio_over_budget() {
+    let items = vec![FunctionCallOutputContentItem::InputAudio {
+        input_audio: InputAudio {
+            data: "A".repeat(200),
+            format: "wav".to_string(),
+        },
+    }];
+
+    let output = truncate_function_output_items_with_policy(&items, TruncationPolicy::Bytes(32));
+
+    assert_eq!(
+        output,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: "[omitted 1 audio item because its size exceeds the output truncation budget]"
+                .to_string(),
+        }]
+    );
+}
+
+#[test]
+fn truncate_function_output_items_with_policy_charges_preserved_audio_to_budget() {
+    let audio = FunctionCallOutputContentItem::InputAudio {
+        input_audio: InputAudio {
+            data: "UklGRg==".to_string(),
+            format: "wav".to_string(),
+        },
+    };
+    let items = vec![
+        audio.clone(),
+        FunctionCallOutputContentItem::InputText {
+            text: "tail".to_string(),
+        },
+    ];
+
+    let output = truncate_function_output_items_with_policy(
+        &items,
+        TruncationPolicy::Bytes(SMALL_AUDIO_SERIALIZED_BYTES),
+    );
+
+    assert_eq!(
+        output,
+        vec![
+            audio,
+            FunctionCallOutputContentItem::InputText {
+                text: "[omitted 1 text items ...]".to_string(),
+            },
+        ]
+    );
 }
 
 #[test]

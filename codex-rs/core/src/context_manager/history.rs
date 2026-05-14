@@ -113,9 +113,8 @@ impl ContextManager {
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
-    /// normalization and drops un-suited items. When `input_modalities` does not
-    /// include `InputModality::Image`, images are stripped from messages and tool
-    /// outputs.
+    /// normalization and drops un-suited items. Unsupported media content is
+    /// stripped from messages and tool outputs according to `input_modalities`.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
         self.items
@@ -365,8 +364,8 @@ impl ContextManager {
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
 
-        // strip images when model does not support them
-        normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
+        // strip unsupported media content before sending history to the model
+        normalize::strip_unsupported_media_content(input_modalities, &mut self.items);
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {

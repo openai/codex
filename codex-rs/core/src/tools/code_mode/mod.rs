@@ -14,6 +14,7 @@ use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::InputModality;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
@@ -168,6 +169,9 @@ pub(super) async fn handle_runtime_response(
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            if let Some(output) = unsupported_audio_output(exec.turn.as_ref(), &content_items) {
+                return Ok(output);
+            }
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -175,6 +179,9 @@ pub(super) async fn handle_runtime_response(
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            if let Some(output) = unsupported_audio_output(exec.turn.as_ref(), &content_items) {
+                return Ok(output);
+            }
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
@@ -187,12 +194,15 @@ pub(super) async fn handle_runtime_response(
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             exec.session
                 .services
                 .code_mode_service
                 .replace_stored_values(stored_values)
                 .await;
+            if let Some(output) = unsupported_audio_output(exec.turn.as_ref(), &content_items) {
+                return Ok(output);
+            }
+            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
                 content_items.push(FunctionCallOutputContentItem::InputText {
@@ -207,6 +217,29 @@ pub(super) async fn handle_runtime_response(
             ))
         }
     }
+}
+
+fn unsupported_audio_output(
+    turn: &TurnContext,
+    items: &[FunctionCallOutputContentItem],
+) -> Option<FunctionToolOutput> {
+    let supports_audio = turn
+        .model_info
+        .input_modalities
+        .contains(&InputModality::Audio);
+    if supports_audio
+        || !items
+            .iter()
+            .any(|item| matches!(item, FunctionCallOutputContentItem::InputAudio { .. }))
+    {
+        return None;
+    }
+
+    Some(FunctionToolOutput::from_text(
+        "audio content emitted by code mode but the selected model does not support audio input"
+            .to_string(),
+        Some(false),
+    ))
 }
 
 fn sanitize_runtime_image_detail(turn: &TurnContext, items: &mut [FunctionCallOutputContentItem]) {

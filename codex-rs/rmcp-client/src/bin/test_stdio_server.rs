@@ -71,6 +71,7 @@ impl TestToolServer {
             Self::cwd_tool(),
             Self::sync_tool(),
             Self::image_tool(),
+            Self::audio_tool(),
             Self::image_scenario_tool(),
             sandbox_meta_tool,
         ];
@@ -221,6 +222,24 @@ impl TestToolServer {
         let mut tool = Tool::new(
             Cow::Borrowed("image"),
             Cow::Borrowed("Return a single image content block."),
+            Arc::new(schema),
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn audio_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("audio tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("audio"),
+            Cow::Borrowed("Return a single audio content block."),
             Arc::new(schema),
         );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
@@ -541,6 +560,20 @@ impl ServerHandler for TestToolServer {
 
                 Ok(CallToolResult::success(vec![rmcp::model::Content::image(
                     data_b64, mime_type,
+                )]))
+            }
+            "audio" => {
+                let data =
+                    std::env::var("MCP_TEST_AUDIO_DATA").unwrap_or_else(|_| "QkFTRTY0".to_string());
+                let mime_type = std::env::var("MCP_TEST_AUDIO_MIME_TYPE")
+                    .unwrap_or_else(|_| "audio/wav".to_string());
+
+                Ok(CallToolResult::success(vec![rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Audio(rmcp::model::RawAudioContent {
+                        data,
+                        mime_type,
+                    }),
+                    None,
                 )]))
             }
             "image_scenario" => {

@@ -36,6 +36,7 @@ export type { ImageDetail } from "./ImageDetail";
 export type { InitializeCapabilities } from "./InitializeCapabilities";
 export type { InitializeParams } from "./InitializeParams";
 export type { InitializeResponse } from "./InitializeResponse";
+export type { InputAudio } from "./InputAudio";
 export type { InputModality } from "./InputModality";
 export type { InternalSessionSource } from "./InternalSessionSource";
 export type { LocalShellAction } from "./LocalShellAction";

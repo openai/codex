@@ -262,6 +262,48 @@ fn image_generation_requires_feature_and_supported_model() {
 }
 
 #[test]
+fn audio_input_support_tracks_model_modalities() {
+    let supported_model_info = ModelInfo {
+        input_modalities: vec![
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ],
+        ..model_info()
+    };
+    let unsupported_model_info = ModelInfo {
+        input_modalities: vec![InputModality::Text, InputModality::Image],
+        ..model_info()
+    };
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+
+    let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &supported_model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let unsupported_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &unsupported_model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    assert!(supported_tools_config.supports_audio_input);
+    assert!(!unsupported_tools_config.supports_audio_input);
+}
+
+#[test]
 fn provider_capability_methods_disable_provider_bound_tool_surfaces() {
     let model_info = model_info();
     let features = Features::with_defaults();

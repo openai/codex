@@ -253,8 +253,11 @@ fn build_code_mode_executors(
             create_code_mode_tool(
                 &enabled_tools,
                 &namespace_descriptions,
-                config.code_mode_only_enabled,
-                deferred_tools_available,
+                codex_code_mode::ExecToolDescriptionOptions {
+                    code_mode_only: config.code_mode_only_enabled,
+                    deferred_tools_available,
+                    supports_audio_input: config.supports_audio_input,
+                },
             ),
             code_mode_nested_tool_specs,
         )),

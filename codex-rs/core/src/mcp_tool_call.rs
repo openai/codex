@@ -582,13 +582,8 @@ async fn execute_mcp_tool_call(
         )
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
-    let result = sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        Ok(result),
-    )?;
+    let result =
+        sanitize_mcp_tool_result_for_model(&turn_context.model_info.input_modalities, Ok(result))?;
     Ok(maybe_request_codex_apps_auth_elicitation(
         sess,
         turn_context,
@@ -776,34 +771,59 @@ async fn maybe_mark_thread_memory_mode_polluted(
 }
 
 fn sanitize_mcp_tool_result_for_model(
-    supports_image_input: bool,
+    input_modalities: &[InputModality],
     result: Result<CallToolResult, String>,
 ) -> Result<CallToolResult, String> {
-    if supports_image_input {
-        return result;
-    }
+    let supports_image_input = input_modalities.contains(&InputModality::Image);
+    let supports_audio_input = input_modalities.contains(&InputModality::Audio);
 
-    result.map(|call_tool_result| CallToolResult {
-        content: call_tool_result
-            .content
-            .iter()
-            .map(|block| {
-                if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
-                    && content_type == "image"
-                {
-                    return serde_json::json!({
-                        "type": "text",
-                        "text": "<image content omitted because you do not support image input>",
-                    });
-                }
+    result.and_then(|call_tool_result| {
+        if !supports_audio_input
+            && !has_non_null_structured_content(&call_tool_result)
+            && call_tool_result
+                .content
+                .iter()
+                .any(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("audio"))
+        {
+            return Err(
+                "audio content returned by MCP tool but the selected model does not support audio input"
+                    .to_string(),
+            );
+        }
 
-                block.clone()
-            })
-            .collect::<Vec<_>>(),
-        structured_content: call_tool_result.structured_content,
-        is_error: call_tool_result.is_error,
-        meta: call_tool_result.meta,
+        if supports_image_input {
+            return Ok(call_tool_result);
+        }
+
+        Ok(CallToolResult {
+            content: call_tool_result
+                .content
+                .iter()
+                .map(|block| {
+                    if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
+                        && content_type == "image"
+                    {
+                        return serde_json::json!({
+                            "type": "text",
+                            "text": "<image content omitted because you do not support image input>",
+                        });
+                    }
+
+                    block.clone()
+                })
+                .collect::<Vec<_>>(),
+            structured_content: call_tool_result.structured_content,
+            is_error: call_tool_result.is_error,
+            meta: call_tool_result.meta,
+        })
     })
+}
+
+fn has_non_null_structured_content(call_tool_result: &CallToolResult) -> bool {
+    call_tool_result
+        .structured_content
+        .as_ref()
+        .is_some_and(|structured_content| !structured_content.is_null())
 }
 
 fn truncate_mcp_tool_result_for_event(

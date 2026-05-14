@@ -703,6 +703,7 @@ mod tests {
     use super::run_session_control;
     use crate::CodeModeToolKind;
     use crate::FunctionCallOutputContentItem;
+    use crate::InputAudio;
     use crate::ToolDefinition;
     use crate::runtime::ExecuteRequest;
     use crate::runtime::ExecuteToPendingOutcome;
@@ -1230,6 +1231,7 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
 const returnsUndefined = [
   text("first"),
   image("https://example.com/image.jpg"),
+  audio({ data: "BASE64", format: "wav" }),
   notify("ping"),
 ].map((value) => value === undefined);
 text(JSON.stringify(returnsUndefined));
@@ -1253,8 +1255,14 @@ text(JSON.stringify(returnsUndefined));
                         image_url: "https://example.com/image.jpg".to_string(),
                         detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
+                    FunctionCallOutputContentItem::InputAudio {
+                        input_audio: InputAudio {
+                            data: "BASE64".to_string(),
+                            format: "wav".to_string(),
+                        },
+                    },
                     FunctionCallOutputContentItem::InputText {
-                        text: "[true,true,true]".to_string(),
+                        text: "[true,true,true,true]".to_string(),
                     },
                 ],
                 stored_values: HashMap::new(),
@@ -1436,6 +1444,147 @@ image({
                 stored_values: HashMap::new(),
                 error_text: Some(
                     "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block".to_string(),
+                ),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_helper_accepts_explicit_object() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"audio({ data: "BASE64", format: "wav" });"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "BASE64".to_string(),
+                        format: "wav".to_string(),
+                    },
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_helper_strips_data_url_and_derives_format() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"audio({ data: "data:audio/mpeg;base64,BASE64" });"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "BASE64".to_string(),
+                        format: "mp3".to_string(),
+                    },
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_helper_accepts_raw_mcp_audio_block() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"audio({ type: "audio", data: "BASE64", mimeType: "audio/ogg" });"#
+                    .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "BASE64".to_string(),
+                        format: "ogg".to_string(),
+                    },
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_helper_rejects_bare_string() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"audio("BASE64");"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "audio expects an object with non-empty data and format/mimeType/mime_type, or a raw MCP audio block".to_string(),
+                ),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_helper_rejects_non_audio_mime_type() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"audio({ data: "BASE64", mimeType: "application/octet-stream" });"#
+                    .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "audio expects an object with non-empty data and format/mimeType/mime_type, or a raw MCP audio block".to_string(),
                 ),
             }
         );

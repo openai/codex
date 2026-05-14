@@ -10,6 +10,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::InputAudio;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -511,6 +512,85 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
     } else {
         panic!("expected Message");
     }
+}
+
+#[test]
+fn for_prompt_strips_audio_when_model_does_not_support_audio() {
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "audio_tool".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "audio result".to_string(),
+                },
+                FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "UklGRg==".to_string(),
+                        format: "wav".to_string(),
+                    },
+                },
+            ]),
+        },
+    ];
+    let history = create_history_with_items(items);
+    let default_modalities = default_input_modalities();
+    let stripped = history.clone().for_prompt(&default_modalities);
+
+    assert_eq!(
+        stripped,
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "audio_tool".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "audio result".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "audio content omitted because you do not support audio input"
+                            .to_string(),
+                    },
+                ]),
+            },
+        ]
+    );
+
+    let audio_modalities = vec![
+        InputModality::Text,
+        InputModality::Image,
+        InputModality::Audio,
+    ];
+    let with_audio = history.for_prompt(&audio_modalities);
+    assert_eq!(
+        with_audio[1],
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "audio result".to_string(),
+                },
+                FunctionCallOutputContentItem::InputAudio {
+                    input_audio: InputAudio {
+                        data: "UklGRg==".to_string(),
+                        format: "wav".to_string(),
+                    },
+                },
+            ]),
+        }
+    );
 }
 
 #[test]
@@ -1042,6 +1122,46 @@ fn record_items_truncates_function_call_output_content() {
             assert!(
                 content.contains("tokens truncated"),
                 "expected truncation marker, got {content}"
+            );
+        }
+        other => panic!("unexpected history item: {other:?}"),
+    }
+}
+
+#[test]
+fn record_items_omits_over_budget_audio_content() {
+    let mut history = ContextManager::new();
+    let audio_data = "A".repeat(1_000);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-audio".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputAudio {
+                input_audio: InputAudio {
+                    data: audio_data.clone(),
+                    format: "wav".to_string(),
+                },
+            },
+        ]),
+    };
+
+    history.record_items([&item], TruncationPolicy::Bytes(32));
+
+    assert_eq!(history.items.len(), 1);
+    match &history.items[0] {
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(
+                output,
+                &FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text:
+                            "[omitted 1 audio item because its size exceeds the output truncation budget]"
+                                .to_string(),
+                    },
+                ])
+            );
+            assert!(
+                !format!("{output:?}").contains(&audio_data),
+                "over-budget audio data should not be retained"
             );
         }
         other => panic!("unexpected history item: {other:?}"),

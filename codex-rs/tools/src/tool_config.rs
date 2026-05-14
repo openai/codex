@@ -113,6 +113,7 @@ pub struct ToolsConfig {
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
+    pub supports_audio_input: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub goal_tools: bool,
@@ -187,6 +188,7 @@ impl ToolsConfig {
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(model_info);
+        let supports_audio_input = model_info.input_modalities.contains(&InputModality::Audio);
         // API-key auth bypasses Codex backend entitlement/tool normalization, so
         // callers must confirm ChatGPT auth before exposing the built-in tool.
         let include_image_gen_tool = *image_generation_tool_auth_allowed
@@ -252,6 +254,7 @@ impl ToolsConfig {
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
+            supports_audio_input,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             goal_tools: include_goal_tools,

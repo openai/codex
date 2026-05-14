@@ -2352,6 +2352,70 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     assert!(!description.contains("### `view_image`"));
 }
 
+#[test]
+fn code_mode_exec_audio_helper_docs_require_audio_input_support() {
+    let unsupported_model_info = model_info();
+    let mut supported_model_info = unsupported_model_info.clone();
+    supported_model_info.input_modalities = vec![
+        InputModality::Text,
+        InputModality::Image,
+        InputModality::Audio,
+    ];
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    let available_models = Vec::new();
+    let unsupported_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &unsupported_model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &supported_model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (unsupported_tools, _) = build_specs(
+        &unsupported_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool {
+        description: unsupported_description,
+        ..
+    }) = find_tool(&unsupported_tools, "exec")
+    else {
+        panic!("expected freeform tool");
+    };
+    assert!(!unsupported_description.contains("`audio(audioItem"));
+
+    let (supported_tools, _) = build_specs(
+        &supported_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let ToolSpec::Freeform(FreeformTool {
+        description: supported_description,
+        ..
+    }) = find_tool(&supported_tools, "exec")
+    else {
+        panic!("expected freeform tool");
+    };
+    assert!(supported_description.contains("`audio(audioItem"));
+}
+
 fn model_info() -> ModelInfo {
     serde_json::from_value(json!({
         "slug": "gpt-5-codex",

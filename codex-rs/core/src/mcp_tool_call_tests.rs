@@ -924,7 +924,7 @@ fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
         meta: None,
     });
 
-    let got = sanitize_mcp_tool_result_for_model(/*supports_image_input*/ false, result)
+    let got = sanitize_mcp_tool_result_for_model(&[InputModality::Text], result)
         .expect("sanitized result");
 
     assert_eq!(
@@ -956,10 +956,77 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
     };
 
     let got = sanitize_mcp_tool_result_for_model(
-        /*supports_image_input*/ true,
+        &[InputModality::Text, InputModality::Image],
         Ok(original.clone()),
     )
     .expect("unsanitized result");
+
+    assert_eq!(got, original);
+}
+
+#[test]
+fn sanitize_mcp_tool_result_for_model_rejects_audio_when_unsupported() {
+    let result = Ok(CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "audio",
+            "data": "UklGRg==",
+            "mimeType": "audio/wav",
+        })],
+        structured_content: None,
+        is_error: Some(false),
+        meta: None,
+    });
+
+    let err = sanitize_mcp_tool_result_for_model(&[InputModality::Text], result)
+        .expect_err("unsupported audio should fail");
+
+    assert_eq!(
+        err,
+        "audio content returned by MCP tool but the selected model does not support audio input"
+    );
+}
+
+#[test]
+fn sanitize_mcp_tool_result_for_model_preserves_audio_when_supported() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "audio",
+            "data": "UklGRg==",
+            "mimeType": "audio/wav",
+        })],
+        structured_content: None,
+        is_error: Some(false),
+        meta: Some(serde_json::json!({"k": "v"})),
+    };
+
+    let got = sanitize_mcp_tool_result_for_model(
+        &[
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ],
+        Ok(original.clone()),
+    )
+    .expect("supported audio should remain unchanged");
+
+    assert_eq!(got, original);
+}
+
+#[test]
+fn sanitize_mcp_tool_result_for_model_lets_structured_content_take_precedence_over_audio() {
+    let original = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "audio",
+            "data": "UklGRg==",
+            "mimeType": "audio/wav",
+        })],
+        structured_content: Some(serde_json::json!({"answer": "structured"})),
+        is_error: Some(false),
+        meta: None,
+    };
+
+    let got = sanitize_mcp_tool_result_for_model(&[InputModality::Text], Ok(original.clone()))
+        .expect("structured content should take precedence");
 
     assert_eq!(got, original);
 }

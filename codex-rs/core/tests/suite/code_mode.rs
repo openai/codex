@@ -12,6 +12,7 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -149,6 +150,54 @@ async fn run_code_mode_turn(
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build(server).await?;
+
+    responses::mount_sse_once(
+        server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let second_mock = responses::mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn(prompt).await?;
+    Ok((test, second_mock))
+}
+
+async fn run_code_mode_turn_with_audio_model(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+) -> Result<(TestCodex, ResponseMock)> {
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            let mut model_catalog = bundled_models_response()
+                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model = model_catalog
+                .models
+                .iter_mut()
+                .find(|model| model.slug == "gpt-5.4")
+                .expect("gpt-5.4 exists in bundled models.json");
+            model.input_modalities = vec![
+                InputModality::Text,
+                InputModality::Image,
+                InputModality::Audio,
+            ];
+            config.model_catalog = Some(model_catalog);
         });
     let test = builder.build(server).await?;
 
@@ -1975,6 +2024,77 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_output_audio_via_global_helper_for_audio_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_audio_model(
+        &server,
+        "use exec to return audio",
+        r#"
+audio({ data: "BASE64", format: "wav" });
+audio({ data: "data:audio/mpeg;base64,MP3BASE64" });
+"#,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode audio output failed unexpectedly"
+    );
+    assert_eq!(items.len(), 3);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, /*index*/ 0),
+    );
+    assert_eq!(
+        items[1],
+        serde_json::json!({
+            "type": "input_audio",
+            "input_audio": { "data": "BASE64", "format": "wav" }
+        }),
+    );
+    assert_eq!(
+        items[2],
+        serde_json::json!({
+            "type": "input_audio",
+            "input_audio": { "data": "MP3BASE64", "format": "mp3" }
+        }),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_audio_output_fails_for_non_audio_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return audio",
+        r#"audio({ data: "BASE64", format: "wav" });"#,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, _success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_eq!(
+        output,
+        "audio content emitted by code mode but the selected model does not support audio input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2404,6 +2524,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "WeakSet",
         "__codexContentItems",
         "add_content",
+        "audio",
         "decodeURI",
         "decodeURIComponent",
         "encodeURI",

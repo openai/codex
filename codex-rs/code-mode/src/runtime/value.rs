@@ -3,8 +3,10 @@ use serde_json::Value as JsonValue;
 use crate::response::DEFAULT_IMAGE_DETAIL;
 use crate::response::FunctionCallOutputContentItem;
 use crate::response::ImageDetail;
+use crate::response::InputAudio;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
+const AUDIO_HELPER_EXPECTS_MESSAGE: &str = "audio expects an object with non-empty data and format/mimeType/mime_type, or a raw MCP audio block";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
 pub(super) fn serialize_output_text(
@@ -93,6 +95,35 @@ pub(super) fn normalize_output_image(
     }
 }
 
+pub(super) fn normalize_output_audio(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<FunctionCallOutputContentItem, ()> {
+    let result = (|| -> Result<FunctionCallOutputContentItem, String> {
+        if !value.is_object() || value.is_array() {
+            return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+        }
+
+        let object = v8::Local::<v8::Object>::try_from(value)
+            .map_err(|_| AUDIO_HELPER_EXPECTS_MESSAGE.to_string())?;
+        let input_audio = if let Some(audio) = parse_non_mcp_output_audio(scope, object)? {
+            audio
+        } else {
+            parse_mcp_output_audio(scope, value)?
+        };
+
+        Ok(FunctionCallOutputContentItem::InputAudio { input_audio })
+    })();
+
+    match result {
+        Ok(item) => Ok(item),
+        Err(error_text) => {
+            throw_type_error(scope, &error_text);
+            Err(())
+        }
+    }
+}
+
 fn parse_non_mcp_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
@@ -159,6 +190,90 @@ fn parse_mcp_output_image(
         .filter(|detail| matches!(*detail, "high" | "original"))
         .map(str::to_string);
     Ok((image_url, detail))
+}
+
+fn parse_non_mcp_output_audio(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+) -> Result<Option<InputAudio>, String> {
+    let data_key = v8::String::new(scope, "data")
+        .ok_or_else(|| "failed to allocate audio helper keys".to_string())?;
+    let Some(data) = object.get(scope, data_key.into()) else {
+        return Ok(None);
+    };
+    if data.is_undefined() {
+        return Ok(None);
+    }
+    if !data.is_string() {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    }
+    let data = data.to_rust_string_lossy(scope);
+    let format = optional_string_property(scope, object, "format")?;
+    let mime_type = optional_string_property(scope, object, "mimeType")?
+        .or(optional_string_property(scope, object, "mime_type")?);
+    let Some(input_audio) = codex_protocol::models::input_audio_from_data(
+        &data,
+        format.as_deref(),
+        mime_type.as_deref(),
+    ) else {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    };
+    Ok(Some(InputAudio {
+        data: input_audio.data,
+        format: input_audio.format,
+    }))
+}
+
+fn parse_mcp_output_audio(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<InputAudio, String> {
+    let Some(result) = v8_value_to_json(scope, value)? else {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    };
+    let JsonValue::Object(result) = result else {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    };
+    let Some(item_type) = result.get("type").and_then(JsonValue::as_str) else {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    };
+    if item_type != "audio" {
+        return Err(format!(
+            "audio only accepts MCP audio blocks, got \"{item_type}\""
+        ));
+    }
+    let data = result
+        .get("data")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "audio expected MCP audio data".to_string())?;
+    let mime_type = result
+        .get("mimeType")
+        .or_else(|| result.get("mime_type"))
+        .and_then(JsonValue::as_str);
+    let Some(input_audio) =
+        codex_protocol::models::input_audio_from_data(data, /*format*/ None, mime_type)
+    else {
+        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
+    };
+    Ok(InputAudio {
+        data: input_audio.data,
+        format: input_audio.format,
+    })
+}
+
+fn optional_string_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let key = v8::String::new(scope, name)
+        .ok_or_else(|| "failed to allocate audio helper keys".to_string())?;
+    match object.get(scope, key.into()) {
+        Some(value) if value.is_string() => Ok(Some(value.to_rust_string_lossy(scope))),
+        Some(value) if value.is_null() || value.is_undefined() => Ok(None),
+        Some(_) => Err(format!("{name} must be a string when provided")),
+        None => Ok(None),
+    }
 }
 
 fn parse_image_detail_value<'s>(
