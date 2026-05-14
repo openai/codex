@@ -108,7 +108,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -552,6 +551,7 @@ impl AppServerSession {
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
         permission_profile: PermissionProfile,
         active_permission_profile: Option<ActivePermissionProfile>,
+        workspace_roots: &[AbsolutePathBuf],
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
@@ -565,6 +565,7 @@ impl AppServerSession {
             &permission_profile,
             active_permission_profile,
             cwd.as_path(),
+            workspace_roots,
             self.thread_params_mode(),
         );
         self.client
@@ -1174,15 +1175,14 @@ fn sandbox_mode_from_permission_profile(
 
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
+    cwd: &std::path::Path,
+    workspace_roots: &[AbsolutePathBuf],
 ) -> PermissionProfileSelectionParams {
-    let modifications = active
-        .modifications
-        .into_iter()
-        .map(|modification| match modification {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                PermissionProfileModificationParams::AdditionalWritableRoot { path }
-            }
-        })
+    let modifications = workspace_roots
+        .iter()
+        .filter(|root| root.as_path() != cwd)
+        .cloned()
+        .map(|path| PermissionProfileModificationParams::AdditionalWritableRoot { path })
         .collect::<Vec<_>>();
     PermissionProfileSelectionParams::Profile {
         id: active.id,
@@ -1194,13 +1194,15 @@ fn turn_permissions_overrides(
     permission_profile: &PermissionProfile,
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: &std::path::Path,
+    workspace_roots: &[AbsolutePathBuf],
     thread_params_mode: ThreadParamsMode,
 ) -> (
     Option<codex_app_server_protocol::SandboxPolicy>,
     Option<PermissionProfileSelectionParams>,
 ) {
     let permissions = if matches!(thread_params_mode, ThreadParamsMode::Embedded) {
-        active_permission_profile.map(permissions_selection_from_active_profile)
+        active_permission_profile
+            .map(|active| permissions_selection_from_active_profile(active, cwd, workspace_roots))
     } else {
         None
     };
@@ -1229,7 +1231,13 @@ fn permissions_selection_from_config(
     config
         .permissions
         .active_permission_profile()
-        .map(permissions_selection_from_active_profile)
+        .map(|active| {
+            permissions_selection_from_active_profile(
+                active,
+                config.cwd.as_path(),
+                config.permissions.user_visible_workspace_roots(),
+            )
+        })
 }
 
 fn thread_start_params_from_config(
@@ -1243,7 +1251,7 @@ fn thread_start_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1277,7 +1285,7 @@ fn thread_resume_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1309,7 +1317,7 @@ fn thread_fork_params_from_config(
         .is_none()
         .then(|| {
             sandbox_mode_from_permission_profile(
-                &config.permissions.permission_profile(),
+                &config.permissions.effective_permission_profile(),
                 config.cwd.as_path(),
             )
         })
@@ -1499,7 +1507,7 @@ fn permission_profile_from_thread_response(
         return permission_profile.clone().into();
     }
     match thread_params_mode {
-        ThreadParamsMode::Embedded => config.permissions.permission_profile(),
+        ThreadParamsMode::Embedded => config.permissions.effective_permission_profile(),
         ThreadParamsMode::Remote => {
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
         }
@@ -1635,7 +1643,13 @@ mod tests {
             config
                 .permissions
                 .active_permission_profile()
-                .map(permissions_selection_from_active_profile)
+                .map(|active| {
+                    permissions_selection_from_active_profile(
+                        active,
+                        config.cwd.as_path(),
+                        config.permissions.user_visible_workspace_roots(),
+                    )
+                })
         );
         assert_eq!(params.model_provider, Some(config.model_provider_id));
         assert_eq!(params.thread_source, Some(ThreadSource::User));
@@ -1661,18 +1675,53 @@ mod tests {
         let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile =
             ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
-        let expected_permissions =
-            permissions_selection_from_active_profile(active_permission_profile.clone());
+        let workspace_roots = vec![cwd.clone()];
+        let expected_permissions = permissions_selection_from_active_profile(
+            active_permission_profile.clone(),
+            cwd.as_path(),
+            &workspace_roots,
+        );
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             &PermissionProfile::workspace_write(),
             Some(active_permission_profile),
             cwd.as_path(),
+            &workspace_roots,
             ThreadParamsMode::Embedded,
         );
 
         assert_eq!(sandbox_policy, None);
         assert_eq!(permissions, Some(expected_permissions));
+    }
+
+    #[test]
+    fn embedded_turn_permissions_include_extra_workspace_roots_as_modifications() {
+        let cwd = test_path_buf("/workspace/project").abs();
+        let extra_root = test_path_buf("/workspace/cache").abs();
+        let active_permission_profile =
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
+        let workspace_roots = vec![cwd.clone(), extra_root.clone()];
+
+        let (sandbox_policy, permissions) = turn_permissions_overrides(
+            &PermissionProfile::workspace_write(),
+            Some(active_permission_profile),
+            cwd.as_path(),
+            &workspace_roots,
+            ThreadParamsMode::Embedded,
+        );
+
+        assert_eq!(sandbox_policy, None);
+        assert_eq!(
+            permissions,
+            Some(PermissionProfileSelectionParams::Profile {
+                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                modifications: Some(vec![
+                    PermissionProfileModificationParams::AdditionalWritableRoot {
+                        path: extra_root
+                    }
+                ]),
+            })
+        );
     }
 
     #[test]
@@ -1683,6 +1732,7 @@ mod tests {
             &PermissionProfile::read_only(),
             /*active_permission_profile*/ None,
             cwd.as_path(),
+            std::slice::from_ref(&cwd),
             ThreadParamsMode::Embedded,
         );
 
@@ -1705,6 +1755,7 @@ mod tests {
                 BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
             )),
             cwd.as_path(),
+            std::slice::from_ref(&cwd),
             ThreadParamsMode::Remote,
         );
 
@@ -1723,7 +1774,7 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
 
@@ -1830,7 +1881,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let remote_cwd = PathBuf::from("repo/on/server");
         let expected_sandbox = sandbox_mode_from_permission_profile(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
 

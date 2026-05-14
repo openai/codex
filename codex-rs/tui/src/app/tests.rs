@@ -1639,8 +1639,9 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         app.chat_widget
             .config_ref()
             .permissions
-            .permission_profile(),
-        auto_review.permission_profile
+            .permission_profile()
+            .get(),
+        &auto_review.permission_profile
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
@@ -1816,8 +1817,9 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         app.chat_widget
             .config_ref()
             .permissions
-            .permission_profile(),
-        auto_review.permission_profile
+            .permission_profile()
+            .get(),
+        &auto_review.permission_profile
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -3001,7 +3003,9 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         .chat_widget
         .config_ref()
         .permissions
-        .permission_profile();
+        .permission_profile()
+        .get()
+        .clone();
     assert_eq!(
         session.permission_profile, expected_permission_profile,
         "thread/read does not return fresh server permissions; the fallback profile must use the \
@@ -3136,7 +3140,7 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
             fork_config.model_reasoning_effort,
             fork_config.service_tier.as_deref(),
             fork_config.permissions.approval_policy.value(),
-            fork_config.permissions.permission_profile(),
+            fork_config.permissions.permission_profile().get(),
             fork_config.approvals_reviewer,
         ),
         (
@@ -3144,7 +3148,7 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
             Some(ReasoningEffortConfig::High),
             Some(parent_service_tier),
             AskForApproval::OnRequest.to_core(),
-            parent_permission_profile,
+            &parent_permission_profile,
             ApprovalsReviewer::AutoReview,
         )
     );

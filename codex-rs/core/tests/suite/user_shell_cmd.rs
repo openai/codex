@@ -344,11 +344,13 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
         let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
-        config.permissions.permission_profile =
-            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::from_runtime_permissions(
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::Restricted,
-            ));
+            ))
+            .expect("set permission profile");
     });
     let test = builder.build(&server).await?;
 

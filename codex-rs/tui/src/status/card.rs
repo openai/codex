@@ -15,17 +15,16 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 
@@ -256,7 +255,8 @@ impl StatusHistoryCell {
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-        let permission_profile = config.permissions.permission_profile();
+        let permission_profile = config.permissions.effective_permission_profile();
+        let workspace_roots = config.permissions.user_visible_workspace_roots();
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
@@ -267,7 +267,7 @@ impl StatusHistoryCell {
             ),
             (
                 "sandbox",
-                summarize_permission_profile(&permission_profile, config.cwd.as_path()),
+                summarize_permission_profile(&permission_profile, &config.cwd, workspace_roots),
             ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
@@ -291,7 +291,8 @@ impl StatusHistoryCell {
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
         let active_permission_profile = config.permissions.active_permission_profile();
-        let sandbox = status_permission_summary(&permission_profile, config.cwd.as_path());
+        let sandbox = status_permission_summary(&permission_profile, &config.cwd, workspace_roots);
+        let workspace_root_suffix = workspace_root_suffix(workspace_roots, &config.cwd);
         let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
         let permissions = status_permissions_label(
             active_permission_profile.as_ref(),
@@ -299,6 +300,7 @@ impl StatusHistoryCell {
             approval_policy,
             &sandbox,
             &approval,
+            workspace_root_suffix.as_deref(),
         );
         let model_provider = format_model_provider(config, runtime_model_provider_base_url);
         let account = compose_account_display(account_display);
@@ -542,8 +544,12 @@ impl StatusHistoryCell {
     }
 }
 
-fn status_permission_summary(permission_profile: &PermissionProfile, cwd: &Path) -> String {
-    let summary = summarize_permission_profile(permission_profile, cwd);
+fn status_permission_summary(
+    permission_profile: &PermissionProfile,
+    cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
+) -> String {
+    let summary = summarize_permission_profile(permission_profile, cwd, workspace_roots);
     if let Some(details) = summary.strip_prefix("read-only") {
         if details.contains("(network access enabled)") {
             return "read-only with network access".to_string();
@@ -562,33 +568,31 @@ fn status_permission_summary(permission_profile: &PermissionProfile, cwd: &Path)
     summary
 }
 
+fn workspace_root_suffix(
+    workspace_roots: &[AbsolutePathBuf],
+    cwd: &AbsolutePathBuf,
+) -> Option<String> {
+    let extra_roots = workspace_roots
+        .iter()
+        .filter(|root| *root != cwd)
+        .map(|root| root.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if extra_roots.is_empty() {
+        None
+    } else {
+        Some(format!(" [{}]", extra_roots.join(", ")))
+    }
+}
+
 fn status_permissions_label(
     active_permission_profile: Option<&ActivePermissionProfile>,
     permission_profile: &PermissionProfile,
     approval_policy: AskForApproval,
     sandbox: &str,
     approval: &str,
+    workspace_root_suffix: Option<&str>,
 ) -> String {
     let active_id = active_permission_profile.map(|active| active.id.as_str());
-    let writable_root_modifications = active_permission_profile
-        .map(|active| {
-            active
-                .modifications
-                .iter()
-                .filter(|modification| {
-                    matches!(
-                        modification,
-                        ActivePermissionProfileModification::AdditionalWritableRoot { .. }
-                    )
-                })
-                .count()
-        })
-        .unwrap_or(0);
-    let modification_suffix = match writable_root_modifications {
-        0 => String::new(),
-        1 => " + 1 writable root".to_string(),
-        count => format!(" + {count} writable roots"),
-    };
     match active_id {
         Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY) => {
             let label = if sandbox == "read-only with network access" {
@@ -596,12 +600,20 @@ fn status_permissions_label(
             } else {
                 "Read Only"
             };
-            return format!("{label}{modification_suffix} ({approval})");
+            return format!("{label} ({approval})");
         }
         Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE) => match sandbox {
-            "workspace" => return format!("Workspace{modification_suffix} ({approval})"),
+            "workspace" => {
+                return format!(
+                    "Workspace{} ({approval})",
+                    workspace_root_suffix.unwrap_or("")
+                );
+            }
             "workspace with network access" => {
-                return format!("Workspace with network access{modification_suffix} ({approval})");
+                return format!(
+                    "Workspace with network access{} ({approval})",
+                    workspace_root_suffix.unwrap_or("")
+                );
             }
             _ => {}
         },
@@ -614,7 +626,10 @@ fn status_permissions_label(
                 format!("No Sandbox ({approval})")
             };
         }
-        Some(id) => return format!("Profile {id}{modification_suffix} ({sandbox}, {approval})"),
+        Some(id) => {
+            let sandbox = decorate_workspace_sandbox_label(sandbox, workspace_root_suffix);
+            return format!("Profile {id} ({sandbox}, {approval})");
+        }
         None => {}
     }
 
@@ -622,14 +637,25 @@ fn status_permissions_label(
         return format!("Read Only ({approval})");
     }
     if approval_policy == AskForApproval::OnRequest && sandbox == "workspace" {
-        return format!("Workspace ({approval})");
+        return format!(
+            "Workspace{} ({approval})",
+            workspace_root_suffix.unwrap_or("")
+        );
     }
     if approval_policy == AskForApproval::Never
         && permission_profile == &PermissionProfile::Disabled
     {
         return "Full Access".to_string();
     }
+    let sandbox = decorate_workspace_sandbox_label(sandbox, workspace_root_suffix);
     format!("Custom ({sandbox}, {approval})")
+}
+
+fn decorate_workspace_sandbox_label(sandbox: &str, workspace_root_suffix: Option<&str>) -> String {
+    match workspace_root_suffix {
+        Some(suffix) if sandbox.starts_with("workspace") => format!("{sandbox}{suffix}"),
+        _ => sandbox.to_string(),
+    }
 }
 
 fn status_approval_label(

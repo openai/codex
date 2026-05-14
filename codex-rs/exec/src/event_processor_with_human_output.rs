@@ -1,5 +1,4 @@
 use std::io::IsTerminal;
-use std::path::Path;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -11,11 +10,9 @@ use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::num_format::format_with_separators;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use codex_utils_sandbox_summary::summarize_permission_profile;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 
@@ -437,8 +434,9 @@ fn config_summary_entries(
         (
             "sandbox",
             summarize_permission_profile(
-                config.permissions.permission_profile.get(),
-                config.cwd.as_path(),
+                &config.permissions.effective_permission_profile(),
+                &config.cwd,
+                config.permissions.user_visible_workspace_roots(),
             ),
         ),
     ];
@@ -463,83 +461,6 @@ fn config_summary_entries(
         session_configured_event.session_id.to_string(),
     ));
     entries
-}
-
-fn summarize_permission_profile(permission_profile: &PermissionProfile, cwd: &Path) -> String {
-    match permission_profile {
-        PermissionProfile::Disabled => "danger-full-access".to_string(),
-        PermissionProfile::External { network } => {
-            let mut summary = "external-sandbox".to_string();
-            append_network_summary(&mut summary, *network);
-            summary
-        }
-        PermissionProfile::Managed { .. } => {
-            let file_system_policy = permission_profile.file_system_sandbox_policy();
-            let network_policy = permission_profile.network_sandbox_policy();
-            if file_system_policy.has_full_disk_write_access() {
-                let mut summary = "workspace-write [/]".to_string();
-                append_network_summary(&mut summary, network_policy);
-                return summary;
-            }
-
-            let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd);
-            if writable_roots.is_empty() {
-                let mut summary = "read-only".to_string();
-                append_network_summary(&mut summary, network_policy);
-                return summary;
-            }
-
-            let mut summary = "workspace-write".to_string();
-            let writable_entries = writable_roots
-                .iter()
-                .map(|root| writable_root_label(root.root.as_path(), cwd))
-                .collect::<Vec<_>>();
-            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
-            append_network_summary(&mut summary, network_policy);
-            summary
-        }
-    }
-}
-
-fn append_network_summary(summary: &mut String, network_policy: NetworkSandboxPolicy) {
-    if network_policy.is_enabled() {
-        summary.push_str(" (network access enabled)");
-    }
-}
-
-fn writable_root_label(root: &Path, cwd: &Path) -> String {
-    if paths_match_after_canonicalization(root, cwd) {
-        return "workdir".to_string();
-    }
-    if paths_match_after_canonicalization(root, Path::new("/tmp")) {
-        return "/tmp".to_string();
-    }
-    if std::env::var_os("TMPDIR")
-        .filter(|tmpdir| !tmpdir.is_empty())
-        .is_some_and(|tmpdir| paths_match_after_canonicalization(root, Path::new(&tmpdir)))
-    {
-        return "$TMPDIR".to_string();
-    }
-    display_path_label(root)
-}
-
-fn paths_match_after_canonicalization(left: &Path, right: &Path) -> bool {
-    match (
-        canonicalize_preserving_symlinks(left),
-        canonicalize_preserving_symlinks(right),
-    ) {
-        (Ok(left), Ok(right)) if left == right => true,
-        _ => display_path_label(left) == display_path_label(right),
-    }
-}
-
-fn display_path_label(path: &Path) -> String {
-    path.strip_prefix("/private/tmp")
-        .ok()
-        .map(|suffix| Path::new("/tmp").join(suffix))
-        .unwrap_or_else(|| path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
 }
 
 fn reasoning_text(
