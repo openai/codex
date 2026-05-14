@@ -411,7 +411,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with restricted network
     /// access.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
         Self::workspace_write_with(
@@ -425,7 +425,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with the legacy
     /// `sandbox_workspace_write` knobs applied directly to the profile.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write_with(
         writable_roots: &[AbsolutePathBuf],

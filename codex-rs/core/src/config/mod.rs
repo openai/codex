@@ -2522,7 +2522,7 @@ impl Config {
                 // Keep legacy behavior for extra writable roots while storing
                 // the result as the canonical permission profile. Explicit
                 // extra roots are concrete paths, so their metadata carveouts
-                // are also concrete rather than symbolic `:project_roots`
+                // are also concrete rather than symbolic `:workspace_roots`
                 // entries.
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
