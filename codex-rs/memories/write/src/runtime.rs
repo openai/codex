@@ -12,6 +12,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_login::default_client::ClientIdentity;
 use codex_login::default_client::originator;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -179,6 +180,7 @@ impl MemoryStartupContext {
             installation_id,
             config.model_provider.clone(),
             session_source,
+            ClientIdentity::process_default(),
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
@@ -245,6 +247,7 @@ impl MemoryStartupContext {
                     InternalSessionSource::MemoryConsolidation,
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
+                app_server_client_info: None,
                 dynamic_tools: Vec::new(),
                 persist_extended_history: false,
                 metrics_service_name: None,

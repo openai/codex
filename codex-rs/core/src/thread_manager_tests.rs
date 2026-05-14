@@ -9,6 +9,7 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_login::default_client::ClientIdentity;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -326,6 +327,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            app_server_client_info: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -460,6 +462,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
                 InternalSessionSource::MemoryConsolidation,
             )),
             thread_source: None,
+            app_server_client_info: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -479,6 +482,68 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn start_thread_uses_app_server_client_identity_for_rollout_metadata() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            app_server_client_info: Some(AppServerClientInfo {
+                name: "codex_test_app".to_string(),
+                version: "1.0.0".to_string(),
+                client_identity: ClientIdentity::explicit(
+                    "codex_test_app".to_string(),
+                    Some("codex_test_app; 1.0.0".to_string()),
+                )
+                .expect("explicit identity should be valid"),
+            }),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("thread should start");
+
+    thread.thread.ensure_rollout_materialized().await;
+    thread.thread.flush_rollout().await.expect("flush rollout");
+    let rollout_path = thread
+        .thread
+        .rollout_path()
+        .expect("rollout path should exist");
+    let history = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("rollout history");
+    let InitialHistory::Resumed(resumed) = history else {
+        panic!("expected materialized rollout history");
+    };
+    let RolloutItem::SessionMeta(session_meta) = &resumed.history[0] else {
+        panic!("expected session metadata as first rollout item");
+    };
+
+    assert_eq!(session_meta.meta.originator, "codex_test_app");
+
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    assert_eq!(report.completed, vec![thread.thread_id]);
 }
 
 #[tokio::test]
@@ -516,6 +581,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            app_server_client_info: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -788,6 +854,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
+            app_server_client_info: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

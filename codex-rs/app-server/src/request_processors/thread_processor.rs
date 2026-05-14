@@ -17,6 +17,29 @@ struct ThreadListFilters {
     use_state_db_only: bool,
 }
 
+fn app_server_client_info(
+    name: Option<String>,
+    version: Option<String>,
+) -> Result<Option<AppServerClientInfo>, JSONRPCErrorError> {
+    match (name, version) {
+        (Some(name), Some(version)) => {
+            let user_agent_suffix = Some(format!("{name}; {version}"));
+            let client_identity = ClientIdentity::explicit(name.clone(), user_agent_suffix)
+                .map_err(|_| {
+                    invalid_request(format!(
+                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                    ))
+                })?;
+            Ok(Some(AppServerClientInfo {
+                name,
+                version,
+                client_identity,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
@@ -859,6 +882,10 @@ impl ThreadRequestProcessor {
         let config_manager = self.config_manager.clone();
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
+        let client_info = app_server_client_info(
+            app_server_client_name.clone(),
+            app_server_client_version.clone(),
+        )?;
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
@@ -866,6 +893,7 @@ impl ThreadRequestProcessor {
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
+                client_info,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -950,6 +978,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        app_server_client_info: Option<AppServerClientInfo>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -1073,6 +1102,7 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
+                app_server_client_info,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
                 metrics_service_name: service_name,
@@ -2314,6 +2344,10 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let client_info = app_server_client_info(
+            app_server_client_name.clone(),
+            app_server_client_version.clone(),
+        )?;
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -2416,17 +2450,30 @@ impl ThreadRequestProcessor {
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
-        match self
-            .thread_manager
-            .resume_thread_with_history(
-                config.clone(),
-                thread_history,
-                self.auth_manager.clone(),
-                /*persist_extended_history*/ false,
-                self.request_trace_context(&request_id).await,
-            )
-            .await
-        {
+        let resume_result = if let Some(client_info) = client_info {
+            self.thread_manager
+                .resume_thread_with_history_and_app_server_client_info(
+                    config.clone(),
+                    thread_history,
+                    self.auth_manager.clone(),
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                    client_info,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .resume_thread_with_history(
+                    config.clone(),
+                    thread_history,
+                    self.auth_manager.clone(),
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        };
+
+        match resume_result {
             Ok(NewThread {
                 thread_id,
                 thread: codex_thread,
@@ -3007,6 +3054,10 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let client_info = app_server_client_info(
+            app_server_client_name.clone(),
+            app_server_client_version.clone(),
+        )?;
 
         let source_thread = self
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
@@ -3068,34 +3119,49 @@ impl ThreadRequestProcessor {
 
         let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let initial_history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: source_thread_id,
+            history: history_items.clone(),
+            rollout_path: source_thread.rollout_path.clone(),
+        });
+
+        let fork_result = if let Some(client_info) = client_info {
+            self.thread_manager
+                .fork_thread_from_history_and_app_server_client_info(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    initial_history,
+                    thread_source.map(Into::into),
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                    client_info,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread_from_history(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    initial_history,
+                    thread_source.map(Into::into),
+                    /*persist_extended_history*/ false,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        };
 
         let NewThread {
             thread_id,
             thread: forked_thread,
             session_configured,
             ..
-        } = self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: history_items.clone(),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
-                thread_source.map(Into::into),
-                /*persist_extended_history*/ false,
-                self.request_trace_context(&request_id).await,
-            )
-            .await
-            .map_err(|err| match err {
-                CodexErr::Io(_) | CodexErr::Json(_) => {
-                    invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
-                }
-                CodexErr::InvalidRequest(message) => invalid_request(message),
-                err => internal_error(format!("error forking thread: {err}")),
-            })?;
+        } = fork_result.map_err(|err| match err {
+            CodexErr::Io(_) | CodexErr::Json(_) => {
+                invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
+            }
+            CodexErr::InvalidRequest(message) => invalid_request(message),
+            err => internal_error(format!("error forking thread: {err}")),
+        })?;
 
         Self::set_app_server_client_info(
             forked_thread.as_ref(),

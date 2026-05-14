@@ -66,6 +66,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
+use codex_login::default_client::ClientIdentity;
 use codex_login::default_client::build_reqwest_client;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
@@ -170,6 +171,7 @@ struct ModelClientState {
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
+    client_identity: ClientIdentity,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
@@ -316,6 +318,7 @@ impl ModelClient {
         installation_id: String,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
+        client_identity: ClientIdentity,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
@@ -339,6 +342,7 @@ impl ModelClient {
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
+                client_identity,
                 model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,
@@ -365,6 +369,10 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
+    }
+
+    pub(crate) fn client_identity_headers(&self) -> ApiHeaderMap {
+        self.state.client_identity.headers_with_default_residency()
     }
 
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
@@ -526,6 +534,7 @@ impl ModelClient {
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
+        extra_headers.extend(self.client_identity_headers());
         let mut sideband_headers = extra_headers.clone();
         sideband_headers.extend(sideband_websocket_auth_headers(
             client_setup.api_auth.as_ref(),
@@ -585,8 +594,11 @@ impl ModelClient {
             }),
         };
 
+        let mut extra_headers = self.client_identity_headers();
+        extra_headers.extend(self.build_subagent_headers());
+
         client
-            .summarize_input(&payload, self.build_subagent_headers())
+            .summarize_input(&payload, extra_headers)
             .await
             .map_err(map_api_error)
     }
@@ -611,7 +623,8 @@ impl ModelClient {
     }
 
     fn build_responses_identity_headers(&self) -> ApiHeaderMap {
-        let mut extra_headers = self.build_subagent_headers();
+        let mut extra_headers = self.client_identity_headers();
+        extra_headers.extend(self.build_subagent_headers());
         if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source)
             && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
         {
@@ -823,7 +836,7 @@ impl ModelClient {
             websocket_connect_timeout,
             ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
-                codex_login::default_client::default_headers(),
+                self.client_identity_headers(),
                 turn_state,
                 Some(websocket_telemetry),
             ),

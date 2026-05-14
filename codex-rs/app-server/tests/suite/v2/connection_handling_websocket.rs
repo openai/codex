@@ -18,6 +18,10 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::responses;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
@@ -102,6 +106,72 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
         .await
         .context("failed to stop websocket app-server process")?;
     Ok(())
+}
+
+#[tokio::test]
+async fn websocket_thread_requests_use_starting_connection_identity() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let result = async {
+        let mut ws1 = connect_websocket(bind_addr).await?;
+        let mut ws2 = connect_websocket(bind_addr).await?;
+
+        send_initialize_request(&mut ws1, /*id*/ 1, "ws_client_one").await?;
+        read_response_for_id(&mut ws1, /*id*/ 1).await?;
+
+        send_initialize_request(&mut ws2, /*id*/ 2, "ws_client_two").await?;
+        read_response_for_id(&mut ws2, /*id*/ 2).await?;
+
+        let thread_id = start_thread(&mut ws2, /*id*/ 3).await?;
+        send_request(
+            &mut ws2,
+            "turn/start",
+            /*id*/ 4,
+            Some(serde_json::to_value(TurnStartParams {
+                thread_id,
+                input: vec![V2UserInput::Text {
+                    text: "Hello from the second websocket client".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })?),
+        )
+        .await?;
+        let turn_response = read_response_for_id(&mut ws2, /*id*/ 4).await?;
+        let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_response)?;
+        read_notification_for_method(&mut ws2, "turn/completed").await?;
+
+        let request = response_mock.single_request();
+        assert_eq!(
+            request.header("originator").as_deref(),
+            Some("ws_client_two")
+        );
+        let user_agent = request.header("user-agent").expect("user-agent header");
+        assert!(user_agent.starts_with("ws_client_two/"));
+        assert!(user_agent.ends_with(" (ws_client_two; 0.1.0)"));
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    result
 }
 
 #[tokio::test]

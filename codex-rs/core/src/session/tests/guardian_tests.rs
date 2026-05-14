@@ -677,6 +677,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),
         thread_source: None,
+        app_server_client_info: None,
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,

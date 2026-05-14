@@ -15,6 +15,7 @@ use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::ClientIdentity;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
@@ -61,6 +62,13 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
+    test_model_client_with_identity(session_source, ClientIdentity::process_default())
+}
+
+fn test_model_client_with_identity(
+    session_source: SessionSource,
+    client_identity: ClientIdentity,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
     ModelClient::new(
@@ -70,12 +78,39 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
+        client_identity,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     )
+}
+
+#[test]
+fn model_client_identity_headers_use_concrete_identity() {
+    let client = test_model_client_with_identity(
+        SessionSource::Exec,
+        ClientIdentity::explicit(
+            "codex_explicit_model_client".to_string(),
+            Some("codex_explicit_model_client; 1.0.0".to_string()),
+        )
+        .expect("explicit identity should be valid"),
+    );
+
+    let headers = client.client_identity_headers();
+    assert_eq!(
+        headers
+            .get("originator")
+            .and_then(|value| value.to_str().ok()),
+        Some("codex_explicit_model_client"),
+    );
+    let user_agent = headers
+        .get(http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .expect("user-agent header");
+    assert!(user_agent.starts_with("codex_explicit_model_client/"));
+    assert!(user_agent.ends_with(" (codex_explicit_model_client; 1.0.0)"));
 }
 
 fn test_model_info() -> ModelInfo {
@@ -520,6 +555,7 @@ fn model_client_with_counting_attestation(
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
+        ClientIdentity::process_default(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,

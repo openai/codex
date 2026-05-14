@@ -14,6 +14,7 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::app_server_client_info::AppServerClientInfo;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -61,7 +62,7 @@ use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::default_client::originator;
+use codex_login::default_client::ClientIdentity;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -396,6 +397,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) app_server_client_info: Option<AppServerClientInfo>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
@@ -460,6 +462,7 @@ impl Codex {
             conversation_history,
             session_source,
             thread_source,
+            app_server_client_info,
             agent_control,
             dynamic_tools,
             persist_extended_history,
@@ -603,6 +606,11 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
+        let (app_server_client_name, app_server_client_version, client_identity) =
+            match app_server_client_info {
+                Some(info) => (Some(info.name), Some(info.version), info.client_identity),
+                None => (None, None, ClientIdentity::process_default()),
+            };
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -624,8 +632,9 @@ impl Codex {
             environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
-            app_server_client_name: None,
-            app_server_client_version: None,
+            app_server_client_name,
+            app_server_client_version,
+            client_identity,
             session_source,
             thread_source,
             dynamic_tools,

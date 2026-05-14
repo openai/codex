@@ -370,6 +370,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             /*forked_from_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         ),
@@ -419,6 +420,13 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         text.contains("\"type\":\"session_meta\""),
         "expected session metadata in rollout"
     );
+    let first_line = text.lines().next().expect("session metadata line");
+    let first_line: RolloutLine =
+        serde_json::from_str(first_line).expect("session metadata should parse");
+    let RolloutItem::SessionMeta(session_meta) = first_line.item else {
+        panic!("expected first rollout item to be session metadata");
+    };
+    assert_eq!(session_meta.meta.originator, "test_originator");
     let buffered_idx = text
         .find("buffered-event")
         .expect("buffered event in rollout");
@@ -448,6 +456,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
             /*forked_from_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            "test_originator".to_string(),
             BaseInstructions::default(),
             Vec::new(),
         ),

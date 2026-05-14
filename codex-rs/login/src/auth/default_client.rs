@@ -13,6 +13,7 @@ use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -44,6 +45,18 @@ pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
+
+#[derive(Debug, Clone)]
+pub struct ClientIdentity {
+    inner: Arc<ClientIdentityInner>,
+}
+
+#[derive(Debug)]
+struct ClientIdentityInner {
+    originator: Originator,
+    user_agent_suffix: Option<String>,
+}
+
 static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
 static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
     LazyLock::new(|| RwLock::new(None));
@@ -72,6 +85,98 @@ fn get_originator_value(provided: Option<String>) -> Originator {
                 header_value: HeaderValue::from_static(DEFAULT_ORIGINATOR),
             }
         }
+    }
+}
+
+fn originator_from_explicit_value(value: String) -> Result<Originator, SetOriginatorError> {
+    match HeaderValue::from_str(&value) {
+        Ok(header_value) => Ok(Originator {
+            value,
+            header_value,
+        }),
+        Err(_) => Err(SetOriginatorError::InvalidHeaderValue),
+    }
+}
+
+fn current_user_agent_suffix() -> Option<String> {
+    USER_AGENT_SUFFIX
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+fn build_codex_user_agent(originator_value: &str, suffix: Option<&str>) -> String {
+    let build_version = env!("CARGO_PKG_VERSION");
+    let os_info = os_info::get();
+    let prefix = format!(
+        "{originator_value}/{build_version} ({} {}; {}) {}",
+        os_info.os_type(),
+        os_info.version(),
+        os_info.architecture().unwrap_or("unknown"),
+        user_agent()
+    );
+    let suffix = suffix
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map_or_else(String::new, |value| format!(" ({value})"));
+
+    let candidate = format!("{prefix}{suffix}");
+    sanitize_user_agent(candidate, &prefix)
+}
+
+fn headers_for_identity(identity: &ClientIdentity) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("originator", identity.inner.originator.header_value.clone());
+    if let Ok(user_agent) = HeaderValue::from_str(&identity.user_agent()) {
+        headers.insert(USER_AGENT, user_agent);
+    }
+    if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
+        && let Some(requirement) = guard.as_ref()
+        && !headers.contains_key(RESIDENCY_HEADER_NAME)
+    {
+        let value = match requirement {
+            ResidencyRequirement::Us => HeaderValue::from_static("us"),
+        };
+        headers.insert(RESIDENCY_HEADER_NAME, value);
+    }
+    headers
+}
+
+impl ClientIdentity {
+    pub fn explicit(
+        originator: String,
+        user_agent_suffix: Option<String>,
+    ) -> Result<Self, SetOriginatorError> {
+        Ok(Self {
+            inner: Arc::new(ClientIdentityInner {
+                originator: originator_from_explicit_value(originator)?,
+                user_agent_suffix,
+            }),
+        })
+    }
+
+    pub fn process_default() -> Self {
+        Self {
+            inner: Arc::new(ClientIdentityInner {
+                originator: originator(),
+                user_agent_suffix: current_user_agent_suffix(),
+            }),
+        }
+    }
+
+    pub fn originator_value(&self) -> &str {
+        self.inner.originator.value.as_str()
+    }
+
+    pub fn user_agent(&self) -> String {
+        build_codex_user_agent(
+            self.inner.originator.value.as_str(),
+            self.inner.user_agent_suffix.as_deref(),
+        )
+    }
+
+    pub fn headers_with_default_residency(&self) -> HeaderMap {
+        headers_for_identity(self)
     }
 }
 
@@ -131,29 +236,7 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
-    let os_info = os_info::get();
-    let originator = originator();
-    let prefix = format!(
-        "{}/{build_version} ({} {}; {}) {}",
-        originator.value.as_str(),
-        os_info.os_type(),
-        os_info.version(),
-        os_info.architecture().unwrap_or("unknown"),
-        user_agent()
-    );
-    let suffix = USER_AGENT_SUFFIX
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-    let suffix = suffix
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map_or_else(String::new, |value| format!(" ({value})"));
-
-    let candidate = format!("{prefix}{suffix}");
-    sanitize_user_agent(candidate, &prefix)
+    ClientIdentity::process_default().user_agent()
 }
 
 /// Sanitize the user agent string.
@@ -230,21 +313,7 @@ pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransp
 }
 
 pub fn default_headers() -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
-    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent()) {
-        headers.insert(USER_AGENT, user_agent);
-    }
-    if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
-        && let Some(requirement) = guard.as_ref()
-        && !headers.contains_key(RESIDENCY_HEADER_NAME)
-    {
-        let value = match requirement {
-            ResidencyRequirement::Us => HeaderValue::from_static("us"),
-        };
-        headers.insert(RESIDENCY_HEADER_NAME, value);
-    }
-    headers
+    ClientIdentity::process_default().headers_with_default_residency()
 }
 
 fn is_sandboxed() -> bool {

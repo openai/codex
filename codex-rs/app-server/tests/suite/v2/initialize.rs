@@ -17,6 +17,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
@@ -113,6 +114,82 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_cli_rs/"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_backend_thread_requests_use_connection_identity() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex-backend".to_string(),
+            title: Some("Codex Backend".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
+    assert!(user_agent.starts_with("codex_cli_rs/"));
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello from codex-backend".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    assert_eq!(
+        request.header("originator").as_deref(),
+        Some("codex-backend")
+    );
+    let user_agent = request.header("user-agent").expect("user-agent header");
+    assert!(user_agent.starts_with("codex-backend/"));
+    assert!(user_agent.ends_with(" (codex-backend; 0.1.0)"));
+
     Ok(())
 }
 

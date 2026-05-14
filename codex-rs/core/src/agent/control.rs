@@ -596,6 +596,7 @@ impl AgentControl {
                 }),
                 agent_control: self.clone(),
                 session_source,
+                app_server_client_info: None,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })

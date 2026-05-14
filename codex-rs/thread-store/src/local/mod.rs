@@ -1015,6 +1015,7 @@ mod tests {
             forked_from_id: None,
             source: SessionSource::Exec,
             thread_source: None,
+            originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             metadata: thread_metadata(),

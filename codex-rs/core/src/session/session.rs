@@ -88,6 +88,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
+    pub(super) client_identity: ClientIdentity,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -419,6 +420,10 @@ impl Session {
                                 forked_from_id,
                                 source: session_source,
                                 thread_source: session_configuration.thread_source,
+                                originator: session_configuration
+                                    .client_identity
+                                    .originator_value()
+                                    .to_string(),
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
@@ -611,7 +616,10 @@ impl Session {
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
             let account_email = auth.and_then(CodexAuth::get_account_email);
-            let originator = originator().value;
+            let originator = session_configuration
+                .client_identity
+                .originator_value()
+                .to_string();
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
             let auth_env_telemetry = collect_auth_env_telemetry(
@@ -876,6 +884,7 @@ impl Session {
                     installation_id.clone(),
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
+                    session_configuration.client_identity.clone(),
                     config.model_verbosity,
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),

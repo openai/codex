@@ -8,6 +8,7 @@ use codex_core::ResponseEvent;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::default_client::ClientIdentity;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_otel::MetricsClient;
@@ -2040,6 +2041,7 @@ async fn websocket_harness_with_provider_options(
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
+        ClientIdentity::process_default(),
         config.model_verbosity,
         /*enable_request_compression*/ false,
         runtime_metrics_enabled,

@@ -1,5 +1,6 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::app_server_client_info::AppServerClientInfo;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -113,6 +114,16 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+struct ForkThreadWithInitialHistoryOptions {
+    snapshot: ForkSnapshot,
+    config: Config,
+    history: InitialHistory,
+    thread_source: Option<ThreadSource>,
+    persist_extended_history: bool,
+    parent_trace: Option<W3cTraceContext>,
+    app_server_client_info: Option<AppServerClientInfo>,
+}
+
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
 // core can represent sampling boundaries directly instead of relying on
 // whichever items happened to be persisted mid-turn.
@@ -177,6 +188,7 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    pub app_server_client_info: Option<AppServerClientInfo>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
@@ -189,6 +201,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
+    pub(crate) app_server_client_info: Option<AppServerClientInfo>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -569,6 +582,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            app_server_client_info: None,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
@@ -595,6 +609,7 @@ impl ThreadManager {
             self.agent_control(),
             session_source,
             thread_source,
+            options.app_server_client_info,
             options.dynamic_tools,
             options.persist_extended_history,
             options.metrics_service_name,
@@ -663,6 +678,48 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_inner(
+            config,
+            initial_history,
+            auth_manager,
+            persist_extended_history,
+            parent_trace,
+            /*app_server_client_info*/ None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn resume_thread_with_history_and_app_server_client_info(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+        app_server_client_info: AppServerClientInfo,
+    ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_inner(
+            config,
+            initial_history,
+            auth_manager,
+            persist_extended_history,
+            parent_trace,
+            Some(app_server_client_info),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn resume_thread_with_history_inner(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+        app_server_client_info: Option<AppServerClientInfo>,
+    ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -679,6 +736,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
+            app_server_client_info,
             /*user_shell_override*/ None,
         ))
         .await
@@ -704,6 +762,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
+            /*app_server_client_info*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -733,6 +792,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
+            /*app_server_client_info*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -856,26 +916,57 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        self.fork_thread_with_initial_history(
-            snapshot.into(),
+        self.fork_thread_with_initial_history(ForkThreadWithInitialHistoryOptions {
+            snapshot: snapshot.into(),
             config,
             history,
             thread_source,
             persist_extended_history,
             parent_trace,
-        )
+            app_server_client_info: None,
+        })
         .await
     }
 
-    async fn fork_thread_with_initial_history(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fork_thread_from_history_and_app_server_client_info<S>(
         &self,
-        snapshot: ForkSnapshot,
+        snapshot: S,
         config: Config,
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
+        app_server_client_info: AppServerClientInfo,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(ForkThreadWithInitialHistoryOptions {
+            snapshot: snapshot.into(),
+            config,
+            history,
+            thread_source,
+            persist_extended_history,
+            parent_trace,
+            app_server_client_info: Some(app_server_client_info),
+        })
+        .await
+    }
+
+    async fn fork_thread_with_initial_history(
+        &self,
+        options: ForkThreadWithInitialHistoryOptions,
     ) -> CodexResult<NewThread> {
+        let ForkThreadWithInitialHistoryOptions {
+            snapshot,
+            config,
+            history,
+            thread_source,
+            persist_extended_history,
+            parent_trace,
+            app_server_client_info,
+        } = options;
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
@@ -893,6 +984,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
+            app_server_client_info,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1032,6 +1124,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             thread_source,
+            /*app_server_client_info*/ None,
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
@@ -1053,6 +1146,7 @@ impl ThreadManagerState {
             initial_history,
             agent_control,
             session_source,
+            app_server_client_info,
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
@@ -1066,6 +1160,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             thread_source,
+            app_server_client_info,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -1101,6 +1196,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             thread_source,
+            /*app_server_client_info*/ None,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -1127,6 +1223,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
+        app_server_client_info: Option<AppServerClientInfo>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -1136,6 +1233,7 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             thread_source,
+            app_server_client_info,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -1157,6 +1255,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         thread_source: Option<ThreadSource>,
+        app_server_client_info: Option<AppServerClientInfo>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -1209,6 +1308,7 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             session_source,
             thread_source,
+            app_server_client_info,
             agent_control,
             dynamic_tools,
             persist_extended_history,

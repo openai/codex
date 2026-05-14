@@ -130,6 +130,8 @@ pub(crate) mod agents_md;
 pub use agents_md::AgentsMdManager;
 pub use agents_md::DEFAULT_AGENTS_MD_FILENAME;
 pub use agents_md::LOCAL_AGENTS_MD_FILENAME;
+mod app_server_client_info;
+pub use app_server_client_info::AppServerClientInfo;
 mod rollout;
 pub(crate) mod safety;
 mod session_rollout_init_error;

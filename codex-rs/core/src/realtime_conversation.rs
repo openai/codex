@@ -24,7 +24,6 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
-use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -320,6 +319,7 @@ impl RealtimeConversationManager {
                 session_config,
                 call_id: call.call_id,
                 sideband_headers: call.sideband_headers,
+                default_headers: model_client.client_identity_headers(),
                 input_channels,
                 events_tx,
                 handoff_state: handoff.clone(),
@@ -329,11 +329,13 @@ impl RealtimeConversationManager {
             });
             (task, Some(call.sdp))
         } else {
+            let mut extra_headers = extra_headers.unwrap_or_default();
+            extra_headers.extend(model_client.client_identity_headers());
             let connection = client
                 .connect(
                     session_config,
-                    extra_headers.unwrap_or_default(),
-                    default_headers(),
+                    extra_headers,
+                    model_client.client_identity_headers(),
                 )
                 .await
                 .map_err(map_api_error)?;
@@ -1022,6 +1024,7 @@ struct RealtimeWebrtcSidebandInputTask {
     session_config: RealtimeSessionConfig,
     call_id: String,
     sideband_headers: HeaderMap,
+    default_headers: HeaderMap,
     input_channels: RealtimeInputChannels,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
@@ -1036,6 +1039,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         session_config,
         call_id,
         sideband_headers,
+        default_headers,
         input_channels,
         events_tx,
         handoff_state,
@@ -1050,12 +1054,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         }
 
         let connection = match client
-            .connect_webrtc_sideband(
-                session_config,
-                &call_id,
-                sideband_headers,
-                default_headers(),
-            )
+            .connect_webrtc_sideband(session_config, &call_id, sideband_headers, default_headers)
             .await
         {
             Ok(connection) => connection,
