@@ -36,7 +36,7 @@ pub use codex_tools::ToolExposure;
 
 /// Typed runtime contract for locally executed tools.
 ///
-/// Implementors provide the shared `ToolExecutor` behavior plus optional
+/// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     fn search_info(&self) -> Option<ToolSearchInfo> {

@@ -2109,18 +2109,19 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         &[],
     );
 
-    let ResponsesApiTool { description, .. } =
-        find_namespace_function_tool(&tools, "mcp__sample__", "echo");
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
+        panic!("expected freeform tool");
+    };
 
-    assert_eq!(
-        description,
-        r#"Echo text
+    assert!(description.contains(
+        r#"### `mcp__sample__echo`
+Echo text
 
 exec tool declaration:
 ```ts
 declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult>; };
 ```"#
-    );
+    ));
 }
 
 #[test]
@@ -2536,18 +2537,19 @@ fn code_mode_augments_mcp_tool_descriptions_with_structured_output_sample() {
         &[],
     );
 
-    let ResponsesApiTool { description, .. } =
-        find_namespace_function_tool(&tools, "mcp__sample__", "echo");
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = find_tool(&tools, "exec") else {
+        panic!("expected freeform tool");
+    };
 
-    assert_eq!(
-        description,
-        r#"Echo text
+    assert!(description.contains(
+        r#"### `mcp__sample__echo`
+Echo text
 
 exec tool declaration:
 ```ts
 declare const tools: { mcp__sample__echo(args: { message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
 ```"#
-    );
+    ));
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
