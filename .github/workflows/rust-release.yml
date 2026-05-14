@@ -631,7 +631,7 @@ jobs:
       - name: List
         run: ls -R dist/
 
-      - name: Keep only unsigned macOS artifacts
+      - name: Prune artifacts excluded from unsigned macOS release
         if: ${{ env.SIGN_MACOS == 'false' }}
         run: |
           find dist -mindepth 1 -maxdepth 1 -type d \

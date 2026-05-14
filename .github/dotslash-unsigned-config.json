@@ -84,6 +84,18 @@
         }
       }
     },
+    "bwrap": {
+      "platforms": {
+        "linux-x86_64": {
+          "regex": "^bwrap-x86_64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
+        },
+        "linux-aarch64": {
+          "regex": "^bwrap-aarch64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
+        }
+      }
+    },
     "codex-command-runner": {
       "platforms": {
         "windows-x86_64": {
