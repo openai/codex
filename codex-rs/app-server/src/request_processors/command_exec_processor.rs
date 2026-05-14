@@ -246,7 +246,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile_constraint()
                 .can_set(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
@@ -267,7 +267,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile_constraint()
                 .can_set(&permission_profile)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             permission_profile
