@@ -2021,8 +2021,14 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
+                // Ack-enabled websocket flows must observe `response.completed` so they can
+                // acknowledge that exact response before issuing any mailbox follow-up request.
+                if !sess
+                    .features
+                    .enabled(Feature::ResponsesWebsocketResponseProcessed)
+                    && preempt_for_mailbox_mail
+                    && sess.mailbox_rx.lock().await.has_pending()
+                {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,

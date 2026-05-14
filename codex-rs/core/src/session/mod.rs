@@ -3187,6 +3187,17 @@ impl Session {
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(&self, sub_id: &str) {
+        // Ack-enabled websocket responses cannot be interrupted mid-stream. If mailbox mail was
+        // already queued before the final answer boundary, keep it eligible for the immediate
+        // post-ack follow-up instead of silently pushing it to a later user turn.
+        if self
+            .features
+            .enabled(Feature::ResponsesWebsocketResponseProcessed)
+            && self.has_pending_mailbox_items().await
+        {
+            return;
+        }
+
         let turn_state = self.turn_state_for_sub_id(sub_id).await;
         let Some(turn_state) = turn_state else {
             return;

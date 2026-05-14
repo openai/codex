@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
@@ -369,6 +370,74 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
 
     let requests = server.requests().await;
     assert_two_responses_input_snapshot("pending_input_queued_mail_after_reasoning", &requests);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_inter_agent_mail_waits_for_response_completion_when_ack_enabled() {
+    let (gate_reasoning_done_tx, gate_reasoning_done_rx) = oneshot::channel();
+
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_reasoning_item_added("reason-1", &["thinking"])),
+        gated_chunk(
+            gate_reasoning_done_rx,
+            vec![
+                ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_message_item_added("msg-1", ""),
+                ev_output_text_delta("first answer"),
+                ev_message_item_done("msg-1", "first answer"),
+                ev_completed("resp-1"),
+            ],
+        ),
+    ];
+
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+
+    let codex = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ResponsesWebsocketResponseProcessed)
+                .expect("test config should allow feature update");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
+        .codex;
+
+    submit_user_input(&codex, "first prompt").await;
+
+    wait_for_reasoning_item_started(&codex).await;
+    submit_queue_only_agent_mail(&codex, "queued child update").await;
+
+    let _ = gate_reasoning_done_tx.send(());
+
+    wait_for_agent_message(&codex, "first answer").await;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+
+    let second_body: Value = from_slice(&requests[1]).expect("parse second request");
+    let has_queued_mail = second_body
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("output_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .any(|text| text.contains("\"content\":\"queued child update\""));
+    assert!(
+        has_queued_mail,
+        "queued child update should be injected only after the first response completes"
+    );
 
     server.shutdown().await;
 }

@@ -8798,6 +8798,46 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 }
 
 #[tokio::test]
+async fn queued_mailbox_mail_stays_in_current_turn_after_answer_boundary_when_ack_enabled() {
+    let (sess, tc, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::ResponsesWebsocketResponseProcessed)
+                .expect("response processed websocket mode should be enableable in tests");
+        },
+    )
+    .await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "queued child update".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.enqueue_mailbox_communication(communication.clone());
+    sess.defer_mailbox_delivery_to_next_turn(&tc.sub_id).await;
+
+    assert!(sess.has_pending_input().await);
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![communication.to_response_input_item()],
+    );
+}
+
+#[tokio::test]
 async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.spawn_task(
