@@ -564,19 +564,6 @@ impl Session {
                     }),
                 });
             }
-            if crate::config::uses_deprecated_instructions_file(&config.config_layer_stack) {
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
-                        summary: "`experimental_instructions_file` is deprecated and ignored. Use `model_instructions_file` instead."
-                            .to_string(),
-                        details: Some(
-                            "Move the setting to `model_instructions_file` in config.toml (or under a profile) to load instructions from a file."
-                                .to_string(),
-                        ),
-                    }),
-                });
-            }
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
