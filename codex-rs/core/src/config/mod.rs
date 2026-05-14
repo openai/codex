@@ -18,6 +18,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
+use codex_config::ProfileV2Name;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -187,6 +188,7 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -750,15 +752,14 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread persistence backend.
     pub experimental_thread_store: ThreadStoreConfig,
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_chatgpt_workspace_id: Option<String>,
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -889,7 +890,7 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
-    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
     }
 
@@ -1272,6 +1273,52 @@ impl Config {
         )
         .await
     }
+    /// This is a secondary way of creating [Config], which is appropriate when
+    /// the harness is meant to be used with a specific configuration that
+    /// ignores user settings. For example, the `codex exec` subcommand is
+    /// designed to use [AskForApproval::Never] exclusively.
+    ///
+    /// Further, [ConfigOverrides] contains some options that are not supported
+    /// in [ConfigToml], such as `cwd`, `codex_self_exe`, `codex_linux_sandbox_exe`, and
+    /// `main_execve_wrapper_exe`.
+    pub async fn load_with_cli_overrides_and_harness_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+        harness_overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .harness_overrides(harness_overrides)
+            .build()
+            .await
+    }
+}
+
+pub fn resolve_profile_v2_config_path(
+    codex_home: &Path,
+    profile_name: &ProfileV2Name,
+) -> AbsolutePathBuf {
+    AbsolutePathBuf::resolve_path_against_base(
+        format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}"),
+        codex_home,
+    )
+}
+
+/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
+/// with [ConfigToml] directly means that [ConfigRequirements] have not been
+/// applied yet, which risks failing to enforce required constraints.
+pub async fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_loader_overrides(
+        codex_home,
+        cwd,
+        cli_overrides,
+        loader_overrides,
+    )
+    .await
 }
 
 /// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
@@ -1881,7 +1928,6 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
-    pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
@@ -2196,7 +2242,6 @@ impl Config {
             developer_instructions,
             personality,
             compact_prompt,
-            include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
@@ -2250,7 +2295,6 @@ impl Config {
         };
         let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
         let feature_overrides = FeatureOverrides {
-            include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
         };
 
@@ -2258,14 +2302,11 @@ impl Config {
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
                 include_apply_patch_tool: None,
-                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             },
             FeatureConfigSource {
                 features: config_profile.features.as_ref(),
-                include_apply_patch_tool: config_profile.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: config_profile
-                    .experimental_use_freeform_apply_patch,
+                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: config_profile
                     .experimental_use_unified_exec_tool,
             },
@@ -2556,7 +2597,7 @@ impl Config {
                 // Keep legacy behavior for extra writable roots while storing
                 // the result as the canonical permission profile. Explicit
                 // extra roots are concrete paths, so their metadata carveouts
-                // are also concrete rather than symbolic `:project_roots`
+                // are also concrete rather than symbolic `:workspace_roots`
                 // entries.
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
@@ -2807,15 +2848,18 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id =
-            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
+        let forced_chatgpt_workspace_id = cfg
+            .forced_chatgpt_workspace_id
+            .clone()
+            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 

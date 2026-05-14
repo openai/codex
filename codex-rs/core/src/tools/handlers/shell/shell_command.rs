@@ -127,6 +127,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     type Output = FunctionToolOutput;
 

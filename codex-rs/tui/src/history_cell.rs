@@ -1089,6 +1089,11 @@ fn exec_snippet(command: &[String]) -> String {
     truncate_exec_snippet(&full_cmd)
 }
 
+fn non_empty_exec_snippet(command: &[String]) -> Option<String> {
+    let snippet = exec_snippet(command);
+    (!snippet.is_empty()).then_some(snippet)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReviewDecision {
     Approved,
@@ -1104,8 +1109,14 @@ pub(crate) enum ReviewDecision {
     Abort,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ApprovalDecisionSubject {
+    Command(Vec<String>),
+    NetworkAccess { target: String },
+}
+
 pub fn new_approval_decision_cell(
-    command: Vec<String>,
+    subject: ApprovalDecisionSubject,
     decision: ReviewDecision,
     actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
@@ -1113,19 +1124,37 @@ pub fn new_approval_decision_cell(
     use codex_protocol::approvals::NetworkPolicyRuleAction;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
-        Approved => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
+        Approved => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    vec![
+                        actor.subject().into(),
+                        "approved".bold(),
+                        " codex to run ".into(),
+                        Span::from(snippet).dim(),
+                        " this time".bold(),
+                    ]
+                } else {
+                    vec![
+                        actor.subject().into(),
+                        "approved".bold(),
+                        " this request".into(),
+                        " this time".bold(),
+                    ]
+                };
+                ("✔ ".green(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
                 "✔ ".green(),
                 vec![
                     actor.subject().into(),
                     "approved".bold(),
-                    " codex to run ".into(),
-                    snippet,
+                    " codex network access to ".into(),
+                    Span::from(target).dim(),
                     " this time".bold(),
                 ],
-            )
-        }
+            ),
+        },
         ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } => {
@@ -1140,84 +1169,164 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedForSession => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
+        ApprovedForSession => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    vec![
+                        actor.subject().into(),
+                        "approved".bold(),
+                        " codex to run ".into(),
+                        Span::from(snippet).dim(),
+                        " every time this session".bold(),
+                    ]
+                } else {
+                    vec![
+                        actor.subject().into(),
+                        "approved".bold(),
+                        " this request".into(),
+                        " every time this session".bold(),
+                    ]
+                };
+                ("✔ ".green(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
                 "✔ ".green(),
                 vec![
                     actor.subject().into(),
                     "approved".bold(),
-                    " codex to run ".into(),
-                    snippet,
-                    " every time this session".bold(),
-                ],
-            )
-        }
-        NetworkPolicyAmendment {
-            network_policy_amendment,
-        } => match network_policy_amendment.action {
-            NetworkPolicyRuleAction::Allow => (
-                "✔ ".green(),
-                vec![
-                    actor.subject().into(),
-                    "persisted".bold(),
-                    " Codex network access to ".into(),
-                    Span::from(network_policy_amendment.host).dim(),
-                ],
-            ),
-            NetworkPolicyRuleAction::Deny => (
-                "✗ ".red(),
-                vec![
-                    actor.subject().into(),
-                    "denied".bold(),
                     " codex network access to ".into(),
-                    Span::from(network_policy_amendment.host).dim(),
-                    " and saved that rule".into(),
+                    Span::from(target).dim(),
+                    " every time this session".bold(),
                 ],
             ),
         },
-        Denied => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            let summary = match actor {
-                ApprovalDecisionActor::User => vec![
+        NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => {
+            let target = match subject {
+                ApprovalDecisionSubject::NetworkAccess { target } => target,
+                ApprovalDecisionSubject::Command(_) => network_policy_amendment.host,
+            };
+            match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => (
+                    "✔ ".green(),
+                    vec![
+                        actor.subject().into(),
+                        "persisted".bold(),
+                        " Codex network access to ".into(),
+                        Span::from(target).dim(),
+                    ],
+                ),
+                NetworkPolicyRuleAction::Deny => (
+                    "✗ ".red(),
+                    vec![
+                        actor.subject().into(),
+                        "denied".bold(),
+                        " codex network access to ".into(),
+                        Span::from(target).dim(),
+                        " and saved that rule".into(),
+                    ],
+                ),
+            }
+        }
+        Denied => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    let snippet = Span::from(snippet).dim();
+                    match actor {
+                        ApprovalDecisionActor::User => vec![
+                            actor.subject().into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                            snippet,
+                        ],
+                        ApprovalDecisionActor::Guardian => vec![
+                            "Request ".into(),
+                            "denied".bold(),
+                            " for codex to run ".into(),
+                            snippet,
+                        ],
+                    }
+                } else {
+                    match actor {
+                        ApprovalDecisionActor::User => vec![
+                            actor.subject().into(),
+                            "did not approve".bold(),
+                            " this request".into(),
+                        ],
+                        ApprovalDecisionActor::Guardian => {
+                            vec!["Request ".into(), "denied".bold()]
+                        }
+                    }
+                };
+                ("✗ ".red(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
+                "✗ ".red(),
+                vec![
                     actor.subject().into(),
                     "did not approve".bold(),
-                    " codex to run ".into(),
-                    snippet,
+                    " codex network access to ".into(),
+                    Span::from(target).dim(),
                 ],
-                ApprovalDecisionActor::Guardian => vec![
-                    "Request ".into(),
-                    "denied".bold(),
-                    " for codex to run ".into(),
-                    snippet,
-                ],
-            };
-            ("✗ ".red(), summary)
-        }
-        TimedOut => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
+            ),
+        },
+        TimedOut => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    vec![
+                        "Review ".into(),
+                        "timed out".bold(),
+                        " before codex could run ".into(),
+                        Span::from(snippet).dim(),
+                    ]
+                } else {
+                    vec![
+                        "Review ".into(),
+                        "timed out".bold(),
+                        " before this request could be approved".into(),
+                    ]
+                };
+                ("✗ ".red(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
                 "✗ ".red(),
                 vec![
                     "Review ".into(),
                     "timed out".bold(),
-                    " before codex could run ".into(),
-                    snippet,
+                    " before codex could access ".into(),
+                    Span::from(target).dim(),
                 ],
-            )
-        }
-        Abort => {
-            let snippet = Span::from(exec_snippet(&command)).dim();
-            (
+            ),
+        },
+        Abort => match subject {
+            ApprovalDecisionSubject::Command(command) => {
+                let summary = if let Some(snippet) = non_empty_exec_snippet(&command) {
+                    vec![
+                        actor.subject().into(),
+                        "canceled".bold(),
+                        " the request to run ".into(),
+                        Span::from(snippet).dim(),
+                    ]
+                } else {
+                    vec![
+                        actor.subject().into(),
+                        "canceled".bold(),
+                        " this request".into(),
+                    ]
+                };
+                ("✗ ".red(), summary)
+            }
+            ApprovalDecisionSubject::NetworkAccess { target } => (
                 "✗ ".red(),
                 vec![
                     actor.subject().into(),
                     "canceled".bold(),
-                    " the request to run ".into(),
-                    snippet,
+                    " the request for codex network access to ".into(),
+                    Span::from(target).dim(),
                 ],
-            )
-        }
+            ),
+        },
     };
 
     Box::new(PrefixedWrappedHistoryCell::new(

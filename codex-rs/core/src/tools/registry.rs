@@ -637,13 +637,6 @@ impl ToolRegistryBuilder {
         self.specs.push(spec);
     }
 
-    pub fn register_handler<H>(&mut self, handler: Arc<H>)
-    where
-        H: ToolHandler + 'static,
-    {
-        self.register_tool(handler);
-    }
-
     pub(crate) fn register_tool(&mut self, handler: Arc<dyn RegisteredTool>) {
         self.register_tool_internal(handler, /*include_spec*/ true);
     }

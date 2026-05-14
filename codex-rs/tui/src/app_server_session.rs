@@ -1592,6 +1592,8 @@ mod tests {
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::config_types::Verbosity;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -1612,7 +1614,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                 ..ConfigOverrides::default()
             })
             .build()
@@ -1657,7 +1659,8 @@ mod tests {
     #[test]
     fn embedded_turn_permissions_use_active_profile_selection() {
         let cwd = test_path_buf("/workspace/project").abs();
-        let active_permission_profile = ActivePermissionProfile::new(":workspace");
+        let active_permission_profile =
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         let expected_permissions =
             permissions_selection_from_active_profile(active_permission_profile.clone());
 
@@ -1698,7 +1701,9 @@ mod tests {
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             &PermissionProfile::read_only(),
-            Some(ActivePermissionProfile::new(":read-only")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
             cwd.as_path(),
             ThreadParamsMode::Remote,
         );

@@ -15,7 +15,6 @@ use crate::arc_monitor::monitor_action;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::load_global_mcp_servers;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
@@ -2004,8 +2003,7 @@ async fn maybe_persist_mcp_tool_approval(
             remember_mcp_tool_approval(sess, key).await;
             return;
         };
-        persist_codex_app_tool_approval(&turn_context.config.codex_home, &connector_id, &tool_name)
-            .await
+        persist_codex_app_tool_approval(&turn_context.config, &connector_id, &tool_name).await
     } else {
         persist_non_app_mcp_tool_approval(sess, &turn_context.config, &key.server, &tool_name).await
     };
@@ -2026,11 +2024,11 @@ async fn maybe_persist_mcp_tool_approval(
 }
 
 async fn persist_codex_app_tool_approval(
-    codex_home: &AbsolutePathBuf,
+    config: &Config,
     connector_id: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    ConfigEditsBuilder::new(codex_home)
+    ConfigEditsBuilder::for_config(config)
         .with_edits([ConfigEdit::SetPath {
             segments: vec![
                 "apps".to_string(),
@@ -2051,11 +2049,12 @@ async fn persist_custom_mcp_tool_approval(
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    let Some(config_folder) = custom_mcp_tool_approval_config_folder(config, server).await? else {
+    let Some(config_edits_builder) = custom_mcp_tool_approval_config_builder(config, server)?
+    else {
         anyhow::bail!("MCP server `{server}` is not configured in config.toml");
     };
 
-    persist_custom_mcp_tool_approval_at(&config_folder, server, tool_name).await
+    persist_custom_mcp_tool_approval_with(config_edits_builder, server, tool_name).await
 }
 
 async fn persist_non_app_mcp_tool_approval(
@@ -2064,8 +2063,9 @@ async fn persist_non_app_mcp_tool_approval(
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    if let Some(config_folder) = custom_mcp_tool_approval_config_folder(config, server).await? {
-        return persist_custom_mcp_tool_approval_at(&config_folder, server, tool_name).await;
+    if let Some(config_edits_builder) = custom_mcp_tool_approval_config_builder(config, server)? {
+        return persist_custom_mcp_tool_approval_with(config_edits_builder, server, tool_name)
+            .await;
     }
 
     let plugin_config_name = sess
@@ -2080,7 +2080,7 @@ async fn persist_non_app_mcp_tool_approval(
         .map(|plugin| plugin.config_name.clone());
 
     if let Some(plugin_config_name) = plugin_config_name {
-        return ConfigEditsBuilder::new(&config.codex_home)
+        return ConfigEditsBuilder::for_config(config)
             .with_edits([ConfigEdit::SetPath {
                 segments: vec![
                     "plugins".to_string(),
@@ -2100,26 +2100,24 @@ async fn persist_non_app_mcp_tool_approval(
     anyhow::bail!("MCP server `{server}` is not configured in config.toml or an enabled plugin")
 }
 
-async fn custom_mcp_tool_approval_config_folder(
+fn custom_mcp_tool_approval_config_builder(
     config: &Config,
     server: &str,
-) -> anyhow::Result<Option<AbsolutePathBuf>> {
+) -> anyhow::Result<Option<ConfigEditsBuilder>> {
     if let Some(project_config_folder) = project_mcp_tool_approval_config_folder(config, server) {
-        return Ok(Some(project_config_folder));
+        return Ok(Some(ConfigEditsBuilder::new(&project_config_folder)));
     }
 
-    let servers = load_global_mcp_servers(&config.codex_home).await?;
-    Ok(servers
-        .contains_key(server)
-        .then(|| config.codex_home.clone()))
+    Ok(user_mcp_server_is_configured(config, server)?
+        .then(|| ConfigEditsBuilder::for_config(config)))
 }
 
-async fn persist_custom_mcp_tool_approval_at(
-    config_folder: &AbsolutePathBuf,
+async fn persist_custom_mcp_tool_approval_with(
+    config_edits_builder: ConfigEditsBuilder,
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    ConfigEditsBuilder::new(config_folder)
+    config_edits_builder
         .with_edits([ConfigEdit::SetPath {
             segments: vec![
                 "mcp_servers".to_string(),
@@ -2132,6 +2130,21 @@ async fn persist_custom_mcp_tool_approval_at(
         }])
         .apply()
         .await
+}
+
+fn user_mcp_server_is_configured(config: &Config, server: &str) -> anyhow::Result<bool> {
+    let Some(mcp_servers_toml) = config
+        .config_layer_stack
+        .effective_user_config()
+        .as_ref()
+        .and_then(|user_config| user_config.get("mcp_servers"))
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let servers =
+        HashMap::<String, codex_config::types::McpServerConfig>::deserialize(mcp_servers_toml)?;
+    Ok(servers.contains_key(server))
 }
 
 fn project_mcp_tool_approval_config_folder(

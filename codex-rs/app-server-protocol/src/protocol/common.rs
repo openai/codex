@@ -799,6 +799,18 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureEnablementSetResponse,
     },
+    #[experimental("remoteControl/enable")]
+    RemoteControlEnable => "remoteControl/enable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlEnableResponse,
+    },
+    #[experimental("remoteControl/disable")]
+    RemoteControlDisable => "remoteControl/disable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlDisableResponse,
+    },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {

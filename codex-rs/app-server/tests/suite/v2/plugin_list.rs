@@ -1360,7 +1360,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
 async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_remote_plugin_catalog_config(
+    write_plugins_enabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
@@ -1858,6 +1858,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
     mount_shared_workspace_plugins(&server, &shared_plugin_body).await;
+    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1986,6 +1987,12 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         share_context.discoverability,
         Some(PluginShareDiscoverability::Unlisted)
     );
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 5,
+    )
+    .await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }

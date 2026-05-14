@@ -183,8 +183,8 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
         network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
 
     let python_code = r#"import multiprocessing

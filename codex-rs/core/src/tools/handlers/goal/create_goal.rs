@@ -18,6 +18,7 @@ use super::goal_response;
 
 pub struct CreateGoalHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CreateGoalHandler {
     type Output = FunctionToolOutput;
 

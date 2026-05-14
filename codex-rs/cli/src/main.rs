@@ -37,6 +37,7 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::ProfileV2Name;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -49,18 +50,22 @@ mod desktop_app;
 mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod plugin_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
-use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::plugin_cmd::PluginCli;
+use crate::plugin_cmd::PluginSubcommand;
 use doctor::DoctorCommand;
 
+use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
@@ -131,8 +136,8 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// [experimental] Ensure the app-server daemon is running with remote control enabled.
-    RemoteControl,
+    /// [experimental] Manage the app-server daemon with remote control enabled.
+    RemoteControl(RemoteControlCommand),
 
     /// Launch the Codex desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -184,22 +189,6 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
-}
-
-#[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin")]
-struct PluginCli {
-    #[clap(flatten)]
-    pub config_overrides: CliConfigOverrides,
-
-    #[command(subcommand)]
-    subcommand: PluginSubcommand,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum PluginSubcommand {
-    /// Manage plugin marketplaces for Codex.
-    Marketplace(MarketplaceCli),
 }
 
 #[derive(Debug, Parser)]
@@ -454,6 +443,10 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -532,10 +525,10 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Enable remote_control for future starts and a currently running managed daemon.
+    /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
-    /// Disable remote_control for future starts and a currently running managed daemon.
+    /// Disable remote control for future starts and a currently running managed daemon.
     DisableRemoteControl,
 
     /// Stop the local app server daemon.
@@ -558,9 +551,24 @@ struct AppServerProxyCommand {
 
 #[derive(Debug, Args)]
 struct AppServerBootstrapCommand {
-    /// Launch the managed app-server with remote_control enabled.
+    /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+}
+
+#[derive(Debug, Args)]
+struct RemoteControlCommand {
+    #[command(subcommand)]
+    subcommand: Option<RemoteControlSubcommand>,
+}
+
+#[derive(Debug, Clone, Copy, clap::Subcommand)]
+enum RemoteControlSubcommand {
+    /// Start the app-server daemon with remote control enabled.
+    Start,
+
+    /// Stop the app-server daemon.
+    Stop,
 }
 
 #[derive(Debug, Args)]
@@ -834,6 +842,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let root_remote_auth_token_env = remote.remote_auth_token_env;
     let root_strict_config = interactive.strict_config;
     reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
+    if let Some(subcommand) = subcommand.as_ref() {
+        profile_v2_for_subcommand(&interactive, subcommand)?;
+    }
 
     match subcommand {
         None => {
@@ -876,6 +887,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "review",
             )?;
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            exec_cli
+                .shared
+                .inherit_exec_root_options(&interactive.shared);
             exec_cli.command = Some(ExecCommand::Review(review_args));
             exec_cli.strict_config = strict_config || root_strict_config;
             prepend_config_flags(
@@ -919,9 +933,27 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             } = plugin_cli;
             prepend_config_flags(&mut config_overrides, root_config_overrides.clone());
             match subcommand {
+                PluginSubcommand::Add(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_add(overrides, args).await?;
+                }
+                PluginSubcommand::List(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_list(overrides, args).await?;
+                }
                 PluginSubcommand::Marketplace(mut marketplace_cli) => {
                     prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
                     marketplace_cli.run().await?;
+                }
+                PluginSubcommand::Remove(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_remove(overrides, args).await?;
                 }
             }
         }
@@ -930,6 +962,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 subcommand,
                 strict_config: app_server_strict_config,
                 listen,
+                remote_control,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -944,16 +977,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 None => {
                     let transport = listen;
                     let auth = auth.try_into_settings()?;
+                    let runtime_options = codex_app_server::AppServerRuntimeOptions {
+                        remote_control_enabled: remote_control,
+                        ..Default::default()
+                    };
                     codex_app_server::run_main_with_transport_options(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_config::LoaderOverrides::default(),
+                        LoaderOverrides::default(),
                         strict_config,
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
                         auth,
-                        codex_app_server::AppServerRuntimeOptions::default(),
+                        runtime_options,
                     )
                     .await?;
                 }
@@ -1024,14 +1061,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Subcommand::RemoteControl) => {
+        Some(Subcommand::RemoteControl(remote_control_cli)) => {
+            let subcommand_name = remote_control_subcommand_name(&remote_control_cli);
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
-                "remote-control",
+                subcommand_name,
             )?;
-            let output = codex_app_server_daemon::ensure_remote_control_started().await?;
-            println!("{}", serde_json::to_string(&output)?);
+            match remote_control_cli
+                .subcommand
+                .unwrap_or(RemoteControlSubcommand::Start)
+            {
+                RemoteControlSubcommand::Start => {
+                    let output = codex_app_server_daemon::ensure_remote_control_started().await?;
+                    println!("{}", serde_json::to_string(&output)?);
+                }
+                RemoteControlSubcommand::Stop => {
+                    print_app_server_daemon_output(AppServerLifecycleCommand::Stop).await?;
+                }
+            }
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
@@ -1411,6 +1459,28 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn profile_v2_for_subcommand<'a>(
+    interactive: &'a TuiCli,
+    subcommand: &Subcommand,
+) -> anyhow::Result<Option<&'a ProfileV2Name>> {
+    let Some(profile_v2) = interactive.config_profile_v2.as_ref() else {
+        return Ok(None);
+    };
+
+    match subcommand {
+        Subcommand::Exec(_)
+        | Subcommand::Review(_)
+        | Subcommand::Resume(_)
+        | Subcommand::Fork(_)
+        | Subcommand::Debug(DebugCommand {
+            subcommand: DebugSubcommand::PromptInput(_),
+        }) => Ok(Some(profile_v2)),
+        _ => anyhow::bail!(
+            "--profile-v2 only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+        ),
+    }
+}
+
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
@@ -1469,6 +1539,22 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     Ok(())
 }
 
+fn loader_overrides_for_profile(
+    profile_v2: Option<&ProfileV2Name>,
+) -> anyhow::Result<LoaderOverrides> {
+    match profile_v2 {
+        Some(profile_v2) => {
+            let codex_home = find_codex_home()?;
+            Ok(LoaderOverrides {
+                user_config_path: Some(resolve_profile_v2_config_path(&codex_home, profile_v2)),
+                user_config_profile: Some(profile_v2.clone()),
+                ..Default::default()
+            })
+        }
+        None => Ok(LoaderOverrides::default()),
+    }
+}
+
 fn maybe_print_under_development_feature_warning(
     codex_home: &std::path::Path,
     interactive: &TuiCli,
@@ -1511,6 +1597,7 @@ async fn run_debug_prompt_input_command(
     interactive: TuiCli,
     arg0_paths: Arg0DispatchPaths,
 ) -> anyhow::Result<()> {
+    let loader_overrides = loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
     let shared = interactive.shared.into_inner();
     let mut cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -1550,6 +1637,7 @@ async fn run_debug_prompt_input_command(
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
         .build()
         .await?;
 
@@ -1713,7 +1801,9 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
         }
-        Some(Subcommand::RemoteControl) => Some("remote-control"),
+        Some(Subcommand::RemoteControl(remote_control)) => {
+            Some(remote_control_subcommand_name(remote_control))
+        }
         Some(Subcommand::Mcp(_)) => Some("mcp"),
         Some(Subcommand::Plugin(_)) => Some("plugin"),
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1764,6 +1854,14 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = app_server_subcommand_name(subcommand);
     reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+}
+
+fn remote_control_subcommand_name(command: &RemoteControlCommand) -> &'static str {
+    match command.subcommand {
+        None => "remote-control",
+        Some(RemoteControlSubcommand::Start) => "remote-control start",
+        Some(RemoteControlSubcommand::Stop) => "remote-control stop",
+    }
 }
 
 fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'static str {
@@ -2062,6 +2160,49 @@ mod tests {
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
     }
 
+    fn profile_v2_for_args(args: &[&str]) -> anyhow::Result<Option<String>> {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let Some(subcommand) = cli.subcommand.as_ref() else {
+            return Ok(cli
+                .interactive
+                .config_profile_v2
+                .as_ref()
+                .map(std::string::ToString::to_string));
+        };
+        Ok(profile_v2_for_subcommand(&cli.interactive, subcommand)?.map(ToString::to_string))
+    }
+
+    #[test]
+    fn profile_v2_is_rejected_for_config_management_subcommands() {
+        assert!(
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "features", "list"]).is_err()
+        );
+    }
+
+    #[test]
+    fn profile_v2_is_allowed_for_runtime_subcommands() {
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "resume"])
+                .expect("resume supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile-v2", "work", "debug", "prompt-input"])
+                .expect("debug prompt-input supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+    }
+
+    #[test]
+    fn profile_v2_rejects_non_plain_names_at_parse_time() {
+        assert!(
+            MultitoolCli::try_parse_from(["codex", "--profile-v2", "nested/work", "resume"])
+                .is_err()
+        );
+    }
+
     #[test]
     fn exec_resume_last_accepts_prompt_positional() {
         let cli =
@@ -2202,6 +2343,7 @@ mod tests {
 
         for (subcommand, usage) in [
             ("add", "Usage: codex plugin marketplace add"),
+            ("list", "Usage: codex plugin marketplace list"),
             ("upgrade", "Usage: codex plugin marketplace upgrade"),
             ("remove", "Usage: codex plugin marketplace remove"),
         ] {
@@ -2224,6 +2366,45 @@ mod tests {
         let cli =
             MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "upgrade", "debug"])
                 .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_add_parses_under_plugin() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "plugin",
+            "add",
+            "sample",
+            "--marketplace",
+            "debug",
+        ])
+        .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_list_parses_under_plugin() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "plugin", "list", "--marketplace", "debug"])
+                .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_remove_parses_under_plugin() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "plugin",
+            "remove",
+            "sample",
+            "--marketplace",
+            "debug",
+        ])
+        .expect("parse");
 
         assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
     }
@@ -2465,6 +2646,8 @@ mod tests {
                 "gpt-5.1-test",
                 "-p",
                 "my-profile",
+                "--profile-v2",
+                "my-config",
                 "-C",
                 "/tmp",
                 "--strict-config",
@@ -2477,6 +2660,7 @@ mod tests {
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.oss);
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
+        assert_eq!(interactive.config_profile_v2.as_deref(), Some("my-config"));
         assert_matches!(
             interactive.sandbox_mode,
             Some(codex_utils_cli::SandboxModeCliArg::WorkspaceWrite)
@@ -2571,6 +2755,7 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert!(!app_server.remote_control);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
@@ -2659,7 +2844,12 @@ mod tests {
     fn reject_remote_flag_for_remote_control() {
         let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://", "remote-control"])
             .expect("parse");
-        assert_matches!(cli.subcommand, Some(Subcommand::RemoteControl));
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::RemoteControl(RemoteControlCommand {
+                subcommand: None
+            }))
+        );
 
         let err = reject_remote_mode_for_subcommand(
             cli.remote.remote.as_deref(),

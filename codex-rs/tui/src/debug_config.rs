@@ -385,7 +385,7 @@ fn format_config_layer_source(source: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("system ({})", file.as_path().display())
         }
-        ConfigLayerSource::User { file } => {
+        ConfigLayerSource::User { file, .. } => {
             format!("user ({})", file.as_path().display())
         }
         ConfigLayerSource::Project { dot_codex_folder } => {
@@ -728,7 +728,10 @@ mod tests {
         };
         let stack = ConfigLayerStack::new(
             vec![ConfigLayerEntry::new(
-                ConfigLayerSource::User { file: user_file },
+                ConfigLayerSource::User {
+                    file: user_file,
+                    profile: None,
+                },
                 empty_toml_table(),
             )],
             requirements,

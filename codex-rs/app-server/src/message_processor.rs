@@ -30,6 +30,7 @@ use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
+use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -173,6 +174,7 @@ pub(crate) struct MessageProcessor {
     marketplace_processor: MarketplaceRequestProcessor,
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
+    remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
@@ -389,6 +391,7 @@ impl MessageProcessor {
             config_manager.clone(),
             workspace_settings_cache,
         );
+        let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
@@ -446,7 +449,6 @@ impl MessageProcessor {
             auth_manager,
             thread_manager.clone(),
             analytics_events_client,
-            remote_control_handle,
         );
         let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
             outgoing.clone(),
@@ -488,6 +490,7 @@ impl MessageProcessor {
             marketplace_processor,
             mcp_processor,
             plugin_processor,
+            remote_control_processor,
             search_processor,
             thread_goal_processor,
             thread_processor,
@@ -886,6 +889,14 @@ impl MessageProcessor {
                     .experimental_feature_enablement_set(request_id.clone(), params)
                     .await
             }
+            ClientRequest::RemoteControlEnable { .. } => self
+                .remote_control_processor
+                .enable()
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlDisable { .. } => self
+                .remote_control_processor
+                .disable()
+                .map(|response| Some(response.into())),
             ClientRequest::ConfigRequirementsRead { params: _, .. } => self
                 .config_processor
                 .config_requirements_read()

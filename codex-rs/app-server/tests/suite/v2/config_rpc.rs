@@ -14,6 +14,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
@@ -82,6 +83,7 @@ sandbox_mode = "workspace-write"
         origins.get("model").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     let layers = layers.expect("layers present");
@@ -144,6 +146,7 @@ allowed_domains = ["example.com"]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -153,10 +156,91 @@ allowed_domains = ["example.com"]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_legacy_forced_chatgpt_workspace_id() -> Result<()> {
+    const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+forced_chatgpt_workspace_id = "{WORKSPACE_ID}"
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Single(WORKSPACE_ID.to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_forced_chatgpt_workspace_id_list() -> Result<()> {
+    const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            WORKSPACE_ID_A.to_string(),
+            WORKSPACE_ID_B.to_string(),
+        ]))
+    );
 
     Ok(())
 }
@@ -297,6 +381,7 @@ default_tools_approval_mode = "prompt"
         origins.get("apps.app1.enabled").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -306,6 +391,7 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -315,6 +401,7 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -508,6 +595,7 @@ writable_roots = [{}]
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -534,6 +622,7 @@ writable_roots = [{}]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -888,7 +977,10 @@ fn assert_layers_user_then_optional_system(
     assert_eq!(layers.len(), first_index + 2);
     assert_eq!(
         layers[first_index].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 1].name,
@@ -916,7 +1008,10 @@ fn assert_layers_managed_user_then_optional_system(
     );
     assert_eq!(
         layers[first_index + 1].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 2].name,

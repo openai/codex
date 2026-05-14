@@ -347,9 +347,6 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
-        "experimental_use_freeform_apply_patch": {
-          "type": "boolean"
-        },
         "experimental_use_unified_exec_tool": {
           "type": "boolean"
         },
@@ -428,9 +425,6 @@
               "type": "boolean"
             },
             "exec_permission_approvals": {
-              "type": "boolean"
-            },
-            "experimental_use_freeform_apply_patch": {
               "type": "boolean"
             },
             "experimental_use_unified_exec_tool": {
@@ -618,9 +612,6 @@
             }
           },
           "type": "object"
-        },
-        "include_apply_patch_tool": {
-          "type": "boolean"
         },
         "include_apps_instructions": {
           "type": "boolean"
@@ -860,6 +851,20 @@
         }
       },
       "type": "object"
+    },
+    "ForcedChatgptWorkspaceIds": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Backward-compatible shape for ChatGPT workspace login restrictions in config.toml."
     },
     "ForcedLoginMethod": {
       "enum": [
@@ -1208,6 +1213,17 @@
           "type": "object"
         }
       ]
+    },
+    "McpServerOAuthConfig": {
+      "additionalProperties": false,
+      "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
+      "properties": {
+        "client_id": {
+          "description": "Explicit OAuth client identifier to present during authorization and token exchange.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "McpServerToolConfig": {
       "additionalProperties": false,
@@ -2132,6 +2148,14 @@
           "default": null,
           "description": "Legacy display-name field accepted for backward compatibility.",
           "type": "string"
+        },
+        "oauth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerOAuthConfig"
+            }
+          ],
+          "default": null
         },
         "oauth_resource": {
           "default": null,
@@ -4096,9 +4120,6 @@
       ],
       "description": "Experimental / do not use. Selects the thread store implementation."
     },
-    "experimental_use_freeform_apply_patch": {
-      "type": "boolean"
-    },
     "experimental_use_unified_exec_tool": {
       "type": "boolean"
     },
@@ -4177,9 +4198,6 @@
           "type": "boolean"
         },
         "exec_permission_approvals": {
-          "type": "boolean"
-        },
-        "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
         "experimental_use_unified_exec_tool": {
@@ -4385,9 +4403,13 @@
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme."
     },
     "forced_chatgpt_workspace_id": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ForcedChatgptWorkspaceIds"
+        }
+      ],
       "default": null,
-      "description": "When set, restricts ChatGPT login to a specific workspace identifier.",
-      "type": "string"
+      "description": "When set, restricts ChatGPT login to one or more workspace identifiers."
     },
     "forced_login_method": {
       "allOf": [

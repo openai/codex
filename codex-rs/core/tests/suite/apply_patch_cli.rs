@@ -64,7 +64,7 @@ async fn apply_patch_harness_with(
     });
     // Box harness construction so apply_patch_cli tests do not inline the
     // full test-thread startup path into each test future.
-    Box::pin(TestCodexHarness::with_remote_aware_builder(builder)).await
+    Box::pin(TestCodexHarness::with_remote_env_builder(builder)).await
 }
 
 async fn submit_without_wait(harness: &TestCodexHarness, prompt: &str) -> Result<()> {

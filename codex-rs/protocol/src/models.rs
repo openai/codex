@@ -297,6 +297,15 @@ impl ManagedFileSystemPermissions {
     }
 }
 
+/// Reserved identifier for the built-in read-only permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_READ_ONLY: &str = ":read-only";
+
+/// Reserved identifier for the built-in workspace-write permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_WORKSPACE: &str = ":workspace";
+
+/// Reserved identifier for the built-in full-access permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-access";
+
 /// Canonical active runtime permissions for a conversation, turn, or command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -402,7 +411,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with restricted network
     /// access.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
         Self::workspace_write_with(
@@ -416,7 +425,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with the legacy
     /// `sandbox_workspace_write` knobs applied directly to the profile.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write_with(
         writable_roots: &[AbsolutePathBuf],

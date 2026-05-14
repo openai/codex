@@ -26,6 +26,7 @@ use super::serialize_function_output;
 
 pub struct ReadMcpResourceHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
     type Output = FunctionToolOutput;
 

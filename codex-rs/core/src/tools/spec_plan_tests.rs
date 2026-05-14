@@ -28,6 +28,7 @@ use crate::tools::registry::ToolRegistry;
 use codex_app_server_protocol::AppInfo;
 use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::ToolCall as ExtensionToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::ToolInfo;
@@ -79,7 +80,10 @@ fn extension_tool_executor(name: &str, description: &str) -> Arc<dyn ExtensionTo
         description: String,
     }
 
-    impl ExtensionToolExecutor for SpecOnlyExtensionExecutor {
+    #[async_trait::async_trait]
+    impl ToolExecutor<ExtensionToolCall> for SpecOnlyExtensionExecutor {
+        type Output = codex_tools::JsonToolOutput;
+
         fn tool_name(&self) -> ToolName {
             ToolName::plain(self.name.as_str())
         }
@@ -102,8 +106,11 @@ fn extension_tool_executor(name: &str, description: &str) -> Arc<dyn ExtensionTo
             }))
         }
 
-        fn handle(&self, _call: ExtensionToolCall) -> codex_extension_api::ExtensionToolFuture<'_> {
-            Box::pin(async { panic!("spec planning should not execute extension tools") })
+        async fn handle(
+            &self,
+            _call: ExtensionToolCall,
+        ) -> Result<Self::Output, codex_tools::FunctionCallError> {
+            panic!("spec planning should not execute extension tools")
         }
     }
 
@@ -131,7 +138,7 @@ fn extension_tools_do_not_replace_builtin_tools() {
         "update_plan",
         "Extension attempt to replace a built-in tool.",
     )];
-    let (tools, _) = build_specs_with_discoverable_tools(
+    let (tools, _) = build_specs_with_inputs_for_test(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
@@ -1882,7 +1889,7 @@ fn request_plugin_install_is_not_registered_without_feature_flag() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs_with_discoverable_tools(
+    let (tools, _) = build_specs_with_inputs_for_test(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
@@ -1923,7 +1930,7 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
         permission_profile: &PermissionProfile::Disabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs_with_discoverable_tools(
+    let (tools, _) = build_specs_with_inputs_for_test(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
@@ -1992,7 +1999,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
         })),
     ];
 
-    let (tools, registry) = build_specs_with_discoverable_tools(
+    let (tools, registry) = build_specs_with_inputs_for_test(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
@@ -2293,7 +2300,7 @@ fn code_mode_only_exec_description_includes_extension_tool_details() {
         "extension_echo",
         "Echoes arguments through an extension tool.",
     )];
-    let (tools, _) = build_specs_with_discoverable_tools(
+    let (tools, _) = build_specs_with_inputs_for_test(
         &tools_config,
         /*mcp_tools*/ None,
         /*deferred_mcp_tools*/ None,
@@ -2391,7 +2398,7 @@ fn build_specs(
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ToolSpec>, ToolRegistry) {
-    build_specs_with_discoverable_tools(
+    build_specs_with_inputs_for_test(
         config,
         mcp_tools,
         deferred_mcp_tools,
@@ -2401,7 +2408,7 @@ fn build_specs(
     )
 }
 
-fn build_specs_with_discoverable_tools(
+fn build_specs_with_inputs_for_test(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
@@ -2415,17 +2422,20 @@ fn build_specs_with_discoverable_tools(
             .map(|(name, tool)| tool_info_from_parts(name, tool.clone()))
             .collect::<Vec<_>>()
     });
-    let builder = build_tool_registry_builder(
+    let params = ToolRegistryBuildParams {
+        mcp_tools: mcp_tool_inputs.as_deref(),
+        deferred_mcp_tools: deferred_mcp_tools.as_deref(),
+        discoverable_tools: discoverable_tools.as_deref(),
+        extension_tool_executors,
+        dynamic_tools,
+        default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
+        wait_agent_timeouts: wait_agent_timeout_options(),
+    };
+    let executors = collect_tool_executors(config, params);
+    let builder = build_tool_registry_builder_from_executors(
         config,
-        ToolRegistryBuildParams {
-            mcp_tools: mcp_tool_inputs.as_deref(),
-            deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-            discoverable_tools: discoverable_tools.as_deref(),
-            extension_tool_executors,
-            dynamic_tools,
-            default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
-            wait_agent_timeouts: wait_agent_timeout_options(),
-        },
+        executors,
+        hosted_model_tool_specs(config),
     );
     builder.build()
 }

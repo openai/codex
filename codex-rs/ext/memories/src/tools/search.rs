@@ -1,7 +1,6 @@
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolFuture;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
@@ -43,10 +42,13 @@ pub(super) struct SearchTool<B> {
     pub(super) backend: B,
 }
 
-impl<B> ExtensionToolExecutor for SearchTool<B>
+#[async_trait::async_trait]
+impl<B> ToolExecutor<ToolCall> for SearchTool<B>
 where
     B: MemoriesBackend,
 {
+    type Output = JsonToolOutput;
+
     fn tool_name(&self) -> ToolName {
         memory_tool_name(SEARCH_TOOL_NAME)
     }
@@ -58,16 +60,17 @@ where
         ))
     }
 
-    fn handle(&self, call: ToolCall) -> ExtensionToolFuture<'_> {
+    async fn handle(
+        &self,
+        call: ToolCall,
+    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
         let backend = self.backend.clone();
-        Box::pin(async move {
-            let args: SearchArgs = parse_args(&call)?;
-            let response = backend
-                .search(args.into_request())
-                .await
-                .map_err(backend_error_to_function_call)?;
-            Ok(JsonToolOutput::new(json!(response)))
-        })
+        let args: SearchArgs = parse_args(&call)?;
+        let response = backend
+            .search(args.into_request())
+            .await
+            .map_err(backend_error_to_function_call)?;
+        Ok(JsonToolOutput::new(json!(response)))
     }
 }
 

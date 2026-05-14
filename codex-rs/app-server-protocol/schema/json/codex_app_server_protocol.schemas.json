@@ -7133,9 +7133,13 @@
             ]
           },
           "forced_chatgpt_workspace_id": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "forced_login_method": {
@@ -7429,6 +7433,13 @@
                   }
                 ],
                 "description": "This is the path to the user's config.toml file, though it is not guaranteed to exist."
+              },
+              "profile": {
+                "description": "Name of the selected profile-v2 config layered on top of the base user config, when this layer represents one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": {
                 "enum": [
@@ -8696,6 +8707,20 @@
           "path"
         ],
         "type": "object"
+      },
+      "ForcedChatgptWorkspaceIds": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "description": "Backward-compatible API shape for ChatGPT workspace login restrictions."
       },
       "ForcedLoginMethod": {
         "enum": [
