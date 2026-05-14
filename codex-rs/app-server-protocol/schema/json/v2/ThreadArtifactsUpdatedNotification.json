@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadArtifact": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "createdAt",
+        "id",
+        "payload"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/definitions/ThreadArtifact"
+      },
+      "type": "array"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "artifacts",
+    "threadId"
+  ],
+  "title": "ThreadArtifactsUpdatedNotification",
+  "type": "object"
+}

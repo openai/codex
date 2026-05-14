@@ -4,6 +4,7 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { GitInfo } from "./GitInfo";
 import type { SessionSource } from "./SessionSource";
+import type { ThreadArtifact } from "./ThreadArtifact";
 import type { ThreadSource } from "./ThreadSource";
 import type { ThreadStatus } from "./ThreadStatus";
 import type { Turn } from "./Turn";
@@ -73,6 +74,10 @@ agentRole: string | null,
  * Optional Git metadata captured when the thread was created.
  */
 gitInfo: GitInfo | null,
+/**
+ * Model-managed artifacts associated with the thread.
+ */
+artifacts?: Array<ThreadArtifact>,
 /**
  * Optional user-facing thread title.
  */

@@ -356,6 +356,17 @@ export type { ThreadApproveGuardianDeniedActionResponse } from "./ThreadApproveG
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";
+export type { ThreadArtifact } from "./ThreadArtifact";
+export type { ThreadArtifactCreateParams } from "./ThreadArtifactCreateParams";
+export type { ThreadArtifactCreateResponse } from "./ThreadArtifactCreateResponse";
+export type { ThreadArtifactDeleteParams } from "./ThreadArtifactDeleteParams";
+export type { ThreadArtifactDeleteResponse } from "./ThreadArtifactDeleteResponse";
+export type { ThreadArtifactListParams } from "./ThreadArtifactListParams";
+export type { ThreadArtifactListResponse } from "./ThreadArtifactListResponse";
+export type { ThreadArtifactUpdateParams } from "./ThreadArtifactUpdateParams";
+export type { ThreadArtifactUpdateResponse } from "./ThreadArtifactUpdateResponse";
+export type { ThreadArtifactWriteParams } from "./ThreadArtifactWriteParams";
+export type { ThreadArtifactsUpdatedNotification } from "./ThreadArtifactsUpdatedNotification";
 export type { ThreadClosedNotification } from "./ThreadClosedNotification";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";

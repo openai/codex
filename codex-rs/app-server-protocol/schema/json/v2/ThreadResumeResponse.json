@@ -1438,6 +1438,16 @@
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
           "format": "int64",
           "type": "integer"
+        },
+        "artifacts": {
+          "description": "Model-managed artifacts associated with the thread.",
+          "items": {
+            "$ref": "#/definitions/ThreadArtifact"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2558,6 +2568,28 @@
           "type": "object"
         }
       ]
+    },
+    "ThreadArtifact": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "createdAt",
+        "id",
+        "payload"
+      ],
+      "type": "object"
     }
   },
   "properties": {

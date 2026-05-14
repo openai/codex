@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadArtifactWriteParams": {
+      "properties": {
+        "artifactType": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "artifactType",
+        "payload"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "artifact": {
+      "$ref": "#/definitions/ThreadArtifactWriteParams"
+    },
+    "artifactId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact",
+    "artifactId",
+    "threadId"
+  ],
+  "title": "ThreadArtifactUpdateParams",
+  "type": "object"
+}

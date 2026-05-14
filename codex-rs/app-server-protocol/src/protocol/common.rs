@@ -516,6 +516,26 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
+    ThreadArtifactList => "thread/artifact/list" {
+        params: v2::ThreadArtifactListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadArtifactListResponse,
+    },
+    ThreadArtifactCreate => "thread/artifact/create" {
+        params: v2::ThreadArtifactCreateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadArtifactCreateResponse,
+    },
+    ThreadArtifactUpdate => "thread/artifact/update" {
+        params: v2::ThreadArtifactUpdateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadArtifactUpdateResponse,
+    },
+    ThreadArtifactDelete => "thread/artifact/delete" {
+        params: v2::ThreadArtifactDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadArtifactDeleteResponse,
+    },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
         params: v2::ThreadMemoryModeSetParams,
@@ -1434,6 +1454,7 @@ server_notification_definitions! {
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     #[experimental("thread/goal/updated")]
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
+    ThreadArtifactsUpdated => "thread/artifacts/updated" (v2::ThreadArtifactsUpdatedNotification),
     #[experimental("thread/goal/cleared")]
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
@@ -2265,6 +2286,7 @@ mod tests {
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
+                    artifacts: None,
                     name: None,
                     turns: Vec::new(),
                 },
