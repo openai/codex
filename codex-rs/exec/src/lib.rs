@@ -790,6 +790,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         responsesapi_client_metadata: None,
                         environments: None,
                         cwd: Some(default_cwd),
+                        runtime_workspace_roots: None,
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
                         sandbox_policy: None,
@@ -961,6 +962,13 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        runtime_workspace_roots: Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect(),
+        ),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -984,6 +992,13 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
+        runtime_workspace_roots: Some(
+            config
+                .workspace_roots
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect(),
+        ),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -1003,10 +1018,7 @@ fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfil
 fn permissions_selection_from_active_profile(
     active: ActivePermissionProfile,
 ) -> PermissionProfileSelectionParams {
-    PermissionProfileSelectionParams::Profile {
-        id: active.id,
-        modifications: None,
-    }
+    PermissionProfileSelectionParams::new(active.id)
 }
 
 fn sandbox_mode_from_permission_profile(
