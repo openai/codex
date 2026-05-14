@@ -457,9 +457,6 @@
             "in_app_browser": {
               "type": "boolean"
             },
-            "include_apply_patch_tool": {
-              "type": "boolean"
-            },
             "js_repl": {
               "type": "boolean"
             },
@@ -4222,9 +4219,6 @@
           "type": "boolean"
         },
         "in_app_browser": {
-          "type": "boolean"
-        },
-        "include_apply_patch_tool": {
           "type": "boolean"
         },
         "js_repl": {

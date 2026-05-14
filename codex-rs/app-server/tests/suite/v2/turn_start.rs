@@ -2476,7 +2476,6 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
         &server.uri(),
         "never",
         &BTreeMap::from([
-            (Feature::ApplyPatchFreeform, true),
             (Feature::ApplyPatchStreamingEvents, true),
             (Feature::Plugins, false),
             (Feature::RemoteModels, false),

@@ -235,7 +235,6 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     skip_if_windows!(Ok(()));
 
     let builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
         config.use_experimental_unified_exec_tool = true;
         if let Err(err) = config.features.enable(Feature::UnifiedExec) {
             panic!("test config should allow feature update: {err}");

@@ -67,6 +67,16 @@ fn image_detail_original_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn apply_patch_freeform_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::ApplyPatchFreeform.stage(), Stage::Removed);
+    assert_eq!(Feature::ApplyPatchFreeform.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("apply_patch_freeform"),
+        Some(Feature::ApplyPatchFreeform)
+    );
+}
+
+#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);
@@ -403,7 +413,6 @@ fn from_sources_applies_base_profile_and_overrides() {
         },
         FeatureConfigSource {
             features: Some(&profile_features),
-            include_apply_patch_tool: Some(true),
             ..Default::default()
         },
         FeatureOverrides {
@@ -414,7 +423,7 @@ fn from_sources_applies_base_profile_and_overrides() {
     assert_eq!(features.enabled(Feature::Plugins), true);
     assert_eq!(features.enabled(Feature::CodeModeOnly), true);
     assert_eq!(features.enabled(Feature::CodeMode), true);
-    assert_eq!(features.enabled(Feature::ApplyPatchFreeform), true);
+    assert_eq!(features.enabled(Feature::ApplyPatchFreeform), false);
     assert_eq!(features.enabled(Feature::WebSearchRequest), false);
 }
 
@@ -459,6 +468,23 @@ fn from_sources_ignores_removed_js_repl_feature_keys() {
         ("js_repl".to_string(), true),
         ("js_repl_tools_only".to_string(), true),
     ]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
+    let features_toml =
+        FeaturesToml::from(BTreeMap::from([("apply_patch_freeform".to_string(), true)]));
 
     let features = Features::from_sources(
         FeatureConfigSource {
@@ -587,14 +613,13 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
             ..Default::default()
         })),
-        entries: BTreeMap::from([("include_apply_patch_tool".to_string(), true)]),
+        entries: BTreeMap::new(),
         ..Default::default()
     };
 
     features_toml.materialize_resolved_enabled(&features);
 
     let entries = features_toml.entries();
-    assert_eq!(entries.get("include_apply_patch_tool"), None);
     for spec in crate::FEATURES {
         assert_eq!(
             entries.get(spec.key),
@@ -627,7 +652,7 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
         FeatureConfigSource::default(),
         FeatureOverrides::default(),
     );
-    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), true);
+    assert_eq!(replayed.enabled(Feature::ApplyPatchFreeform), false);
 }
 
 #[test]

@@ -1408,7 +1408,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 content: "freeform-patch-danger",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![Feature::ApplyPatchFreeform],
+            features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {

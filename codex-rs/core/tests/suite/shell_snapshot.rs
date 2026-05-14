@@ -531,7 +531,6 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             .features
             .enable(Feature::ShellSnapshot)
             .expect("test config should allow feature update");
-        config.include_apply_patch_tool = true;
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 

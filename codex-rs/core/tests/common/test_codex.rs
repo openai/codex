@@ -24,7 +24,6 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::empty_extension_registry;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -580,12 +579,6 @@ impl TestCodexBuilder {
             mutator(&mut config);
         }
         ensure_test_model_catalog(&mut config)?;
-
-        if config.include_apply_patch_tool {
-            config.features.enable(Feature::ApplyPatchFreeform)?;
-        } else {
-            config.features.disable(Feature::ApplyPatchFreeform)?;
-        }
 
         Ok((config, cwd))
     }
