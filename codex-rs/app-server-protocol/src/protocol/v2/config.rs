@@ -51,6 +51,10 @@ pub enum ConfigLayerSource {
         /// This is the path to the user's config.toml file, though it is not
         /// guaranteed to exist.
         file: AbsolutePathBuf,
+
+        /// Name of the selected profile-v2 config layered on top of the base
+        /// user config, when this layer represents one.
+        profile: Option<String>,
     },
 
     /// Path to a .codex/ folder within a project. There could be multiple of
@@ -84,7 +88,13 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
-            ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::User { profile, .. } => {
+                if profile.is_some() {
+                    21
+                } else {
+                    20
+                }
+            }
             ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
@@ -120,7 +130,6 @@ pub struct SandboxWorkspaceWrite {
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
-    pub view_image: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

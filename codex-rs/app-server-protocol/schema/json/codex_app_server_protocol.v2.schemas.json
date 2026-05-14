@@ -3812,6 +3812,13 @@
               ],
               "description": "This is the path to the user's config.toml file, though it is not guaranteed to exist."
             },
+            "profile": {
+              "description": "Name of the selected profile-v2 config layered on top of the base user config, when this layer represents one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "user"
@@ -15517,12 +15524,6 @@
     },
     "ToolsV2": {
       "properties": {
-        "view_image": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "web_search": {
           "anyOf": [
             {

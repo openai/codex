@@ -20,6 +20,7 @@ use super::goal_response;
 
 pub struct UpdateGoalHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
     type Output = FunctionToolOutput;
 

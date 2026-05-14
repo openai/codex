@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn collab_command_hidden_when_collaboration_modes_disabled() {
+    fn plan_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         popup.on_composer_text_change("/".to_string());
 
@@ -432,41 +432,9 @@ mod tests {
             })
             .collect();
         assert!(
-            !cmds.iter().any(|cmd| cmd == "collab"),
-            "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
-        );
-        assert!(
             !cmds.iter().any(|cmd| cmd == "plan"),
             "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
-    }
-
-    #[test]
-    fn collab_command_visible_when_collaboration_modes_enabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/collab".to_string());
-
-        match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
-            Some(CommandItem::ServiceTier(command)) => {
-                panic!("expected collab command, got service tier {command:?}")
-            }
-            other => panic!("expected collab to be selected for exact match, got {other:?}"),
-        }
     }
 
     #[test]

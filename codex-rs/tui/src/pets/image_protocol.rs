@@ -132,7 +132,7 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
         Some(Multiplexer::Tmux { .. }) => {
             return PetImageSupport::Unsupported(PetImageUnsupportedReason::Tmux);
         }
-        Some(Multiplexer::Zellij {}) => {
+        Some(Multiplexer::Zellij { .. }) => {
             return PetImageSupport::Unsupported(PetImageUnsupportedReason::Zellij);
         }
         None => {}
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(
             pet_image_support_for_terminal(&terminal_info_for_test(
                 TerminalName::Kitty,
-                Some(Multiplexer::Zellij {}),
+                Some(Multiplexer::Zellij { version: None }),
                 Some("kitty"),
                 /*term*/ None,
             )),

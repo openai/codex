@@ -39,6 +39,10 @@ struct AppServerArgs {
     #[command(flatten)]
     auth: AppServerWebsocketAuthArgs,
 
+    /// Fail if config.toml contains unknown configuration fields.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
     /// Hidden debug-only test hook used by integration tests that spawn the
     /// production app-server binary.
     #[cfg(debug_assertions)]
@@ -52,7 +56,15 @@ struct AppServerArgs {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        let args = AppServerArgs::parse();
+        let AppServerArgs {
+            listen,
+            session_source,
+            auth,
+            strict_config,
+            #[cfg(debug_assertions)]
+            disable_plugin_startup_tasks_for_tests,
+            remote_control,
+        } = AppServerArgs::parse();
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {
@@ -60,20 +72,20 @@ fn main() -> anyhow::Result<()> {
                 .map(LoaderOverrides::with_managed_config_path_for_tests)
                 .unwrap_or_default()
         };
-        let transport = args.listen;
-        let session_source = args.session_source;
-        let auth = args.auth.try_into_settings()?;
+        let transport = listen;
+        let auth = auth.try_into_settings()?;
         let mut runtime_options = AppServerRuntimeOptions::default();
         #[cfg(debug_assertions)]
-        if args.disable_plugin_startup_tasks_for_tests {
+        if disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
-        runtime_options.remote_control_enabled = args.remote_control;
+        runtime_options.remote_control_enabled = remote_control;
 
         run_main_with_transport_options(
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
+            strict_config,
             /*default_analytics_enabled*/ false,
             transport,
             session_source,

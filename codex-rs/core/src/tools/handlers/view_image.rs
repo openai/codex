@@ -62,6 +62,7 @@ enum ViewImageDetail {
     Original,
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ViewImageHandler {
     type Output = ViewImageOutput;
 
@@ -134,8 +135,7 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         };
         let cwd = turn_environment.cwd.clone();
         let abs_path = cwd.join(path);
-        let mut sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None);
-        sandbox.cwd = Some(cwd.clone());
+        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
         let fs = turn_environment.environment.get_filesystem();
 
         let metadata = fs
@@ -282,7 +282,7 @@ mod tests {
         let (session, mut turn) = make_session_and_context().await;
         let image_dir = tempfile::tempdir().expect("create image temp dir");
         let image_cwd = image_dir.abs();
-        turn.cwd = image_cwd.clone();
+
         turn.environments
             .turn_environments
             .first_mut()

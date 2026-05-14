@@ -189,17 +189,13 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
     Freeform,
-    Shell,
-    ShellViaHeredoc,
     ShellCommandViaHeredoc,
 }
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShellModelOutput {
-    Shell,
     ShellCommand,
-    LocalShell,
     // UnifiedExec has its own set of tests
 }
 
@@ -959,9 +955,7 @@ impl TestCodexHarness {
             ApplyPatchModelOutput::Freeform => {
                 Box::pin(self.custom_tool_call_output(call_id)).await
             }
-            ApplyPatchModelOutput::Shell
-            | ApplyPatchModelOutput::ShellViaHeredoc
-            | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ApplyPatchModelOutput::ShellCommandViaHeredoc => {
                 Box::pin(self.function_call_stdout(call_id)).await
             }
         }

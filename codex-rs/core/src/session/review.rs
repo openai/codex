@@ -56,12 +56,23 @@ pub(super) async fn spawn_review_thread(
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+    .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
     .with_goal_tools_allowed(goal_tools_supported)
     .with_max_concurrent_threads_per_session(config.agent_max_threads)
     .with_wait_agent_min_timeout_ms(
         review_features
             .enabled(Feature::MultiAgentV2)
             .then_some(config.multi_agent_v2.min_wait_timeout_ms),
+    )
+    .with_wait_agent_max_timeout_ms(
+        review_features
+            .enabled(Feature::MultiAgentV2)
+            .then_some(config.multi_agent_v2.max_wait_timeout_ms),
+    )
+    .with_wait_agent_default_timeout_ms(
+        review_features
+            .enabled(Feature::MultiAgentV2)
+            .then_some(config.multi_agent_v2.default_wait_timeout_ms),
     )
     .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
         &config.agent_roles,
@@ -106,6 +117,7 @@ pub(super) async fn spawn_review_thread(
         sess.thread_id().to_string(),
         parent_turn_context.thread_source,
         review_turn_id.clone(),
+        #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
@@ -142,6 +154,7 @@ pub(super) async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
+        #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),

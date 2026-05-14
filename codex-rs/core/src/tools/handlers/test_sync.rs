@@ -56,6 +56,7 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
     BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestSyncHandler {
     type Output = FunctionToolOutput;
 

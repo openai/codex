@@ -18,6 +18,7 @@ use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
@@ -56,6 +57,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
+    pub shell_type: ShellType,
     pub hook_command: String,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
@@ -271,6 +273,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &env,
             )
         };
+        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&req.shell_type),
+            attempt.sandbox,
+            attempt.windows_sandbox_level,
+        );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
@@ -401,6 +409,7 @@ mod tests {
         let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
         let request = UnifiedExecRequest {
             command: vec!["pwd".to_string()],
+            shell_type: ShellType::Sh,
             hook_command: "pwd".to_string(),
             process_id: 1000,
             cwd,

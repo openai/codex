@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub(crate) struct Handler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     type Output = ResumeAgentResult;
 
@@ -18,11 +19,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         Some(create_resume_agent_tool())
     }
 
-    fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
-        Box::pin(handle_resume_agent(invocation))
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        handle_resume_agent(invocation).await
     }
 }
 

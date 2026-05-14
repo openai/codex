@@ -18,7 +18,6 @@ pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
 pub use tools::ExtensionToolExecutor;
-pub use tools::ExtensionToolFuture;
 pub use tools::ExtensionToolOutput;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnStartInput;

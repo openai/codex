@@ -107,13 +107,13 @@ impl ChatComposer {
         }
         self.paste_burst.clear_window_after_non_char();
 
-        if self.current_file_query.is_some() {
+        if self.popups.current_file_query.is_some() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(String::new()));
-            self.current_file_query = None;
+            self.popups.current_file_query = None;
         }
-        self.active_popup = ActivePopup::None;
-        self.selected_remote_image_index = None;
+        self.popups.active = ActivePopup::None;
+        self.attachments.clear_remote_image_selection();
         self.history_search = Some(HistorySearchSession {
             original_draft: self.snapshot_draft(),
             query: String::new(),
