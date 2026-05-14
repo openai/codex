@@ -349,7 +349,7 @@ fn configured_marketplace_snapshot_issues(
     load_errors: &[MarketplaceListError],
     marketplace_name: Option<&str>,
 ) -> Vec<ConfiguredMarketplaceSnapshotIssue> {
-    let Some(user_layer) = plugins_input.config_layer_stack.get_user_layer() else {
+    let Some(user_layer) = plugins_input.config_layer_stack.get_active_user_layer() else {
         return Vec::new();
     };
     let Some(configured_marketplaces) = user_layer
