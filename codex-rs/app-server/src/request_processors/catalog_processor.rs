@@ -423,10 +423,7 @@ impl CatalogRequestProcessor {
                     };
                     let plugins_input = config.plugins_config_input();
                     let effective_skill_roots = plugins_manager
-                        .effective_skill_roots_for_layer_stack(
-                            &config_layer_stack,
-                            &plugins_input,
-                        )
+                        .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
                         .await;
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
                         cwd_abs.clone(),
