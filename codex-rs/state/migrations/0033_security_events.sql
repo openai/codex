@@ -27,4 +27,3 @@ CREATE INDEX idx_security_events_thread_created
 
 CREATE INDEX idx_security_events_kind_created
     ON security_events(kind, created_at DESC, id DESC);
-
