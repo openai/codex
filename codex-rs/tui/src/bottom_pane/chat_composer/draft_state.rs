@@ -1,4 +1,4 @@
-//! Editable composer draft state kept separate from orchestration.
+//! Editable composer draft state kept separate from composer control flow.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
