@@ -62,6 +62,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
@@ -780,7 +781,7 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text_elements: Vec::new(),
             }],
             permissions: Some(PermissionProfileSelectionParams::Profile {
-                id: ":danger-no-sandbox".to_string(),
+                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                 modifications: None,
             }),
             ..Default::default()
@@ -1895,8 +1896,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
                 network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
             }),
             permissions: None,
             model: Some("mock-model".to_string()),

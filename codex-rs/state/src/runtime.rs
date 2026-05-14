@@ -300,11 +300,30 @@ pub fn logs_db_path(codex_home: &Path) -> PathBuf {
     codex_home.join(logs_db_filename())
 }
 
+/// Run SQLite's built-in integrity check against an existing database file.
+pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true)
+        .log_statements(LevelFilter::Off);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await?;
+    let rows = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+        .fetch_all(&pool)
+        .await?;
+    pool.close().await;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
     use super::open_state_sqlite;
     use super::runtime_state_migrator;
+    use super::sqlite_integrity_check;
     use super::state_db_path;
     use super::test_support::unique_temp_dir;
     use crate::DB_INIT_METRIC;
@@ -378,6 +397,34 @@ mod tests {
         )
         .await
         .expect("open sqlite pool")
+    }
+
+    #[tokio::test]
+    async fn sqlite_integrity_check_reports_ok_for_valid_db() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let path = state_db_path(codex_home.as_path());
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open sqlite db");
+        sqlx::query("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("create sample table");
+        pool.close().await;
+
+        let result = sqlite_integrity_check(&path)
+            .await
+            .expect("integrity check should run");
+
+        assert_eq!(result, vec!["ok".to_string()]);
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]

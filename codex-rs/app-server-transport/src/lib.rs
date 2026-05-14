@@ -12,6 +12,7 @@ pub use transport::CHANNEL_CAPACITY;
 pub use transport::ConnectionOrigin;
 pub use transport::RemoteControlHandle;
 pub use transport::RemoteControlStartConfig;
+pub use transport::RemoteControlUnavailable;
 pub use transport::TransportEvent;
 pub use transport::app_server_control_socket_path;
 pub use transport::auth;

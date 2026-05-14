@@ -695,7 +695,7 @@ impl FileSystemSandboxPolicy {
         )
     }
 
-    /// Replaces symbolic `:project_roots` entries with absolute paths resolved
+    /// Replaces symbolic `:workspace_roots` entries with absolute paths resolved
     /// against `cwd`.
     ///
     /// Use this when a durable permission profile must survive a cwd-only
@@ -763,7 +763,7 @@ impl FileSystemSandboxPolicy {
     ///
     /// Unlike [`Self::with_additional_writable_roots`], this mirrors legacy
     /// writable-roots semantics by adding exact roots even when they are
-    /// already writable through `:project_roots`, and by adding the default
+    /// already writable through `:workspace_roots`, and by adding the default
     /// read-only protected subpaths for each new root.
     pub fn with_additional_legacy_workspace_writable_roots(
         mut self,

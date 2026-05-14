@@ -41,6 +41,7 @@ where
     })
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     type Output = FunctionToolOutput;
 

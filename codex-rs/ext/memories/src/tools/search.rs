@@ -1,7 +1,6 @@
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolFuture;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
@@ -18,7 +17,8 @@ use crate::backend::SearchMemoriesResponse;
 
 use super::backend_error_to_function_call;
 use super::clamp_max_results;
-use super::function_tool;
+use super::memory_function_tool;
+use super::memory_tool_name;
 use super::parse_args;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,31 +42,35 @@ pub(super) struct SearchTool<B> {
     pub(super) backend: B,
 }
 
-impl<B> ExtensionToolExecutor for SearchTool<B>
+#[async_trait::async_trait]
+impl<B> ToolExecutor<ToolCall> for SearchTool<B>
 where
     B: MemoriesBackend,
 {
+    type Output = JsonToolOutput;
+
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(SEARCH_TOOL_NAME)
+        memory_tool_name(SEARCH_TOOL_NAME)
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(function_tool::<SearchArgs, SearchMemoriesResponse>(
+        Some(memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
             SEARCH_TOOL_NAME,
             "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
         ))
     }
 
-    fn handle(&self, call: ToolCall) -> ExtensionToolFuture<'_> {
+    async fn handle(
+        &self,
+        call: ToolCall,
+    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
         let backend = self.backend.clone();
-        Box::pin(async move {
-            let args: SearchArgs = parse_args(&call)?;
-            let response = backend
-                .search(args.into_request())
-                .await
-                .map_err(backend_error_to_function_call)?;
-            Ok(JsonToolOutput::new(json!(response)))
-        })
+        let args: SearchArgs = parse_args(&call)?;
+        let response = backend
+            .search(args.into_request())
+            .await
+            .map_err(backend_error_to_function_call)?;
+        Ok(JsonToolOutput::new(json!(response)))
     }
 }
 

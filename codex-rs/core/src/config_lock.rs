@@ -84,6 +84,7 @@ pub(crate) fn lock_layer_from_config(
     Ok(ConfigLayerEntry::new(
         ConfigLayerSource::User {
             file: lock_path.clone(),
+            profile: None,
         },
         value,
     ))

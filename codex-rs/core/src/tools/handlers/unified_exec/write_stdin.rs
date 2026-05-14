@@ -31,6 +31,7 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     type Output = ExecCommandToolOutput;
 

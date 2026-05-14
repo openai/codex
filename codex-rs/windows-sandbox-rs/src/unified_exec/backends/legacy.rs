@@ -10,11 +10,13 @@ use crate::process::StderrMode;
 use crate::process::StdinMode;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
-use crate::spawn_prep::LocalSid;
+use crate::spawn_prep::LegacyAclSids;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
+use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
+use crate::token::LocalSid;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
@@ -204,8 +206,7 @@ fn finalize_exit(
     process_handle: Arc<StdMutex<Option<HANDLE>>>,
     thread_handle: HANDLE,
     output_join: std::thread::JoinHandle<()>,
-    guards: Vec<PathBuf>,
-    cap_sid: Option<String>,
+    guards: Vec<(PathBuf, String)>,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
 ) {
@@ -242,11 +243,9 @@ fn finalize_exit(
         log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
     }
 
-    if let Some(cap_sid) = cap_sid
-        && let Ok(sid) = LocalSid::from_string(&cap_sid)
-    {
-        unsafe {
-            for path in guards {
+    unsafe {
+        for (path, cap_sid) in guards {
+            if let Ok(sid) = LocalSid::from_string(&cap_sid) {
                 revoke_ace(&path, sid.as_ptr());
             }
         }
@@ -311,15 +310,19 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     if !additional_deny_read_paths.is_empty() {
         anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
     }
-    let additional_deny_read_paths = additional_deny_read_paths
-        .iter()
-        .map(AbsolutePathBuf::to_path_buf)
-        .collect::<Vec<_>>();
     let additional_deny_write_paths = additional_deny_write_paths
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
-    let security = prepare_legacy_session_security(&common.policy, codex_home, cwd)?;
+    let capability_roots = legacy_session_capability_roots(
+        &common.policy,
+        sandbox_policy_cwd,
+        &common.current_dir,
+        &env_map,
+        codex_home,
+    );
+    let security =
+        prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
     allow_null_device_for_workspace_write(common.is_workspace_write);
 
     let persist_aces = common.is_workspace_write;
@@ -329,11 +332,13 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         codex_home,
         &common.current_dir,
         &env_map,
-        &security.psid_generic,
-        security.psid_workspace.as_ref(),
-        &security.cap_sid_str,
-        &additional_deny_read_paths,
+        &[],
         &additional_deny_write_paths,
+        LegacyAclSids {
+            readonly_sid: security.readonly_sid.as_ref(),
+            readonly_sid_str: security.readonly_sid_str.as_deref(),
+            write_root_sids: &security.write_root_sids,
+        },
         persist_aces,
     )?;
 
@@ -370,12 +375,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         Ok(handles) => handles,
         Err(err) => {
             unsafe {
-                if !persist_aces
-                    && !guards.is_empty()
-                    && let Ok(sid) = LocalSid::from_string(&security.cap_sid_str)
-                {
-                    for path in &guards {
-                        revoke_ace(path, sid.as_ptr());
+                if !persist_aces {
+                    for (path, cap_sid) in &guards {
+                        if let Ok(sid) = LocalSid::from_string(cap_sid) {
+                            revoke_ace(path, sid.as_ptr());
+                        }
                     }
                 }
                 CloseHandle(security.h_token);
@@ -389,11 +393,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let wait_handle = Arc::clone(&process_handle);
     let command_for_wait = command.clone();
     let guards_for_wait = if persist_aces { Vec::new() } else { guards };
-    let cap_sid_for_wait = if guards_for_wait.is_empty() {
-        None
-    } else {
-        Some(security.cap_sid_str)
-    };
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;
@@ -425,7 +424,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             pi.hThread,
             output_join,
             guards_for_wait,
-            cap_sid_for_wait,
             common.logs_base_dir.as_deref(),
             command_for_wait,
         );

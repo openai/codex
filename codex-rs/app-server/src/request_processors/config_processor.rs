@@ -6,7 +6,6 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::transport::RemoteControlHandle;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -39,7 +38,6 @@ use codex_config::MatcherGroup as CoreMatcherGroup;
 use codex_config::ResidencyRequirement as CoreResidencyRequirement;
 use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::ThreadManager;
-use codex_features::Feature;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
@@ -67,7 +65,6 @@ pub(crate) struct ConfigRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     analytics_events_client: AnalyticsEventsClient,
-    remote_control_handle: Option<RemoteControlHandle>,
 }
 
 impl ConfigRequestProcessor {
@@ -77,7 +74,6 @@ impl ConfigRequestProcessor {
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         analytics_events_client: AnalyticsEventsClient,
-        remote_control_handle: Option<RemoteControlHandle>,
     ) -> Self {
         Self {
             outgoing,
@@ -85,7 +81,6 @@ impl ConfigRequestProcessor {
             auth_manager,
             thread_manager,
             analytics_events_client,
-            remote_control_handle,
         }
     }
 
@@ -187,21 +182,6 @@ impl ConfigRequestProcessor {
     pub(crate) async fn handle_config_mutation(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
-        let Some(remote_control_handle) = &self.remote_control_handle else {
-            return;
-        };
-
-        match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => {
-                remote_control_handle.set_enabled(config.features.enabled(Feature::RemoteControl));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "failed to load config for remote control enablement refresh after config mutation: {}",
-                    error.message
-                );
-            }
-        }
     }
 
     async fn handle_config_mutation_result<T>(

@@ -306,7 +306,7 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
     );
     assert!(
         !codex_home.path().join("parent.txt").exists(),
-        "permissionProfile :project_roots write should not grant the server cwd when command cwd differs"
+        "permissionProfile :workspace_roots write should not grant the server cwd when command cwd differs"
     );
 
     Ok(())
