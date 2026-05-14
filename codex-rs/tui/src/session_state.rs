@@ -42,6 +42,7 @@ pub(crate) struct ThreadSessionState {
     /// when the server knows it.
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) runtime_workspace_roots: Vec<AbsolutePathBuf>,
     pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
     pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub(crate) message_history: Option<MessageHistoryMetadata>,
