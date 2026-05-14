@@ -13,12 +13,8 @@ use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
 use codex_config::types::AppsDefaultConfig;
-use codex_connectors::filter::filter_disallowed_connectors;
-use codex_connectors::filter::filter_tool_suggest_discoverable_connectors;
-use codex_connectors::merge::merge_connectors;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
-use codex_connectors::metadata::connector_mention_slug;
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -62,15 +58,6 @@ fn app(id: &str) -> AppInfo {
     }
 }
 
-fn named_app(id: &str, name: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        install_url: Some(connector_install_url(name, id)),
-        ..app(id)
-    }
-}
-
 fn plugin_names(names: &[&str]) -> Vec<String> {
     names.iter().map(ToString::to_string).collect()
 }
@@ -86,24 +73,6 @@ fn test_tool_definition(tool_name: &str) -> Tool {
         execution: None,
         icons: None,
         meta: None,
-    }
-}
-
-fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInfo {
-    AppInfo {
-        id: "calendar".to_string(),
-        name: "Google Calendar".to_string(),
-        description: Some("Plan events".to_string()),
-        logo_url: Some("https://example.com/logo.png".to_string()),
-        logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-        distribution_channel: Some("workspace".to_string()),
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: true,
-        is_enabled: true,
-        plugin_display_names: plugin_names(plugin_display_names),
     }
 }
 
@@ -145,34 +114,6 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = previous;
     result
-}
-
-#[test]
-fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
-    let plugin = plugin_connector_to_app_info("calendar".to_string());
-    let accessible = google_calendar_accessible_connector(&[]);
-
-    let merged = merge_connectors(vec![plugin], vec![accessible]);
-
-    assert_eq!(
-        merged,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events".to_string()),
-            logo_url: Some("https://example.com/logo.png".to_string()),
-            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-            distribution_channel: Some("workspace".to_string()),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some(connector_install_url("calendar", "calendar")),
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        }]
-    );
-    assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
 }
 
 #[test]
@@ -258,50 +199,38 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
     assert_eq!(
         cached,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some(connector_install_url("Google Calendar", "calendar")),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["calendar-plugin"]),
-        }]
-    );
-}
-
-#[test]
-fn merge_connectors_unions_and_dedupes_plugin_display_names() {
-    let mut plugin = plugin_connector_to_app_info("calendar".to_string());
-    plugin.plugin_display_names = plugin_names(&["sample", "alpha", "sample"]);
-
-    let accessible = google_calendar_accessible_connector(&["beta", "alpha"]);
-
-    let merged = merge_connectors(vec![plugin], vec![accessible]);
-
-    assert_eq!(
-        merged,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events".to_string()),
-            logo_url: Some("https://example.com/logo.png".to_string()),
-            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
-            distribution_channel: Some("workspace".to_string()),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some(connector_install_url("calendar", "calendar")),
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
-        }]
+        vec![
+            AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
+            },
+            AppInfo {
+                id: "connector_openai_hidden".to_string(),
+                name: "Hidden".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Hidden", "connector_openai_hidden")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }
+        ]
     );
 }
 
@@ -1245,55 +1174,6 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
     );
 }
 
-#[test]
-fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
-    let filtered =
-        filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")], "codex_cli");
-    assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
-}
-
-#[test]
-fn filter_disallowed_connectors_filters_openai_prefix() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("connector_openai_foo"),
-            app("connector_openai_bar"),
-            app("gamma"),
-        ],
-        "codex_cli",
-    );
-    assert_eq!(filtered, vec![app("gamma")]);
-}
-
-#[test]
-fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
-            app("delta"),
-        ],
-        "codex_cli",
-    );
-    assert_eq!(filtered, vec![app("delta")]);
-}
-
-#[test]
-fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
-    let filtered = filter_disallowed_connectors(
-        vec![
-            app("connector_openai_foo"),
-            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
-        ],
-        "codex_atlas",
-    );
-    assert_eq!(
-        filtered,
-        vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
-    );
-}
-
 #[tokio::test]
 async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -1384,72 +1264,4 @@ discoverables = [
             "connector_gmail".to_string(),
         ))]
     );
-}
-
-#[test]
-fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
-    let filtered = filter_tool_suggest_discoverable_connectors(
-        vec![
-            named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            ),
-            named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
-            named_app("connector_other", "Other"),
-        ],
-        &[AppInfo {
-            is_accessible: true,
-            ..named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            )
-        }],
-        &HashSet::from([
-            "connector_2128aebfecb84f64a069897515042a44".to_string(),
-            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
-        ]),
-        "codex_cli",
-    );
-
-    assert_eq!(
-        filtered,
-        vec![named_app(
-            "connector_68df038e0ba48191908c8434991bbac2",
-            "Gmail",
-        )]
-    );
-}
-
-#[test]
-fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_when_disabled() {
-    let filtered = filter_tool_suggest_discoverable_connectors(
-        vec![
-            named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            ),
-            named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
-        ],
-        &[
-            AppInfo {
-                is_accessible: true,
-                ..named_app(
-                    "connector_2128aebfecb84f64a069897515042a44",
-                    "Google Calendar",
-                )
-            },
-            AppInfo {
-                is_accessible: true,
-                is_enabled: false,
-                ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
-            },
-        ],
-        &HashSet::from([
-            "connector_2128aebfecb84f64a069897515042a44".to_string(),
-            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
-        ]),
-        "codex_cli",
-    );
-
-    assert_eq!(filtered, Vec::<AppInfo>::new());
 }

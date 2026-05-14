@@ -10,6 +10,13 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: "Sign and notarize macOS release artifacts."
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,9 +32,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
+        env:
+          SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${SIGN_MACOS}" == "true" ]]; then
+            echo "❌  Manual rust-release runs must set sign_macos=false"
+            exit 1
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -64,6 +78,7 @@ jobs:
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
 
     strategy:
       fail-fast: false
@@ -295,6 +310,39 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
+      - if: ${{ runner.os == 'macOS' }}
+        name: Stage unsigned macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dest="unsigned-dist/${target}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            unsigned_name="${binary}-${target}-unsigned"
+            unsigned_path="${dest}/${unsigned_name}"
+            if [[ ! -f "${binary_path}" ]]; then
+              echo "Binary ${binary_path} not found"
+              exit 1
+            fi
+
+            cp "${binary_path}" "${unsigned_path}"
+            tar -C "$dest" -czf "${unsigned_path}.tar.gz" "${unsigned_name}"
+            zstd -T0 -19 --rm "${unsigned_path}"
+          done
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Upload unsigned macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: codex-rs/unsigned-dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
@@ -303,7 +351,7 @@ jobs:
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
           binaries: ${{ matrix.binaries }}
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS == 'true' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -317,7 +365,7 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
         name: Build macOS dmg
         shell: bash
         run: |
@@ -357,7 +405,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -371,6 +419,7 @@ jobs:
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
       - name: Stage artifacts
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
@@ -400,7 +449,7 @@ jobs:
           fi
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -451,7 +500,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -459,6 +508,7 @@ jobs:
           if-no-files-found: error
 
       - name: Compress artifacts
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
@@ -495,6 +545,7 @@ jobs:
           done
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         with:
           name: ${{ matrix.artifact_name }}
           # Upload the per-binary .zst files, .tar.gz equivalents, and any
@@ -522,6 +573,7 @@ jobs:
     uses: ./.github/workflows/rust-release-zsh.yml
 
   release:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
     needs:
       - build
       - build-windows

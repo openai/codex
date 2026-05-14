@@ -1823,6 +1823,18 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
             /*enabled*/ None,
         ))?;
     shared_plugin_body["plugins"][0]["share_principals"] = serde_json::Value::Null;
+    let shared_unlisted_body: serde_json::Value =
+        serde_json::from_str(&workspace_remote_plugin_page_body(
+            "plugins~Plugin_44444444444444444444444444444444",
+            "shared-unlisted-linear",
+            "Shared Unlisted Linear",
+            "UNLISTED",
+            /*enabled*/ None,
+        ))?;
+    shared_plugin_body["plugins"]
+        .as_array_mut()
+        .expect("shared plugins should be an array")
+        .push(shared_unlisted_body["plugins"][0].clone());
     let shared_plugin_body = serde_json::to_string(&shared_plugin_body)?;
     let mut workspace_installed_body: serde_json::Value =
         serde_json::from_str(&workspace_remote_plugin_page_body(
@@ -1878,10 +1890,10 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
             .and_then(|interface| interface.display_name.as_deref()),
         Some("Shared with me")
     );
-    assert_eq!(marketplace.plugins.len(), 1);
+    assert_eq!(marketplace.plugins.len(), 2);
     assert_eq!(
         marketplace.plugins[0].id,
-        "shared-linear@workspace-shared-with-me-private"
+        "shared-linear@workspace-shared-with-me"
     );
     assert_eq!(
         marketplace.plugins[0].remote_plugin_id.as_deref(),
@@ -1913,6 +1925,29 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some("https://chatgpt.example/plugins/share/share-key-1")
     );
     assert_eq!(share_context.share_principals, None);
+    assert_eq!(
+        marketplace.plugins[1].id,
+        "shared-unlisted-linear@workspace-shared-with-me"
+    );
+    assert_eq!(
+        marketplace.plugins[1].remote_plugin_id.as_deref(),
+        Some("plugins~Plugin_44444444444444444444444444444444")
+    );
+    assert_eq!(marketplace.plugins[1].name, "shared-unlisted-linear");
+    assert_eq!(marketplace.plugins[1].installed, false);
+    assert_eq!(marketplace.plugins[1].enabled, false);
+    let share_context = marketplace.plugins[1]
+        .share_context
+        .as_ref()
+        .expect("expected share context");
+    assert_eq!(
+        share_context.remote_plugin_id,
+        "plugins~Plugin_44444444444444444444444444444444"
+    );
+    assert_eq!(
+        share_context.discoverability,
+        Some(PluginShareDiscoverability::Unlisted)
+    );
 
     let marketplace = response
         .marketplaces
@@ -1929,7 +1964,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
     assert_eq!(marketplace.plugins.len(), 1);
     assert_eq!(
         marketplace.plugins[0].id,
-        "unlisted-linear@workspace-shared-with-me-unlisted"
+        "unlisted-linear@workspace-shared-with-me"
     );
     assert_eq!(
         marketplace.plugins[0].remote_plugin_id.as_deref(),

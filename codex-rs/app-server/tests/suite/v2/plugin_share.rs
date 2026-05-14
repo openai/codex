@@ -169,7 +169,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     local_version: None,
                     name: "demo-plugin".to_string(),
@@ -573,7 +573,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     local_version: None,
                     name: "demo-plugin".to_string(),
@@ -1123,7 +1123,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
         PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "demo-plugin@workspace-shared-with-me-private".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: Some("plugins_123".to_string()),
                     local_version: None,
                     name: "demo-plugin".to_string(),

@@ -393,7 +393,6 @@ fn from_sources_applies_base_profile_and_overrides() {
         },
         FeatureOverrides {
             web_search_request: Some(false),
-            ..Default::default()
         },
     );
 
