@@ -360,6 +360,10 @@ impl TurnRequestProcessor {
         base_snapshot: &ThreadConfigSnapshot,
         request: TurnContextOverrideRequest,
     ) -> Result<Option<CodexThreadTurnContextOverrides>, JSONRPCErrorError> {
+        // Both turn/start and thread/turnContext/update accept the same
+        // persistent turn-context fields. Resolve them once into the core
+        // override shape so validation and permission-profile expansion stay
+        // consistent between the two entry points.
         if request.sandbox_policy.is_some() && request.permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandboxPolicy`",
@@ -415,6 +419,9 @@ impl TurnRequestProcessor {
                 (None, None)
             };
 
+        // None means the caller sent no context fields at all. Some means at
+        // least one explicit override was present, even if the effective value
+        // matches the current thread context.
         Ok(Some(CodexThreadTurnContextOverrides {
             cwd,
             approval_policy,
@@ -516,6 +523,8 @@ impl TurnRequestProcessor {
             .await?;
         let has_turn_context_overrides = resolved_overrides.is_some();
         if let Some(overrides) = resolved_overrides.as_ref() {
+            // Validate before accepting input so the request can fail without
+            // queuing a user turn.
             thread
                 .preview_turn_context_overrides(overrides.clone())
                 .await
@@ -561,6 +570,10 @@ impl TurnRequestProcessor {
             })?;
 
         if has_turn_context_overrides {
+            // The queued UserInputWithTurnContext owns the sticky context
+            // mutation. Wait for core to start processing that turn before
+            // reporting the effective state, otherwise a later direct update
+            // can appear to win and then be overwritten by this turn.
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let turn_started = {
                 let mut thread_state = thread_state.lock().await;
@@ -651,6 +664,8 @@ impl TurnRequestProcessor {
             .await?;
 
         let after_snapshot = if let Some(overrides) = resolved_overrides {
+            // There is no queued turn to order against here, so applying
+            // directly gives the caller a synchronized response snapshot.
             thread
                 .update_turn_context_overrides(overrides)
                 .await
