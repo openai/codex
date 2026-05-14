@@ -83,7 +83,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
             serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
         Ok(codex_tools::JsonToolOutput::new(json!({
             "arguments": arguments,
-            "callId": call.call_id.clone(),
+            "callId": call.call_id,
             "ok": true,
         })))
     }
