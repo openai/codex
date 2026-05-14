@@ -2,7 +2,13 @@ name: rust-ci-full
 run-name: >-
   rust-ci-full${{
     github.event_name == 'workflow_dispatch' &&
-    format(' windows-nextest-{0} arm64-shards-{1}', inputs.windows_nextest_threads || 'default', inputs.windows_arm64_partitions || '1') ||
+    format(
+      ' windows-nextest-{0} arm64-shards-{1}{2}',
+      inputs.windows_nextest_threads || 'default',
+      inputs.windows_arm64_partitions || '1',
+      inputs.windows_arm64_archive == 'true' && ' arm64-archive' || ''
+    ) ||
+    contains(github.ref_name, 'arm64-cross-archive') && ' arm64-cross-archive' ||
     contains(github.ref_name, 'arm64-shards-4') && ' arm64-shards-4' ||
     contains(github.ref_name, 'arm64-shards-2') && ' arm64-shards-2' ||
     ''
@@ -27,6 +33,14 @@ on:
           - "1"
           - "2"
           - "4"
+      windows_arm64_archive:
+        description: "Build Windows arm64 nextest archive on Windows x64, then run it on Windows arm64"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 # CI builds in debug (dev) for faster signal.
 
@@ -559,6 +573,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      windows_arm64_archive_matrix: ${{ steps.matrix.outputs.windows_arm64_archive_matrix }}
+      windows_arm64_archive: ${{ steps.matrix.outputs.windows_arm64_archive }}
     env:
       WINDOWS_ARM64_PARTITIONS: >-
         ${{
@@ -566,6 +582,12 @@ jobs:
           contains(github.ref_name, 'arm64-shards-4') && '4' ||
           contains(github.ref_name, 'arm64-shards-2') && '2' ||
           '1'
+        }}
+      WINDOWS_ARM64_ARCHIVE: >-
+        ${{
+          github.event_name == 'workflow_dispatch' && inputs.windows_arm64_archive ||
+          contains(github.ref_name, 'arm64-cross-archive') && 'true' ||
+          'false'
         }}
     steps:
       - name: Build test matrix
@@ -580,12 +602,20 @@ jobs:
               exit 1
               ;;
           esac
+          case "${WINDOWS_ARM64_ARCHIVE}" in
+            true|false) ;;
+            *)
+              echo "Unsupported WINDOWS_ARM64_ARCHIVE=${WINDOWS_ARM64_ARCHIVE}" >&2
+              exit 1
+              ;;
+          esac
 
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           import os
 
           windows_arm64_partitions = int(os.environ["WINDOWS_ARM64_PARTITIONS"])
+          windows_arm64_archive = os.environ["WINDOWS_ARM64_ARCHIVE"] == "true"
 
           def row(runner, target, profile, *, timeout_minutes=None, remote_env=None, runs_on=None, partition_index=None):
               partition_suffix = ""
@@ -642,8 +672,9 @@ jobs:
               ),
           ]
 
+          windows_arm64_rows = []
           for partition_index in range(1, windows_arm64_partitions + 1):
-              include.append(
+              windows_arm64_rows.append(
                   row(
                       "windows-arm64",
                       "aarch64-pc-windows-msvc",
@@ -654,10 +685,202 @@ jobs:
                   )
               )
 
+          if not windows_arm64_archive:
+              include.extend(windows_arm64_rows)
+
           print("matrix<<JSON")
           print(json.dumps({"include": include}, separators=(",", ":")))
           print("JSON")
+          print("windows_arm64_archive_matrix<<JSON")
+          print(json.dumps({"include": windows_arm64_rows}, separators=(",", ":")))
+          print("JSON")
+          print(f"windows_arm64_archive={'true' if windows_arm64_archive else 'false'}")
           PY
+
+  windows_arm64_test_archive:
+    name: Build Windows arm64 nextest archive
+    needs: test_matrix
+    if: ${{ needs.test_matrix.outputs.windows_arm64_archive == 'true' }}
+    runs-on:
+      group: codex-runners
+      labels: codex-windows-x64
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      USE_SCCACHE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_IDLE_TIMEOUT: "0"
+      WINDOWS_ARM64_ARCHIVE_FILE: windows-arm64-nextest-archive.tar.zst
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Configure Dev Drive (Windows)
+        shell: pwsh
+        run: ../.github/scripts/setup-dev-drive.ps1
+
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Expose MSVC SDK environment (Windows)
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: aarch64-pc-windows-msvc
+
+      - name: Compute lockfile hash
+        id: lockhash
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-windows-x64-aarch64-pc-windows-msvc-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+          restore-keys: |
+            cargo-home-windows-x64-aarch64-pc-windows-msvc-dev-
+
+      - name: Install sccache
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        uses: taiki-e/install-action@cca35edeb1d01366c2843b68fc3ca441446d73d3 # v2.77.1
+        with:
+          tool: sccache@0.14.0
+          fallback: none
+
+      - name: Configure sccache backend
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            if [[ -n "${DEV_DRIVE:-}" ]]; then
+              echo "SCCACHE_DIR=${DEV_DRIVE}\\.sccache" >> "$GITHUB_ENV"
+            else
+              echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            fi
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+
+      - name: Enable sccache wrapper
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrapper="$(command -v sccache)"
+          if [[ "${RUNNER_OS}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+            wrapper="$(cygpath -w "${wrapper}")"
+          fi
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-windows-x64-aarch64-pc-windows-msvc-dev-archive-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-windows-x64-aarch64-pc-windows-msvc-dev-archive-${{ steps.lockhash.outputs.hash }}-
+            sccache-windows-x64-aarch64-pc-windows-msvc-dev-${{ steps.lockhash.outputs.hash }}-
+            sccache-windows-x64-aarch64-pc-windows-msvc-dev-
+
+      - name: Start sccache server
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server
+          sccache --show-stats
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+
+      - name: Build nextest archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="${RUNNER_TEMP}/nextest-archive"
+          mkdir -p "${archive_dir}"
+          cargo nextest archive \
+            --target aarch64-pc-windows-msvc \
+            --cargo-profile ci-test \
+            --timings \
+            --archive-file "${archive_dir}/${WINDOWS_ARM64_ARCHIVE_FILE}"
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-arm64-nextest-archive
+          path: ${{ runner.temp }}/nextest-archive/${{ env.WINDOWS_ARM64_ARCHIVE_FILE }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Cargo timings (nextest archive)
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-rust-ci-nextest-aarch64-pc-windows-msvc-dev-archive
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-windows-x64-aarch64-pc-windows-msvc-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-windows-x64-aarch64-pc-windows-msvc-dev-archive-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+
+      - name: sccache stats
+        if: always() && env.USE_SCCACHE == 'true'
+        continue-on-error: true
+        run: sccache --show-stats || true
+
+      - name: sccache summary
+        if: always() && env.USE_SCCACHE == 'true'
+        shell: bash
+        run: |
+          {
+            echo "### sccache stats — aarch64-pc-windows-msvc (archive)";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
 
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}${{ matrix.partition_name }}
@@ -898,6 +1121,87 @@ jobs:
           echo "Tests failed. See logs for details."
           exit 1
 
+  windows_arm64_archive_tests:
+    name: Tests — windows-arm64 archive - aarch64-pc-windows-msvc${{ matrix.partition_name }}
+    needs: [test_matrix, windows_arm64_test_archive]
+    if: ${{ needs.test_matrix.outputs.windows_arm64_archive == 'true' && needs.windows_arm64_test_archive.result == 'success' }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout_minutes || 45 }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      WINDOWS_NEXTEST_THREADS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_nextest_threads || '' }}
+      WINDOWS_ARM64_ARCHIVE_FILE: windows-arm64-nextest-archive.tar.zst
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test_matrix.outputs.windows_arm64_archive_matrix) }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Configure Dev Drive (Windows)
+        shell: pwsh
+        run: ../.github/scripts/setup-dev-drive.ps1
+
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-arm64-nextest-archive
+          path: ${{ runner.temp }}/windows-arm64-nextest-archive
+
+      - name: tests
+        id: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_file="${RUNNER_TEMP}/windows-arm64-nextest-archive/${WINDOWS_ARM64_ARCHIVE_FILE}"
+          workspace_root="$(pwd)"
+          extract_dir="${RUNNER_TEMP}/nextest-extract${{ matrix.partition_suffix }}"
+          if [[ "${RUNNER_OS}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+            mkdir -p "$(cygpath -u "${extract_dir}")"
+            archive_file="$(cygpath -w "${archive_file}")"
+            workspace_root="$(cygpath -w "${workspace_root}")"
+            extract_dir="$(cygpath -w "${extract_dir}")"
+          else
+            mkdir -p "${extract_dir}"
+          fi
+          nextest_args=(
+            --no-fail-fast
+            --archive-file "${archive_file}"
+            --workspace-remap "${workspace_root}"
+            --extract-to "${extract_dir}"
+            --extract-overwrite
+          )
+          if [[ -n "${WINDOWS_NEXTEST_THREADS}" ]]; then
+            nextest_args+=(--test-threads "${WINDOWS_NEXTEST_THREADS}")
+          fi
+          if [[ -n "${NEXTEST_PARTITION}" ]]; then
+            nextest_args+=(--partition "${NEXTEST_PARTITION}")
+          fi
+          cargo nextest run "${nextest_args[@]}"
+        env:
+          RUST_BACKTRACE: 1
+          RUST_MIN_STACK: "8388608" # 8 MiB
+          NEXTEST_STATUS_LEVEL: leak
+          NEXTEST_PARTITION: ${{ matrix.nextest_partition }}
+
+      - name: verify tests passed
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "Tests failed. See logs for details."
+          exit 1
+
   # --- Gatherer job for the full post-merge workflow --------------------------
   results:
     name: Full CI results
@@ -910,6 +1214,8 @@ jobs:
         lint_build,
         test_matrix,
         tests,
+        windows_arm64_test_archive,
+        windows_arm64_archive_tests,
       ]
     if: always()
     runs-on: ubuntu-24.04
@@ -924,6 +1230,8 @@ jobs:
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "matrix : ${{ needs.test_matrix.result }}"
           echo "tests  : ${{ needs.tests.result }}"
+          echo "archive: ${{ needs.windows_arm64_test_archive.result }}"
+          echo "armins : ${{ needs.windows_arm64_archive_tests.result }}"
           [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
           [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
@@ -931,6 +1239,13 @@ jobs:
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.test_matrix.result }}' == 'success' ]] || { echo 'test_matrix failed'; exit 1; }
           [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+          if [[ '${{ needs.test_matrix.outputs.windows_arm64_archive }}' == 'true' ]]; then
+            [[ '${{ needs.windows_arm64_test_archive.result }}' == 'success' ]] || { echo 'windows_arm64_test_archive failed'; exit 1; }
+            [[ '${{ needs.windows_arm64_archive_tests.result }}' == 'success' ]] || { echo 'windows_arm64_archive_tests failed'; exit 1; }
+          else
+            [[ '${{ needs.windows_arm64_test_archive.result }}' == 'skipped' ]] || { echo 'windows_arm64_test_archive unexpectedly ran'; exit 1; }
+            [[ '${{ needs.windows_arm64_archive_tests.result }}' == 'skipped' ]] || { echo 'windows_arm64_archive_tests unexpectedly ran'; exit 1; }
+          fi
 
       - name: sccache summary note
         if: always()
