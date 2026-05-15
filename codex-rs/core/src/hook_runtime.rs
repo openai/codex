@@ -308,6 +308,8 @@ pub(crate) async fn run_turn_stop_hooks(
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
 ) -> StopOutcome {
+    // Resolve the stop hook kind from the session source before building the
+    // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
     let (target, transcript_path) = match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             agent_role,
@@ -347,6 +349,8 @@ pub(crate) async fn run_turn_stop_hooks(
                 parent_transcript_path,
             )
         }
+        // Internal/synthetic subagents do not expose user-configured lifecycle
+        // hooks, so there is no Stop or SubagentStop request to dispatch.
         SessionSource::SubAgent(_) => return StopOutcome::default(),
         _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
