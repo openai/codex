@@ -4016,6 +4016,10 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "apps_mcp_product_sku": {
+      "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",
+      "type": "string"
+    },
     "audio": {
       "allOf": [
         {

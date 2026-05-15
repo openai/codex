@@ -2404,6 +2404,7 @@ wire_api = "responses"
     let ignored_project_config_keys = vec![
         "openai_base_url",
         "chatgpt_base_url",
+        "apps_mcp_product_sku",
         "model_provider",
         "model_providers",
         "notify",
