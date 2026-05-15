@@ -209,6 +209,7 @@ impl CommandExecRequestProcessor {
             command,
             cwd: cwd.clone(),
             expiration,
+            graceful_cancellation: None,
             capture_policy,
             env,
             network: started_network_proxy
