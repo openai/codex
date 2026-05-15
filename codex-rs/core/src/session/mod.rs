@@ -2690,14 +2690,6 @@ impl Session {
         {
             developer_sections.push(developer_instructions.to_string());
         }
-        // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-        {
-            developer_sections.push(memory_prompt);
-        }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if turn_context.config.include_collaboration_mode_instructions
             && let Some(collab_instructions) =
@@ -3437,8 +3429,6 @@ pub(crate) fn emit_subagent_session_started(
         created_at,
     });
 }
-
-use codex_memories_read::build_memory_tool_developer_instructions;
 
 /// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
 async fn build_hooks_for_config(

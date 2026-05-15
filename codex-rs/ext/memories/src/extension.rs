@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -23,6 +24,15 @@ pub(crate) struct MemoriesExtension;
 pub(crate) struct MemoriesExtensionConfig {
     pub(crate) enabled: bool,
     pub(crate) codex_home: AbsolutePathBuf,
+}
+
+impl MemoriesExtensionConfig {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
+            codex_home: config.codex_home.clone(),
+        }
+    }
 }
 
 impl ContextContributor for MemoriesExtension {
@@ -50,11 +60,21 @@ impl ContextContributor for MemoriesExtension {
 
 impl ThreadLifecycleContributor<Config> for MemoriesExtension {
     fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input.thread_store.insert(MemoriesExtensionConfig {
-            enabled: input.config.features.enabled(Feature::MemoryTool)
-                && input.config.memories.use_memories,
-            codex_home: input.config.codex_home.clone(),
-        });
+        input
+            .thread_store
+            .insert(MemoriesExtensionConfig::from_config(input.config));
+    }
+}
+
+impl ConfigContributor<Config> for MemoriesExtension {
+    fn on_config_changed(
+        &self,
+        _session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        _previous_config: &Config,
+        new_config: &Config,
+    ) {
+        thread_store.insert(MemoriesExtensionConfig::from_config(new_config));
     }
 }
 
@@ -79,6 +99,8 @@ impl ToolContributor for MemoriesExtension {
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
     let extension = Arc::new(MemoriesExtension);
     registry.thread_lifecycle_contributor(extension.clone());
-    registry.prompt_contributor(extension.clone());
-    registry.tool_contributor(extension);
+    registry.config_contributor(extension.clone());
+    registry.prompt_contributor(extension);
+    // Keep the read/retrieval tools out of app-server until that rollout is intentional.
+    // registry.tool_contributor(extension);
 }
