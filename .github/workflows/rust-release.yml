@@ -1274,8 +1274,8 @@ jobs:
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
     # promote_signed intentionally skips build jobs that are ancestors of release;
-    # include a status function so Actions does not apply its implicit success()
-    # check to the whole dependency chain before evaluating release outputs.
+    # include the always() status function so Actions does not apply its implicit
+    # success() check to the whole dependency chain before evaluating release outputs.
     if: >-
       ${{
         always() &&
