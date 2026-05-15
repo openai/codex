@@ -2782,13 +2782,16 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "hello from worker".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "hello from worker".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await
@@ -3267,13 +3270,16 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "completed".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "completed".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let wait_output = wait_task
         .await
@@ -3337,13 +3343,16 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
         .agent_path
         .expect("worker path");
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "already queued".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "already queued".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = timeout(
         Duration::from_millis(500),
@@ -3433,13 +3442,16 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_b_path,
-        AgentPath::root(),
-        Vec::new(),
-        "from worker b".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_b_path,
+            AgentPath::root(),
+            Vec::new(),
+            "from worker b".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await
@@ -3518,13 +3530,16 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "sensitive child output".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "sensitive child output".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await

@@ -373,6 +373,7 @@ impl CodexThread {
         {
             self.codex
                 .session
+                .input_queue
                 .queue_response_items_for_next_turn(items)
                 .await;
             self.codex.session.maybe_start_turn_for_pending_work().await;

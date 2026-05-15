@@ -486,7 +486,13 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     timeout(Duration::from_secs(5), async {
         loop {
-            if thread.codex.session.has_pending_input().await {
+            if thread
+                .codex
+                .session
+                .input_queue
+                .has_pending_input(&thread.codex.session.active_turn)
+                .await
+            {
                 break;
             }
             sleep(Duration::from_millis(10)).await;
