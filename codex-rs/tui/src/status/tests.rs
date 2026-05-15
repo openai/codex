@@ -464,6 +464,40 @@ async fn status_permissions_workspace_roots_show_additional_directories() {
 }
 
 #[tokio::test]
+async fn status_permissions_workspace_roots_include_profile_defined_directories() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())
+        .expect("set approval policy");
+    let profile_root = test_path_buf("/workspace/shared").abs();
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot_with_profile_workspace_roots(
+            PermissionProfile::workspace_write_with(
+                std::slice::from_ref(&profile_root),
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ false,
+                /*exclude_slash_tmp*/ false,
+            ),
+            Some(ActivePermissionProfile::new(":workspace")),
+            vec![profile_root.clone()],
+        )
+        .expect("set permission profile");
+
+    assert_eq!(
+        permissions_text_for(&config),
+        Some(format!(
+            "Workspace [{}] (on-request)",
+            profile_root.display()
+        ))
+    );
+}
+
+#[tokio::test]
 async fn status_permissions_broadened_workspace_profile_shows_builtin_label() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
