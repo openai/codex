@@ -127,29 +127,6 @@ fn share_context_for_source(
     }
 }
 
-fn convert_configured_marketplace_to_plugin_marketplace_entry(
-    marketplace: codex_core_plugins::ConfiguredMarketplace,
-    shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
-) -> PluginMarketplaceEntry {
-    PluginMarketplaceEntry {
-        name: marketplace.name,
-        path: Some(marketplace.path),
-        interface: marketplace.interface.map(|interface| MarketplaceInterface {
-            display_name: interface.display_name,
-        }),
-        plugins: marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| {
-                convert_configured_marketplace_plugin_to_plugin_summary(
-                    plugin,
-                    shared_plugin_ids_by_local_path,
-                )
-            })
-            .collect(),
-    }
-}
-
 fn convert_configured_marketplace_plugin_to_plugin_summary(
     plugin: codex_core_plugins::ConfiguredMarketplacePlugin,
     shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
@@ -566,11 +543,24 @@ impl PluginRequestProcessor {
                     outcome
                         .marketplaces
                         .into_iter()
-                        .map(|marketplace| {
-                            convert_configured_marketplace_to_plugin_marketplace_entry(
-                                marketplace,
-                                &shared_plugin_ids_by_local_path,
-                            )
+                        .map(|marketplace| PluginMarketplaceEntry {
+                            name: marketplace.name,
+                            path: Some(marketplace.path),
+                            interface: marketplace.interface.map(|interface| {
+                                MarketplaceInterface {
+                                    display_name: interface.display_name,
+                                }
+                            }),
+                            plugins: marketplace
+                                .plugins
+                                .into_iter()
+                                .map(|plugin| {
+                                    convert_configured_marketplace_plugin_to_plugin_summary(
+                                        plugin,
+                                        &shared_plugin_ids_by_local_path,
+                                    )
+                                })
+                                .collect(),
                         })
                         .collect(),
                     outcome
