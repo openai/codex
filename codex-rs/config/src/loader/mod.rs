@@ -223,16 +223,18 @@ pub async fn load_config_layers_state(
         strict_config,
     )
     .await?;
-    if active_user_profile.is_some()
-        && base_user_layer
-            .config
-            .as_table()
-            .is_some_and(|config| config.contains_key("profiles"))
+    if let Some(active_user_profile) = active_user_profile.as_ref()
+        && base_user_layer.config.as_table().is_some_and(|config| {
+            config
+                .get("profiles")
+                .and_then(TomlValue::as_table)
+                .is_some_and(|profiles| profiles.contains_key(active_user_profile.as_str()))
+        })
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "--profile-v2 cannot be used while {} contains legacy `[profiles]` config; move those profile settings into a profile-v2 file such as {} or remove `[profiles]`",
+                "--profile-v2 `{active_user_profile}` cannot be used while {} contains legacy `[profiles.{active_user_profile}]` config; move those settings into {} or remove `[profiles.{active_user_profile}]`",
                 base_user_file.as_path().display(),
                 active_user_file.as_path().display()
             ),
