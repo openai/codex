@@ -323,9 +323,9 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     );
     let security =
         prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
-    allow_null_device_for_workspace_write(common.is_workspace_write);
+    allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
-    let persist_aces = common.is_workspace_write;
+    let persist_aces = common.uses_write_capabilities;
     let guards = apply_legacy_session_acl_rules(
         &common.policy,
         sandbox_policy_cwd,

@@ -410,7 +410,7 @@ mod windows_impl {
         let policy = common.policy;
         let current_dir = common.current_dir;
         let logs_base_dir = common.logs_base_dir.as_deref();
-        let is_workspace_write = common.is_workspace_write;
+        let uses_write_capabilities = common.uses_write_capabilities;
         if !policy.has_full_disk_read_access() {
             anyhow::bail!(
                 "Restricted read-only access requires the elevated Windows sandbox backend"
@@ -429,8 +429,8 @@ mod windows_impl {
             codex_home,
         );
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
-        allow_null_device_for_workspace_write(is_workspace_write);
-        let persist_aces = is_workspace_write;
+        allow_null_device_for_workspace_write(uses_write_capabilities);
+        let persist_aces = uses_write_capabilities;
         let guards = apply_legacy_session_acl_rules(
             &policy,
             sandbox_policy_cwd,
@@ -637,7 +637,8 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use crate::policy::SandboxPolicy;
-        use crate::spawn_prep::should_apply_network_block;
+        use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+        use std::path::Path;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
@@ -646,6 +647,11 @@ mod windows_impl {
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
+        }
+
+        fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, Path::new("."))
+                .should_apply_network_block()
         }
 
         #[test]

@@ -56,13 +56,6 @@ pub fn token_mode_for_permission_profile(
 }
 
 impl ResolvedWindowsSandboxPermissions {
-    pub(crate) fn from_legacy_policy(policy: &SandboxPolicy) -> Self {
-        Self {
-            file_system: FileSystemSandboxPolicy::from(policy),
-            network: NetworkSandboxPolicy::from(policy),
-        }
-    }
-
     pub(crate) fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
         Self {
             file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd),
@@ -92,6 +85,18 @@ impl ResolvedWindowsSandboxPermissions {
 
     pub(crate) fn should_apply_network_block(&self) -> bool {
         !self.network.is_enabled()
+    }
+
+    pub(crate) fn network_policy(&self) -> NetworkSandboxPolicy {
+        self.network
+    }
+
+    pub(crate) fn uses_write_capabilities_for_cwd(
+        &self,
+        cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> bool {
+        !self.writable_roots_for_cwd(cwd, env_map).is_empty()
     }
 
     pub(crate) fn writable_roots_for_cwd(
