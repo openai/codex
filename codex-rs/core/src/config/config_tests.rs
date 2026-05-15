@@ -4877,12 +4877,14 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     config.apps_mcp_path_override = Some("/custom/mcp".to_string());
+    config.apps_mcp_product_sku = Some("tpp".to_string());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
     assert_eq!(
         mcp_config.apps_mcp_path_override.as_deref(),
         Some("/custom/mcp")
     );
+    assert_eq!(mcp_config.apps_mcp_product_sku.as_deref(), Some("tpp"));
 
     let _ = config.features.disable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
@@ -7692,6 +7694,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             apps_mcp_path_override: None,
+            apps_mcp_product_sku: None,
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
@@ -8142,6 +8145,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -8306,6 +8310,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -8455,6 +8460,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -9174,6 +9180,27 @@ path = "/custom/mcp"
         Some("/custom/mcp")
     );
     assert!(config.features.enabled(Feature::AppsMcpPathOverride));
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+apps_mcp_product_sku = "tpp"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP SKU");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.apps_mcp_product_sku.as_deref(), Some("tpp"));
     Ok(())
 }
 
