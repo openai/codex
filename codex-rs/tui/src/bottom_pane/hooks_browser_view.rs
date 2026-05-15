@@ -737,6 +737,7 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     }
 }
@@ -751,6 +752,7 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
         HookEventName::SubagentStart => "When a subagent is created",
+        HookEventName::SubagentStop => "Right before a subagent ends its turn",
         HookEventName::Stop => "Right before Codex ends its turn",
     }
 }

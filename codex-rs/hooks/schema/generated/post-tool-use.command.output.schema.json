@@ -18,6 +18,7 @@
         "SessionStart",
         "UserPromptSubmit",
         "SubagentStart",
+        "SubagentStop",
         "Stop"
       ],
       "type": "string"
