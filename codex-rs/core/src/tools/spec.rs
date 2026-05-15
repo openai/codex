@@ -11,7 +11,3 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
         ShellType::Cmd => ToolUserShellType::Cmd,
     }
 }
-
-#[cfg(test)]
-#[path = "spec_tests.rs"]
-mod tests;

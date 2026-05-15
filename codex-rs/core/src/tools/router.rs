@@ -17,7 +17,6 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::ToolsConfig;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -45,8 +44,8 @@ pub(crate) struct ToolRouterParams<'a> {
 }
 
 impl ToolRouter {
-    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
-        build_tool_router(config, params)
+    pub fn from_turn_context(turn_context: &TurnContext, params: ToolRouterParams<'_>) -> Self {
+        build_tool_router(turn_context, params)
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {

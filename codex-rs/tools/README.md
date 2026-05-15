@@ -9,8 +9,8 @@ need to live in `core/src/tools/spec.rs` or `core/src/client_common.rs`:
 - aggregate host models such as `ToolSpec`, `ConfiguredToolSpec`,
   `LoadableToolSpec`, `ResponsesApiNamespace`, and
   `ResponsesApiNamespaceTool`
-- host config and discovery models used while assembling tool sets, including
-  `ToolsConfig`, discoverable-tool models, and request-plugin-install helpers
+- host discovery models used while assembling tool sets, including
+  discoverable-tool models and request-plugin-install helpers
 - host adapters such as schema sanitization, MCP/dynamic conversion, code-mode
   augmentation, and image-detail normalization
 - shared executable-tool contracts such as `ToolExecutor`, `ToolCall`, and

@@ -285,11 +285,6 @@ impl ToolRegistry {
         self.tools.get(name).map(|tool| tool.exposure())
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
-        self.tool(name).is_some()
-    }
-
     pub(crate) fn create_diff_consumer(
         &self,
         name: &ToolName,
