@@ -312,7 +312,7 @@ impl SessionConfiguration {
                     })?;
                 config
                     .permissions
-                    .set_permission_profile_with_active_profile(
+                    .set_permission_profile_from_session_snapshot(
                         permission_profile,
                         Some(active_permission_profile),
                     )?;
