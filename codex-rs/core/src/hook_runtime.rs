@@ -16,6 +16,7 @@ use codex_hooks::SessionStartOutcome;
 use codex_hooks::SessionStartTarget;
 use codex_hooks::StopHookTarget;
 use codex_hooks::StopOutcome;
+use codex_hooks::SubagentHookContext;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
@@ -127,11 +128,11 @@ pub(crate) async fn run_pending_session_start_hooks(
                 codex_hooks::SessionStartSource::Startup
             ) =>
         {
-            let metadata = subagent_hook_metadata(sess, agent_role);
+            let context = subagent_hook_context(sess, agent_role);
             SessionStartTarget::SubagentStart {
                 turn_id: turn_context.sub_id.clone(),
-                agent_id: metadata.agent_id,
-                agent_type: metadata.agent_type,
+                agent_id: context.agent_id,
+                agent_type: context.agent_type,
             }
         }
         SessionSource::SubAgent(_) => return false,
@@ -176,6 +177,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     let request = PreToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -236,6 +238,7 @@ pub(crate) async fn run_permission_request_hooks(
     let request = PermissionRequestRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
@@ -277,6 +280,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -309,7 +313,7 @@ pub(crate) async fn run_turn_stop_hooks(
             parent_thread_id,
             ..
         }) => {
-            let metadata = subagent_hook_metadata(sess, agent_role);
+            let context = subagent_hook_context(sess, agent_role);
             let agent_transcript_path = sess.hook_transcript_path().await;
             let parent_transcript_path = match sess
                 .services
@@ -333,8 +337,8 @@ pub(crate) async fn run_turn_stop_hooks(
             };
             (
                 StopHookTarget::SubagentStop {
-                    agent_id: metadata.agent_id,
-                    agent_type: metadata.agent_type,
+                    agent_id: context.agent_id,
+                    agent_type: context.agent_type,
                     agent_transcript_path,
                 },
                 parent_transcript_path,
@@ -371,6 +375,7 @@ pub(crate) async fn run_pre_compact_hooks(
     let request = codex_hooks::PreCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -409,6 +414,7 @@ pub(crate) async fn run_post_compact_hooks(
     let request = codex_hooks::PostCompactRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -435,6 +441,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
     let request = UserPromptSubmitRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
@@ -688,16 +695,20 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
     .to_string()
 }
 
-struct SubagentHookMetadata {
-    agent_id: String,
-    agent_type: String,
+fn thread_spawn_subagent_hook_context(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+) -> Option<SubagentHookContext> {
+    match &turn_context.session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
+            Some(subagent_hook_context(sess, agent_role))
+        }
+        _ => None,
+    }
 }
 
-fn subagent_hook_metadata(
-    sess: &Arc<Session>,
-    agent_role: &Option<String>,
-) -> SubagentHookMetadata {
-    SubagentHookMetadata {
+fn subagent_hook_context(sess: &Arc<Session>, agent_role: &Option<String>) -> SubagentHookContext {
+    SubagentHookContext {
         agent_id: sess.thread_id().to_string(),
         agent_type: agent_role
             .clone()
