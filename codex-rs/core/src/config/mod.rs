@@ -134,6 +134,7 @@ mod managed_features;
 mod network_proxy_spec;
 mod otel;
 mod permissions;
+mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
 pub use codex_config::ConfigLoadOptions;
@@ -148,6 +149,7 @@ pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
+pub(crate) use resolved_permission_profile::PermissionProfileState;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
@@ -247,15 +249,11 @@ pub(crate) async fn test_config() -> Config {
 pub struct Permissions {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
-    /// Canonical constrained permissions profile before runtime workspace-root
-    /// materialization has been applied.
-    constrained_permissions_profile: Constrained<PermissionProfile>,
-    /// Named or implicit built-in profile selected by config, rather than an
-    /// ad-hoc override.
-    active_permission_profile: Option<ActivePermissionProfile>,
+    /// Constrained permission profile plus its selected profile identity, if
+    /// the profile came from a built-in or named config profile.
+    permission_profile_state: PermissionProfileState,
     /// Thread-scoped runtime workspace roots. Symbolic `:workspace_roots`
-    /// entries in `constrained_permissions_profile` are materialized against
-    /// these roots.
+    /// entries in the permission profile are materialized against these roots.
     workspace_roots: Vec<AbsolutePathBuf>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
@@ -286,8 +284,10 @@ impl Permissions {
     ) -> Self {
         Self {
             approval_policy,
-            constrained_permissions_profile: permission_profile,
-            active_permission_profile: None,
+            permission_profile_state: PermissionProfileState::from_constrained_legacy(
+                permission_profile,
+            )
+            .expect("initial constrained permission profile should be valid"),
             workspace_roots: Vec::new(),
             network: None,
             allow_login_shell: true,
@@ -297,21 +297,88 @@ impl Permissions {
         }
     }
 
-    /// Borrow the constrained canonical profile. This preserves the raw
-    /// symbolic `:workspace_roots` form for session/thread state.
-    pub fn permission_profile(&self) -> &Constrained<PermissionProfile> {
-        &self.constrained_permissions_profile
+    pub(crate) fn permission_profile_state(&self) -> &PermissionProfileState {
+        &self.permission_profile_state
     }
 
-    /// Set the full constrained profile value and preserve the active profile
-    /// sidecar when the caller has already validated both together.
-    pub fn set_constrained_permission_profile_with_active_profile(
+    pub(crate) fn set_permission_profile_state(
+        &mut self,
+        permission_profile_state: PermissionProfileState,
+    ) {
+        self.permission_profile_state = permission_profile_state;
+    }
+
+    /// Apply a permission profile snapshot emitted by core session state.
+    ///
+    /// This is a trusted-state bridge for consumers of `SessionConfigured`.
+    /// Config loading and app-server selection should resolve named profiles
+    /// through config instead of constructing this pair directly.
+    pub fn set_permission_profile_from_session_snapshot(
+        &mut self,
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
+        self.set_permission_profile_from_session_snapshot_with_profile_workspace_roots(
+            permission_profile,
+            active_permission_profile,
+            Vec::new(),
+        )
+    }
+
+    pub fn set_permission_profile_from_session_snapshot_with_profile_workspace_roots(
+        &mut self,
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> ConstraintResult<()> {
+        self.permission_profile_state.set_active_permission_profile(
+            permission_profile,
+            active_permission_profile,
+            profile_workspace_roots,
+        )
+    }
+
+    /// Replace the current permission constraints with a trusted session
+    /// snapshot. This is only for clients that must mirror core session state
+    /// after their local config constraints reject the snapshot.
+    pub fn replace_permission_profile_from_session_snapshot(
         &mut self,
         permission_profile: Constrained<PermissionProfile>,
         active_permission_profile: Option<ActivePermissionProfile>,
-    ) {
-        self.constrained_permissions_profile = permission_profile;
-        self.active_permission_profile = active_permission_profile;
+    ) -> ConstraintResult<()> {
+        self.replace_permission_profile_from_session_snapshot_with_profile_workspace_roots(
+            permission_profile,
+            active_permission_profile,
+            Vec::new(),
+        )
+    }
+
+    pub fn replace_permission_profile_from_session_snapshot_with_profile_workspace_roots(
+        &mut self,
+        permission_profile: Constrained<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> ConstraintResult<()> {
+        self.permission_profile_state = PermissionProfileState::from_constrained_active_profile(
+            permission_profile,
+            active_permission_profile,
+            profile_workspace_roots,
+        )?;
+        Ok(())
+    }
+
+    /// Borrow the canonical profile before runtime workspace-root
+    /// materialization has been applied.
+    pub fn permission_profile(&self) -> &PermissionProfile {
+        self.permission_profile_state.permission_profile()
+    }
+
+    pub fn can_set_permission_profile(
+        &self,
+        permission_profile: &PermissionProfile,
+    ) -> ConstraintResult<()> {
+        self.permission_profile_state
+            .can_set_legacy_permission_profile(permission_profile)
     }
 
     pub fn set_workspace_roots(&mut self, workspace_roots: Vec<AbsolutePathBuf>) {
@@ -329,8 +396,7 @@ impl Permissions {
     }
 
     fn materialized_permission_profile(&self) -> PermissionProfile {
-        self.constrained_permissions_profile
-            .get()
+        self.permission_profile()
             .clone()
             .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
@@ -343,7 +409,7 @@ impl Permissions {
 
     /// Named profile selected by config, if the current profile has one.
     pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
-        self.active_permission_profile.clone()
+        self.permission_profile_state.active_permission_profile()
     }
 
     /// Effective filesystem sandbox policy derived from the canonical profile.
@@ -354,9 +420,7 @@ impl Permissions {
 
     /// Effective network sandbox policy derived from the canonical profile.
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        self.constrained_permissions_profile
-            .get()
-            .network_sandbox_policy()
+        self.permission_profile().network_sandbox_policy()
     }
 
     /// Legacy compatibility projection derived from the canonical profile.
@@ -386,8 +450,8 @@ impl Permissions {
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
-        self.constrained_permissions_profile
-            .can_set(&permission_profile)
+        self.permission_profile_state
+            .can_set_legacy_permission_profile(&permission_profile)
     }
 
     /// Set permissions from a legacy sandbox policy and keep every permission
@@ -427,9 +491,8 @@ impl Permissions {
             ],
         };
 
-        self.constrained_permissions_profile
-            .set(permission_profile)?;
-        self.active_permission_profile = None;
+        self.permission_profile_state
+            .set_legacy_permission_profile(permission_profile)?;
         Ok(())
     }
 
@@ -438,23 +501,8 @@ impl Permissions {
         &mut self,
         permission_profile: PermissionProfile,
     ) -> ConstraintResult<()> {
-        self.set_permission_profile_with_active_profile(
-            permission_profile,
-            /*active_permission_profile*/ None,
-        )
-    }
-
-    /// Set permissions from the canonical profile and record the named source
-    /// profile, if one is known.
-    pub fn set_permission_profile_with_active_profile(
-        &mut self,
-        permission_profile: PermissionProfile,
-        active_permission_profile: Option<ActivePermissionProfile>,
-    ) -> ConstraintResult<()> {
-        self.constrained_permissions_profile
-            .set(permission_profile)?;
-        self.active_permission_profile = active_permission_profile;
-        Ok(())
+        self.permission_profile_state
+            .set_legacy_permission_profile(permission_profile)
     }
 }
 
@@ -3225,6 +3273,12 @@ impl Config {
             .value
             .set(effective_permission_profile)
             .map_err(std::io::Error::from)?;
+        let permission_profile_state = PermissionProfileState::from_constrained_active_profile(
+            constrained_permission_profile.value,
+            active_permission_profile,
+            Vec::new(),
+        )
+        .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
@@ -3240,8 +3294,7 @@ impl Config {
             startup_warnings,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
-                constrained_permissions_profile: constrained_permission_profile.value,
-                active_permission_profile,
+                permission_profile_state,
                 workspace_roots,
                 network,
                 allow_login_shell,
@@ -3526,7 +3579,7 @@ impl Config {
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
         !matches!(
-            self.permissions.permission_profile().get(),
+            self.permissions.permission_profile(),
             PermissionProfile::Disabled
         ) && self
             .config_layer_stack
