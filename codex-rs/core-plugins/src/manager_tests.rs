@@ -355,6 +355,8 @@ plugins = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: None,
         keywords: Vec::new(),
@@ -387,6 +389,8 @@ remote_plugin = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: None,
         keywords: Vec::new(),
@@ -406,6 +410,8 @@ fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() 
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::InstalledByDefault,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnInstall,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         interface: Some(codex_app_server_protocol::PluginInterface {
             display_name: Some("Linear".to_string()),
@@ -442,6 +448,14 @@ fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() 
     assert_eq!(plugin.name, "linear");
     assert_eq!(plugin.installed, true);
     assert_eq!(plugin.enabled, true);
+    assert_eq!(
+        plugin.install_policy,
+        codex_app_server_protocol::PluginInstallPolicy::InstalledByDefault
+    );
+    assert_eq!(
+        plugin.auth_policy,
+        codex_app_server_protocol::PluginAuthPolicy::OnInstall
+    );
     assert_eq!(plugin.keywords, vec!["issues".to_string()]);
     assert_eq!(
         plugin

@@ -63,7 +63,7 @@ const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
-const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 4] = [
+const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 5] = [
     (
         REMOTE_GLOBAL_MARKETPLACE_NAME,
         REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME,
@@ -71,6 +71,10 @@ const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 4] = [
     (
         REMOTE_WORKSPACE_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME,
+    ),
+    (
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME,
     ),
     (
         REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
@@ -107,6 +111,8 @@ pub struct RemoteInstalledPlugin {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    pub install_policy: PluginInstallPolicy,
+    pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
     pub keywords: Vec<String>,
@@ -684,8 +690,8 @@ pub fn group_remote_installed_plugins_by_marketplaces(
             share_context: None,
             installed: true,
             enabled: plugin.enabled,
-            install_policy: PluginInstallPolicy::Available,
-            auth_policy: PluginAuthPolicy::OnUse,
+            install_policy: plugin.install_policy,
+            auth_policy: plugin.auth_policy,
             availability: plugin.availability,
             interface: plugin.interface.clone(),
             keywords: plugin.keywords.clone(),
@@ -1052,6 +1058,8 @@ fn remote_installed_plugin_to_cache_entry(
         id: plugin.id.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
+        install_policy: plugin.installation_policy,
+        auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         interface: remote_plugin_interface_to_info(plugin),
         keywords: plugin.release.keywords.clone(),
