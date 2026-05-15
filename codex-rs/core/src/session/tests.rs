@@ -3583,6 +3583,8 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
             ),
         )
         .expect("set permission profile");
+    let expected_file_system_sandbox_policy = file_system_sandbox_policy
+        .materialize_project_roots_with_workspace_roots(&session_configuration.workspace_roots);
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -3593,7 +3595,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
 
     assert_eq!(
         updated.file_system_sandbox_policy(),
-        file_system_sandbox_policy
+        expected_file_system_sandbox_policy
     );
 }
 
