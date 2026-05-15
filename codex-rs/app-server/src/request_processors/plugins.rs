@@ -122,7 +122,7 @@ fn share_context_for_source(
     }
 }
 
-fn configured_marketplace_to_info(
+fn plugin_marketplace_entry_from_configured_marketplace(
     marketplace: codex_core_plugins::ConfiguredMarketplace,
     shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
 ) -> PluginMarketplaceEntry {
@@ -136,13 +136,16 @@ fn configured_marketplace_to_info(
             .plugins
             .into_iter()
             .map(|plugin| {
-                configured_marketplace_plugin_to_info(plugin, shared_plugin_ids_by_local_path)
+                plugin_summary_from_configured_marketplace_plugin(
+                    plugin,
+                    shared_plugin_ids_by_local_path,
+                )
             })
             .collect(),
     }
 }
 
-fn configured_marketplace_plugin_to_info(
+fn plugin_summary_from_configured_marketplace_plugin(
     plugin: codex_core_plugins::ConfiguredMarketplacePlugin,
     shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
 ) -> PluginSummary {
@@ -765,7 +768,7 @@ impl PluginRequestProcessor {
                     .marketplaces
                     .into_iter()
                     .map(|marketplace| {
-                        configured_marketplace_to_info(
+                        plugin_marketplace_entry_from_configured_marketplace(
                             marketplace,
                             &shared_plugin_ids_by_local_path,
                         )
@@ -826,7 +829,7 @@ impl PluginRequestProcessor {
                                                 .contains(&plugin.name)
                                     })
                                     .map(|plugin| {
-                                        configured_marketplace_plugin_to_info(
+                                        plugin_summary_from_configured_marketplace_plugin(
                                             plugin,
                                             &shared_plugin_ids_by_local_path_for_suggestions,
                                         )
