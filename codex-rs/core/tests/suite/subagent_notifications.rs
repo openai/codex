@@ -180,6 +180,27 @@ fn read_hook_log(home: &Path, filename: &str) -> Result<Vec<serde_json::Value>> 
         .collect()
 }
 
+async fn wait_for_hook_log(
+    home: &Path,
+    filename: &str,
+    expected_len: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let inputs = read_hook_log(home, filename)?;
+        if inputs.len() >= expected_len {
+            return Ok(inputs);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "expected at least {expected_len} entries in {filename}, got {}",
+                inputs.len()
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -418,7 +439,8 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
     let child_requests = wait_for_requests(&child_request_log).await?;
     assert_eq!(child_requests.len(), 1);
 
-    let start_inputs = read_hook_log(test.codex_home_path(), "subagent_start_hook_log.jsonl")?;
+    let start_inputs =
+        wait_for_hook_log(test.codex_home_path(), "subagent_start_hook_log.jsonl", 1).await?;
     assert_eq!(start_inputs.len(), 1);
     assert_eq!(start_inputs[0]["agent_type"].as_str(), Some("worker"));
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
@@ -428,7 +450,7 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
     );
 
     let session_start_inputs =
-        read_hook_log(test.codex_home_path(), "session_start_hook_log.jsonl")?;
+        wait_for_hook_log(test.codex_home_path(), "session_start_hook_log.jsonl", 1).await?;
     assert_eq!(session_start_inputs.len(), 1);
     assert_eq!(session_start_inputs[0]["source"].as_str(), Some("startup"));
     assert_ne!(
