@@ -11,9 +11,6 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SkillsConfigWriteParams;
-use codex_app_server_protocol::SkillsConfigWriteResponse;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
@@ -24,14 +21,6 @@ pub(crate) fn replace_config_value(key_path: impl Into<String>, value: JsonValue
         key_path: key_path.into(),
         value,
         merge_strategy: MergeStrategy::Replace,
-    }
-}
-
-pub(crate) fn upsert_config_value(key_path: impl Into<String>, value: JsonValue) -> ConfigEdit {
-    ConfigEdit {
-        key_path: key_path.into(),
-        value,
-        merge_strategy: MergeStrategy::Upsert,
     }
 }
 
@@ -57,23 +46,4 @@ pub(crate) async fn write_config_batch(
         })
         .await
         .wrap_err("config/batchWrite failed in TUI")
-}
-
-pub(crate) async fn write_skill_enabled(
-    request_handle: AppServerRequestHandle,
-    path: AbsolutePathBuf,
-    enabled: bool,
-) -> Result<SkillsConfigWriteResponse> {
-    let request_id = RequestId::String(format!("tui-skill-config-write-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::SkillsConfigWrite {
-            request_id,
-            params: SkillsConfigWriteParams {
-                path: Some(path),
-                name: None,
-                enabled,
-            },
-        })
-        .await
-        .wrap_err("skills/config/write failed in TUI")
 }
