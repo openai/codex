@@ -742,7 +742,9 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-            permission_profile: Some(PermissionProfile::workspace_write()),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -751,6 +753,26 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             collaboration_mode: None,
             personality: None,
         }
+    );
+
+    let permission_profile_update = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::UpdatePermissionProfile {
+                permission_profile,
+                active_permission_profile,
+            } => Some((permission_profile, active_permission_profile)),
+            _ => None,
+        })
+        .expect("expected UpdatePermissionProfile event");
+
+    assert_eq!(
+        permission_profile_update,
+        (
+            PermissionProfile::workspace_write(),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            ))
+        )
     );
 }
 

@@ -17,13 +17,15 @@ impl ChatWidget {
         }
     }
 
-    /// Set the permission profile in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_permission_profile(
+    pub(crate) fn set_permission_profile_from_session_snapshot(
         &mut self,
         profile: PermissionProfile,
+        active_profile: Option<ActivePermissionProfile>,
     ) -> ConstraintResult<()> {
-        self.config.permissions.set_permission_profile(profile)?;
+        self.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(profile, active_profile)?;
         self.refresh_status_surfaces();
         Ok(())
     }
