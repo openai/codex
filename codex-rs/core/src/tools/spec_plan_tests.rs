@@ -267,6 +267,49 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
+struct SpecOnlyExtensionTool {
+    name: &'static str,
+    description: &'static str,
+    exposure: ToolExposure,
+    defer_loading: Option<bool>,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for SpecOnlyExtensionTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(self.name)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: self.name.to_string(),
+            description: self.description.to_string(),
+            strict: true,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::from([(
+                    "message".to_string(),
+                    codex_tools::JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["message".to_string()]),
+                Some(false.into()),
+            ),
+            output_schema: None,
+            defer_loading: self.defer_loading,
+        })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
+    async fn handle(
+        &self,
+        _call: ExtensionToolCall,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        panic!("spec planning should not execute extension tools")
+    }
+}
+
 struct WebRunExtensionTool;
 
 #[async_trait::async_trait]
@@ -391,6 +434,65 @@ async fn request_user_input_tool_respects_experimental_config_gate() {
     .await;
     disabled.assert_visible_lacks(&["request_user_input"]);
     disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
+async fn deferred_extension_tools_remain_model_visible() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![
+                Arc::new(SpecOnlyExtensionTool {
+                    name: "extension_echo",
+                    description: "Echoes arguments through an extension tool.",
+                    exposure: ToolExposure::Deferred,
+                    defer_loading: None,
+                }),
+                Arc::new(SpecOnlyExtensionTool {
+                    name: "extension_lazy",
+                    description: "Lazy extension tool.",
+                    exposure: ToolExposure::Deferred,
+                    defer_loading: Some(true),
+                }),
+                Arc::new(SpecOnlyExtensionTool {
+                    name: "extension_model_only",
+                    description: "Model-only extension tool.",
+                    exposure: ToolExposure::DirectModelOnly,
+                    defer_loading: None,
+                }),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["extension_echo", "extension_lazy", "extension_model_only"]);
+    assert_eq!(plan.exposure("extension_echo"), ToolExposure::Direct);
+    assert_eq!(plan.exposure("extension_lazy"), ToolExposure::Direct);
+    assert_eq!(
+        plan.exposure("extension_model_only"),
+        ToolExposure::DirectModelOnly
+    );
+    assert_eq!(
+        plan.visible_spec("extension_lazy"),
+        &ToolSpec::Function(ResponsesApiTool {
+            name: "extension_lazy".to_string(),
+            description: "Lazy extension tool.".to_string(),
+            strict: true,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::from([(
+                    "message".to_string(),
+                    codex_tools::JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["message".to_string()]),
+                Some(false.into()),
+            ),
+            output_schema: None,
+            defer_loading: None,
+        })
+    );
 }
 
 #[tokio::test]
