@@ -355,10 +355,7 @@ plugins = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
-        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
-        share_context: None,
         interface: None,
         keywords: Vec::new(),
     }]);
@@ -390,10 +387,7 @@ remote_plugin = true
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
-        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
-        share_context: None,
         interface: None,
         keywords: Vec::new(),
     }]);
@@ -412,10 +406,7 @@ fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() 
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
-        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
-        share_context: None,
         interface: Some(codex_app_server_protocol::PluginInterface {
             display_name: Some("Linear".to_string()),
             short_description: Some("Track remote work".to_string()),
