@@ -875,6 +875,17 @@ async fn thread_title_from_thread_store(
     (!title.is_empty() && thread.preview.trim() != title).then(|| title.to_string())
 }
 
+struct ManagedNetworkProxyStartParams<'a> {
+    spec: &'a crate::config::NetworkProxySpec,
+    credentialed_routes: &'a [codex_backend_client::ResolvedCredentialRoute],
+    exec_policy: &'a codex_execpolicy::Policy,
+    permission_profile: &'a PermissionProfile,
+    network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
+    managed_network_requirements_enabled: bool,
+    audit_metadata: NetworkProxyAuditMetadata,
+}
+
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -938,14 +949,16 @@ impl Session {
     }
 
     async fn start_managed_network_proxy(
-        spec: &crate::config::NetworkProxySpec,
-        credentialed_routes: &[codex_backend_client::ResolvedCredentialRoute],
-        exec_policy: &codex_execpolicy::Policy,
-        permission_profile: &PermissionProfile,
-        network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
-        blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
-        managed_network_requirements_enabled: bool,
-        audit_metadata: NetworkProxyAuditMetadata,
+        ManagedNetworkProxyStartParams {
+            spec,
+            credentialed_routes,
+            exec_policy,
+            permission_profile,
+            network_policy_decider,
+            blocked_request_observer,
+            managed_network_requirements_enabled,
+            audit_metadata,
+        }: ManagedNetworkProxyStartParams<'_>,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
         debug!(
             credentialed_routes = credentialed_routes.len(),

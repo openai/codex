@@ -683,16 +683,18 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
         /*justification*/ None,
     )?;
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        /*credentialed_routes*/ &[],
-        &exec_policy,
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
+    let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
+        spec: &spec,
+        credentialed_routes: &[],
+        exec_policy: &exec_policy,
+        permission_profile: &permission_profile_for_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+        ),
+        network_policy_decider: None,
+        blocked_request_observer: None,
+        managed_network_requirements_enabled: false,
+        audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+    })
     .await?;
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
@@ -728,16 +730,18 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         /*justification*/ None,
     )?;
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        /*credentialed_routes*/ &[],
-        &exec_policy,
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
+    let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
+        spec: &spec,
+        credentialed_routes: &[],
+        exec_policy: &exec_policy,
+        permission_profile: &permission_profile_for_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+        ),
+        network_policy_decider: None,
+        blocked_request_observer: None,
+        managed_network_requirements_enabled: false,
+        audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+    })
     .await?;
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
@@ -768,16 +772,18 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
         }
     });
 
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        /*credentialed_routes*/ &[],
-        &exec_policy,
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
-        Some(network_policy_decider),
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ true,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
+    let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
+        spec: &spec,
+        credentialed_routes: &[],
+        exec_policy: &exec_policy,
+        permission_profile: &permission_profile_for_sandbox_policy(
+            &SandboxPolicy::DangerFullAccess,
+        ),
+        network_policy_decider: Some(network_policy_decider),
+        blocked_request_observer: None,
+        managed_network_requirements_enabled: true,
+        audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+    })
     .await?;
 
     let spec = spec.recompute_for_permission_profile(&permission_profile_for_sandbox_policy(
@@ -841,16 +847,16 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         Some(requirements),
         &permission_profile_for_sandbox_policy(&initial_policy),
     )?;
-    let (started_proxy, _) = Session::start_managed_network_proxy(
-        &spec,
-        /*credentialed_routes*/ &[],
-        &Policy::empty(),
-        &permission_profile_for_sandbox_policy(&initial_policy),
-        /*network_policy_decider*/ None,
-        /*blocked_request_observer*/ None,
-        /*managed_network_requirements_enabled*/ false,
-        crate::config::NetworkProxyAuditMetadata::default(),
-    )
+    let (started_proxy, _) = Session::start_managed_network_proxy(ManagedNetworkProxyStartParams {
+        spec: &spec,
+        credentialed_routes: &[],
+        exec_policy: &Policy::empty(),
+        permission_profile: &permission_profile_for_sandbox_policy(&initial_policy),
+        network_policy_decider: None,
+        blocked_request_observer: None,
+        managed_network_requirements_enabled: false,
+        audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+    })
     .await?;
     assert_eq!(
         started_proxy

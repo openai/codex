@@ -818,14 +818,19 @@ impl Session {
                             .await;
                     let current_exec_policy = exec_policy.current();
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-                        spec,
-                        &credentialed_routes,
-                        current_exec_policy.as_ref(),
-                        config.permissions.permission_profile(),
-                        network_policy_decider.as_ref().map(Arc::clone),
-                        blocked_request_observer.as_ref().map(Arc::clone),
-                        managed_network_requirements_configured,
-                        network_proxy_audit_metadata,
+                        ManagedNetworkProxyStartParams {
+                            spec,
+                            credentialed_routes: &credentialed_routes,
+                            exec_policy: current_exec_policy.as_ref(),
+                            permission_profile: config.permissions.permission_profile(),
+                            network_policy_decider: network_policy_decider.as_ref().map(Arc::clone),
+                            blocked_request_observer: blocked_request_observer
+                                .as_ref()
+                                .map(Arc::clone),
+                            managed_network_requirements_enabled:
+                                managed_network_requirements_configured,
+                            audit_metadata: network_proxy_audit_metadata,
+                        },
                     )
                     .instrument(info_span!(
                         "session_init.network_proxy",
