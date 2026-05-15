@@ -1273,9 +1273,12 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
+    # promote_signed intentionally skips build jobs that are ancestors of release;
+    # include a status function so Actions does not apply its implicit success()
+    # check to the whole dependency chain before evaluating release outputs.
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.should_publish_npm == 'true'
       }}
@@ -1438,7 +1441,7 @@ jobs:
     # Publish to PyPI for stable releases and alpha pre-releases with numeric suffixes.
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.should_publish_python_runtime == 'true'
       }}
@@ -1484,7 +1487,7 @@ jobs:
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.sign_macos == 'true' &&
         !contains(needs.release.outputs.version, '-')
@@ -1510,7 +1513,7 @@ jobs:
     name: Update latest-alpha-cli branch
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.sign_macos == 'true'
       }}
