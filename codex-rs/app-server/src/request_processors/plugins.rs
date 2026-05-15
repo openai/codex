@@ -24,6 +24,11 @@ pub(crate) struct PluginRequestProcessor {
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
 }
 
+type PluginMarketplaceEntriesAndErrors = (
+    Vec<PluginMarketplaceEntry>,
+    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
+);
+
 fn plugin_skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_skill_paths: &HashSet<AbsolutePathBuf>,
@@ -708,41 +713,87 @@ impl PluginRequestProcessor {
             .into_iter()
             .collect::<HashSet<_>>();
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let empty_response = || PluginInstalledResponse {
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
         };
-        if !config.features.enabled(Feature::Plugins) {
+        let Some((config, auth)) = self.check_plugin_installed_preconditions().await? else {
             return Ok(empty_response());
+        };
+
+        let plugins_input = config.plugins_config_input();
+
+        let (mut data, mut marketplace_load_errors) = self
+            .load_local_installed_plugins(
+                plugins_manager.clone(),
+                &config,
+                &plugins_input,
+                roots.clone(),
+            )
+            .await?;
+
+        let (suggestion_data, suggestion_errors) = self
+            .load_suggestion_plugins(
+                plugins_manager.clone(),
+                &config,
+                &plugins_input,
+                roots,
+                install_suggestion_plugin_names,
+            )
+            .await?;
+        for marketplace in suggestion_data {
+            merge_plugin_marketplace_entry(&mut data, marketplace);
         }
+        marketplace_load_errors.extend(suggestion_errors);
+
+        for marketplace in self
+            .load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
+            .await
+        {
+            merge_plugin_marketplace_entry(&mut data, marketplace);
+        }
+
+        Ok(PluginInstalledResponse {
+            marketplaces: data,
+            marketplace_load_errors,
+        })
+    }
+
+    async fn check_plugin_installed_preconditions(
+        &self,
+    ) -> Result<Option<(Config, Option<CodexAuth>)>, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(None);
+        }
+
         let auth = self.auth_manager.auth().await;
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
-            return Ok(empty_response());
+            return Ok(None);
         }
 
-        let plugins_input = config.plugins_config_input();
+        Ok(Some((config, auth)))
+    }
 
+    async fn load_local_installed_plugins(
+        &self,
+        plugins_manager: Arc<codex_core_plugins::PluginsManager>,
+        config: &Config,
+        plugins_input: &codex_core_plugins::PluginsConfigInput,
+        roots: Vec<AbsolutePathBuf>,
+    ) -> Result<PluginMarketplaceEntriesAndErrors, JSONRPCErrorError> {
         let config_for_installed_listing = plugins_input.clone();
-        let plugins_manager_for_installed_listing = plugins_manager.clone();
-        let roots_for_installed_listing = roots.clone();
-        let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
-        let (mut data, mut marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager_for_installed_listing.list_marketplaces_for_config(
+        let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
+        match tokio::task::spawn_blocking(move || {
+            let outcome = plugins_manager.list_marketplaces_for_config(
                 &config_for_installed_listing,
-                &roots_for_installed_listing,
+                &roots,
                 ConfiguredMarketplacePluginFilter::InstalledOnly,
             )?;
-            Ok::<
-                (
-                    Vec<PluginMarketplaceEntry>,
-                    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
-                ),
-                MarketplaceError,
-            >((
+            Ok::<PluginMarketplaceEntriesAndErrors, MarketplaceError>((
                 outcome
                     .marketplaces
                     .into_iter()
@@ -765,104 +816,98 @@ impl PluginRequestProcessor {
         })
         .await
         {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
-                return Err(Self::marketplace_error(
-                    err,
-                    "list installed marketplace plugins",
-                ));
-            }
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to list installed plugins: {err}"
-                )));
-            }
-        };
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(err)) => Err(Self::marketplace_error(
+                err,
+                "list installed marketplace plugins",
+            )),
+            Err(err) => Err(internal_error(format!(
+                "failed to list installed plugins: {err}"
+            ))),
+        }
+    }
 
-        if !install_suggestion_plugin_names.is_empty() {
-            let config_for_marketplace_listing = plugins_input.clone();
-            let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-            let shared_plugin_ids_by_local_path_for_suggestions =
-                load_shared_plugin_ids_by_local_path(&config)?;
-            let (suggestion_data, suggestion_errors) =
-                match tokio::task::spawn_blocking(move || {
-                    let outcome = plugins_manager_for_marketplace_listing
-                        .list_marketplaces_for_config(
-                            &config_for_marketplace_listing,
-                            &roots,
-                            ConfiguredMarketplacePluginFilter::All,
-                        )?;
-                    Ok::<
-                        (
-                            Vec<PluginMarketplaceEntry>,
-                            Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
-                        ),
-                        MarketplaceError,
-                    >((
-                        outcome
-                            .marketplaces
-                            .into_iter()
-                            .filter_map(|marketplace| {
-                                let plugins = marketplace
-                                    .plugins
-                                    .into_iter()
-                                    .filter(|plugin| {
-                                        !plugin.installed
-                                            && install_suggestion_plugin_names
-                                                .contains(&plugin.name)
-                                    })
-                                    .map(|plugin| {
-                                        convert_configured_marketplace_plugin_to_plugin_summary(
-                                            plugin,
-                                            &shared_plugin_ids_by_local_path_for_suggestions,
-                                        )
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
-                                    name: marketplace.name,
-                                    path: Some(marketplace.path),
-                                    interface: marketplace.interface.map(|interface| {
-                                        MarketplaceInterface {
-                                            display_name: interface.display_name,
-                                        }
-                                    }),
-                                    plugins,
-                                })
-                            })
-                            .collect(),
-                        outcome
-                            .errors
-                            .into_iter()
-                            .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
-                                marketplace_path: err.path,
-                                message: err.message,
-                            })
-                            .collect(),
-                    ))
-                })
-                .await
-                {
-                    Ok(Ok(outcome)) => outcome,
-                    Ok(Err(err)) => {
-                        return Err(Self::marketplace_error(
-                            err,
-                            "list plugin install suggestions",
-                        ));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to list plugin install suggestions: {err}"
-                        )));
-                    }
-                };
-
-            for marketplace in suggestion_data {
-                merge_plugin_marketplace_entry(&mut data, marketplace);
-            }
-            marketplace_load_errors.extend(suggestion_errors);
+    async fn load_suggestion_plugins(
+        &self,
+        plugins_manager: Arc<codex_core_plugins::PluginsManager>,
+        config: &Config,
+        plugins_input: &codex_core_plugins::PluginsConfigInput,
+        roots: Vec<AbsolutePathBuf>,
+        install_suggestion_plugin_names: HashSet<String>,
+    ) -> Result<PluginMarketplaceEntriesAndErrors, JSONRPCErrorError> {
+        if install_suggestion_plugin_names.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
         }
 
+        let config_for_marketplace_listing = plugins_input.clone();
+        let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
+        match tokio::task::spawn_blocking(move || {
+            let outcome = plugins_manager.list_marketplaces_for_config(
+                &config_for_marketplace_listing,
+                &roots,
+                ConfiguredMarketplacePluginFilter::All,
+            )?;
+            Ok::<PluginMarketplaceEntriesAndErrors, MarketplaceError>((
+                outcome
+                    .marketplaces
+                    .into_iter()
+                    .filter_map(|marketplace| {
+                        let plugins = marketplace
+                            .plugins
+                            .into_iter()
+                            .filter(|plugin| {
+                                !plugin.installed
+                                    && install_suggestion_plugin_names.contains(&plugin.name)
+                            })
+                            .map(|plugin| {
+                                convert_configured_marketplace_plugin_to_plugin_summary(
+                                    plugin,
+                                    &shared_plugin_ids_by_local_path,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
+                            name: marketplace.name,
+                            path: Some(marketplace.path),
+                            interface: marketplace.interface.map(|interface| {
+                                MarketplaceInterface {
+                                    display_name: interface.display_name,
+                                }
+                            }),
+                            plugins,
+                        })
+                    })
+                    .collect(),
+                outcome
+                    .errors
+                    .into_iter()
+                    .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
+                        marketplace_path: err.path,
+                        message: err.message,
+                    })
+                    .collect(),
+            ))
+        })
+        .await
+        {
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(err)) => Err(Self::marketplace_error(
+                err,
+                "list plugin install suggestions",
+            )),
+            Err(err) => Err(internal_error(format!(
+                "failed to list plugin install suggestions: {err}"
+            ))),
+        }
+    }
+
+    async fn load_remote_installed_plugins(
+        &self,
+        plugins_manager: Arc<codex_core_plugins::PluginsManager>,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
             plugins_manager.remote_installed_marketplaces_from_cache()
         {
@@ -872,38 +917,27 @@ impl PluginRequestProcessor {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
             plugins_manager
-                .fetch_and_cache_remote_installed_marketplaces(
-                    &remote_plugin_service_config,
-                    auth.as_ref(),
-                )
+                .fetch_and_cache_remote_installed_marketplaces(&remote_plugin_service_config, auth)
                 .await
         };
 
         match remote_marketplaces {
-            Ok(remote_marketplaces) => {
-                for remote_marketplace in remote_marketplaces
-                    .into_iter()
-                    .map(remote_marketplace_to_info)
-                {
-                    merge_plugin_marketplace_entry(&mut data, remote_marketplace);
-                }
-            }
+            Ok(remote_marketplaces) => remote_marketplaces
+                .into_iter()
+                .map(remote_marketplace_to_info)
+                .collect(),
             Err(
                 RemotePluginCatalogError::AuthRequired
                 | RemotePluginCatalogError::UnsupportedAuthMode,
-            ) => {}
+            ) => Vec::new(),
             Err(err) => {
                 warn!(
                     error = %err,
                     "plugin/installed remote installed plugin fetch failed; returning local marketplaces only"
                 );
+                Vec::new()
             }
         }
-
-        Ok(PluginInstalledResponse {
-            marketplaces: data,
-            marketplace_load_errors,
-        })
     }
 
     async fn plugin_read_response(
