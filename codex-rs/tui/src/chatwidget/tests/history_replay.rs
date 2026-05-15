@@ -324,9 +324,10 @@ async fn session_configured_preserves_profile_workspace_roots() {
         .set_workspace_roots(chat.config.workspace_roots.clone());
 
     let session_cwd = test_path_buf("/home/user/sub-agent").abs();
-    let session_workspace_roots = vec![session_cwd.clone(), profile_root];
+    let session_runtime_workspace_roots = vec![session_cwd.clone()];
+    let session_effective_workspace_roots = vec![session_cwd.clone(), profile_root];
     let session_permission_profile = PermissionProfile::workspace_write()
-        .materialize_project_roots_with_workspace_roots(&session_workspace_roots);
+        .materialize_project_roots_with_workspace_roots(&session_effective_workspace_roots);
     let configured = crate::session_state::ThreadSessionState {
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -340,6 +341,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
         permission_profile: session_permission_profile.clone(),
         active_permission_profile: None,
         cwd: session_cwd.clone(),
+        runtime_workspace_roots: session_runtime_workspace_roots.clone(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -352,7 +354,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
     assert_eq!(&chat.config_ref().cwd, &session_cwd);
     assert_eq!(
         chat.config_ref().permissions.user_visible_workspace_roots(),
-        session_workspace_roots.as_slice()
+        session_runtime_workspace_roots.as_slice()
     );
     assert_eq!(
         chat.config_ref().permissions.effective_permission_profile(),
