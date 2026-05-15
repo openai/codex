@@ -688,3 +688,7 @@ fn code_mode_namespace_name<'a>(
         .and_then(|namespace| namespace_descriptions.get(namespace))
         .map(|namespace_description| namespace_description.name.as_str())
 }
+
+#[cfg(test)]
+#[path = "spec_plan_tests.rs"]
+mod tests;
