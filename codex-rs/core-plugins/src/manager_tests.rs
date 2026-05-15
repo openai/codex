@@ -1588,7 +1588,11 @@ enabled = false
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            ConfiguredMarketplacePluginFilter::All,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1688,7 +1692,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            ConfiguredMarketplacePluginFilter::All,
+        )
         .unwrap()
         .marketplaces;
 
@@ -1736,7 +1744,11 @@ plugins = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            ConfiguredMarketplacePluginFilter::All,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2173,7 +2185,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            ConfiguredMarketplacePluginFilter::All,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2285,7 +2301,7 @@ plugins = true
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], ConfiguredMarketplacePluginFilter::All)
         .unwrap()
         .marketplaces;
 
@@ -2364,7 +2380,7 @@ source = "/tmp/debug"
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], ConfiguredMarketplacePluginFilter::All)
         .unwrap()
         .marketplaces;
 
@@ -2440,7 +2456,7 @@ source = "/tmp/debug"
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], ConfiguredMarketplacePluginFilter::All)
         .unwrap()
         .marketplaces;
 
@@ -2495,7 +2511,7 @@ plugins = true
     .unwrap();
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[])
+        .list_marketplaces_for_config(&config, &[], ConfiguredMarketplacePluginFilter::All)
         .unwrap()
         .marketplaces;
 
@@ -2580,6 +2596,7 @@ enabled = false
                 AbsolutePathBuf::try_from(repo_a_root).unwrap(),
                 AbsolutePathBuf::try_from(repo_b_root).unwrap(),
             ],
+            ConfiguredMarketplacePluginFilter::All,
         )
         .unwrap()
         .marketplaces;
@@ -2688,7 +2705,11 @@ enabled = true
 
     let config = load_config(tmp.path(), &repo_root).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
-        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .list_marketplaces_for_config(
+            &config,
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            ConfiguredMarketplacePluginFilter::All,
+        )
         .unwrap()
         .marketplaces;
 
@@ -2833,7 +2854,7 @@ enabled = true
 
     let synced_config = load_config(tmp.path(), tmp.path()).await;
     let curated_marketplace = manager
-        .list_marketplaces_for_config(&synced_config, &[])
+        .list_marketplaces_for_config(&synced_config, &[], ConfiguredMarketplacePluginFilter::All)
         .unwrap()
         .marketplaces
         .into_iter()

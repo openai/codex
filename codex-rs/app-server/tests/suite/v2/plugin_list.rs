@@ -181,7 +181,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn plugin_installed_reads_local_cache_without_catalog() -> Result<()> {
+async fn plugin_installed_ignores_local_cache_without_catalog() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_installed_plugin(&codex_home, "openai-curated", "linear")?;
     std::fs::write(
@@ -211,16 +211,7 @@ enabled = true
     .await??;
     let response: PluginInstalledResponse = to_response(response)?;
 
-    assert_eq!(response.marketplaces.len(), 1);
-    assert_eq!(response.marketplaces[0].name, "openai-curated");
-    assert_eq!(
-        response.marketplaces[0]
-            .plugins
-            .iter()
-            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
-            .collect::<Vec<_>>(),
-        vec![("linear@openai-curated".to_string(), true, true)]
-    );
+    assert_eq!(response.marketplaces, Vec::new());
     assert_eq!(response.marketplace_load_errors, Vec::new());
     Ok(())
 }

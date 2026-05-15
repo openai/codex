@@ -6,6 +6,7 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
+use codex_core_plugins::ConfiguredMarketplacePluginFilter;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
@@ -550,7 +551,11 @@ impl PluginRequestProcessor {
             let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
             match tokio::task::spawn_blocking(move || {
                 let outcome = plugins_manager_for_marketplace_listing
-                    .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
+                    .list_marketplaces_for_config(
+                        &config_for_marketplace_listing,
+                        &roots,
+                        ConfiguredMarketplacePluginFilter::All,
+                    )?;
                 Ok::<
                     (
                         Vec<PluginMarketplaceEntry>,
@@ -753,10 +758,14 @@ impl PluginRequestProcessor {
 
         let config_for_installed_listing = plugins_input.clone();
         let plugins_manager_for_installed_listing = plugins_manager.clone();
+        let roots_for_installed_listing = roots.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
         let (mut data, mut marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager_for_installed_listing
-                .list_installed_plugins_for_config(&config_for_installed_listing);
+            let outcome = plugins_manager_for_installed_listing.list_marketplaces_for_config(
+                &config_for_installed_listing,
+                &roots_for_installed_listing,
+                ConfiguredMarketplacePluginFilter::InstalledOnly,
+            )?;
             Ok::<
                 (
                     Vec<PluginMarketplaceEntry>,
@@ -808,7 +817,11 @@ impl PluginRequestProcessor {
             let (suggestion_data, suggestion_errors) =
                 match tokio::task::spawn_blocking(move || {
                     let outcome = plugins_manager_for_marketplace_listing
-                        .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
+                        .list_marketplaces_for_config(
+                            &config_for_marketplace_listing,
+                            &roots,
+                            ConfiguredMarketplacePluginFilter::All,
+                        )?;
                     Ok::<
                         (
                             Vec<PluginMarketplaceEntry>,

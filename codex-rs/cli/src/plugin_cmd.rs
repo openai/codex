@@ -5,6 +5,7 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::ConfiguredMarketplace;
+use codex_core_plugins::ConfiguredMarketplacePluginFilter;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
@@ -142,7 +143,7 @@ pub async fn run_plugin_list(
         ..
     } = load_plugin_command_context(overrides).await?;
     let outcome = manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], ConfiguredMarketplacePluginFilter::All)
         .context("failed to list marketplace plugins")?;
     ensure_configured_marketplace_snapshots_loaded(
         codex_home.as_path(),
@@ -277,7 +278,7 @@ fn find_marketplace_for_plugin(
     plugin_name: &str,
 ) -> Result<ConfiguredMarketplace> {
     let outcome = manager
-        .list_marketplaces_for_config(plugins_input, &[])
+        .list_marketplaces_for_config(plugins_input, &[], ConfiguredMarketplacePluginFilter::All)
         .context("failed to list marketplace plugins")?;
     ensure_configured_marketplace_snapshots_loaded(
         codex_home,

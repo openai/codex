@@ -1,6 +1,7 @@
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core_plugins::ConfiguredMarketplacePluginFilter;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
@@ -1148,7 +1149,7 @@ fn configured_marketplace_plugins(
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
     let plugins_input = config.plugins_config_input();
     let marketplaces = plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], ConfiguredMarketplacePluginFilter::All)
         .map_err(|err| {
             invalid_data_error(format!("failed to list configured marketplaces: {err}"))
         })?;

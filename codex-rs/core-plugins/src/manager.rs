@@ -23,7 +23,6 @@ use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
 use crate::marketplace::MarketplacePluginAuthPolicy;
-use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::ResolvedMarketplacePlugin;
@@ -68,7 +67,6 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -110,6 +108,13 @@ impl PluginsConfigInput {
             chatgpt_base_url,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConfiguredMarketplacePluginFilter {
+    #[default]
+    All,
+    InstalledOnly,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1194,6 +1199,7 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
+        plugin_filter: ConfiguredMarketplacePluginFilter,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.plugins_enabled {
             return Ok(ConfiguredMarketplaceListOutcome::default());
@@ -1221,6 +1227,11 @@ impl PluginsManager {
                         }
                         let installed = installed_plugins.contains(&plugin_key);
                         let enabled = enabled_plugins.contains(&plugin_key);
+                        if plugin_filter == ConfiguredMarketplacePluginFilter::InstalledOnly
+                            && !installed
+                        {
+                            return None;
+                        }
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
                         if installed
@@ -1270,68 +1281,6 @@ impl PluginsManager {
             marketplaces,
             errors: marketplace_outcome.errors,
         })
-    }
-
-    pub fn list_installed_plugins_for_config(
-        &self,
-        config: &PluginsConfigInput,
-    ) -> ConfiguredMarketplaceListOutcome {
-        if !config.plugins_enabled {
-            return ConfiguredMarketplaceListOutcome::default();
-        }
-
-        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
-        let mut plugins_by_marketplace =
-            BTreeMap::<String, Vec<ConfiguredMarketplacePlugin>>::new();
-
-        for (plugin_key, plugin_config) in configured_plugins {
-            let Ok(plugin_id) = PluginId::parse(&plugin_key) else {
-                continue;
-            };
-            let Some(plugin_root) = self.store.active_plugin_root(&plugin_id) else {
-                continue;
-            };
-            let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
-                continue;
-            };
-
-            plugins_by_marketplace
-                .entry(plugin_id.marketplace_name.clone())
-                .or_default()
-                .push(ConfiguredMarketplacePlugin {
-                    id: plugin_id.as_key(),
-                    name: plugin_id.plugin_name,
-                    local_version: manifest.version,
-                    source: MarketplacePluginSource::Local { path: plugin_root },
-                    policy: MarketplacePluginPolicy {
-                        installation: MarketplacePluginInstallPolicy::Available,
-                        authentication: MarketplacePluginAuthPolicy::OnInstall,
-                        products: None,
-                    },
-                    interface: manifest.interface,
-                    keywords: manifest.keywords,
-                    installed: true,
-                    enabled: plugin_config.enabled,
-                });
-        }
-
-        let marketplaces = plugins_by_marketplace
-            .into_iter()
-            .map(|(marketplace_name, mut plugins)| {
-                plugins.sort_by(|left, right| left.id.cmp(&right.id));
-                ConfiguredMarketplace {
-                    path: self.store.root().join(&marketplace_name),
-                    name: marketplace_name,
-                    interface: None,
-                    plugins,
-                }
-            })
-            .collect();
-
-        ConfiguredMarketplaceListOutcome {
-            marketplaces,
-            errors: Vec::new(),
-        }
     }
 
     pub async fn read_plugin_for_config(

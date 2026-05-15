@@ -44,6 +44,7 @@ pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpSe
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
+pub use manager::ConfiguredMarketplacePluginFilter;
 pub use manager::PluginDetail;
 pub use manager::PluginDetailsUnavailableReason;
 pub use manager::PluginInstallError;

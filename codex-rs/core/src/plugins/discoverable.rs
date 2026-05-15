@@ -5,6 +5,7 @@ use tracing::warn;
 use super::PluginCapabilitySummary;
 use crate::config::Config;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_plugins::ConfiguredMarketplacePluginFilter;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginsManager;
@@ -41,7 +42,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .map(|disabled_tool| disabled_tool.id.as_str())
         .collect::<HashSet<_>>();
     let marketplaces = plugins_manager
-        .list_marketplaces_for_config(&plugins_input, &[])
+        .list_marketplaces_for_config(&plugins_input, &[], ConfiguredMarketplacePluginFilter::All)
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
