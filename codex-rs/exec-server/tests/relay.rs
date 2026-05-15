@@ -42,7 +42,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const EXECUTOR_ID: &str = "exec-mux-test";
-const REGISTRY_TOKEN: &str = "registry-token";
+const REGISTRY_ASSERTION: &str = "registry-assertion";
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -53,7 +53,10 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     let registry = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(format!("/cloud/executor/{EXECUTOR_ID}/register")))
-        .and(header("authorization", format!("Bearer {REGISTRY_TOKEN}")))
+        .and(header(
+            "authorization",
+            format!("AgentAssertion {REGISTRY_ASSERTION}"),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "executor_id": EXECUTOR_ID,
             "url": rendezvous_url,
@@ -63,10 +66,13 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
-    let config = RemoteExecutorConfig::with_bearer_token(
+    let config = RemoteExecutorConfig::with_registration_headers_for_tests(
         registry.uri(),
         EXECUTOR_ID.to_string(),
-        REGISTRY_TOKEN.to_string(),
+        vec![(
+            "Authorization".to_string(),
+            format!("AgentAssertion {REGISTRY_ASSERTION}"),
+        )],
     )?;
     let remote_executor = tokio::spawn(codex_exec_server::run_remote_executor(
         config,

@@ -91,7 +91,7 @@ pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
-pub use remote::CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR;
+pub use remote::CODEX_EXEC_SERVER_REMOTE_AGENT_IDENTITY_JWT_ENV_VAR;
 pub use remote::RemoteExecutorConfig;
 pub use remote::run_remote_executor;
 pub use runtime_paths::ExecServerRuntimePaths;

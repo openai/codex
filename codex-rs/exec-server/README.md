@@ -26,7 +26,8 @@ The CLI entrypoint supports:
 
 Remote mode registers the local exec-server with the executor registry,
 then reconnects to the service-provided rendezvous websocket as the executor.
-It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.
+It requires an Agent Identity JWT in
+`CODEX_EXEC_SERVER_REMOTE_AGENT_IDENTITY_JWT`.
 
 Wire framing:
 

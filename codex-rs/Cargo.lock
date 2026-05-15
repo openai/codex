@@ -2749,6 +2749,8 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-client",
  "codex-file-system",
+ "codex-login",
+ "codex-model-provider",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
