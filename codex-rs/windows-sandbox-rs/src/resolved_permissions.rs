@@ -94,6 +94,18 @@ impl ResolvedWindowsSandboxPermissions {
         !self.network.is_enabled()
     }
 
+    pub(crate) fn network_policy(&self) -> NetworkSandboxPolicy {
+        self.network
+    }
+
+    pub(crate) fn uses_write_capabilities_for_cwd(
+        &self,
+        cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> bool {
+        !self.writable_roots_for_cwd(cwd, env_map).is_empty()
+    }
+
     pub(crate) fn writable_roots_for_cwd(
         &self,
         cwd: &Path,
