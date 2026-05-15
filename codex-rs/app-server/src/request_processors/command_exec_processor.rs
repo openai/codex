@@ -164,7 +164,7 @@ impl CommandExecRequestProcessor {
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(
-                    self.config.permissions.permission_profile.get(),
+                    self.config.permissions.permission_profile().get(),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
@@ -243,7 +243,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile()
                 .can_set(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
@@ -264,12 +264,12 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile
+                .permission_profile()
                 .can_set(&permission_profile)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             permission_profile
         } else {
-            self.config.permissions.permission_profile()
+            self.config.permissions.effective_permission_profile()
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();

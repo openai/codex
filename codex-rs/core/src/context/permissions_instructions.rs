@@ -251,10 +251,11 @@ fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
 }
 
 fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<String> {
-    let roots = writable_roots?;
+    let mut roots = writable_roots?;
     if roots.is_empty() {
         return None;
     }
+    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
 
     let roots_list: Vec<String> = roots
         .iter()

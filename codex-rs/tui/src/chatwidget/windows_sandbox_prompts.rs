@@ -15,14 +15,7 @@ impl ChatWidget {
         }
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
-        let Ok(policy) = self
-            .config
-            .permissions
-            .permission_profile()
-            .to_legacy_sandbox_policy(self.config.cwd.as_path())
-        else {
-            return Some((Vec::new(), 0, true));
-        };
+        let policy = self.config.legacy_sandbox_policy();
         match codex_windows_sandbox::apply_world_writable_scan_and_denies(
             self.config.codex_home.as_path(),
             cwd.as_path(),
@@ -72,7 +65,9 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_profile(&p.permission_profile))
-            .unwrap_or_else(|| describe_profile(&self.config.permissions.permission_profile()));
+            .unwrap_or_else(|| {
+                describe_profile(&self.config.permissions.effective_permission_profile())
+            });
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "

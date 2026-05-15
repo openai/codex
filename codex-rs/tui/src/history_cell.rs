@@ -1683,7 +1683,7 @@ pub(crate) fn new_session_info(
 pub(crate) fn is_yolo_mode(config: &Config) -> bool {
     has_yolo_permissions(
         AskForApproval::from(config.permissions.approval_policy.value()),
-        &config.permissions.permission_profile(),
+        &config.permissions.effective_permission_profile(),
     )
 }
 

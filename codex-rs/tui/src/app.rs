@@ -957,7 +957,7 @@ See the Codex keymap documentation for supported actions and examples."
         // world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let startup_permission_profile = app.config.permissions.permission_profile();
+            let startup_permission_profile = app.config.permissions.effective_permission_profile();
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)

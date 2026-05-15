@@ -1,6 +1,8 @@
 use super::*;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use opentelemetry::trace::TraceContextExt;
@@ -453,6 +455,28 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
     assert_eq!(
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview)
+    );
+}
+
+#[test]
+fn active_profile_selection_includes_extra_workspace_roots_as_modifications() {
+    let cwd = test_path_buf("/workspace/project").abs();
+    let extra_root = test_path_buf("/workspace/cache").abs();
+
+    let selection = permissions_selection_from_active_profile(
+        ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
+        cwd.as_path(),
+        &[cwd.clone(), extra_root.clone()],
+    );
+
+    assert_eq!(
+        selection,
+        PermissionProfileSelectionParams::Profile {
+            id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+            modifications: Some(vec![
+                PermissionProfileModificationParams::AdditionalWritableRoot { path: extra_root }
+            ]),
+        }
     );
 }
 
