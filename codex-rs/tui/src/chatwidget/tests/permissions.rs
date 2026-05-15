@@ -1,17 +1,16 @@
 use super::*;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
-    AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -45,7 +44,6 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
             glob_scan_max_depth: None,
         },
     }
-    .into()
 }
 
 #[tokio::test]
@@ -127,9 +125,9 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
         .into_iter()
         .find(|p| p.id == "read-only")
         .expect("read-only preset exists");
-    let current_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    let current_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -146,8 +144,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             ],
             glob_scan_max_depth: None,
         },
-    }
-    .into();
+    };
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(

@@ -1604,13 +1604,6 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
-    use codex_app_server_protocol::FileSystemAccessMode;
-    use codex_app_server_protocol::FileSystemPath;
-    use codex_app_server_protocol::FileSystemSandboxEntry;
-    use codex_app_server_protocol::FileSystemSpecialPath;
-    use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-    use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-    use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
@@ -1621,7 +1614,13 @@ mod tests {
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+    use codex_protocol::models::ManagedFileSystemPermissions;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -1843,9 +1842,9 @@ mod tests {
     fn sandbox_mode_does_not_project_non_cwd_write_roots_for_remote_sessions() {
         let cwd = test_path_buf("/workspace/project").abs();
         let extra_root = test_path_buf("/workspace/cache").abs();
-        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-            network: PermissionProfileNetworkPermissions { enabled: false },
-            file_system: PermissionProfileFileSystemPermissions::Restricted {
+        let permission_profile: PermissionProfile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -1860,8 +1859,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
-        }
-        .into();
+        };
 
         assert_eq!(
             sandbox_mode_from_permission_profile(&permission_profile, cwd.as_path()),
@@ -1872,9 +1870,9 @@ mod tests {
     #[test]
     fn sandbox_mode_projects_cwd_write_for_remote_sessions() {
         let cwd = test_path_buf("/workspace/project").abs();
-        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-            network: PermissionProfileNetworkPermissions { enabled: false },
-            file_system: PermissionProfileFileSystemPermissions::Restricted {
+        let permission_profile: PermissionProfile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -1891,8 +1889,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
-        }
-        .into();
+        };
 
         assert_eq!(
             sandbox_mode_from_permission_profile(&permission_profile, cwd.as_path()),
