@@ -732,6 +732,7 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnStartResponse,
     },
+    #[experimental("thread/turnContext/update")]
     ThreadTurnContextUpdate => "thread/turnContext/update" {
         params: v2::ThreadTurnContextUpdateParams,
         inspect_params: true,
