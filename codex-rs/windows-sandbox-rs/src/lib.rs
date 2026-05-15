@@ -197,6 +197,10 @@ pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
 #[cfg(target_os = "windows")]
+pub use resolved_permissions::WindowsSandboxTokenMode;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::token_mode_for_permission_profile;
+#[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use setup::SandboxSetupRequest;

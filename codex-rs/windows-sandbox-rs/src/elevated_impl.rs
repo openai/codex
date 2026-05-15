@@ -45,6 +45,7 @@ mod windows_impl {
     use crate::setup::effective_write_roots_for_setup;
     use crate::token::LocalSid;
     use anyhow::Result;
+    use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::path::Path;
 
@@ -144,12 +145,14 @@ mod windows_impl {
         }
 
         (|| -> Result<CaptureResult> {
+            let permission_profile =
+                PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, sandbox_policy_cwd);
             let spawn_request = SpawnRequest {
                 command: command.clone(),
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
-                policy_json_or_preset: policy_json_or_preset.to_string(),
-                sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                permission_profile,
+                permission_profile_cwd: sandbox_policy_cwd.to_path_buf(),
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,
