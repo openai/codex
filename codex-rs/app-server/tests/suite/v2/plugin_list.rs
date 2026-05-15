@@ -181,6 +181,51 @@ enabled = true
 }
 
 #[tokio::test]
+async fn plugin_installed_reads_local_cache_without_catalog() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."linear@openai-curated"]
+enabled = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "openai-curated");
+    assert_eq!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![("linear@openai-curated".to_string(), true, true)]
+    );
+    assert_eq!(response.marketplace_load_errors, Vec::new());
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_rejects_relative_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1766,8 +1811,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 }
 
 #[tokio::test]
-async fn plugin_installed_fetches_remote_installed_rows_without_remote_catalog_list() -> Result<()>
-{
+async fn plugin_installed_skips_remote_installed_rows_without_cached_bundle() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -1810,28 +1854,7 @@ async fn plugin_installed_fetches_remote_installed_rows_without_remote_catalog_l
     .await??;
     let response: PluginInstalledResponse = to_response(response)?;
 
-    assert_eq!(response.marketplaces.len(), 1);
-    assert_eq!(response.marketplaces[0].name, "chatgpt-global");
-    assert_eq!(
-        response.marketplaces[0]
-            .plugins
-            .iter()
-            .map(|plugin| {
-                (
-                    plugin.id.clone(),
-                    plugin.remote_plugin_id.clone(),
-                    plugin.installed,
-                    plugin.enabled,
-                )
-            })
-            .collect::<Vec<_>>(),
-        vec![(
-            "linear@chatgpt-global".to_string(),
-            Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
-            true,
-            true,
-        )]
-    );
+    assert_eq!(response.marketplaces, Vec::new());
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }

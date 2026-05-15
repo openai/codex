@@ -122,6 +122,80 @@ fn share_context_for_source(
     }
 }
 
+fn configured_marketplace_to_info(
+    marketplace: codex_core_plugins::ConfiguredMarketplace,
+    shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
+) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: marketplace.name,
+        path: Some(marketplace.path),
+        interface: marketplace.interface.map(|interface| MarketplaceInterface {
+            display_name: interface.display_name,
+        }),
+        plugins: marketplace
+            .plugins
+            .into_iter()
+            .map(|plugin| {
+                configured_marketplace_plugin_to_info(plugin, shared_plugin_ids_by_local_path)
+            })
+            .collect(),
+    }
+}
+
+fn configured_marketplace_plugin_to_info(
+    plugin: codex_core_plugins::ConfiguredMarketplacePlugin,
+    shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
+) -> PluginSummary {
+    let share_context = share_context_for_source(&plugin.source, shared_plugin_ids_by_local_path);
+    PluginSummary {
+        id: plugin.id,
+        remote_plugin_id: None,
+        local_version: plugin.local_version,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+        name: plugin.name,
+        share_context,
+        source: marketplace_plugin_source_to_info(plugin.source),
+        install_policy: plugin.policy.installation.into(),
+        auth_policy: plugin.policy.authentication.into(),
+        availability: PluginAvailability::Available,
+        interface: plugin.interface.map(local_plugin_interface_to_info),
+        keywords: plugin.keywords,
+    }
+}
+
+fn merge_plugin_marketplace_entry(
+    data: &mut Vec<PluginMarketplaceEntry>,
+    incoming: PluginMarketplaceEntry,
+) {
+    let Some(existing) = data
+        .iter_mut()
+        .find(|marketplace| marketplace.name == incoming.name)
+    else {
+        data.push(incoming);
+        return;
+    };
+
+    if existing.interface.is_none() {
+        existing.interface = incoming.interface;
+    }
+    if incoming.path.is_some() {
+        existing.path = incoming.path.clone();
+    }
+
+    let mut seen_plugin_ids = existing
+        .plugins
+        .iter()
+        .map(|plugin| plugin.id.clone())
+        .collect::<HashSet<_>>();
+    existing.plugins.extend(
+        incoming
+            .plugins
+            .into_iter()
+            .filter(|plugin| seen_plugin_ids.insert(plugin.id.clone())),
+    );
+}
+
 fn remote_plugin_share_discoverability(
     discoverability: PluginShareDiscoverability,
 ) -> codex_core_plugins::remote::RemotePluginShareDiscoverability {
@@ -674,12 +748,12 @@ impl PluginRequestProcessor {
 
         let plugins_input = config.plugins_config_input();
 
-        let config_for_marketplace_listing = plugins_input.clone();
-        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
+        let config_for_installed_listing = plugins_input.clone();
+        let plugins_manager_for_installed_listing = plugins_manager.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
-        let (mut data, marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager_for_marketplace_listing
-                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
+        let (mut data, mut marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
+            let outcome = plugins_manager_for_installed_listing
+                .list_installed_plugins_for_config(&config_for_installed_listing);
             Ok::<
                 (
                     Vec<PluginMarketplaceEntry>,
@@ -690,47 +764,11 @@ impl PluginRequestProcessor {
                 outcome
                     .marketplaces
                     .into_iter()
-                    .filter_map(|marketplace| {
-                        let plugins = marketplace
-                            .plugins
-                            .into_iter()
-                            .filter(|plugin| {
-                                plugin.installed
-                                    || install_suggestion_plugin_names.contains(&plugin.name)
-                            })
-                            .map(|plugin| {
-                                let share_context = share_context_for_source(
-                                    &plugin.source,
-                                    &shared_plugin_ids_by_local_path,
-                                );
-                                PluginSummary {
-                                    id: plugin.id,
-                                    remote_plugin_id: None,
-                                    local_version: plugin.local_version,
-                                    installed: plugin.installed,
-                                    enabled: plugin.enabled,
-                                    name: plugin.name,
-                                    share_context,
-                                    source: marketplace_plugin_source_to_info(plugin.source),
-                                    install_policy: plugin.policy.installation.into(),
-                                    auth_policy: plugin.policy.authentication.into(),
-                                    availability: PluginAvailability::Available,
-                                    interface: plugin.interface.map(local_plugin_interface_to_info),
-                                    keywords: plugin.keywords,
-                                }
-                            })
-                            .collect::<Vec<_>>();
-
-                        (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
-                            name: marketplace.name,
-                            path: Some(marketplace.path),
-                            interface: marketplace.interface.map(|interface| {
-                                MarketplaceInterface {
-                                    display_name: interface.display_name,
-                                }
-                            }),
-                            plugins,
-                        })
+                    .map(|marketplace| {
+                        configured_marketplace_to_info(
+                            marketplace,
+                            &shared_plugin_ids_by_local_path,
+                        )
                     })
                     .collect(),
                 outcome
@@ -754,10 +792,90 @@ impl PluginRequestProcessor {
             }
             Err(err) => {
                 return Err(internal_error(format!(
-                    "failed to list installed marketplace plugins: {err}"
+                    "failed to list installed plugins: {err}"
                 )));
             }
         };
+
+        if !install_suggestion_plugin_names.is_empty() {
+            let config_for_marketplace_listing = plugins_input.clone();
+            let plugins_manager_for_marketplace_listing = plugins_manager.clone();
+            let shared_plugin_ids_by_local_path_for_suggestions =
+                load_shared_plugin_ids_by_local_path(&config)?;
+            let (suggestion_data, suggestion_errors) =
+                match tokio::task::spawn_blocking(move || {
+                    let outcome = plugins_manager_for_marketplace_listing
+                        .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
+                    Ok::<
+                        (
+                            Vec<PluginMarketplaceEntry>,
+                            Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
+                        ),
+                        MarketplaceError,
+                    >((
+                        outcome
+                            .marketplaces
+                            .into_iter()
+                            .filter_map(|marketplace| {
+                                let plugins = marketplace
+                                    .plugins
+                                    .into_iter()
+                                    .filter(|plugin| {
+                                        !plugin.installed
+                                            && install_suggestion_plugin_names
+                                                .contains(&plugin.name)
+                                    })
+                                    .map(|plugin| {
+                                        configured_marketplace_plugin_to_info(
+                                            plugin,
+                                            &shared_plugin_ids_by_local_path_for_suggestions,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
+                                    name: marketplace.name,
+                                    path: Some(marketplace.path),
+                                    interface: marketplace.interface.map(|interface| {
+                                        MarketplaceInterface {
+                                            display_name: interface.display_name,
+                                        }
+                                    }),
+                                    plugins,
+                                })
+                            })
+                            .collect(),
+                        outcome
+                            .errors
+                            .into_iter()
+                            .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
+                                marketplace_path: err.path,
+                                message: err.message,
+                            })
+                            .collect(),
+                    ))
+                })
+                .await
+                {
+                    Ok(Ok(outcome)) => outcome,
+                    Ok(Err(err)) => {
+                        return Err(Self::marketplace_error(
+                            err,
+                            "list plugin install suggestions",
+                        ));
+                    }
+                    Err(err) => {
+                        return Err(internal_error(format!(
+                            "failed to list plugin install suggestions: {err}"
+                        )));
+                    }
+                };
+
+            for marketplace in suggestion_data {
+                merge_plugin_marketplace_entry(&mut data, marketplace);
+            }
+            marketplace_load_errors.extend(suggestion_errors);
+        }
 
         if config.features.enabled(Feature::RemotePlugin) {
             let remote_marketplaces = if let Some(remote_marketplaces) =
@@ -768,11 +886,12 @@ impl PluginRequestProcessor {
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
-                codex_core_plugins::remote::fetch_remote_installed_marketplaces(
-                    &remote_plugin_service_config,
-                    auth.as_ref(),
-                )
-                .await
+                plugins_manager
+                    .fetch_cached_remote_installed_marketplaces(
+                        &remote_plugin_service_config,
+                        auth.as_ref(),
+                    )
+                    .await
             };
 
             match remote_marketplaces {
@@ -781,14 +900,7 @@ impl PluginRequestProcessor {
                         .into_iter()
                         .map(remote_marketplace_to_info)
                     {
-                        if let Some(existing) = data
-                            .iter_mut()
-                            .find(|marketplace| marketplace.name == remote_marketplace.name)
-                        {
-                            *existing = remote_marketplace;
-                        } else {
-                            data.push(remote_marketplace);
-                        }
+                        merge_plugin_marketplace_entry(&mut data, remote_marketplace);
                     }
                 }
                 Err(
