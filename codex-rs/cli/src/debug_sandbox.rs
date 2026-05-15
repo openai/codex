@@ -965,7 +965,6 @@ mod tests {
         let actual = config
             .permissions
             .permission_profile()
-            .get()
             .file_system_sandbox_policy();
         let expected = codex_protocol::models::PermissionProfile::workspace_write()
             .file_system_sandbox_policy();
@@ -1008,7 +1007,6 @@ mod tests {
         let actual = config
             .permissions
             .permission_profile()
-            .get()
             .file_system_sandbox_policy();
         let expected = codex_protocol::models::PermissionProfile::workspace_write()
             .file_system_sandbox_policy();

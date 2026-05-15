@@ -1639,8 +1639,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         app.chat_widget
             .config_ref()
             .permissions
-            .permission_profile()
-            .get(),
+            .permission_profile(),
         &auto_review.permission_profile
     );
     assert_eq!(
@@ -1817,8 +1816,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         app.chat_widget
             .config_ref()
             .permissions
-            .permission_profile()
-            .get(),
+            .permission_profile(),
         &auto_review.permission_profile
     );
     assert_eq!(
@@ -3004,7 +3002,6 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         .config_ref()
         .permissions
         .permission_profile()
-        .get()
         .clone();
     assert_eq!(
         session.permission_profile, expected_permission_profile,

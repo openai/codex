@@ -20,7 +20,6 @@ impl App {
             .config_ref()
             .permissions
             .permission_profile()
-            .get()
             .clone();
         let active_permission_profile = self
             .chat_widget
@@ -104,7 +103,6 @@ impl App {
             .config_ref()
             .permissions
             .permission_profile()
-            .get()
             .clone()
     }
 
