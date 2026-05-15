@@ -49,6 +49,7 @@ use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::tool_family::shell::ShellToolsOptions;
 use crate::tools::tool_family::shell::register_shell_tools;
+use crate::tools::tool_set::CoreToolSetBuilderExt;
 use crate::tools::tool_set::ToolSet;
 use crate::tools::tool_set::ToolSetBuilder;
 use codex_features::Feature;
@@ -65,6 +66,7 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSource;
 use codex_tools::ToolSpec;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
@@ -78,7 +80,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 #[derive(Clone, Copy)]
-struct ToolSetBuildParams<'a> {
+struct CoreToolPlanContext<'a> {
+    turn_context: &'a TurnContext,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
     discoverable_tools: Option<&'a [DiscoverableTool]>,
@@ -109,23 +112,20 @@ fn build_tool_specs_and_registry(
     } = params;
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
-    let mut tool_set = ToolSetBuilder::new();
-    register_tool_runtimes(
+    let context = CoreToolPlanContext {
         turn_context,
-        ToolSetBuildParams {
-            mcp_tools: mcp_tools.as_deref(),
-            deferred_mcp_tools: deferred_mcp_tools.as_deref(),
-            discoverable_tools: discoverable_tools.as_deref(),
-            extension_tool_executors: &extension_tool_executors,
-            dynamic_tools,
-            default_agent_type_description: &default_agent_type_description,
-            wait_agent_timeouts: wait_agent_timeout_options(turn_context),
-        },
-        &mut tool_set,
-    );
-    tool_set.extend_hosted_specs(hosted_model_tool_specs(turn_context));
-    append_tool_search_executor(turn_context, &mut tool_set);
-    prepend_code_mode_executors(turn_context, &mut tool_set);
+        mcp_tools: mcp_tools.as_deref(),
+        deferred_mcp_tools: deferred_mcp_tools.as_deref(),
+        discoverable_tools: discoverable_tools.as_deref(),
+        extension_tool_executors: &extension_tool_executors,
+        dynamic_tools,
+        default_agent_type_description: &default_agent_type_description,
+        wait_agent_timeouts: wait_agent_timeout_options(turn_context),
+    };
+    let mut tool_set = ToolSetBuilder::new();
+    add_tool_sources(&context, &mut tool_set);
+    append_tool_search_executor(&context, &mut tool_set);
+    prepend_code_mode_executors(&context, &mut tool_set);
     build_model_visible_specs_and_registry(turn_context, tool_set.finish())
 }
 
@@ -426,88 +426,154 @@ fn code_mode_namespace_descriptions(
     namespace_descriptions
 }
 
-fn register_tool_runtimes(
-    turn_context: &TurnContext,
-    params: ToolSetBuildParams<'_>,
-    tool_set: &mut ToolSetBuilder,
-) {
-    let features = turn_context.features.get();
-    let environment_mode = turn_context.tool_environment_mode();
-    register_shell_tools(
-        tool_set,
-        ShellToolsOptions {
-            shell_type: shell_type_for_model_and_features(&turn_context.model_info, features),
-            shell_command_backend: shell_command_backend_for_features(features),
-            environment_mode,
-            allow_login_shell: turn_context.config.permissions.allow_login_shell,
-            exec_permission_approvals_enabled: features.enabled(Feature::ExecPermissionApprovals),
-        },
-    );
-
-    if params.mcp_tools.is_some() {
-        tool_set.add_runtime(ListMcpResourcesHandler);
-        tool_set.add_runtime(ListMcpResourceTemplatesHandler);
-        tool_set.add_runtime(ReadMcpResourceHandler);
+fn add_tool_sources(context: &CoreToolPlanContext<'_>, tool_set: &mut ToolSetBuilder) {
+    let sources: [&dyn ToolSource<CoreToolPlanContext<'_>, Arc<dyn CoreToolRuntime>>; 8] = [
+        &ShellToolSource,
+        &McpResourceToolSource,
+        &CoreUtilityToolSource,
+        &CollaborationToolSource,
+        &McpRuntimeToolSource,
+        &DynamicToolSource,
+        &ExtensionToolSource,
+        &HostedModelToolSource,
+    ];
+    for source in sources {
+        source.add_tools(context, tool_set);
     }
+}
 
-    tool_set.add_runtime(PlanHandler);
-    if turn_context.goal_tools_enabled() {
-        tool_set.add_runtime(GetGoalHandler);
-        tool_set.add_runtime(CreateGoalHandler);
-        tool_set.add_runtime(UpdateGoalHandler);
+struct ShellToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for ShellToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        let turn_context = context.turn_context;
+        let features = turn_context.features.get();
+        register_shell_tools(
+            tool_set,
+            ShellToolsOptions {
+                shell_type: shell_type_for_model_and_features(&turn_context.model_info, features),
+                shell_command_backend: shell_command_backend_for_features(features),
+                environment_mode: turn_context.tool_environment_mode(),
+                allow_login_shell: turn_context.config.permissions.allow_login_shell,
+                exec_permission_approvals_enabled: features
+                    .enabled(Feature::ExecPermissionApprovals),
+            },
+        );
     }
+}
 
-    tool_set.add_runtime(RequestUserInputHandler {
-        available_modes: request_user_input_available_modes(features),
-    });
+struct McpResourceToolSource;
 
-    if features.enabled(Feature::RequestPermissionsTool) {
-        tool_set.add_runtime(RequestPermissionsHandler);
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for McpResourceToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        if context.mcp_tools.is_some() {
+            tool_set.add_runtime(ListMcpResourcesHandler);
+            tool_set.add_runtime(ListMcpResourceTemplatesHandler);
+            tool_set.add_runtime(ReadMcpResourceHandler);
+        }
     }
+}
 
-    if tool_suggest_enabled(turn_context)
-        && let Some(discoverable_tools) =
-            params.discoverable_tools.filter(|tools| !tools.is_empty())
-    {
-        tool_set.add_runtime(RequestPluginInstallHandler::new(discoverable_tools));
+struct CoreUtilityToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for CoreUtilityToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        let turn_context = context.turn_context;
+        let features = turn_context.features.get();
+        let environment_mode = turn_context.tool_environment_mode();
+
+        tool_set.add_runtime(PlanHandler);
+        if turn_context.goal_tools_enabled() {
+            tool_set.add_runtime(GetGoalHandler);
+            tool_set.add_runtime(CreateGoalHandler);
+            tool_set.add_runtime(UpdateGoalHandler);
+        }
+
+        tool_set.add_runtime(RequestUserInputHandler {
+            available_modes: request_user_input_available_modes(features),
+        });
+
+        if features.enabled(Feature::RequestPermissionsTool) {
+            tool_set.add_runtime(RequestPermissionsHandler);
+        }
+
+        if tool_suggest_enabled(turn_context)
+            && let Some(discoverable_tools) =
+                context.discoverable_tools.filter(|tools| !tools.is_empty())
+        {
+            tool_set.add_runtime(RequestPluginInstallHandler::new(discoverable_tools));
+        }
+
+        if environment_mode.has_environment()
+            && turn_context.model_info.apply_patch_tool_type.is_some()
+        {
+            let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+            tool_set.add_runtime(ApplyPatchHandler::new(include_environment_id));
+        }
+
+        if turn_context
+            .model_info
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "test_sync_tool")
+        {
+            tool_set.add_runtime(TestSyncHandler);
+        }
+
+        if environment_mode.has_environment() {
+            let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+            tool_set.add_runtime(ViewImageHandler::new(ViewImageToolOptions {
+                can_request_original_image_detail: can_request_original_image_detail(
+                    &turn_context.model_info,
+                ),
+                include_environment_id,
+            }));
+        }
     }
+}
 
-    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
-    {
-        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        tool_set.add_runtime(ApplyPatchHandler::new(include_environment_id));
-    }
+struct CollaborationToolSource;
 
-    if turn_context
-        .model_info
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "test_sync_tool")
-    {
-        tool_set.add_runtime(TestSyncHandler);
-    }
-
-    if environment_mode.has_environment() {
-        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        tool_set.add_runtime(ViewImageHandler::new(ViewImageToolOptions {
-            can_request_original_image_detail: can_request_original_image_detail(
-                &turn_context.model_info,
-            ),
-            include_environment_id,
-        }));
-    }
-
-    if collab_tools_enabled(turn_context) {
-        if multi_agent_v2_enabled(turn_context) {
-            let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
-                ToolExposure::DirectModelOnly
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for CollaborationToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        let turn_context = context.turn_context;
+        if collab_tools_enabled(turn_context) {
+            if multi_agent_v2_enabled(turn_context) {
+                let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
+                    ToolExposure::DirectModelOnly
+                } else {
+                    ToolExposure::Direct
+                };
+                let agent_type_description =
+                    agent_type_description(turn_context, context.default_agent_type_description);
+                tool_set.add_runtime_arc(multi_agent_v2_handler(
+                    SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                        available_models: turn_context.available_models.clone(),
+                        agent_type_description,
+                        hide_agent_type_model_reasoning: turn_context
+                            .config
+                            .multi_agent_v2
+                            .hide_spawn_agent_metadata,
+                        include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
+                        usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                        max_concurrent_threads_per_session: max_concurrent_threads_per_session(
+                            turn_context,
+                        ),
+                    }),
+                    exposure,
+                ));
+                tool_set.add_runtime_arc(multi_agent_v2_handler(SendMessageHandlerV2, exposure));
+                tool_set.add_runtime_arc(multi_agent_v2_handler(FollowupTaskHandlerV2, exposure));
+                tool_set.add_runtime_arc(multi_agent_v2_handler(
+                    WaitAgentHandlerV2::new(context.wait_agent_timeouts),
+                    exposure,
+                ));
+                tool_set.add_runtime_arc(multi_agent_v2_handler(CloseAgentHandlerV2, exposure));
+                tool_set.add_runtime_arc(multi_agent_v2_handler(ListAgentsHandlerV2, exposure));
             } else {
-                ToolExposure::Direct
-            };
-            let agent_type_description =
-                agent_type_description(turn_context, params.default_agent_type_description);
-            tool_set.add_runtime_arc(multi_agent_v2_handler(
-                SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                let agent_type_description =
+                    agent_type_description(turn_context, context.default_agent_type_description);
+                tool_set.add_runtime(SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
                     agent_type_description,
                     hide_agent_type_model_reasoning: turn_context
@@ -519,78 +585,86 @@ fn register_tool_runtimes(
                     max_concurrent_threads_per_session: max_concurrent_threads_per_session(
                         turn_context,
                     ),
-                }),
-                exposure,
-            ));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(SendMessageHandlerV2, exposure));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(FollowupTaskHandlerV2, exposure));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(
-                WaitAgentHandlerV2::new(params.wait_agent_timeouts),
-                exposure,
-            ));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(CloseAgentHandlerV2, exposure));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(ListAgentsHandlerV2, exposure));
-        } else {
-            let agent_type_description =
-                agent_type_description(turn_context, params.default_agent_type_description);
-            tool_set.add_runtime(SpawnAgentHandler::new(SpawnAgentToolOptions {
-                available_models: turn_context.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: turn_context
-                    .config
-                    .multi_agent_v2
-                    .hide_spawn_agent_metadata,
-                include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
-                usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                max_concurrent_threads_per_session: max_concurrent_threads_per_session(
-                    turn_context,
-                ),
-            }));
-            tool_set.add_runtime(SendInputHandler);
-            tool_set.add_runtime(ResumeAgentHandler);
-            tool_set.add_runtime(WaitAgentHandler::new(params.wait_agent_timeouts));
-            tool_set.add_runtime(CloseAgentHandler);
+                }));
+                tool_set.add_runtime(SendInputHandler);
+                tool_set.add_runtime(ResumeAgentHandler);
+                tool_set.add_runtime(WaitAgentHandler::new(context.wait_agent_timeouts));
+                tool_set.add_runtime(CloseAgentHandler);
+            }
+        }
+
+        if agent_jobs_tools_enabled(turn_context) {
+            tool_set.add_runtime(SpawnAgentsOnCsvHandler);
+            if agent_jobs_worker_tools_enabled(turn_context) {
+                tool_set.add_runtime(ReportAgentJobResultHandler);
+            }
         }
     }
-
-    if agent_jobs_tools_enabled(turn_context) {
-        tool_set.add_runtime(SpawnAgentsOnCsvHandler);
-        if agent_jobs_worker_tools_enabled(turn_context) {
-            tool_set.add_runtime(ReportAgentJobResultHandler);
-        }
-    }
-
-    if let Some(mcp_tools) = params.mcp_tools {
-        for tool in mcp_tools {
-            tool_set.add_runtime(McpHandler::new(tool.clone()));
-        }
-    }
-
-    if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
-        for tool in deferred_mcp_tools {
-            tool_set.add_runtime(McpHandler::with_exposure(
-                tool.clone(),
-                ToolExposure::Deferred,
-            ));
-        }
-    }
-
-    for tool in params.dynamic_tools {
-        let Some(handler) = DynamicToolHandler::new(tool) else {
-            tracing::error!(
-                "Failed to convert dynamic tool {:?} to OpenAI tool",
-                tool.name
-            );
-            continue;
-        };
-
-        tool_set.add_runtime(handler);
-    }
-
-    append_extension_tool_executors(turn_context, params.extension_tool_executors, tool_set);
 }
 
-fn append_tool_search_executor(turn_context: &TurnContext, tool_set: &mut ToolSetBuilder) {
+struct McpRuntimeToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for McpRuntimeToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        if let Some(mcp_tools) = context.mcp_tools {
+            for tool in mcp_tools {
+                tool_set.add_runtime(McpHandler::new(tool.clone()));
+            }
+        }
+
+        if let Some(deferred_mcp_tools) = context.deferred_mcp_tools {
+            for tool in deferred_mcp_tools {
+                tool_set.add_runtime(McpHandler::with_exposure(
+                    tool.clone(),
+                    ToolExposure::Deferred,
+                ));
+            }
+        }
+    }
+}
+
+struct DynamicToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for DynamicToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        for tool in context.dynamic_tools {
+            let Some(handler) = DynamicToolHandler::new(tool) else {
+                tracing::error!(
+                    "Failed to convert dynamic tool {:?} to OpenAI tool",
+                    tool.name
+                );
+                continue;
+            };
+
+            tool_set.add_runtime(handler);
+        }
+    }
+}
+
+struct ExtensionToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for ExtensionToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        // Extension ToolContributor implementations are resolved into executors
+        // before planning. Core only adapts those executors into its runtime set.
+        append_extension_tool_executors(
+            context.turn_context,
+            context.extension_tool_executors,
+            tool_set,
+        );
+    }
+}
+
+struct HostedModelToolSource;
+
+impl<'a> ToolSource<CoreToolPlanContext<'a>, Arc<dyn CoreToolRuntime>> for HostedModelToolSource {
+    fn add_tools(&self, context: &CoreToolPlanContext<'a>, tool_set: &mut ToolSetBuilder) {
+        tool_set.extend_hosted_specs(hosted_model_tool_specs(context.turn_context));
+    }
+}
+
+fn append_tool_search_executor(context: &CoreToolPlanContext<'_>, tool_set: &mut ToolSetBuilder) {
+    let turn_context = context.turn_context;
     if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
         return;
     }
@@ -608,7 +682,8 @@ fn append_tool_search_executor(turn_context: &TurnContext, tool_set: &mut ToolSe
     tool_set.add_runtime(ToolSearchHandler::new(search_infos));
 }
 
-fn prepend_code_mode_executors(turn_context: &TurnContext, tool_set: &mut ToolSetBuilder) {
+fn prepend_code_mode_executors(context: &CoreToolPlanContext<'_>, tool_set: &mut ToolSetBuilder) {
+    let turn_context = context.turn_context;
     let deferred_tools_available = search_tool_enabled(turn_context)
         && tool_set
             .runtimes()
