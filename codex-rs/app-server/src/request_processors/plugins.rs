@@ -898,7 +898,7 @@ impl PluginRequestProcessor {
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.cached_remote_installed_plugin_marketplaces()
+            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache()
         {
             Ok(remote_marketplaces)
         } else {
@@ -906,7 +906,7 @@ impl PluginRequestProcessor {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
             plugins_manager
-                .fetch_remote_installed_plugin_marketplaces_with_cache(
+                .build_and_cache_remote_installed_plugin_marketplaces(
                     &remote_plugin_service_config,
                     auth,
                 )
