@@ -121,7 +121,6 @@ pub(super) async fn try_run_zsh_fork(
         build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
-        graceful_cancellation: Some(req.cancellation_token.clone()),
         capture_policy: ExecCapturePolicy::ShellTool,
     };
     let sandbox_exec_request = attempt
@@ -138,7 +137,6 @@ pub(super) async fn try_run_zsh_fork(
         exec_server_env_config: _,
         network: sandbox_network,
         expiration: _sandbox_expiration,
-        graceful_cancellation: _sandbox_graceful_cancellation,
         capture_policy: _capture_policy,
         sandbox,
         windows_sandbox_policy_cwd: sandbox_policy_cwd,
@@ -797,7 +795,6 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 exec_server_env_config: None,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
-                graceful_cancellation: None,
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
                 windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
@@ -920,7 +917,6 @@ impl CoreShellCommandExecutor {
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
-            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let exec_request = sandbox_manager.transform(SandboxTransformRequest {

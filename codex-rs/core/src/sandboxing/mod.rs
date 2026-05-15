@@ -28,12 +28,9 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use tokio_util::sync::CancellationToken;
-
 #[derive(Debug)]
 pub(crate) struct ExecOptions {
     pub(crate) expiration: ExecExpiration,
-    pub(crate) graceful_cancellation: Option<CancellationToken>,
     pub(crate) capture_policy: ExecCapturePolicy,
 }
 
@@ -51,7 +48,6 @@ pub struct ExecRequest {
     pub(crate) exec_server_env_config: Option<ExecServerEnvConfig>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
-    pub graceful_cancellation: Option<CancellationToken>,
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
     pub windows_sandbox_policy_cwd: AbsolutePathBuf,
@@ -89,7 +85,6 @@ impl ExecRequest {
             exec_server_env_config: None,
             network,
             expiration,
-            graceful_cancellation: None,
             capture_policy,
             sandbox,
             windows_sandbox_policy_cwd,
@@ -132,7 +127,6 @@ impl ExecRequest {
         } = request;
         let ExecOptions {
             expiration,
-            graceful_cancellation,
             capture_policy,
         } = options;
         if !network_sandbox_policy.is_enabled() {
@@ -152,7 +146,6 @@ impl ExecRequest {
             exec_server_env_config: None,
             network,
             expiration,
-            graceful_cancellation,
             capture_policy,
             sandbox,
             windows_sandbox_policy_cwd,

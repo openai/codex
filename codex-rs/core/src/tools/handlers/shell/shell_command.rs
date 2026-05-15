@@ -99,7 +99,6 @@ impl ShellCommandHandler {
             command,
             cwd,
             expiration: params.timeout_ms.into(),
-            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::ShellTool,
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),

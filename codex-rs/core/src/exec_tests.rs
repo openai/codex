@@ -270,7 +270,6 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
             command,
             cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
             expiration: 1.into(),
-            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::FullBuffer,
             env,
             network: None,
@@ -307,7 +306,6 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                 ],
                 cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
                 expiration: 1.into(),
-                graceful_cancellation: None,
                 capture_policy: ExecCapturePolicy::FullBuffer,
                 env: std::env::vars().collect(),
                 network: None,
@@ -356,7 +354,6 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
             command,
             cwd: cwd.clone(),
             expiration: 1.into(),
-            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::FullBuffer,
             env: std::env::vars().collect(),
             network: None,
@@ -1044,7 +1041,6 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         command,
         cwd,
         expiration: 500.into(),
-        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
@@ -1100,7 +1096,6 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         command,
         cwd: cwd.clone(),
         expiration: ExecExpiration::Cancellation(cancel_token),
-        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
@@ -1140,10 +1135,13 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
     let temp_dir = tempfile::TempDir::new()?;
     let ready_marker = temp_dir.path().join("ready");
     let cleanup_marker = temp_dir.path().join("cleanup");
+    let descendant_pid_marker = temp_dir.path().join("descendant-pid");
     let command = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
         concat!(
+            "(trap '' TERM; sleep 60) &\n",
+            "printf '%s' \"$!\" > \"$DESCENDANT_PID_MARKER\"\n",
             "trap 'printf cleaned > \"$CLEANUP_MARKER\"; exit 0' TERM\n",
             "printf ready > \"$READY_MARKER\"\n",
             "while :; do sleep 1; done"
@@ -1160,6 +1158,10 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
         "CLEANUP_MARKER".to_string(),
         cleanup_marker.to_string_lossy().into_owned(),
     );
+    env.insert(
+        "DESCENDANT_PID_MARKER".to_string(),
+        descendant_pid_marker.to_string_lossy().into_owned(),
+    );
     let cancel_token = CancellationToken::new();
     let cancel_tx = cancel_token.clone();
     tokio::spawn(async move {
@@ -1175,8 +1177,7 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
     let params = ExecParams {
         command,
         cwd: cwd.clone(),
-        expiration: ExecExpiration::DefaultTimeout,
-        graceful_cancellation: Some(cancel_token),
+        expiration: ExecExpiration::DefaultTimeout.with_cancellation(cancel_token),
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
@@ -1206,6 +1207,28 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
         std::fs::read_to_string(cleanup_marker)?,
         "cleaned",
         "SIGTERM cleanup trap should run before cancellation falls back to a hard kill"
+    );
+    let descendant_pid = std::fs::read_to_string(descendant_pid_marker)?
+        .parse::<i32>()
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to parse descendant pid: {error}"),
+            )
+        })?;
+    let mut killed = false;
+    for _ in 0..20 {
+        if unsafe { libc::kill(descendant_pid, 0) } == -1
+            && let Some(libc::ESRCH) = std::io::Error::last_os_error().raw_os_error()
+        {
+            killed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        killed,
+        "TERM-ignoring descendant process with pid {descendant_pid} is still alive"
     );
     Ok(())
 }

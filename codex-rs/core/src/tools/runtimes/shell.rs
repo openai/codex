@@ -267,12 +267,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
+        expiration = expiration.with_cancellation(req.cancellation_token.clone());
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);
         }
         let options = ExecOptions {
             expiration,
-            graceful_cancellation: Some(req.cancellation_token.clone()),
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt

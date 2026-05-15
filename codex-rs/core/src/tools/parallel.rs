@@ -88,6 +88,8 @@ impl ToolCallRuntime {
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
+        let wait_for_runtime_cancellation =
+            call.tool_name.namespace.is_none() && call.tool_name.name == "shell_command";
         let started = Instant::now();
 
         let dispatch_span = trace_span!(
@@ -100,31 +102,40 @@ impl ToolCallRuntime {
 
         let handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        let secs = started.elapsed().as_secs_f32().max(0.1);
-                        dispatch_span.record("aborted", true);
-                        Ok(Self::aborted_response(&call, secs))
-                    },
-                    res = async {
-                        let _guard = if supports_parallel {
-                            Either::Left(lock.read().await)
-                        } else {
-                            Either::Right(lock.write().await)
-                        };
+                let dispatch_call = call.clone();
+                let dispatch_span_for_future = dispatch_span.clone();
+                let dispatch = async move {
+                    let _guard = if supports_parallel {
+                        Either::Left(lock.read().await)
+                    } else {
+                        Either::Right(lock.write().await)
+                    };
 
-                        router
-                            .dispatch_tool_call_with_code_mode_result(
-                                session,
-                                turn,
-                                invocation_cancellation_token,
-                                tracker,
-                                call.clone(),
-                                source,
-                            )
-                            .instrument(dispatch_span.clone())
-                            .await
-                    } => res,
+                    router
+                        .dispatch_tool_call_with_code_mode_result(
+                            session,
+                            turn,
+                            invocation_cancellation_token,
+                            tracker,
+                            dispatch_call,
+                            source,
+                        )
+                        .instrument(dispatch_span_for_future)
+                        .await
+                };
+                tokio::pin!(dispatch);
+                tokio::select! {
+                    biased;
+                    res = &mut dispatch => res,
+                    _ = cancellation_token.cancelled() => {
+                        if wait_for_runtime_cancellation {
+                            dispatch.await
+                        } else {
+                            let secs = started.elapsed().as_secs_f32().max(0.1);
+                            dispatch_span.record("aborted", true);
+                            Ok(Self::aborted_response(&call, secs))
+                        }
+                    },
                 }
             }));
 

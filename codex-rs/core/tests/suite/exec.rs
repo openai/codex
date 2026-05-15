@@ -39,7 +39,6 @@ where
         command: command.into_iter().map(Into::into).collect(),
         cwd: cwd.clone(),
         expiration: 1000.into(),
-        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
