@@ -11,7 +11,6 @@ import statistics
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,6 +28,9 @@ class ProbeEndpoint:
     label: str
     path: str
     timeout_sec: float
+
+    def api_label(self) -> str:
+        return f"{self.label} | GET {self.path}"
 
 
 ENDPOINTS: tuple[ProbeEndpoint, ...] = (
@@ -216,7 +218,7 @@ def perform_request(
     return {
         "iteration": iteration,
         "order": order,
-        "label": endpoint.label,
+        "label": endpoint.api_label(),
         "method": "GET",
         "url_path_query": endpoint.path,
         "started_at": started_at,
@@ -242,7 +244,8 @@ def nearest_rank(values: list[float], percentile: float) -> float | None:
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     summaries: dict[str, Any] = {}
     for endpoint in ENDPOINTS:
-        endpoint_rows = [row for row in rows if row["label"] == endpoint.label]
+        api_label = endpoint.api_label()
+        endpoint_rows = [row for row in rows if row["label"] == api_label]
         latencies = [float(row["latency_ms"]) for row in endpoint_rows]
         success_rows = [row for row in endpoint_rows if row["success"] == "true"]
         error_rows = [row for row in endpoint_rows if row["success"] != "true"]
@@ -283,7 +286,7 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "stdev_ms": None,
             }
 
-        summaries[endpoint.label] = summary
+        summaries[api_label] = summary
 
     return {
         "generated_at": utc_now_iso(),
@@ -314,9 +317,10 @@ def print_summary(summary: dict[str, Any]) -> None:
         "label,count,success,error,non_2xx,min,mean,p50,p90,p95,p99,max,stdev"
     )
     for endpoint in ENDPOINTS:
-        item = summary["endpoints"][endpoint.label]
+        api_label = endpoint.api_label()
+        item = summary["endpoints"][api_label]
         values = [
-            endpoint.label,
+            api_label,
             item["count"],
             item["success_count"],
             item["error_count"],
@@ -387,7 +391,7 @@ def main() -> int:
                 outcome = "ok" if row["success"] == "true" else "error"
                 print(
                     f"[{completed_calls}/{total_calls}] "
-                    f"iteration={iteration} order={order} label={endpoint.label} "
+                    f"iteration={iteration} order={order} label={row['label']} "
                     f"status={status} outcome={outcome} "
                     f"latency_ms={row['latency_ms']}"
                 )
