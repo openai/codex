@@ -527,7 +527,7 @@ impl Session {
         .with_image_generation_capability(provider_capabilities.image_generation)
         .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode_for_session(
-            crate::tools::spec::tool_user_shell_type(user_shell),
+            crate::tools::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
         )

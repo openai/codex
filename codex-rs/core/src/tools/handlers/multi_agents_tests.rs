@@ -317,7 +317,8 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_context should reject agent_type overrides");
+        .err()
+        .expect("fork_context should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -351,7 +352,8 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
             })),
         ))
         .await
-        .expect_err("forked spawn should reject child model overrides");
+        .err()
+        .expect("forked spawn should reject child model overrides");
 
     assert_eq!(
         err,
@@ -395,7 +397,8 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_turns=all should reject agent_type overrides");
+        .err()
+        .expect("fork_turns=all should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -435,7 +438,8 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
             })),
         ))
         .await
-        .expect_err("default full fork should reject child model overrides");
+        .err()
+        .expect("default full fork should reject child model overrides");
 
     assert_eq!(
         err,
@@ -505,7 +509,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("unknown service tier should be rejected");
+            .err()
+            .expect("unknown service tier should be rejected");
 
         assert_eq!(
             err,
@@ -530,7 +535,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("tier unsupported by the final child model should be rejected");
+            .err()
+            .expect("tier unsupported by the final child model should be rejected");
 
         assert_eq!(
             err,
@@ -1116,7 +1122,8 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
             })),
         ))
         .await
-        .expect_err("legacy fork_context should be rejected");
+        .err()
+        .expect("legacy fork_context should be rejected");
 
     assert_eq!(
         err,
@@ -1155,7 +1162,8 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             })),
         ))
         .await
-        .expect_err("invalid fork_turns should be rejected");
+        .err()
+        .expect("invalid fork_turns should be rejected");
 
     assert_eq!(
         err,
@@ -1194,7 +1202,8 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
             })),
         ))
         .await
-        .expect_err("zero turn count should be rejected");
+        .err()
+        .expect("zero turn count should be rejected");
 
     assert_eq!(
         err,
@@ -3630,7 +3639,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": "/root"})),
         ))
         .await
-        .expect_err("close_agent should reject the root path");
+        .err()
+        .expect("close_agent should reject the root path");
     assert_eq!(
         root_path_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3644,7 +3654,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": root.thread_id.to_string()})),
         ))
         .await
-        .expect_err("close_agent should reject the root thread id");
+        .err()
+        .expect("close_agent should reject the root thread id");
     assert_eq!(
         root_id_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())

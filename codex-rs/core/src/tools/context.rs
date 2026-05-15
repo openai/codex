@@ -28,6 +28,13 @@ use tokio_util::sync::CancellationToken;
 pub use codex_tools::ToolOutput;
 pub use codex_tools::ToolPayload;
 
+pub(crate) fn boxed_tool_output<T>(output: T) -> Box<dyn ToolOutput>
+where
+    T: ToolOutput + 'static,
+{
+    Box::new(output)
+}
+
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +96,10 @@ impl ToolOutput for McpToolOutput {
         serde_json::to_value(&self.result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(self.tool_input.clone())
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -325,6 +336,20 @@ impl ToolOutput for ExecCommandToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        if self.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            self.event_call_id.clone()
+        }
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        self.hook_command
+            .as_ref()
+            .map(|command| serde_json::json!({ "command": command }))
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {

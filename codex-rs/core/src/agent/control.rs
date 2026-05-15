@@ -116,6 +116,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
