@@ -1273,7 +1273,12 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.should_publish_npm == 'true'
+      }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -1431,7 +1436,12 @@ jobs:
   # need release follow-up, but should not invalidate the Rust release itself.
   publish-python-runtime:
     # Publish to PyPI for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_python_runtime == 'true' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.should_publish_python_runtime == 'true'
+      }}
     name: publish-python-runtime
     needs: release
     runs-on: ubuntu-latest
@@ -1472,7 +1482,13 @@ jobs:
     needs: release
     # Only publish stable/mainline releases to WinGet; pre-releases include a
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: ${{ needs.release.outputs.sign_macos == 'true' && !contains(needs.release.outputs.version, '-') }}
+    if: >-
+      ${{
+        always() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.sign_macos == 'true' &&
+        !contains(needs.release.outputs.version, '-')
+      }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
@@ -1492,7 +1508,12 @@ jobs:
 
   update-branch:
     name: Update latest-alpha-cli branch
-    if: ${{ needs.release.outputs.sign_macos == 'true' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.sign_macos == 'true'
+      }}
     permissions:
       contents: write
     needs: release
