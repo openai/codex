@@ -110,13 +110,6 @@ impl PluginsConfigInput {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ConfiguredMarketplacePluginFilter {
-    #[default]
-    All,
-    InstalledOnly,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 struct FeaturedPluginIdsCacheKey {
     chatgpt_base_url: String,
@@ -1195,7 +1188,6 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         additional_roots: &[AbsolutePathBuf],
-        plugin_filter: ConfiguredMarketplacePluginFilter,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.plugins_enabled {
             return Ok(ConfiguredMarketplaceListOutcome::default());
@@ -1223,11 +1215,6 @@ impl PluginsManager {
                         }
                         let installed = installed_plugins.contains(&plugin_key);
                         let enabled = enabled_plugins.contains(&plugin_key);
-                        if plugin_filter == ConfiguredMarketplacePluginFilter::InstalledOnly
-                            && !installed
-                        {
-                            return None;
-                        }
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
                         if installed

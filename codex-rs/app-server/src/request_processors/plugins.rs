@@ -6,7 +6,6 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
-use codex_core_plugins::ConfiguredMarketplacePluginFilter;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
@@ -556,11 +555,7 @@ impl PluginRequestProcessor {
             let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
             match tokio::task::spawn_blocking(move || {
                 let outcome = plugins_manager_for_marketplace_listing
-                    .list_marketplaces_for_config(
-                        &config_for_marketplace_listing,
-                        &roots,
-                        ConfiguredMarketplacePluginFilter::All,
-                    )?;
+                    .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
                 Ok::<
                     (
                         Vec<PluginMarketplaceEntry>,
@@ -765,11 +760,8 @@ impl PluginRequestProcessor {
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
         match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager.list_marketplaces_for_config(
-                &config_for_marketplace_listing,
-                &roots,
-                ConfiguredMarketplacePluginFilter::All,
-            )?;
+            let outcome = plugins_manager
+                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
             Ok::<PluginMarketplaceEntriesAndErrors, MarketplaceError>((
                 outcome
                     .marketplaces
