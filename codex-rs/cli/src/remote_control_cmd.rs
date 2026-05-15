@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -19,7 +20,6 @@ use codex_app_server_daemon::RemoteControlStartOutput as AppServerRemoteControlS
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlEnableResponse;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
@@ -77,17 +77,38 @@ pub(crate) async fn run(
 ) -> anyhow::Result<()> {
     match command.subcommand {
         None => {
+            print_remote_control_progress(
+                command.json,
+                "Starting app-server with remote control enabled...",
+            )?;
             run_foreground_remote_control(command.json, arg0_paths, root_config_overrides).await?;
         }
         Some(RemoteControlSubcommand::Start) => {
+            print_remote_control_progress(
+                command.json,
+                "Starting app-server daemon with remote control enabled...",
+            )?;
             let output = codex_app_server_daemon::ensure_remote_control_ready().await?;
             print_remote_control_start_output(&output, command.json)?;
         }
         Some(RemoteControlSubcommand::Stop) => {
+            print_remote_control_progress(command.json, "Stopping remote control...")?;
             let output = codex_app_server_daemon::run(AppServerLifecycleCommand::Stop).await?;
             print_remote_control_stop_output(&output, command.json)?;
         }
     }
+    Ok(())
+}
+
+fn print_remote_control_progress(json: bool, message: &str) -> anyhow::Result<()> {
+    if json {
+        return Ok(());
+    }
+
+    println!("{message}");
+    std::io::stdout()
+        .flush()
+        .context("failed to flush remote-control progress message")?;
     Ok(())
 }
 
@@ -178,7 +199,7 @@ fn foreground_stop_signal() -> (watch::Receiver<bool>, JoinHandle<()>) {
 }
 
 enum ForegroundStartupResult {
-    Ready(RemoteControlReadySummary),
+    Ready(AppServerRemoteControlReadyStatus),
     Stopped,
     ReadyFailed(anyhow::Error),
     AppServerExited(anyhow::Error),
@@ -186,7 +207,7 @@ enum ForegroundStartupResult {
 
 async fn wait_for_foreground_remote_control_start(
     app_server_task: &mut JoinHandle<std::io::Result<()>>,
-    ready: impl std::future::Future<Output = anyhow::Result<RemoteControlReadySummary>>,
+    ready: impl std::future::Future<Output = anyhow::Result<AppServerRemoteControlReadyStatus>>,
     mut stop_rx: watch::Receiver<bool>,
 ) -> ForegroundStartupResult {
     tokio::pin!(ready);
@@ -251,7 +272,7 @@ async fn abort_foreground_app_server(app_server_task: JoinHandle<std::io::Result
 
 async fn wait_for_foreground_remote_control_ready(
     socket_path: AbsolutePathBuf,
-) -> anyhow::Result<RemoteControlReadySummary> {
+) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
     let mut client = connect_foreground_client(socket_path).await?;
     enable_remote_control_and_wait(&mut client).await
 }
@@ -286,7 +307,7 @@ async fn connect_foreground_client(
 
 async fn enable_remote_control_and_wait(
     client: &mut RemoteAppServerClient,
-) -> anyhow::Result<RemoteControlReadySummary> {
+) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
     let enable_response: RemoteControlEnableResponse = timeout(
         REMOTE_CONTROL_ENABLE_RESPONSE_TIMEOUT,
         client.request_typed(ClientRequest::RemoteControlEnable {
@@ -299,7 +320,7 @@ async fn enable_remote_control_and_wait(
     .context("failed to enable remote control")?;
     wait_for_remote_control_ready(
         client,
-        RemoteControlReadySummary::from(enable_response),
+        AppServerRemoteControlReadyStatus::from(enable_response),
         REMOTE_CONTROL_READY_TIMEOUT,
     )
     .await
@@ -307,9 +328,9 @@ async fn enable_remote_control_and_wait(
 
 async fn wait_for_remote_control_ready(
     client: &mut RemoteAppServerClient,
-    mut summary: RemoteControlReadySummary,
+    mut summary: AppServerRemoteControlReadyStatus,
     ready_timeout: Duration,
-) -> anyhow::Result<RemoteControlReadySummary> {
+) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
     if summary.status != RemoteControlConnectionStatus::Connecting {
         return Ok(summary);
     }
@@ -342,14 +363,14 @@ async fn wait_for_remote_control_ready(
 }
 
 fn apply_remote_control_event(
-    summary: &mut RemoteControlReadySummary,
+    summary: &mut AppServerRemoteControlReadyStatus,
     event: AppServerEvent,
 ) -> bool {
     match event {
         AppServerEvent::ServerNotification(ServerNotification::RemoteControlStatusChanged(
             notification,
         )) => {
-            *summary = RemoteControlReadySummary::from(notification);
+            *summary = AppServerRemoteControlReadyStatus::from(notification);
             true
         }
         AppServerEvent::Lagged { skipped: _ }
@@ -363,6 +384,7 @@ fn print_remote_control_start_output(
     output: &AppServerRemoteControlReadyOutput,
     json: bool,
 ) -> anyhow::Result<()> {
+    ensure_remote_control_startable(&output.remote_control)?;
     if json {
         println!(
             "{}",
@@ -371,15 +393,20 @@ fn print_remote_control_start_output(
         return Ok(());
     }
 
-    let summary = RemoteControlReadySummary::from(&output.remote_control);
-    for line in remote_control_start_human_lines(&summary, RemoteControlHumanOutputMode::Daemon)? {
+    for line in remote_control_start_human_lines(
+        &output.remote_control,
+        RemoteControlHumanOutputMode::Daemon,
+    )? {
+        println!("{line}");
+    }
+    for line in daemon_app_server_human_lines(&output.daemon) {
         println!("{line}");
     }
     Ok(())
 }
 
 fn print_foreground_ready_output(
-    summary: &RemoteControlReadySummary,
+    summary: &AppServerRemoteControlReadyStatus,
     json: bool,
 ) -> anyhow::Result<()> {
     if json {
@@ -396,59 +423,6 @@ fn print_foreground_ready_output(
         println!("{line}");
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RemoteControlReadySummary {
-    status: RemoteControlConnectionStatus,
-    server_name: String,
-    environment_id: Option<String>,
-    timed_out: bool,
-}
-
-impl From<RemoteControlEnableResponse> for RemoteControlReadySummary {
-    fn from(response: RemoteControlEnableResponse) -> Self {
-        let RemoteControlEnableResponse {
-            status,
-            server_name,
-            installation_id: _,
-            environment_id,
-        } = response;
-        Self {
-            status,
-            server_name,
-            environment_id,
-            timed_out: false,
-        }
-    }
-}
-
-impl From<RemoteControlStatusChangedNotification> for RemoteControlReadySummary {
-    fn from(notification: RemoteControlStatusChangedNotification) -> Self {
-        let RemoteControlStatusChangedNotification {
-            status,
-            server_name,
-            installation_id: _,
-            environment_id,
-        } = notification;
-        Self {
-            status,
-            server_name,
-            environment_id,
-            timed_out: false,
-        }
-    }
-}
-
-impl From<&AppServerRemoteControlReadyStatus> for RemoteControlReadySummary {
-    fn from(status: &AppServerRemoteControlReadyStatus) -> Self {
-        Self {
-            status: status.status,
-            server_name: status.server_name.clone(),
-            environment_id: status.environment_id.clone(),
-            timed_out: status.timed_out,
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -471,7 +445,7 @@ enum RemoteControlModeJson {
 }
 
 impl<'a> RemoteControlStartJsonOutput<'a> {
-    fn foreground(summary: &'a RemoteControlReadySummary) -> Self {
+    fn foreground(summary: &'a AppServerRemoteControlReadyStatus) -> Self {
         Self {
             mode: RemoteControlModeJson::Foreground,
             status: summary.status,
@@ -496,7 +470,7 @@ impl<'a> RemoteControlStartJsonOutput<'a> {
 }
 
 fn remote_control_start_human_message(
-    output: &RemoteControlReadySummary,
+    output: &AppServerRemoteControlReadyStatus,
 ) -> anyhow::Result<String> {
     ensure_remote_control_startable(output)?;
     match output.status {
@@ -514,7 +488,9 @@ fn remote_control_start_human_message(
     }
 }
 
-fn ensure_remote_control_startable(output: &RemoteControlReadySummary) -> anyhow::Result<()> {
+fn ensure_remote_control_startable(
+    output: &AppServerRemoteControlReadyStatus,
+) -> anyhow::Result<()> {
     match output.status {
         RemoteControlConnectionStatus::Connected | RemoteControlConnectionStatus::Connecting => {
             Ok(())
@@ -538,7 +514,7 @@ enum RemoteControlHumanOutputMode {
 }
 
 fn remote_control_start_human_lines(
-    summary: &RemoteControlReadySummary,
+    summary: &AppServerRemoteControlReadyStatus,
     mode: RemoteControlHumanOutputMode,
 ) -> anyhow::Result<Vec<String>> {
     let mut lines = vec![remote_control_start_human_message(summary)?];
@@ -549,6 +525,30 @@ fn remote_control_start_human_lines(
         RemoteControlHumanOutputMode::Daemon => {}
     }
     Ok(lines)
+}
+
+fn daemon_app_server_human_lines(output: &AppServerRemoteControlStartOutput) -> Vec<String> {
+    let (managed_codex_path, managed_codex_version) = daemon_app_server_identity(output);
+    vec![
+        "Daemon used app-server:".to_string(),
+        format!("  path: {}", managed_codex_path.display()),
+        format!("  version: {}", managed_codex_version.unwrap_or("unknown")),
+    ]
+}
+
+fn daemon_app_server_identity(
+    output: &AppServerRemoteControlStartOutput,
+) -> (&std::path::Path, Option<&str>) {
+    match output {
+        AppServerRemoteControlStartOutput::Bootstrap(output) => (
+            &output.managed_codex_path,
+            output.managed_codex_version.as_deref(),
+        ),
+        AppServerRemoteControlStartOutput::Start(output) => (
+            &output.managed_codex_path,
+            output.managed_codex_version.as_deref(),
+        ),
+    }
 }
 
 fn print_remote_control_stop_output(
@@ -582,14 +582,17 @@ fn remote_control_stop_human_message(output: &AppServerLifecycleOutput) -> Strin
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::RemoteControlStatusChangedNotification;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
 
     use super::*;
 
-    fn remote_control_status(status: RemoteControlConnectionStatus) -> RemoteControlReadySummary {
-        RemoteControlReadySummary {
+    fn remote_control_status(
+        status: RemoteControlConnectionStatus,
+    ) -> AppServerRemoteControlReadyStatus {
+        AppServerRemoteControlReadyStatus {
             status,
             server_name: "owen-mbp".to_string(),
             environment_id: Some("env_test".to_string()),
@@ -625,6 +628,8 @@ mod tests {
                 status: AppServerLifecycleStatus::Started,
                 backend: None,
                 pid: Some(42),
+                managed_codex_path: PathBuf::from("/opt/codex/bin/codex"),
+                managed_codex_version: Some("1.0.0".to_string()),
                 socket_path: PathBuf::from("/tmp/app-server-control.sock"),
                 cli_version: Some("1.0.0".to_string()),
                 app_server_version: Some("2.0.0".to_string()),
@@ -692,6 +697,20 @@ mod tests {
     }
 
     #[test]
+    fn daemon_app_server_human_lines_include_path_and_version() {
+        assert_eq!(
+            daemon_app_server_human_lines(
+                &daemon_ready_output(RemoteControlConnectionStatus::Connected).daemon
+            ),
+            vec![
+                "Daemon used app-server:".to_string(),
+                "  path: /opt/codex/bin/codex".to_string(),
+                "  version: 1.0.0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn remote_control_json_output_marks_foreground_or_daemon() {
         let foreground_summary = remote_control_status(RemoteControlConnectionStatus::Connected);
         assert_eq!(
@@ -721,6 +740,8 @@ mod tests {
                 "daemon": {
                     "status": "started",
                     "pid": 42,
+                    "managedCodexPath": "/opt/codex/bin/codex",
+                    "managedCodexVersion": "1.0.0",
                     "socketPath": "/tmp/app-server-control.sock",
                     "cliVersion": "1.0.0",
                     "appServerVersion": "2.0.0",
@@ -732,10 +753,23 @@ mod tests {
     #[test]
     fn remote_control_summary_uses_enable_response_as_authoritative() {
         assert_eq!(
-            RemoteControlReadySummary::from(enable_response(
+            AppServerRemoteControlReadyStatus::from(enable_response(
                 RemoteControlConnectionStatus::Connected
             )),
             remote_control_status(RemoteControlConnectionStatus::Connected)
+        );
+    }
+
+    #[test]
+    fn remote_control_daemon_json_rejects_unstartable_status() {
+        assert_eq!(
+            print_remote_control_start_output(
+                &daemon_ready_output(RemoteControlConnectionStatus::Errored),
+                /*json*/ true
+            )
+            .expect_err("errored daemon status should fail")
+            .to_string(),
+            "Remote control is enabled on owen-mbp but the connection is errored."
         );
     }
 
@@ -782,7 +816,7 @@ mod tests {
             std::time::Duration::from_secs(1),
             wait_for_foreground_remote_control_start(
                 &mut app_server_task,
-                std::future::pending::<anyhow::Result<RemoteControlReadySummary>>(),
+                std::future::pending::<anyhow::Result<AppServerRemoteControlReadyStatus>>(),
                 stop_rx,
             ),
         )
@@ -804,7 +838,7 @@ mod tests {
             std::time::Duration::from_secs(1),
             wait_for_foreground_remote_control_start(
                 &mut app_server_task,
-                std::future::pending::<anyhow::Result<RemoteControlReadySummary>>(),
+                std::future::pending::<anyhow::Result<AppServerRemoteControlReadyStatus>>(),
                 stop_rx,
             ),
         )
