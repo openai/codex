@@ -566,41 +566,11 @@ impl PluginRequestProcessor {
                     outcome
                         .marketplaces
                         .into_iter()
-                        .map(|marketplace| PluginMarketplaceEntry {
-                            name: marketplace.name,
-                            path: Some(marketplace.path),
-                            interface: marketplace.interface.map(|interface| {
-                                MarketplaceInterface {
-                                    display_name: interface.display_name,
-                                }
-                            }),
-                            plugins: marketplace
-                                .plugins
-                                .into_iter()
-                                .map(|plugin| {
-                                    let share_context = share_context_for_source(
-                                        &plugin.source,
-                                        &shared_plugin_ids_by_local_path,
-                                    );
-                                    PluginSummary {
-                                        id: plugin.id,
-                                        remote_plugin_id: None,
-                                        local_version: plugin.local_version,
-                                        installed: plugin.installed,
-                                        enabled: plugin.enabled,
-                                        name: plugin.name,
-                                        share_context,
-                                        source: marketplace_plugin_source_to_info(plugin.source),
-                                        install_policy: plugin.policy.installation.into(),
-                                        auth_policy: plugin.policy.authentication.into(),
-                                        availability: PluginAvailability::Available,
-                                        interface: plugin
-                                            .interface
-                                            .map(local_plugin_interface_to_info),
-                                        keywords: plugin.keywords,
-                                    }
-                                })
-                                .collect(),
+                        .map(|marketplace| {
+                            convert_configured_marketplace_to_plugin_marketplace_entry(
+                                marketplace,
+                                &shared_plugin_ids_by_local_path,
+                            )
                         })
                         .collect(),
                     outcome
