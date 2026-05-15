@@ -612,10 +612,14 @@ impl PluginsManager {
         &self,
         config: &RemotePluginServiceConfig,
         auth: Option<&CodexAuth>,
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
         let plugins = crate::remote::fetch_remote_installed_plugins(config, auth).await?;
         let marketplaces = crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins);
-        self.write_remote_installed_plugins_cache(plugins);
+        let changed = self.write_remote_installed_plugins_cache(plugins);
+        if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
+            on_effective_plugins_changed();
+        }
         Ok(marketplaces)
     }
 

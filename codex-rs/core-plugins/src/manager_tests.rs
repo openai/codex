@@ -7,6 +7,7 @@ use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemotePluginServiceConfig;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -2745,6 +2746,96 @@ enabled = true
             }],
         }
     );
+}
+
+#[tokio::test]
+async fn build_and_cache_remote_installed_plugin_marketplaces_notifies_when_cache_changes() {
+    let codex_home = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let installed_body = r#"{
+  "plugins": [
+    {
+      "id": "plugins~Plugin_linear",
+      "name": "linear",
+      "scope": "GLOBAL",
+      "installation_policy": "AVAILABLE",
+      "authentication_policy": "ON_USE",
+      "release": {
+        "version": "1.2.3",
+        "display_name": "Linear",
+        "description": "Track work in Linear",
+        "app_ids": [],
+        "interface": {},
+        "skills": []
+      },
+      "enabled": true,
+      "disabled_skill_names": []
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "next_page_token": null
+  }
+}"#;
+    let empty_installed_body = r#"{
+  "plugins": [],
+  "pagination": {
+    "limit": 50,
+    "next_page_token": null
+  }
+}"#;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(empty_installed_body))
+        .mount(&server)
+        .await;
+
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: format!("{}/backend-api/", server.uri()),
+    };
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let refresh_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let refresh_count_for_first_fetch = std::sync::Arc::clone(&refresh_count);
+    let marketplaces = manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &service_config,
+            Some(&auth),
+            Some(std::sync::Arc::new(move || {
+                refresh_count_for_first_fetch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        )
+        .await
+        .expect("remote installed plugins should load");
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(refresh_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let refresh_count_for_second_fetch = std::sync::Arc::clone(&refresh_count);
+    manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &service_config,
+            Some(&auth),
+            Some(std::sync::Arc::new(move || {
+                refresh_count_for_second_fetch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        )
+        .await
+        .expect("remote installed plugins should load");
+
+    assert_eq!(refresh_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -791,6 +791,7 @@ impl PluginRequestProcessor {
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     &remote_plugin_service_config,
                     auth,
+                    Some(self.effective_plugins_changed_callback()),
                 )
                 .await
         };
