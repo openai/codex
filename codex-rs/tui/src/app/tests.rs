@@ -28,6 +28,7 @@ use crate::app_command::AppCommand as Op;
 use crate::diff_model::FileChange;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -1730,10 +1731,9 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
             PermissionProfile::workspace_write(),
-            /*active_profile*/ None,
-        )?;
+        ))?;
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -3153,10 +3153,9 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
             parent_permission_profile.clone(),
-            /*active_profile*/ None,
-        )
+        ))
         .expect("test permission profile should be accepted");
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
