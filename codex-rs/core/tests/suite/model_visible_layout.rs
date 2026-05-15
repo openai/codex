@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_config::types::Personality;
-use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -103,10 +102,6 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.3-codex")
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
@@ -361,10 +356,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
 
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.3-codex".to_string());
-        config
-            .features
-            .enable(Feature::Personality)
-            .expect("test config should allow feature update");
         config.personality = Some(Personality::Pragmatic);
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;

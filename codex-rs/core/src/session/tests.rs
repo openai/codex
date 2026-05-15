@@ -9293,7 +9293,6 @@ async fn sample_rollout(
                 matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
             }))
     }) && let Some(p) = reconstruction_turn.personality
-        && session.features.enabled(Feature::Personality)
         && let Some(personality_message) = reconstruction_turn
             .model_info
             .model_messages

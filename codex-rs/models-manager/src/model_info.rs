@@ -55,8 +55,6 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     if let Some(base_instructions) = &config.base_instructions {
         model.base_instructions = base_instructions.clone();
         model.model_messages = None;
-    } else if !config.personality_enabled {
-        model.model_messages = None;
     }
 
     model

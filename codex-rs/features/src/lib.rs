@@ -182,7 +182,7 @@ pub enum Feature {
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
     AuthElicitation,
-    /// Enable personality selection in the TUI.
+    /// Removed compatibility flag. Personality selection is always enabled.
     Personality,
     /// Enable native artifact tools.
     Artifact,
@@ -1099,7 +1099,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {

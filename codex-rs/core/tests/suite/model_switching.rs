@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_config::types::Personality;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -213,14 +212,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
 

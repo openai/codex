@@ -329,7 +329,6 @@ impl ChatWidget {
         let personality = self
             .config
             .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = match self.config.service_tier.clone() {
             Some(service_tier) => Some(Some(service_tier)),

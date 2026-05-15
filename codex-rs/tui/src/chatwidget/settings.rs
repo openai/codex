@@ -68,9 +68,6 @@ impl ChatWidget {
         if feature == Feature::FastMode {
             self.sync_service_tier_commands();
         }
-        if feature == Feature::Personality {
-            self.sync_personality_command_enabled();
-        }
         if feature == Feature::Plugins {
             self.sync_plugins_command_enabled();
             self.refresh_plugin_mentions();
@@ -275,7 +272,7 @@ impl ChatWidget {
 
     pub(super) fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
-            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+            .set_personality_command_enabled(/*enabled*/ true);
     }
 
     pub(super) fn sync_plugins_command_enabled(&mut self) {

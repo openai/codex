@@ -1,5 +1,4 @@
 use codex_config::types::Personality;
-use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
@@ -85,10 +84,6 @@ fn read_only_text_turn_with_personality(
 async fn personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .enable(Feature::Personality)
-        .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
 
     let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.4", &config);
@@ -102,10 +97,6 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
 async fn base_instructions_override_disables_personality_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .enable(Feature::Personality)
-        .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
 
@@ -125,14 +116,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build(&server).await?;
 
     test.codex
@@ -167,10 +151,6 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let mut builder = test_codex()
         .with_model("gpt-5.3-codex")
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
@@ -214,10 +194,6 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.3-codex")
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.personality = Some(Personality::None);
         });
     let test = builder.build(&server).await?;
@@ -265,14 +241,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
 
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build(&server).await?;
 
     test.codex
@@ -306,14 +275,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
-    let mut builder = test_codex()
-        .with_model("exp-codex-personality")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder = test_codex().with_model("exp-codex-personality");
     let test = builder.build(&server).await?;
 
     test.codex
@@ -392,10 +354,6 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
@@ -454,102 +412,6 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
         "expected no personality preamble for unchanged personality, got {personality_text:?}"
     );
 
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config
-        .features
-        .disable(Feature::Personality)
-        .expect("test config should allow feature update");
-    config.personality = Some(Personality::Friendly);
-
-    let model_info =
-        codex_core::test_support::construct_model_info_offline("gpt-5.3-codex", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let resp_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let mut builder = test_codex()
-        .with_model("exp-codex-personality")
-        .with_config(|config| {
-            config
-                .features
-                .disable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
-    let test = builder.build(&server).await?;
-
-    test.codex
-        .submit(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
-        })
-        .await?;
-
-    test.codex
-        .submit(read_only_text_turn(
-            &test,
-            "hello",
-            test.session_configured.model.clone(),
-            test.config.permissions.approval_policy.value(),
-        ))
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2, "expected two requests");
-    let request = requests
-        .last()
-        .expect("expected personality update request");
-
-    let developer_texts = request.message_input_texts("developer");
-    let personality_text = developer_texts
-        .iter()
-        .find(|text| text.contains("<personality_spec>"));
-    assert!(
-        personality_text.is_none(),
-        "expected no personality preamble, got {personality_text:?}"
-    );
     Ok(())
 }
 
@@ -623,10 +485,6 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let mut builder = test_codex()
         .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.model = Some(remote_slug.to_string());
             config.personality = Some(Personality::Friendly);
         });
@@ -736,10 +594,6 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let mut builder = test_codex()
         .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.model = Some("gpt-5.3-codex".to_string());
         });
     let test = builder.build(&server).await?;

@@ -77,6 +77,12 @@ fn apply_patch_freeform_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn personality_is_removed_and_enabled_by_default() {
+    assert_eq!(Feature::Personality.stage(), Stage::Removed);
+    assert_eq!(Feature::Personality.default_enabled(), true);
+}
+
+#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);

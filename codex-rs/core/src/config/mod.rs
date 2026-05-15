@@ -1247,7 +1247,6 @@ impl Config {
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
             base_instructions: self.base_instructions.clone(),
-            personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
         }
@@ -3127,11 +3126,7 @@ impl Config {
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
-            .or_else(|| {
-                features
-                    .enabled(Feature::Personality)
-                    .then_some(Personality::Pragmatic)
-            });
+            .or(Some(Personality::Pragmatic));
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
