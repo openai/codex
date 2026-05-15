@@ -33,6 +33,7 @@ async fn spawn_command_under_sandbox(
             command,
             cwd: command_cwd,
             expiration: 1000.into(),
+            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::ShellTool,
             env,
             network: None,
