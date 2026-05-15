@@ -2747,7 +2747,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let _guard = TempDirGuard(output_dir.clone());
         let path = output_dir.join("CommandExecParams.ts");
         let content = r#"import type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
-import type { PermissionProfile } from "./PermissionProfile";
+import type { ActivePermissionProfile } from "./ActivePermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
 export type CommandExecParams = {/**
@@ -2770,12 +2770,12 @@ size?: CommandExecTerminalSize | null, /**
  */
 sandboxPolicy?: SandboxPolicy | null,
 /**
- * Optional full permissions profile for this command.
+ * Optional active permissions profile for this command.
  *
  * Defaults to the user's configured permissions when omitted. Cannot be
  * combined with `sandboxPolicy`.
  */
-permissionProfile?: PermissionProfile | null};
+permissionProfile?: ActivePermissionProfile | null};
 "#;
         fs::write(&path, content)?;
 
@@ -2789,11 +2789,13 @@ permissionProfile?: PermissionProfile | null};
 
         let filtered = fs::read_to_string(&path)?;
         assert_eq!(
-            filtered.contains("permissionProfile?: PermissionProfile"),
+            filtered.contains("permissionProfile?: ActivePermissionProfile"),
             false
         );
         assert_eq!(
-            filtered.contains(r#"import type { PermissionProfile } from "./PermissionProfile";"#),
+            filtered.contains(
+                r#"import type { ActivePermissionProfile } from "./ActivePermissionProfile";"#
+            ),
             false
         );
         assert_eq!(filtered.contains("sandboxPolicy?: SandboxPolicy"), true);

@@ -354,6 +354,7 @@ impl MessageProcessor {
             arg0_paths.clone(),
             Arc::clone(&config),
             outgoing.clone(),
+            config_manager.clone(),
         );
         let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
