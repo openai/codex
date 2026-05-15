@@ -498,7 +498,7 @@ async fn build_auto_harness(mode: Mode) -> Result<TestCodexHarness> {
 }
 
 async fn build_harness(mode: Mode, settings: RunSettings, hooks: bool) -> Result<TestCodexHarness> {
-    build_harness_inner(mode, settings, hooks, None).await
+    build_harness_inner(mode, settings, hooks, /*auto_compact_limit*/ None).await
 }
 
 async fn build_harness_inner(
