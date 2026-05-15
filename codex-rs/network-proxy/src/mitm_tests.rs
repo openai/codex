@@ -285,13 +285,32 @@ fn credentialed_route_proxy_request_rewrites_upstream_target() {
         proxy_url: "http://localhost:8080/api/codex/credential_routes/proxy".to_string(),
     };
     let request_uri: Uri = "https://api.example.com/v1/items?limit=5".parse().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static(CREDENTIAL_ROUTE_REQUEST_URL_HEADER),
+        HeaderValue::from_static("https://spoofed.example.com"),
+    );
 
-    let (proxy_uri, proxy_authority) =
-        credentialed_route_proxy_request(&action, &request_uri).unwrap();
+    let (proxy_uri, proxy_authority) = credentialed_route_proxy_request(&action).unwrap();
+    apply_credentialed_route_proxy_headers(&mut headers, &action, &request_uri).unwrap();
 
     assert_eq!(
         proxy_uri.to_string(),
-        "http://localhost:8080/api/codex/credential_routes/proxy?link_id=link_123&connector_id=connector_123&request_url=https%3A%2F%2Fapi.example.com%2Fv1%2Fitems%3Flimit%3D5"
+        "http://localhost:8080/api/codex/credential_routes/proxy"
     );
     assert_eq!(proxy_authority, "localhost:8080");
+    assert_eq!(
+        headers.get(CREDENTIAL_ROUTE_CONNECTOR_ID_HEADER),
+        Some(&HeaderValue::from_static("connector_123"))
+    );
+    assert_eq!(
+        headers.get(CREDENTIAL_ROUTE_LINK_ID_HEADER),
+        Some(&HeaderValue::from_static("link_123"))
+    );
+    assert_eq!(
+        headers.get(CREDENTIAL_ROUTE_REQUEST_URL_HEADER),
+        Some(&HeaderValue::from_static(
+            "https://api.example.com/v1/items?limit=5"
+        ))
+    );
 }
