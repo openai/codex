@@ -7,6 +7,8 @@ pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const PRIMARY_LIMIT_FALLBACK_LABEL: &str = "usage";
+const SECONDARY_LIMIT_FALLBACK_LABEL: &str = "secondary usage";
 
 #[derive(Default)]
 pub(super) struct RateLimitWarningState {
@@ -42,7 +44,7 @@ impl RateLimitWarningState {
             if let Some(threshold) = highest_secondary {
                 let limit_label = secondary_window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
+                    .unwrap_or_else(|| SECONDARY_LIMIT_FALLBACK_LABEL.to_string());
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -61,7 +63,7 @@ impl RateLimitWarningState {
             if let Some(threshold) = highest_primary {
                 let limit_label = primary_window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
+                    .unwrap_or_else(|| PRIMARY_LIMIT_FALLBACK_LABEL.to_string());
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -82,16 +84,66 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 
     let windows_minutes = windows_minutes.max(0);
 
-    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
+    if windows_minutes == 0 {
+        PRIMARY_LIMIT_FALLBACK_LABEL.to_string()
+    } else if let Some(months) =
+        approximate_window_count(windows_minutes, MINUTES_PER_MONTH, MINUTES_PER_DAY)
+    {
+        if months == 1 {
+            "monthly".to_string()
+        } else {
+            format!("{months}-month")
+        }
+    } else if let Some(weeks) =
+        approximate_window_count(windows_minutes, MINUTES_PER_WEEK, ROUNDING_BIAS_MINUTES)
+    {
+        if weeks == 1 {
+            "weekly".to_string()
+        } else {
+            format!("{weeks}-week")
+        }
+    } else if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
         let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
         let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
         format!("{hours}h")
-    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "weekly".to_string()
-    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "monthly".to_string()
+    } else if let Some(days) =
+        approximate_window_count(windows_minutes, MINUTES_PER_DAY, ROUNDING_BIAS_MINUTES)
+    {
+        format!("{days}-day")
+    } else if windows_minutes < MINUTES_PER_WEEK {
+        let days = windows_minutes.saturating_add(MINUTES_PER_DAY - 1) / MINUTES_PER_DAY;
+        format!("{days}-day")
+    } else if windows_minutes < MINUTES_PER_MONTH {
+        let weeks = windows_minutes.saturating_add(MINUTES_PER_WEEK - 1) / MINUTES_PER_WEEK;
+        format!("{weeks}-week")
     } else {
-        "annual".to_string()
+        let months = windows_minutes.saturating_add(MINUTES_PER_MONTH - 1) / MINUTES_PER_MONTH;
+        format!("{months}-month")
+    }
+}
+
+pub(crate) fn fallback_limit_label(is_secondary: bool) -> &'static str {
+    if is_secondary {
+        SECONDARY_LIMIT_FALLBACK_LABEL
+    } else {
+        PRIMARY_LIMIT_FALLBACK_LABEL
+    }
+}
+
+fn approximate_window_count(
+    minutes: i64,
+    unit_minutes: i64,
+    tolerance_minutes: i64,
+) -> Option<i64> {
+    if minutes <= 0 || unit_minutes <= 0 {
+        return None;
+    }
+    let count = std::cmp::max(1, (minutes + unit_minutes / 2) / unit_minutes);
+    let target_minutes = count.saturating_mul(unit_minutes);
+    if (minutes - target_minutes).abs() <= tolerance_minutes {
+        Some(count)
+    } else {
+        None
     }
 }
 

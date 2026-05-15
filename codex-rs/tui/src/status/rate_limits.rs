@@ -5,6 +5,7 @@
 //!
 //! The key contract is that time-sensitive values are interpreted relative to a caller-provided
 //! capture timestamp so stale detection and reset labels remain coherent for a given draw cycle.
+use crate::chatwidget::fallback_limit_label;
 use crate::chatwidget::get_limits_duration;
 use crate::text_formatting::capitalize_first;
 
@@ -23,7 +24,7 @@ const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
-    /// Human-readable row label, such as `"5h limit"` or `"Credits"`.
+    /// Human-readable row label, such as `"5h limit"`, `"Monthly limit"`, or `"Credits"`.
     pub label: String,
     /// Value payload for the row.
     pub value: StatusRateLimitValue,
@@ -92,9 +93,9 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub limit_name: String,
     /// Local timestamp representing when this display snapshot was captured.
     pub captured_at: DateTime<Local>,
-    /// Primary usage window (typically short duration).
+    /// Primary usage window.
     pub primary: Option<RateLimitWindowDisplay>,
-    /// Secondary usage window (typically weekly).
+    /// Secondary usage window.
     pub secondary: Option<RateLimitWindowDisplay>,
     /// Optional credits metadata when available.
     pub credits: Option<CreditsSnapshotDisplay>,
@@ -191,7 +192,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string())
+                    .unwrap_or_else(|| fallback_limit_label(false).to_string())
             })
             .map(|label| capitalize_first(&label));
         let secondary_label = snapshot
@@ -201,7 +202,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string())
+                    .unwrap_or_else(|| fallback_limit_label(true).to_string())
             })
             .map(|label| capitalize_first(&label));
         let window_count =
@@ -220,12 +221,16 @@ pub(crate) fn compose_rate_limit_data_many(
                 format!(
                     "{} {} limit",
                     limit_bucket_label,
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    primary_label
+                        .clone()
+                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(false)))
                 )
             } else {
                 format!(
                     "{} limit",
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    primary_label
+                        .clone()
+                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(false)))
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -244,14 +249,14 @@ pub(crate) fn compose_rate_limit_data_many(
                     limit_bucket_label,
                     secondary_label
                         .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(true)))
                 )
             } else {
                 format!(
                     "{} limit",
                     secondary_label
                         .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(true)))
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -435,7 +440,7 @@ mod tests {
             vec![
                 "codex-other limit".to_string(),
                 "1h limit".to_string(),
-                "Weekly limit".to_string(),
+                "Secondary usage limit".to_string(),
             ]
         );
     }

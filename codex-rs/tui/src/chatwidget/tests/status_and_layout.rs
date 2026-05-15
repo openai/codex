@@ -1,6 +1,7 @@
 use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
+use crate::chatwidget::rate_limits::get_limits_duration;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
@@ -514,6 +515,36 @@ async fn test_rate_limit_warnings_monthly() {
             "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
         ),],
         "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[test]
+fn rate_limit_duration_labels_preserve_non_standard_windows() {
+    assert_eq!(get_limits_duration(2 * 60), "2h");
+    assert_eq!(get_limits_duration(2 * 24 * 60), "2-day");
+    assert_eq!(get_limits_duration(2 * 7 * 24 * 60), "2-week");
+    assert_eq!(get_limits_duration(30 * 24 * 60), "monthly");
+}
+
+#[tokio::test]
+async fn test_rate_limit_warnings_use_generic_fallback_labels() {
+    let mut state = RateLimitWarningState::default();
+
+    assert_eq!(
+        state.take_warnings(
+            /*secondary_used_percent*/ Some(75.0),
+            /*secondary_window_minutes*/ None,
+            /*primary_used_percent*/ Some(75.0),
+            /*primary_window_minutes*/ None,
+        ),
+        vec![
+            String::from(
+                "Heads up, you have less than 25% of your secondary usage limit left. Run /status for a breakdown.",
+            ),
+            String::from(
+                "Heads up, you have less than 25% of your usage limit left. Run /status for a breakdown.",
+            ),
+        ],
     );
 }
 
