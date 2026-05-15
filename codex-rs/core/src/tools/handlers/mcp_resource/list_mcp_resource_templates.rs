@@ -105,6 +105,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourceTemplatesHandler {
                     ));
                 }
 
+                session.ensure_mcp_connection_manager_initialized().await;
                 let templates = session
                     .services
                     .mcp_connection_manager

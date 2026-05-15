@@ -559,17 +559,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            thread_persistence_result,
-            state_db_ctx,
-            (history_log_id, history_entry_count),
-            (auth, mcp_servers),
-        ) = tokio::join!(
-            thread_persistence_fut,
-            state_db_fut,
-            history_meta_fut,
-            auth_and_mcp_fut
-        );
+        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers)) =
+            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -1003,9 +994,6 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
-
-            // Start the watcher after SessionConfigured so it cannot emit earlier events.
-            sess.start_skills_watcher_listener();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

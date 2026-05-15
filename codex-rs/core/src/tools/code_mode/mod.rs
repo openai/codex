@@ -4,6 +4,7 @@ mod response_adapter;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,9 +30,11 @@ use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
+use crate::tools::router::ToolRouterParams;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
+use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
@@ -261,7 +264,7 @@ pub(super) async fn build_enabled_tools(
     exec: &ExecContext,
 ) -> Vec<codex_code_mode::ToolDefinition> {
     let router = build_nested_router(exec).await;
-    let specs = router.specs();
+    let specs = router.model_visible_specs();
     collect_code_mode_tool_definitions(&specs)
 }
 
@@ -295,14 +298,22 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         })
         .collect::<HashSet<_>>();
 
+    let listed_mcp_tools = listed_mcp_tools
+        .into_iter()
+        .map(|mut tool| {
+            tool.supports_parallel_tool_calls =
+                parallel_mcp_server_names.contains(&tool.server_name);
+            tool
+        })
+        .collect();
+
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(listed_mcp_tools),
-            unavailable_called_tools: Vec::new(),
-            parallel_mcp_server_names,
             discoverable_tools: None,
+            extension_tool_executors: Vec::new(),
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },
     )

@@ -1,4 +1,5 @@
 use super::*;
+use codex_mcp::EffectiveMcpServer;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
@@ -29,7 +30,7 @@ struct ReplaceMcpConnectionManagerArgs<'a> {
     permission_profile: PermissionProfile,
     runtime_environment: McpRuntimeEnvironment,
     config: &'a Arc<Config>,
-    mcp_servers: HashMap<String, McpServerConfig>,
+    mcp_servers: HashMap<String, EffectiveMcpServer>,
     store_mode: OAuthCredentialsStoreMode,
     auth: Option<&'a CodexAuth>,
     host_owned_codex_apps_enabled: bool,
@@ -212,7 +213,10 @@ impl Session {
             mcp_servers,
             store_mode: config.mcp_oauth_credentials_store_mode,
             auth: auth.as_ref(),
-            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()),
+            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(
+                &mcp_config,
+                auth.as_ref(),
+            ),
             client_elicitation_capability: mcp_config.client_elicitation_capability,
             elicitation_reviewer: None,
         })
@@ -429,24 +433,6 @@ impl Session {
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP tool metadata reads through the session-owned manager guard"
-    )]
-    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        self.ensure_mcp_connection_manager_initialized().await;
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .resolve_tool_info(tool_name)
-            .await
-    }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP refresh must stay single-flight while the shared session pool is replaced"
-    )]
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
@@ -484,7 +470,10 @@ impl Session {
             mcp_servers,
             store_mode,
             auth: auth.as_ref(),
-            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()),
+            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(
+                &mcp_config,
+                auth.as_ref(),
+            ),
             client_elicitation_capability: mcp_config.client_elicitation_capability,
             elicitation_reviewer,
         })

@@ -103,6 +103,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
                     ));
                 }
 
+                session.ensure_mcp_connection_manager_initialized().await;
                 let resources = session
                     .services
                     .mcp_connection_manager

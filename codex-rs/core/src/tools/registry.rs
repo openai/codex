@@ -332,26 +332,6 @@ impl ToolRegistry {
                 ),
             ),
         ];
-        let (mcp_server, mcp_server_origin) = match &invocation.payload {
-            ToolPayload::Mcp { server, .. } => {
-                invocation
-                    .session
-                    .ensure_mcp_connection_manager_initialized()
-                    .await;
-                let manager = invocation
-                    .session
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await;
-                let origin = manager.server_origin(server).map(str::to_owned);
-                (Some(server.clone()), origin)
-            }
-            _ => (None, None),
-        };
-        let mcp_server_ref = mcp_server.as_deref();
-        let mcp_server_origin_ref = mcp_server_origin.as_deref();
-
         {
             let mut active = invocation.session.active_turn.lock().await;
             if let Some(active_turn) = active.as_mut() {
