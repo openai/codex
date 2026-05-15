@@ -214,6 +214,7 @@ mod tests {
             codex_turn_id: "turn-1".to_string(),
             model: "gpt-test".to_string(),
             provider_name: "test-provider".to_string(),
+            request_input_mode: None,
             request_payload: inference_request.clone(),
         })?;
         let inference_response = writer.write_json_payload(

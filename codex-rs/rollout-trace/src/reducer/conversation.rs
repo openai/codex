@@ -22,6 +22,7 @@ use crate::model::ConversationRole;
 use crate::model::InferenceCallId;
 use crate::model::ProducerRef;
 use crate::payload::RawPayloadRef;
+use crate::raw_event::InferenceRequestInputMode;
 
 mod normalize;
 
@@ -37,6 +38,7 @@ impl TraceReducer {
         inference_call_id: &InferenceCallId,
         thread_id: &str,
         codex_turn_id: &str,
+        request_input_mode: Option<&InferenceRequestInputMode>,
         request_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
         let payload = self.read_payload_json(request_payload)?;
@@ -55,76 +57,78 @@ impl TraceReducer {
 
         let items = normalize::normalize_model_items(request_items, request_payload)?;
 
-        let previous_response_id = payload.get("previous_response_id").and_then(Value::as_str);
+        let payload_previous_response_id =
+            payload.get("previous_response_id").and_then(Value::as_str);
+        // Old bundles predate request-input reduction metadata. Preserve their
+        // existing replay behavior by deriving the legacy interpretation from
+        // the transport payload only when the explicit mode is absent.
+        let request_input_mode = request_input_mode.cloned().unwrap_or_else(|| {
+            payload_previous_response_id.map_or(InferenceRequestInputMode::FullSnapshot, |id| {
+                InferenceRequestInputMode::Incremental {
+                    previous_response_id: id.to_string(),
+                }
+            })
+        });
         // After compaction, the next full request is compared against the installed replacement
         // history, not the pre-compaction prompt. Any repeated developer/context prefix that Codex
         // reinjects must therefore become a fresh post-compaction conversation item.
-        let post_compaction_snapshot = if previous_response_id.is_none() {
-            self.pending_compaction_replacement_item_ids
-                .get(thread_id)
-                .cloned()
-        } else {
-            None
-        };
-        let request_item_ids = if let Some(previous_response_id) = previous_response_id {
-            // Streaming follow-up requests can send only the new input plus a
-            // `previous_response_id`. The trace model still exposes the full
-            // model-visible input, so rebuild the omitted prefix from the
-            // previous request and response before reducing this delta.
-            let previous_items = self
-                .rollout
-                .inference_calls
-                .values()
-                .find(|inference| {
-                    inference.thread_id == thread_id
-                        && inference.response_id.as_deref() == Some(previous_response_id)
-                })
-                .map(|inference| {
-                    let mut ids = inference.request_item_ids.clone();
-                    ids.extend(inference.response_item_ids.clone());
-                    ids
-                });
-            let mut item_ids = if let Some(previous_items) = previous_items {
-                previous_items
+        let post_compaction_snapshot =
+            if matches!(request_input_mode, InferenceRequestInputMode::FullSnapshot) {
+                self.pending_compaction_replacement_item_ids
+                    .get(thread_id)
+                    .cloned()
             } else {
-                // Startup WebSocket prewarm requests intentionally stay outside rollout
-                // traces, but the first traced request on that thread may reuse the warmup
-                // response id. Startup prewarm is built with empty conversation input and
-                // `generate=false`, so that unresolved parent can omit no traceable request or
-                // response items. No later unresolved id is valid: once a traced inference or
-                // transcript snapshot exists, the reducer should be able to resolve the link.
-                let first_traced_inference_for_thread = !self
+                None
+            };
+        let request_item_ids = match request_input_mode {
+            InferenceRequestInputMode::Incremental {
+                previous_response_id,
+            } => {
+                if payload_previous_response_id != Some(previous_response_id.as_str()) {
+                    bail!(
+                        "incremental inference request {inference_call_id} recorded previous_response_id {previous_response_id}, \
+                         but payload previous_response_id was {payload_previous_response_id:?}"
+                    );
+                }
+                // Streaming follow-up requests can send only the new input plus a
+                // `previous_response_id`. The trace model still exposes the full
+                // model-visible input, so rebuild the omitted prefix from the
+                // previous request and response before reducing this delta.
+                let previous_items = self
                     .rollout
                     .inference_calls
                     .values()
-                    .any(|inference| inference.thread_id == thread_id);
-                let thread_snapshot_is_empty = self
-                    .thread_conversation_snapshots
-                    .get(thread_id)
-                    .is_none_or(Vec::is_empty);
-                if !first_traced_inference_for_thread || !thread_snapshot_is_empty {
+                    .find(|inference| {
+                        inference.thread_id == thread_id
+                            && inference.response_id.as_deref()
+                                == Some(previous_response_id.as_str())
+                    })
+                    .map(|inference| {
+                        let mut ids = inference.request_item_ids.clone();
+                        ids.extend(inference.response_item_ids.clone());
+                        ids
+                    });
+                let Some(mut item_ids) = previous_items else {
                     bail!(
                         "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
                     );
-                }
-                Vec::new()
-            };
-            let delta_item_ids = self.reconcile_conversation_items(
-                items,
-                ReconcileItems {
-                    thread_id,
-                    codex_turn_id,
-                    wall_time_unix_ms,
-                    produced_by: Vec::new(),
-                    start_index: item_ids.len(),
-                    mode: ReconcileMode::AppendOnly,
-                    snapshot_override: None,
-                },
-            )?;
-            item_ids.extend(delta_item_ids);
-            item_ids
-        } else {
-            self.reconcile_conversation_items(
+                };
+                let delta_item_ids = self.reconcile_conversation_items(
+                    items,
+                    ReconcileItems {
+                        thread_id,
+                        codex_turn_id,
+                        wall_time_unix_ms,
+                        produced_by: Vec::new(),
+                        start_index: item_ids.len(),
+                        mode: ReconcileMode::AppendOnly,
+                        snapshot_override: None,
+                    },
+                )?;
+                item_ids.extend(delta_item_ids);
+                item_ids
+            }
+            InferenceRequestInputMode::FullSnapshot => self.reconcile_conversation_items(
                 items,
                 ReconcileItems {
                     thread_id,
@@ -135,7 +139,7 @@ impl TraceReducer {
                     mode: ReconcileMode::FullSnapshot,
                     snapshot_override: post_compaction_snapshot.as_deref(),
                 },
-            )?
+            )?,
         };
 
         self.append_thread_conversation_items(thread_id, &request_item_ids)?;

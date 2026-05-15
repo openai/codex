@@ -12,6 +12,7 @@ use crate::model::ExecutionWindow;
 use crate::model::InferenceCall;
 use crate::model::InferenceCallId;
 use crate::payload::RawPayloadRef;
+use crate::raw_event::InferenceRequestInputMode;
 use crate::raw_event::RawEventSeq;
 use crate::raw_event::RawTraceEventPayload;
 
@@ -25,6 +26,7 @@ pub(super) struct StartedInferenceCall {
     pub(super) codex_turn_id: String,
     pub(super) model: String,
     pub(super) provider_name: String,
+    pub(super) request_input_mode: Option<InferenceRequestInputMode>,
     pub(super) request_payload: RawPayloadRef,
 }
 
@@ -72,6 +74,7 @@ impl TraceReducer {
             &inference_call_id,
             &thread_id,
             &codex_turn_id,
+            started.request_input_mode.as_ref(),
             &request_payload,
         )?;
 

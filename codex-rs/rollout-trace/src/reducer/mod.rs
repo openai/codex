@@ -211,6 +211,7 @@ impl TraceReducer {
                 codex_turn_id,
                 model,
                 provider_name,
+                request_input_mode,
                 request_payload,
             } => {
                 self.start_inference_call(
@@ -222,6 +223,7 @@ impl TraceReducer {
                         codex_turn_id,
                         model,
                         provider_name,
+                        request_input_mode,
                         request_payload,
                     },
                 )?;

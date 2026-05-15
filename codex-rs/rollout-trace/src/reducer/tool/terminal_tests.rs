@@ -533,6 +533,7 @@ fn append_inference_with_tool_call(writer: &TraceWriter) -> anyhow::Result<()> {
         codex_turn_id: "turn-1".to_string(),
         model: "gpt-test".to_string(),
         provider_name: "test-provider".to_string(),
+        request_input_mode: None,
         request_payload: request,
     })?;
 
@@ -575,6 +576,7 @@ fn append_followup_with_tool_output(writer: &TraceWriter) -> anyhow::Result<()> 
         codex_turn_id: "turn-2".to_string(),
         model: "gpt-test".to_string(),
         provider_name: "test-provider".to_string(),
+        request_input_mode: None,
         request_payload: request,
     })?;
     Ok(())

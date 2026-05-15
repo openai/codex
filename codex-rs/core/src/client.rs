@@ -82,6 +82,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
+use codex_rollout_trace::InferenceRequestInputMode;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
@@ -1252,7 +1253,8 @@ impl ModelClientSession {
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
-            inference_trace_attempt.record_started(&request);
+            inference_trace_attempt
+                .record_started(&request, InferenceRequestInputMode::FullSnapshot);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1407,6 +1409,7 @@ impl ModelClientSession {
             }
 
             let mut ws_request = self.prepare_websocket_request(ws_payload, &request);
+            let request_input_mode = websocket_trace_request_input_mode(&ws_request, &request);
             self.websocket_session.last_request = Some(request);
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
@@ -1416,7 +1419,7 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
-            inference_trace_attempt.record_started(&ws_request);
+            inference_trace_attempt.record_started(&ws_request, request_input_mode);
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
                     map_api_error(ApiError::Stream(
@@ -1639,6 +1642,30 @@ fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
             X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
             crate::turn_timing::now_unix_timestamp_ms().to_string(),
         );
+}
+
+/// Describes whether the websocket wire payload still contains the logical full input.
+///
+/// A websocket request can reuse `previous_response_id` while omitting zero visible
+/// items, notably after empty startup prewarm. The reducer should treat that as a
+/// full snapshot even though the transport-level parent id is present.
+fn websocket_trace_request_input_mode(
+    request: &ResponsesWsRequest,
+    logical_request: &ResponsesApiRequest,
+) -> InferenceRequestInputMode {
+    let ResponsesWsRequest::ResponseCreate(payload) = request else {
+        return InferenceRequestInputMode::FullSnapshot;
+    };
+    let Some(previous_response_id) = payload.previous_response_id.as_ref() else {
+        return InferenceRequestInputMode::FullSnapshot;
+    };
+    if payload.input == logical_request.input {
+        InferenceRequestInputMode::FullSnapshot
+    } else {
+        InferenceRequestInputMode::Incremental {
+            previous_response_id: previous_response_id.clone(),
+        }
+    }
 }
 
 /// Builds the extra headers attached to Responses API requests.

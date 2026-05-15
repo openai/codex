@@ -21,6 +21,7 @@ use crate::model::AgentThreadId;
 use crate::model::CodexTurnId;
 use crate::model::InferenceCallId;
 use crate::payload::RawPayloadKind;
+use crate::raw_event::InferenceRequestInputMode;
 use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::writer::TraceWriter;
@@ -166,8 +167,12 @@ impl InferenceTraceAttempt {
         headers.insert(INFERENCE_CALL_ID_HEADER, inference_call_id);
     }
 
-    /// Records the exact request object about to be sent to the model provider.
-    pub fn record_started(&self, request: &impl Serialize) {
+    /// Records the exact provider request plus how replay should reduce its visible input.
+    pub fn record_started(
+        &self,
+        request: &impl Serialize,
+        request_input_mode: InferenceRequestInputMode,
+    ) {
         let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
         };
@@ -187,6 +192,7 @@ impl InferenceTraceAttempt {
                 codex_turn_id: attempt.context.codex_turn_id.clone(),
                 model: attempt.context.model.clone(),
                 provider_name: attempt.context.provider_name.clone(),
+                request_input_mode: Some(request_input_mode),
                 request_payload,
             },
         );
@@ -462,14 +468,17 @@ mod tests {
         );
 
         let attempt = context.start_attempt();
-        attempt.record_started(&json!({
-            "model": "gpt-test",
-            "input": [{
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "hello"}]
-            }],
-        }));
+        attempt.record_started(
+            &json!({
+                "model": "gpt-test",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                }],
+            }),
+            InferenceRequestInputMode::FullSnapshot,
+        );
         attempt.record_completed("resp-1", Some("req-1"), &None, &[]);
 
         let rollout = replay_bundle(temp.path())?;

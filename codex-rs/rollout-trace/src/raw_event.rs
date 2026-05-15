@@ -63,6 +63,24 @@ pub enum RawToolCallRequester {
     },
 }
 
+/// How an inference request's visible `input` field should reduce into conversation state.
+///
+/// The raw request payload intentionally preserves the transport bytes. WebSocket
+/// transport can still send a `previous_response_id` when that parent omitted no
+/// model-visible items, so replay needs this trace-side semantic fact rather than
+/// guessing solely from the wire payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum InferenceRequestInputMode {
+    /// The request payload contains the whole model-visible input snapshot.
+    FullSnapshot,
+    /// The request payload contains only items appended after a traced prior response.
+    Incremental {
+        /// Responses API `response.id` whose traced request/response items form the omitted prefix.
+        previous_response_id: String,
+    },
+}
+
 /// Typed payload for a raw trace event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -98,6 +116,12 @@ pub enum RawTraceEventPayload {
         codex_turn_id: CodexTurnId,
         model: String,
         provider_name: String,
+        /// Reducer semantics for the request payload's visible `input` items.
+        ///
+        /// `None` is accepted only for trace bundles written before this field existed;
+        /// new producers should always record an explicit mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_input_mode: Option<InferenceRequestInputMode>,
         request_payload: RawPayloadRef,
     },
     InferenceCompleted {

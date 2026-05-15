@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
+use crate::raw_event::InferenceRequestInputMode;
 use crate::raw_event::RawTraceEventContext;
 use crate::raw_event::RawTraceEventPayload;
 use crate::replay_bundle;
@@ -126,12 +127,31 @@ pub(crate) fn append_inference_start_for_thread(
     inference_call_id: &str,
     request_payload: RawPayloadRef,
 ) -> anyhow::Result<()> {
+    append_inference_start_for_thread_with_mode(
+        writer,
+        thread_id,
+        codex_turn_id,
+        inference_call_id,
+        /*request_input_mode*/ None,
+        request_payload,
+    )
+}
+
+pub(crate) fn append_inference_start_for_thread_with_mode(
+    writer: &TraceWriter,
+    thread_id: &str,
+    codex_turn_id: &str,
+    inference_call_id: &str,
+    request_input_mode: Option<InferenceRequestInputMode>,
+    request_payload: RawPayloadRef,
+) -> anyhow::Result<()> {
     writer.append(RawTraceEventPayload::InferenceStarted {
         inference_call_id: inference_call_id.to_string(),
         thread_id: thread_id.to_string(),
         codex_turn_id: codex_turn_id.to_string(),
         model: "gpt-test".to_string(),
         provider_name: "test-provider".to_string(),
+        request_input_mode,
         request_payload,
     })?;
     Ok(())

@@ -184,14 +184,17 @@ fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAtt
         "test-provider".to_string(),
     );
     let attempt = inference_trace.start_attempt();
-    attempt.record_started(&json!({
-        "model": "gpt-test",
-        "input": [{
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "hello"}]
-        }],
-    }));
+    attempt.record_started(
+        &json!({
+            "model": "gpt-test",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }],
+        }),
+        codex_rollout_trace::InferenceRequestInputMode::FullSnapshot,
+    );
     Ok(attempt)
 }
 

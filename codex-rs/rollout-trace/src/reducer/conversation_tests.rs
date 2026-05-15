@@ -13,6 +13,7 @@ use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::append_inference_completion;
 use crate::reducer::test_support::append_inference_start;
+use crate::reducer::test_support::append_inference_start_for_thread_with_mode;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::expect_replay_error;
 use crate::reducer::test_support::message;
@@ -76,7 +77,14 @@ fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<
             "input": [message("user", "run tests")]
         }),
     )?;
-    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+    append_inference_start_for_thread_with_mode(
+        &writer,
+        "thread-root",
+        "turn-1",
+        "inference-1",
+        Some(crate::InferenceRequestInputMode::FullSnapshot),
+        request,
+    )?;
 
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
@@ -119,7 +127,14 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
             "input": [message("user", "run tests")]
         }),
     )?;
-    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+    append_inference_start_for_thread_with_mode(
+        &writer,
+        "thread-root",
+        "turn-1",
+        "inference-1",
+        Some(crate::InferenceRequestInputMode::FullSnapshot),
+        request,
+    )?;
 
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
@@ -220,7 +235,16 @@ fn incremental_request_carries_prior_request_and_response_items_forward() -> any
             ]
         }),
     )?;
-    append_inference_start(&writer, "inference-2", "turn-2", incremental_request)?;
+    append_inference_start_for_thread_with_mode(
+        &writer,
+        "thread-root",
+        "turn-2",
+        "inference-2",
+        Some(crate::InferenceRequestInputMode::Incremental {
+            previous_response_id: "resp-1".to_string(),
+        }),
+        incremental_request,
+    )?;
 
     let rollout = replay_bundle(temp.path())?;
     let first = &rollout.inference_calls["inference-1"];
@@ -678,7 +702,14 @@ fn initial_untraced_websocket_prewarm_response_reduces_full_delta_input() -> any
             "input": [message("user", "still here")]
         }),
     )?;
-    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+    append_inference_start_for_thread_with_mode(
+        &writer,
+        "thread-root",
+        "turn-1",
+        "inference-1",
+        Some(crate::InferenceRequestInputMode::FullSnapshot),
+        request,
+    )?;
 
     let rollout = replay_bundle(temp.path())?;
     let inference = &rollout.inference_calls["inference-1"];
@@ -718,7 +749,16 @@ fn later_unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
             "input": [message("user", "later")]
         }),
     )?;
-    append_inference_start(&writer, "inference-2", "turn-2", later_request)?;
+    append_inference_start_for_thread_with_mode(
+        &writer,
+        "thread-root",
+        "turn-2",
+        "inference-2",
+        Some(crate::InferenceRequestInputMode::Incremental {
+            previous_response_id: "resp-missing".to_string(),
+        }),
+        later_request,
+    )?;
 
     expect_replay_error(&temp, "unknown previous_response_id resp-missing")
 }
