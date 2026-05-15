@@ -622,5 +622,8 @@ fn code_mode_namespace_name<'a>(
 }
 
 #[cfg(test)]
+#[path = "spec_plan_model_tests.rs"]
+mod model_tests;
+#[cfg(test)]
 #[path = "spec_plan_tests.rs"]
 mod tests;
