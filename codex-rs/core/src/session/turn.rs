@@ -188,6 +188,7 @@ pub(crate) async fn run_turn(
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
+        sess.ensure_mcp_connection_manager_initialized().await;
         match sess
             .services
             .mcp_connection_manager
@@ -1165,6 +1166,7 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
+    sess.ensure_mcp_connection_manager_initialized().await;
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager

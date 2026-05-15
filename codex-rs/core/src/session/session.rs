@@ -24,7 +24,8 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
-    pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pub(super) pending_mcp_server_refresh: Mutex<Option<McpServerRefreshConfig>>,
+    pub(super) mcp_connection_manager_initialized: std::sync::atomic::AtomicBool,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(super) mailbox: Mailbox,
@@ -407,10 +408,6 @@ impl Session {
 
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "session initialization must serialize access through session-owned manager guards"
-    )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -554,13 +551,7 @@ impl Session {
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                auth.as_ref(),
-            )
-            .await;
-            (auth, mcp_servers, auth_statuses)
+            (auth, mcp_servers)
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -568,8 +559,17 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
-            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (
+            thread_persistence_result,
+            state_db_ctx,
+            (history_log_id, history_entry_count),
+            (auth, mcp_servers),
+        ) = tokio::join!(
+            thread_persistence_fut,
+            state_db_fut,
+            history_meta_fut,
+            auth_and_mcp_fut
+        );
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -885,6 +885,7 @@ impl Session {
                         config.permissions.permission_profile(),
                     ),
                 )),
+                mcp_connection_manager_init_lock: Mutex::new(()),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -951,7 +952,8 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
-                pending_mcp_server_refresh_config: Mutex::new(None),
+                pending_mcp_server_refresh: Mutex::new(None),
+                mcp_connection_manager_initialized: std::sync::atomic::AtomicBool::new(false),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 mailbox,
@@ -1002,114 +1004,8 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let mut required_mcp_servers: Vec<String> = mcp_servers
-                .iter()
-                .filter(|(_, server)| server.enabled() && server.required())
-                .map(|(name, _)| name.clone())
-                .collect();
-            required_mcp_servers.sort();
-            let enabled_mcp_server_count =
-                mcp_servers.values().filter(|server| server.enabled()).count();
-            let required_mcp_server_count = required_mcp_servers.len();
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
-            let host_owned_codex_apps_enabled = config
-                .features
-                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
-            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
-            } else {
-                ElicitationCapability::default()
-            };
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                cancel_guard.cancel();
-                *cancel_guard = CancellationToken::new();
-            }
-            let turn_environment = crate::environment_selection::resolve_environment_selections(
-                sess.services.environment_manager.as_ref(),
-                &session_configuration.environments,
-            )
-            .map_err(|err| {
-                CodexErr::InvalidRequest(err.to_string().replace(
-                    "unknown turn environment id",
-                    "unknown stored MCP environment id",
-                ))
-            })?
-            .primary()
-            .cloned();
-            let mcp_runtime_environment = match turn_environment {
-                Some(turn_environment) => McpRuntimeEnvironment::new(
-                    Arc::clone(&turn_environment.environment),
-                    turn_environment.cwd.to_path_buf(),
-                ),
-                None => McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
-            };
-            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                session_configuration.permission_profile(),
-                mcp_runtime_environment,
-                config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-                session_init.required_mcp_server_count = required_mcp_server_count,
-            ))
-            .await;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                if cancel_guard.is_cancelled() {
-                    cancel_token.cancel();
-                }
-                *cancel_guard = cancel_token;
-            }
-            if !required_mcp_servers.is_empty() {
-                let failures = sess
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await
-                    .required_startup_failures(&required_mcp_servers)
-                    .instrument(info_span!(
-                        "session_init.required_mcp_wait",
-                        otel.name = "session_init.required_mcp_wait",
-                        session_init.required_mcp_server_count = required_mcp_server_count,
-                    ))
-                    .await;
-                if !failures.is_empty() {
-                    let details = failures
-                        .iter()
-                        .map(|failure| format!("{}: {}", failure.server, failure.error))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("required MCP servers failed to initialize: {details}");
-                }
-            }
+            // Start the watcher after SessionConfigured so it cannot emit earlier events.
+            sess.start_skills_watcher_listener();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

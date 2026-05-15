@@ -2722,6 +2722,7 @@ impl Session {
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+            self.ensure_mcp_connection_manager_initialized().await;
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(

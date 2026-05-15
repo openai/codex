@@ -38,6 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    pub(crate) mcp_connection_manager_init_lock: Mutex<()>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]

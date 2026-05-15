@@ -320,6 +320,7 @@ async fn handle_approved_mcp_tool_call(
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
     let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
+    sess.ensure_mcp_connection_manager_initialized().await;
     let server_origin = sess
         .services
         .mcp_connection_manager
@@ -1480,6 +1481,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
+    sess.ensure_mcp_connection_manager_initialized().await;
     let tools = sess
         .services
         .mcp_connection_manager
@@ -1575,6 +1577,7 @@ async fn lookup_mcp_app_usage_metadata(
     server: &str,
     tool_name: &str,
 ) -> Option<McpAppUsageMetadata> {
+    sess.ensure_mcp_connection_manager_initialized().await;
     let tools = sess
         .services
         .mcp_connection_manager

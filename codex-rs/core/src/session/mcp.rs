@@ -19,8 +19,23 @@ use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
+use std::sync::atomic::Ordering;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
+
+struct ReplaceMcpConnectionManagerArgs<'a> {
+    submit_id: String,
+    approval_policy: &'a Constrained<AskForApproval>,
+    permission_profile: PermissionProfile,
+    runtime_environment: McpRuntimeEnvironment,
+    config: &'a Arc<Config>,
+    mcp_servers: HashMap<String, McpServerConfig>,
+    store_mode: OAuthCredentialsStoreMode,
+    auth: Option<&'a CodexAuth>,
+    host_owned_codex_apps_enabled: bool,
+    client_elicitation_capability: ElicitationCapability,
+    elicitation_reviewer: Option<ElicitationReviewerHandle>,
+}
 
 #[derive(Debug, PartialEq)]
 enum GuardianElicitationReview {
@@ -59,6 +74,149 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 impl Session {
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
+    }
+
+    fn session_mcp_runtime_environment(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> McpRuntimeEnvironment {
+        let turn_environment = crate::environment_selection::resolve_environment_selections(
+            self.services.environment_manager.as_ref(),
+            &session_configuration.environments,
+        )
+        .unwrap_or_else(|err| {
+            panic!("session MCP environment selections should remain valid: {err}")
+        })
+        .primary()
+        .cloned();
+        match turn_environment {
+            Some(turn_environment) => McpRuntimeEnvironment::new(
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ),
+            None => McpRuntimeEnvironment::new(
+                self.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                session_configuration.cwd.to_path_buf(),
+            ),
+        }
+    }
+
+    async fn replace_mcp_connection_manager(&self, args: ReplaceMcpConnectionManagerArgs<'_>) {
+        let ReplaceMcpConnectionManagerArgs {
+            submit_id,
+            approval_policy,
+            permission_profile,
+            runtime_environment,
+            config,
+            mcp_servers,
+            store_mode,
+            auth,
+            host_owned_codex_apps_enabled,
+            client_elicitation_capability,
+            elicitation_reviewer,
+        } = args;
+        let tool_plugin_provenance = self
+            .services
+            .mcp_manager
+            .tool_plugin_provenance(config.as_ref())
+            .await;
+        let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode, auth).await;
+        {
+            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+            guard.cancel();
+            *guard = CancellationToken::new();
+        }
+        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            &mcp_servers,
+            store_mode,
+            auth_statuses,
+            approval_policy,
+            submit_id,
+            self.get_tx_event(),
+            permission_profile,
+            runtime_environment,
+            config.codex_home.to_path_buf(),
+            codex_apps_tools_cache_key(auth),
+            host_owned_codex_apps_enabled,
+            client_elicitation_capability,
+            tool_plugin_provenance,
+            auth,
+            elicitation_reviewer,
+        )
+        .await;
+        {
+            let current_manager = self.services.mcp_connection_manager.read().await;
+            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
+        }
+        {
+            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+            if guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *guard = cancel_token;
+        }
+
+        let mut old_manager = {
+            let mut manager = self.services.mcp_connection_manager.write().await;
+            std::mem::replace(&mut *manager, refreshed_manager)
+        };
+        self.mcp_connection_manager_initialized
+            .store(true, Ordering::Release);
+        old_manager.shutdown().await;
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "session MCP initialization must stay single-flight while the shared pool is built"
+    )]
+    pub(crate) async fn ensure_mcp_connection_manager_initialized(&self) {
+        if self
+            .mcp_connection_manager_initialized
+            .load(Ordering::Acquire)
+        {
+            return;
+        }
+
+        let _guard = self.services.mcp_connection_manager_init_lock.lock().await;
+        if self
+            .mcp_connection_manager_initialized
+            .load(Ordering::Acquire)
+        {
+            return;
+        }
+
+        let auth = self.services.auth_manager.auth().await;
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let config = Arc::clone(&session_configuration.original_config_do_not_use);
+        let mcp_servers = self
+            .services
+            .mcp_manager
+            .effective_servers(&config, auth.as_ref())
+            .await;
+        let mcp_config = config
+            .to_mcp_config(self.services.plugins_manager.as_ref())
+            .await;
+
+        self.replace_mcp_connection_manager(ReplaceMcpConnectionManagerArgs {
+            submit_id: INITIAL_SUBMIT_ID.to_owned(),
+            approval_policy: &session_configuration.approval_policy,
+            permission_profile: session_configuration.permission_profile(),
+            runtime_environment: self.session_mcp_runtime_environment(&session_configuration),
+            config: &config,
+            mcp_servers,
+            store_mode: config.mcp_oauth_credentials_store_mode,
+            auth: auth.as_ref(),
+            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()),
+            client_elicitation_capability: mcp_config.client_elicitation_capability,
+            elicitation_reviewer: None,
+        })
+        .await;
     }
 
     #[expect(
@@ -188,6 +346,7 @@ impl Session {
             return Ok(());
         }
 
+        self.ensure_mcp_connection_manager_initialized().await;
         self.services
             .mcp_connection_manager
             .read()
@@ -205,6 +364,7 @@ impl Session {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
+        self.ensure_mcp_connection_manager_initialized().await;
         self.services
             .mcp_connection_manager
             .read()
@@ -222,6 +382,7 @@ impl Session {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.ensure_mcp_connection_manager_initialized().await;
         self.services
             .mcp_connection_manager
             .read()
@@ -239,6 +400,7 @@ impl Session {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
+        self.ensure_mcp_connection_manager_initialized().await;
         self.services
             .mcp_connection_manager
             .read()
@@ -258,6 +420,7 @@ impl Session {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        self.ensure_mcp_connection_manager_initialized().await;
         self.services
             .mcp_connection_manager
             .read()
@@ -266,6 +429,24 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP tool metadata reads through the session-owned manager guard"
+    )]
+    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
+        self.ensure_mcp_connection_manager_initialized().await;
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .resolve_tool_info(tool_name)
+            .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP refresh must stay single-flight while the shared session pool is replaced"
+    )]
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
@@ -278,71 +459,36 @@ impl Session {
         let mcp_config = config
             .to_mcp_config(self.services.plugins_manager.as_ref())
             .await;
-        let tool_plugin_provenance = self
-            .services
-            .mcp_manager
-            .tool_plugin_provenance(config.as_ref())
-            .await;
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
-        let host_owned_codex_apps_enabled =
-            host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-        let auth_statuses =
-            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            ),
-            None => McpRuntimeEnvironment::new(
-                self.services
-                    .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
-        {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            guard.cancel();
-            *guard = CancellationToken::new();
-        }
-        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            store_mode,
-            auth_statuses,
-            &turn_context.approval_policy,
-            turn_context.sub_id.clone(),
-            self.get_tx_event(),
-            turn_context.permission_profile(),
-            mcp_runtime_environment,
-            config.codex_home.to_path_buf(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
-            mcp_config.client_elicitation_capability,
-            tool_plugin_provenance,
-            auth.as_ref(),
-            elicitation_reviewer,
-        )
-        .await;
-        {
-            let current_manager = self.services.mcp_connection_manager.read().await;
-            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
-        }
-        {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            if guard.is_cancelled() {
-                cancel_token.cancel();
-            }
-            *guard = cancel_token;
-        }
 
-        let mut old_manager = {
-            let mut manager = self.services.mcp_connection_manager.write().await;
-            std::mem::replace(&mut *manager, refreshed_manager)
-        };
-        old_manager.shutdown().await;
+        self.replace_mcp_connection_manager(ReplaceMcpConnectionManagerArgs {
+            submit_id: turn_context.sub_id.clone(),
+            approval_policy: &turn_context.approval_policy,
+            permission_profile: turn_context.permission_profile(),
+            runtime_environment: match turn_context.environments.primary() {
+                Some(turn_environment) => McpRuntimeEnvironment::new(
+                    Arc::clone(&turn_environment.environment),
+                    turn_environment.cwd.to_path_buf(),
+                ),
+                None => McpRuntimeEnvironment::new(
+                    self.services
+                        .environment_manager
+                        .default_environment()
+                        .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                    #[allow(deprecated)]
+                    turn_context.cwd.to_path_buf(),
+                ),
+            },
+            config: &config,
+            mcp_servers,
+            store_mode,
+            auth: auth.as_ref(),
+            host_owned_codex_apps_enabled: host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()),
+            client_elicitation_capability: mcp_config.client_elicitation_capability,
+            elicitation_reviewer,
+        })
+        .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -350,15 +496,15 @@ impl Session {
         turn_context: &TurnContext,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
-        let Some(refresh_config) = refresh_config else {
+        let refresh = { self.pending_mcp_server_refresh.lock().await.take() };
+        let Some(refresh) = refresh else {
             return;
         };
 
         let McpServerRefreshConfig {
             mcp_servers,
             mcp_oauth_credentials_store_mode,
-        } = refresh_config;
+        } = refresh;
 
         let mcp_servers =
             match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {

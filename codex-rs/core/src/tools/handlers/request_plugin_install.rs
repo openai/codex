@@ -112,6 +112,7 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         }
 
         let auth = session.services.auth_manager.auth().await;
+        session.ensure_mcp_connection_manager_initialized().await;
         let manager = session.services.mcp_connection_manager.read().await;
         let mcp_tools = manager.list_all_tools().await;
         drop(manager);
@@ -314,6 +315,7 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
+    session.ensure_mcp_connection_manager_initialized().await;
     let manager = session.services.mcp_connection_manager.read().await;
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(

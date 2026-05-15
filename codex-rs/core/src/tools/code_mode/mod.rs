@@ -257,6 +257,56 @@ fn truncate_code_mode_result(
     truncate_function_output_items_with_policy(&items, policy)
 }
 
+pub(super) async fn build_enabled_tools(
+    exec: &ExecContext,
+) -> Vec<codex_code_mode::ToolDefinition> {
+    let router = build_nested_router(exec).await;
+    let specs = router.specs();
+    collect_code_mode_tool_definitions(&specs)
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "nested tool router construction reads through the session-owned manager guard"
+)]
+async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
+    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    exec.session
+        .ensure_mcp_connection_manager_initialized()
+        .await;
+    let listed_mcp_tools = exec
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await;
+    let parallel_mcp_server_names = exec
+        .turn
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter_map(|(server_name, server_config)| {
+            server_config
+                .supports_parallel_tool_calls
+                .then_some(server_name.clone())
+        })
+        .collect::<HashSet<_>>();
+
+    ToolRouter::from_config(
+        &nested_tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: Some(listed_mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names,
+            discoverable_tools: None,
+            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+        },
+    )
+}
 async fn call_nested_tool(
     _exec: ExecContext,
     tool_runtime: ToolCallRuntime,

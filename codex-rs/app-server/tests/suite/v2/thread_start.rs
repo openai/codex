@@ -586,7 +586,7 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Result<()> {
+async fn thread_start_returns_before_required_mcp_server_initializes() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -599,24 +599,13 @@ async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Re
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
 
-    let err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-
-    assert!(
-        err.error
-            .message
-            .contains("required MCP servers failed to initialize"),
-        "unexpected error message: {}",
-        err.error.message
-    );
-    assert!(
-        err.error.message.contains("required_broken"),
-        "unexpected error message: {}",
-        err.error.message
-    );
+    let _: ThreadStartResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+        )
+        .await??,
+    )?;
 
     Ok(())
 }
