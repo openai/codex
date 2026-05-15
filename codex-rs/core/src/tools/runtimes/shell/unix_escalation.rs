@@ -121,6 +121,7 @@ pub(super) async fn try_run_zsh_fork(
         build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
+        graceful_cancellation: Some(req.cancellation_token.clone()),
         capture_policy: ExecCapturePolicy::ShellTool,
     };
     let sandbox_exec_request = attempt
@@ -137,6 +138,7 @@ pub(super) async fn try_run_zsh_fork(
         exec_server_env_config: _,
         network: sandbox_network,
         expiration: _sandbox_expiration,
+        graceful_cancellation: _sandbox_graceful_cancellation,
         capture_policy: _capture_policy,
         sandbox,
         windows_sandbox_policy_cwd: sandbox_policy_cwd,
@@ -192,7 +194,10 @@ pub(super) async fn try_run_zsh_fork(
     // to minimize the time between creating the Stopwatch and starting the
     // escalation server.
     let stopwatch = Stopwatch::new(effective_timeout);
-    let mut cancel_token = stopwatch.cancellation_token();
+    let mut cancel_token = cancel_when_either(
+        stopwatch.cancellation_token(),
+        req.cancellation_token.clone(),
+    );
     if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
         cancel_token = cancel_when_either(cancel_token, cancellation);
     }
@@ -792,6 +797,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 exec_server_env_config: None,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
+                graceful_cancellation: None,
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
                 windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
@@ -914,6 +920,7 @@ impl CoreShellCommandExecutor {
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
+            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let exec_request = sandbox_manager.transform(SandboxTransformRequest {

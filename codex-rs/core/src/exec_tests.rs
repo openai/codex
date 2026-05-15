@@ -270,6 +270,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
             command,
             cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
             expiration: 1.into(),
+            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::FullBuffer,
             env,
             network: None,
@@ -306,6 +307,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                 ],
                 cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()?,
                 expiration: 1.into(),
+                graceful_cancellation: None,
                 capture_policy: ExecCapturePolicy::FullBuffer,
                 env: std::env::vars().collect(),
                 network: None,
@@ -354,6 +356,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
             command,
             cwd: cwd.clone(),
             expiration: 1.into(),
+            graceful_cancellation: None,
             capture_policy: ExecCapturePolicy::FullBuffer,
             env: std::env::vars().collect(),
             network: None,
@@ -1041,6 +1044,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         command,
         cwd,
         expiration: 500.into(),
+        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
@@ -1096,6 +1100,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         command,
         cwd: cwd.clone(),
         expiration: ExecExpiration::Cancellation(cancel_token),
+        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
@@ -1126,6 +1131,82 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
     assert!(!output.timed_out);
     assert_ne!(output.exit_code, 0);
     assert_ne!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<()> {
+    let temp_dir = tempfile::TempDir::new()?;
+    let ready_marker = temp_dir.path().join("ready");
+    let cleanup_marker = temp_dir.path().join("cleanup");
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        concat!(
+            "trap 'printf cleaned > \"$CLEANUP_MARKER\"; exit 0' TERM\n",
+            "printf ready > \"$READY_MARKER\"\n",
+            "while :; do sleep 1; done"
+        )
+        .to_string(),
+    ];
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    env.insert(
+        "READY_MARKER".to_string(),
+        ready_marker.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CLEANUP_MARKER".to_string(),
+        cleanup_marker.to_string_lossy().into_owned(),
+    );
+    let cancel_token = CancellationToken::new();
+    let cancel_tx = cancel_token.clone();
+    tokio::spawn(async move {
+        for _ in 0..50 {
+            if ready_marker.exists() {
+                cancel_tx.cancel();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        cancel_tx.cancel();
+    });
+    let params = ExecParams {
+        command,
+        cwd: cwd.clone(),
+        expiration: ExecExpiration::DefaultTimeout,
+        graceful_cancellation: Some(cancel_token),
+        capture_policy: ExecCapturePolicy::ShellTool,
+        env,
+        network: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        justification: None,
+        arg0: None,
+    };
+
+    let result = timeout(
+        Duration::from_secs(5),
+        process_exec_tool_call(
+            params,
+            &PermissionProfile::Disabled,
+            &cwd,
+            &None,
+            /*use_legacy_landlock*/ false,
+            /*stdout_stream*/ None,
+        ),
+    )
+    .await
+    .expect("cancellation should stop the process promptly");
+    let output = result.expect("cancellation should return a non-timeout exec result");
+    assert!(!output.timed_out);
+    assert_eq!(
+        std::fs::read_to_string(cleanup_marker)?,
+        "cleaned",
+        "SIGTERM cleanup trap should run before cancellation falls back to a hard kill"
+    );
     Ok(())
 }
 

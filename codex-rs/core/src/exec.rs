@@ -56,6 +56,7 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const CANCELLATION_TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(50);
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -85,6 +86,7 @@ pub struct ExecParams {
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub expiration: ExecExpiration,
+    pub graceful_cancellation: Option<CancellationToken>,
     pub capture_policy: ExecCapturePolicy,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -326,6 +328,7 @@ pub fn build_exec_request(
         cwd,
         mut env,
         expiration,
+        graceful_cancellation,
         capture_policy,
         network,
         windows_sandbox_level,
@@ -369,6 +372,7 @@ pub fn build_exec_request(
     };
     let options = ExecOptions {
         expiration,
+        graceful_cancellation,
         capture_policy,
     };
     let mut exec_req = manager
@@ -431,6 +435,7 @@ pub(crate) async fn execute_exec_request(
         exec_server_env_config: _,
         network,
         expiration,
+        graceful_cancellation,
         capture_policy,
         sandbox,
         windows_sandbox_policy_cwd: _,
@@ -447,6 +452,7 @@ pub(crate) async fn execute_exec_request(
         command,
         cwd,
         expiration,
+        graceful_cancellation,
         capture_policy,
         env,
         network: network.clone(),
@@ -917,6 +923,7 @@ async fn exec(
         network,
         arg0,
         expiration,
+        graceful_cancellation,
         capture_policy,
 
         // If applicable, these fields should have been honored upstream of
@@ -955,7 +962,14 @@ async fn exec(
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
-    consume_output(child, expiration, capture_policy, stdout_stream).await
+    consume_output(
+        child,
+        expiration,
+        graceful_cancellation,
+        capture_policy,
+        stdout_stream,
+    )
+    .await
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -1308,6 +1322,7 @@ fn has_reopened_writable_descendant(
 async fn consume_output(
     mut child: Child,
     expiration: ExecExpiration,
+    graceful_cancellation: Option<CancellationToken>,
     capture_policy: ExecCapturePolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
@@ -1348,6 +1363,14 @@ async fn consume_output(
         }
     };
     tokio::pin!(expiration_wait);
+    let graceful_cancellation_wait = async {
+        if let Some(cancellation) = graceful_cancellation {
+            cancellation.cancelled().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::pin!(graceful_cancellation_wait);
     let (exit_status, timed_out) = tokio::select! {
         status_result = child.wait() => {
             let exit_status = status_result?;
@@ -1363,6 +1386,26 @@ async fn consume_output(
                 synthetic_exit_status_for_code(/*code*/ 1)
             };
             (exit_status, timed_out)
+        }
+        _ = &mut graceful_cancellation_wait => {
+            if let Some(process_group_id) = child.id() {
+                codex_utils_pty::process_group::terminate_process_group(process_group_id)?;
+            }
+            match tokio::time::timeout(
+                CANCELLATION_TERMINATION_GRACE_PERIOD,
+                child.wait(),
+            )
+            .await
+            {
+                Ok(status) => {
+                    status?;
+                }
+                Err(_) => {
+                    kill_child_process_group(&mut child)?;
+                    child.start_kill()?;
+                }
+            }
+            (synthetic_exit_status_for_code(/*code*/ 1), false)
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;

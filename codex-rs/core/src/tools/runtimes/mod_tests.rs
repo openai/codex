@@ -101,6 +101,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     .expect("build sandbox command");
     let options = ExecOptions {
         expiration: ExecExpiration::DefaultTimeout,
+        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
     };
     let permissions = PermissionProfile::Disabled;

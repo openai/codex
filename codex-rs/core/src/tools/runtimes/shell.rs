@@ -44,6 +44,7 @@ use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -52,6 +53,7 @@ pub struct ShellRequest {
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
+    pub cancellation_token: CancellationToken,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
@@ -270,6 +272,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         }
         let options = ExecOptions {
             expiration,
+            graceful_cancellation: Some(req.cancellation_token.clone()),
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt

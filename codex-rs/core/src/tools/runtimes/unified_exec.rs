@@ -103,6 +103,7 @@ fn unified_exec_options(
     }
     ExecOptions {
         expiration,
+        graceful_cancellation: None,
         capture_policy: ExecCapturePolicy::ShellTool,
     }
 }
