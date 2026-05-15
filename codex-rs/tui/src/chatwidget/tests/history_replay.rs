@@ -29,6 +29,7 @@ async fn resumed_initial_messages_render_history() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -99,6 +100,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -167,6 +169,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -266,6 +269,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
         cwd: expected_cwd.clone(),
+        runtime_workspace_roots: vec![expected_cwd.clone()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -300,7 +304,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     assert_eq!(
         chat.config_ref().permissions.effective_permission_profile(),
         updated_profile
-            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&expected_cwd)),
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&expected_cwd,)),
         "effective permissions should still use the current thread runtime workspace roots"
     );
 }
@@ -319,9 +323,10 @@ async fn session_configured_preserves_profile_workspace_roots() {
         .set_workspace_roots(chat.config.workspace_roots.clone());
 
     let session_cwd = test_path_buf("/home/user/sub-agent").abs();
-    let session_workspace_roots = vec![session_cwd.clone(), profile_root];
+    let session_runtime_workspace_roots = vec![session_cwd.clone()];
+    let session_effective_workspace_roots = vec![session_cwd.clone(), profile_root];
     let session_permission_profile = PermissionProfile::workspace_write()
-        .materialize_project_roots_with_workspace_roots(&session_workspace_roots);
+        .materialize_project_roots_with_workspace_roots(&session_effective_workspace_roots);
     let configured = crate::session_state::ThreadSessionState {
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -335,6 +340,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
         permission_profile: session_permission_profile.clone(),
         active_permission_profile: None,
         cwd: session_cwd.clone(),
+        runtime_workspace_roots: session_runtime_workspace_roots.clone(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -347,7 +353,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
     assert_eq!(&chat.config_ref().cwd, &session_cwd);
     assert_eq!(
         chat.config_ref().permissions.user_visible_workspace_roots(),
-        session_workspace_roots.as_slice()
+        session_runtime_workspace_roots.as_slice()
     );
     assert_eq!(
         chat.config_ref().permissions.effective_permission_profile(),
@@ -380,6 +386,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         permission_profile: expected_permission_profile,
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/external").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -420,6 +427,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -474,6 +482,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         message_history: None,
@@ -744,6 +753,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         message_history: None,
@@ -789,6 +799,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         message_history: None,
