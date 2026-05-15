@@ -1189,6 +1189,32 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
+      - name: Clean up signed promotion handoff assets
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
+            --jq '.[] | [.id, .name] | @tsv' |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              if [[ -z "$asset_id" || -z "$asset_name" ]]; then
+                continue
+              fi
+
+              delete_asset=false
+              if [[ "$asset_name" == *unsigned* || "$asset_name" == "$SIGNED_MACOS_ASSET" ]]; then
+                delete_asset=true
+              fi
+
+              if [[ "$delete_asset" == "true" ]]; then
+                echo "Deleting release asset ${asset_name}"
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              fi
+            done
+
       - if: ${{ env.SIGN_MACOS == 'true' }}
         uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
