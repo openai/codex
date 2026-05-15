@@ -90,13 +90,7 @@ pub(super) async fn update_thread_metadata(
     .await;
 
     if let Some(name) = name {
-        apply_thread_name(
-            store,
-            thread_id,
-            name.unwrap_or_default(),
-            require_sqlite_write,
-        )
-        .await?;
+        apply_thread_name(store, thread_id, name.unwrap_or_default()).await?;
     }
 
     let resolved_git_info = match git_info {
@@ -504,31 +498,18 @@ async fn apply_thread_name(
     store: &LocalThreadStore,
     thread_id: ThreadId,
     name: String,
-    require_sqlite_write: bool,
 ) -> ThreadStoreResult<()> {
     if let Some(state_db) = store.state_db().await {
-        let title_update = state_db
+        let updated = state_db
             .update_thread_title(thread_id, &name)
             .await
             .map_err(|err| ThreadStoreError::Internal {
                 message: format!("failed to set thread name: {err}"),
+            })?;
+        if !updated {
+            return Err(ThreadStoreError::Internal {
+                message: format!("thread metadata unavailable before name update: {thread_id}"),
             });
-        match title_update {
-            Ok(true) => {}
-            Ok(false) if require_sqlite_write => {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("thread metadata unavailable before name update: {thread_id}"),
-                });
-            }
-            Ok(false) => {
-                warn!("state db thread metadata unavailable before name update for {thread_id}");
-            }
-            Err(err) if require_sqlite_write || !sqlite_write_error_is_best_effort(&err) => {
-                return Err(err);
-            }
-            Err(err) => {
-                warn!("state db update_thread_title failed for {thread_id}: {err}");
-            }
         }
     }
 
