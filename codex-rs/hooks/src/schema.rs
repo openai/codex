@@ -249,7 +249,6 @@ pub(crate) enum PreToolUseDecisionWire {
 #[schemars(rename = "pre-tool-use.command.input")]
 pub(crate) struct PreToolUseCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -268,7 +267,6 @@ pub(crate) struct PreToolUseCommandInput {
 #[schemars(rename = "permission-request.command.input")]
 pub(crate) struct PermissionRequestCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -286,7 +284,6 @@ pub(crate) struct PermissionRequestCommandInput {
 #[schemars(rename = "post-tool-use.command.input")]
 pub(crate) struct PostToolUseCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -306,7 +303,6 @@ pub(crate) struct PostToolUseCommandInput {
 #[schemars(rename = "pre-compact.command.input")]
 pub(crate) struct PreCompactCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -322,7 +318,6 @@ pub(crate) struct PreCompactCommandInput {
 #[schemars(rename = "post-compact.command.input")]
 pub(crate) struct PostCompactCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -406,8 +401,6 @@ pub(crate) struct StopCommandOutputWire {
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
     pub decision: Option<BlockDecisionWire>,
-    /// Claude requires `reason` when `decision` is `block`; we enforce that
-    /// semantic rule during output parsing rather than in the JSON schema.
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -421,8 +414,6 @@ pub(crate) struct SubagentStopCommandOutputWire {
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
     pub decision: Option<BlockDecisionWire>,
-    /// Claude requires `reason` when `decision` is `block`; we enforce that
-    /// semantic rule during output parsing rather than in the JSON schema.
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -475,7 +466,6 @@ impl SessionStartCommandInput {
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -492,7 +482,6 @@ pub(crate) struct UserPromptSubmitCommandInput {
 #[schemars(rename = "subagent-start.command.input")]
 pub(crate) struct SubagentStartCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -510,7 +499,6 @@ pub(crate) struct SubagentStartCommandInput {
 #[schemars(rename = "stop.command.input")]
 pub(crate) struct StopCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
@@ -528,7 +516,6 @@ pub(crate) struct StopCommandInput {
 #[schemars(rename = "subagent-stop.command.input")]
 pub(crate) struct SubagentStopCommandInput {
     pub session_id: String,
-    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
     pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,

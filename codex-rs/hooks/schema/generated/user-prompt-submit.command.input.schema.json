@@ -40,7 +40,6 @@
       "$ref": "#/definitions/NullableString"
     },
     "turn_id": {
-      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
       "type": "string"
     }
   },

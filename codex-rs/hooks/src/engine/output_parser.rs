@@ -10,7 +10,6 @@ pub(crate) struct UniversalOutput {
 pub(crate) struct SessionStartOutput {
     pub universal: UniversalOutput,
     pub additional_context: Option<String>,
-    pub invalid_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,24 +98,17 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
         additional_context,
-        invalid_reason: None,
     })
 }
 
 pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
-    let universal = UniversalOutput::from(wire.universal);
-    let invalid_reason = unsupported_subagent_start_universal(&universal);
-    let additional_context = if invalid_reason.is_none() {
-        wire.hook_specific_output
-            .and_then(|output| output.additional_context)
-    } else {
-        None
-    };
+    let additional_context = wire
+        .hook_specific_output
+        .and_then(|output| output.additional_context);
     Some(SessionStartOutput {
-        universal,
+        universal: UniversalOutput::from(wire.universal),
         additional_context,
-        invalid_reason,
     })
 }
 
@@ -388,18 +380,6 @@ fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Opti
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
     if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
-    } else {
-        None
-    }
-}
-
-fn unsupported_subagent_start_universal(universal: &UniversalOutput) -> Option<String> {
-    if !universal.continue_processing {
-        Some("SubagentStart hook returned unsupported continue:false".to_string())
-    } else if universal.stop_reason.is_some() {
-        Some("SubagentStart hook returned unsupported stopReason".to_string())
-    } else if universal.suppress_output {
-        Some("SubagentStart hook returned unsupported suppressOutput".to_string())
     } else {
         None
     }

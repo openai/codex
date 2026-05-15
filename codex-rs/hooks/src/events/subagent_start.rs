@@ -144,13 +144,7 @@ fn parse_completed(
                             text: system_message,
                         });
                     }
-                    if let Some(invalid_reason) = parsed.invalid_reason {
-                        status = HookRunStatus::Failed;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Error,
-                            text: invalid_reason,
-                        });
-                    } else if let Some(additional_context) = parsed.additional_context {
+                    if let Some(additional_context) = parsed.additional_context {
                         common::append_additional_context(
                             &mut entries,
                             &mut additional_contexts_for_model,

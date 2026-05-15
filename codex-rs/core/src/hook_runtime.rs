@@ -69,7 +69,7 @@ pub(crate) enum PendingInputRecord {
     },
 }
 
-pub(crate) struct StopHookOutcome {
+pub(crate) struct TurnStopHookOutcome {
     pub should_stop: bool,
     pub should_block: bool,
     pub continuation_fragments: Vec<codex_protocol::items::HookPromptFragment>,
@@ -345,7 +345,7 @@ pub(crate) async fn run_turn_stop_hooks(
     turn_context: &Arc<TurnContext>,
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
-) -> StopHookOutcome {
+) -> TurnStopHookOutcome {
     let hooks = sess.hooks();
     let outcome = if let Some(metadata) = subagent_hook_metadata(sess, turn_context).await {
         let request = codex_hooks::SubagentStopRequest {
@@ -381,7 +381,7 @@ pub(crate) async fn run_turn_stop_hooks(
     };
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
 
-    StopHookOutcome {
+    TurnStopHookOutcome {
         should_stop: outcome.should_stop,
         should_block: outcome.should_block,
         continuation_fragments: outcome.continuation_fragments,
@@ -733,7 +733,7 @@ async fn subagent_hook_metadata(
     let parent_transcript_path = if let Some(parent_thread_id) = parent_thread_id {
         sess.services
             .agent_control
-            .thread_rollout_path(parent_thread_id)
+            .rollout_path_for_thread(parent_thread_id)
             .await
     } else {
         None
@@ -747,6 +747,9 @@ async fn subagent_hook_metadata(
     })
 }
 
+// Hook `agent_type` mirrors the spawn_agent `agent_type` argument. Internally,
+// thread-spawned agents store that value as `agent_role`; omitted values use
+// the default role, while system subagents expose fixed type labels.
 fn subagent_hook_agent_type(subagent_source: &SubAgentSource) -> String {
     match subagent_source {
         SubAgentSource::ThreadSpawn { agent_role, .. } => agent_role

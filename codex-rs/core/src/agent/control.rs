@@ -163,7 +163,7 @@ impl AgentControl {
         self.session_id
     }
 
-    pub(crate) async fn thread_rollout_path(&self, thread_id: ThreadId) -> Option<PathBuf> {
+    pub(crate) async fn rollout_path_for_thread(&self, thread_id: ThreadId) -> Option<PathBuf> {
         let state = self.upgrade().ok()?;
         state.get_thread(thread_id).await.ok()?.rollout_path()
     }
