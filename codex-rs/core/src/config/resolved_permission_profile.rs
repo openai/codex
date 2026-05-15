@@ -41,6 +41,11 @@ pub(crate) enum ResolvedPermissionProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionProfileSnapshot {
+    resolved_permission_profile: ResolvedPermissionProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LegacyPermissionProfile {
     permission_profile: PermissionProfile,
 }
@@ -124,6 +129,67 @@ impl ResolvedPermissionProfile {
     }
 }
 
+impl PermissionProfileSnapshot {
+    pub fn legacy(permission_profile: PermissionProfile) -> Self {
+        Self {
+            resolved_permission_profile: ResolvedPermissionProfile::legacy(permission_profile),
+        }
+    }
+
+    pub fn active(
+        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
+    ) -> Self {
+        Self::active_with_profile_workspace_roots(
+            permission_profile,
+            active_permission_profile,
+            Vec::new(),
+        )
+    }
+
+    pub fn active_with_profile_workspace_roots(
+        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> Self {
+        Self {
+            resolved_permission_profile: ResolvedPermissionProfile::from_active_profile(
+                permission_profile,
+                Some(active_permission_profile),
+                profile_workspace_roots,
+            ),
+        }
+    }
+
+    pub fn from_session_snapshot(
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> Self {
+        match active_permission_profile {
+            Some(active_permission_profile) => {
+                Self::active(permission_profile, active_permission_profile)
+            }
+            None => Self::legacy(permission_profile),
+        }
+    }
+
+    pub fn permission_profile(&self) -> &PermissionProfile {
+        self.resolved_permission_profile.permission_profile()
+    }
+
+    pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.resolved_permission_profile.active_permission_profile()
+    }
+
+    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.resolved_permission_profile.profile_workspace_roots()
+    }
+
+    pub(crate) fn into_resolved_permission_profile(self) -> ResolvedPermissionProfile {
+        self.resolved_permission_profile
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PermissionProfileState {
     resolved_permission_profile: Constrained<ResolvedPermissionProfile>,
@@ -199,17 +265,11 @@ impl PermissionProfileState {
             .set(ResolvedPermissionProfile::legacy(permission_profile))
     }
 
-    pub(crate) fn set_active_permission_profile(
+    pub(crate) fn set_permission_profile_snapshot(
         &mut self,
-        permission_profile: PermissionProfile,
-        active_permission_profile: Option<ActivePermissionProfile>,
-        profile_workspace_roots: Vec<AbsolutePathBuf>,
+        snapshot: PermissionProfileSnapshot,
     ) -> ConstraintResult<()> {
-        let candidate = ResolvedPermissionProfile::from_active_profile(
-            permission_profile,
-            active_permission_profile,
-            profile_workspace_roots,
-        );
-        self.resolved_permission_profile.set(candidate)
+        self.resolved_permission_profile
+            .set(snapshot.into_resolved_permission_profile())
     }
 }

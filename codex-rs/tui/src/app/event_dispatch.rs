@@ -1422,8 +1422,10 @@ impl App {
                 if let Err(err) = self
                     .chat_widget
                     .set_permission_profile_from_session_snapshot(
-                        permission_profile_for_chat,
-                        Some(active_permission_profile),
+                        PermissionProfileSnapshot::active(
+                            permission_profile_for_chat,
+                            active_permission_profile,
+                        ),
                     )
                 {
                     tracing::warn!(%err, "failed to set permission profile on chat config");

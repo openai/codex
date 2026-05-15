@@ -357,11 +357,17 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        self.permission_profile_state.set_active_permission_profile(
-            effective_permission_profile,
-            active_permission_profile,
-            profile_workspace_roots,
-        )
+        self.permission_profile_state
+            .set_permission_profile_snapshot(match active_permission_profile {
+                Some(active_permission_profile) => {
+                    PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                        effective_permission_profile,
+                        active_permission_profile,
+                        profile_workspace_roots,
+                    )
+                }
+                None => PermissionProfileSnapshot::legacy(effective_permission_profile),
+            })
     }
 }
 
