@@ -17,24 +17,25 @@ const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_E
 
 pub(super) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
-    let is_wsl = running_in_wsl();
-    let is_vscode_terminal = is_wsl && running_in_vscode_terminal();
-    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, is_vscode_terminal)
+    let is_linux = cfg!(target_os = "linux");
+    let is_vscode_terminal = is_linux && running_in_vscode_terminal();
+    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_linux, is_vscode_terminal)
 }
 
 fn keyboard_enhancement_disabled_for(
     disable_env: Option<&str>,
-    is_wsl: bool,
+    is_linux: bool,
     is_vscode_terminal: bool,
 ) -> bool {
     if let Some(disabled) = parse_bool_env(disable_env) {
         return disabled;
     }
 
-    // VS Code running a WSL shell can hide TERM_PROGRAM from the Linux process
-    // environment, so `running_in_vscode_terminal` also probes the Windows-side
-    // environment through WSL interop.
-    is_wsl && is_vscode_terminal
+    // VS Code terminals on Linux can turn dead-key composition into malformed key events when
+    // crossterm keyboard enhancement flags are enabled. WSL can hide `TERM_PROGRAM` from the
+    // Linux process environment, so `running_in_vscode_terminal` also probes the Windows-side
+    // environment through WSL interop for that path.
+    is_linux && is_vscode_terminal
 }
 
 fn parse_bool_env(value: Option<&str>) -> Option<bool> {
@@ -62,9 +63,10 @@ fn running_in_wsl() -> bool {
 }
 
 pub(super) fn running_in_vscode_terminal() -> bool {
+    let windows_term_program = running_in_wsl().then(windows_term_program).flatten();
     vscode_terminal_detected(
         std::env::var("TERM_PROGRAM").ok().as_deref(),
-        windows_term_program().as_deref(),
+        windows_term_program.as_deref(),
     )
 }
 
@@ -309,19 +311,19 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_enhancement_auto_disables_for_vscode_in_wsl() {
+    fn keyboard_enhancement_auto_disables_for_vscode_on_linux() {
         assert!(keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_linux*/ true, /*is_vscode_terminal*/ true
         ));
     }
 
     #[test]
-    fn keyboard_enhancement_auto_disable_requires_wsl_and_vscode() {
+    fn keyboard_enhancement_auto_disable_requires_linux_and_vscode() {
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false
+            /*disable_env*/ None, /*is_linux*/ true, /*is_vscode_terminal*/ false
         ));
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_linux*/ false, /*is_vscode_terminal*/ true
         ));
     }
 
@@ -329,12 +331,12 @@ mod tests {
     fn keyboard_enhancement_env_flag_overrides_auto_detection() {
         assert!(!keyboard_enhancement_disabled_for(
             Some("0"),
-            /*is_wsl*/ true,
+            /*is_linux*/ true,
             /*is_vscode_terminal*/ true
         ));
         assert!(keyboard_enhancement_disabled_for(
             Some("1"),
-            /*is_wsl*/ false,
+            /*is_linux*/ false,
             /*is_vscode_terminal*/ false
         ));
     }
