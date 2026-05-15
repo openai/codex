@@ -66,3 +66,43 @@ fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
     assert_eq!(summary, expected);
     Ok(())
 }
+
+#[test]
+fn legacy_permission_profile_modifications_extend_runtime_roots() -> Result<()> {
+    let root = if cfg!(windows) {
+        AbsolutePathBuf::try_from("C:\\workspace-extra")?
+    } else {
+        AbsolutePathBuf::try_from("/workspace-extra")?
+    };
+    let selection = serde_json::from_value::<PermissionProfileSelectionParams>(json!({
+        "type": "profile",
+        "id": ":workspace",
+        "modifications": [
+            {
+                "type": "additionalWritableRoot",
+                "path": root,
+            }
+        ],
+    }))?;
+
+    let mut overrides = ConfigOverrides::default();
+    apply_permission_profile_selection_to_config_overrides(&mut overrides, Some(selection.clone()));
+    assert_eq!(
+        overrides.default_permissions,
+        Some(":workspace".to_string())
+    );
+    assert_eq!(
+        overrides.additional_writable_roots,
+        vec![root.to_path_buf()]
+    );
+
+    let mut overrides = ConfigOverrides {
+        workspace_roots: Some(Vec::new()),
+        ..ConfigOverrides::default()
+    };
+    apply_permission_profile_selection_to_config_overrides(&mut overrides, Some(selection));
+    assert_eq!(overrides.additional_writable_roots, Vec::<PathBuf>::new());
+    assert_eq!(overrides.workspace_roots, Some(vec![root.to_path_buf()]));
+
+    Ok(())
+}
