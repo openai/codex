@@ -717,9 +717,17 @@ impl PluginRequestProcessor {
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
         };
-        let Some((config, auth)) = self.check_plugin_installed_preconditions().await? else {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
-        };
+        }
+        let auth = self.auth_manager.auth().await;
+        if !self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await
+        {
+            return Ok(empty_response());
+        }
 
         let plugins_input = config.plugins_config_input();
 
@@ -757,25 +765,6 @@ impl PluginRequestProcessor {
             marketplaces: data,
             marketplace_load_errors,
         })
-    }
-
-    async fn check_plugin_installed_preconditions(
-        &self,
-    ) -> Result<Option<(Config, Option<CodexAuth>)>, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        if !config.features.enabled(Feature::Plugins) {
-            return Ok(None);
-        }
-
-        let auth = self.auth_manager.auth().await;
-        if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
-            .await
-        {
-            return Ok(None);
-        }
-
-        Ok(Some((config, auth)))
     }
 
     async fn load_local_installed_plugins(
