@@ -621,6 +621,7 @@ impl Codex {
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
@@ -821,15 +822,7 @@ fn get_service_tier(
 fn session_permission_profile_state_from_config(
     config: &Config,
 ) -> CodexResult<PermissionProfileState> {
-    config
-        .permissions
-        .permission_profile_state()
-        .clone_with_permission_profile(config.permissions.effective_permission_profile())
-        .map_err(|err| {
-            CodexErr::Fatal(format!(
-                "failed to materialize workspace roots for session permissions: {err}"
-            ))
-        })
+    Ok(config.permissions.permission_profile_state().clone())
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {
