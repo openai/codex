@@ -9920,8 +9920,6 @@
       },
       "ImageDetail": {
         "enum": [
-          "auto",
-          "low",
           "high",
           "original"
         ],
@@ -13446,12 +13444,16 @@
           "installationId": {
             "type": "string"
           },
+          "serverName": {
+            "type": "string"
+          },
           "status": {
             "$ref": "#/definitions/v2/RemoteControlConnectionStatus"
           }
         },
         "required": [
           "installationId",
+          "serverName",
           "status"
         ],
         "title": "RemoteControlStatusChangedNotification",
@@ -18130,6 +18132,17 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "type": {
                 "enum": [
                   "image"
@@ -18150,6 +18163,17 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "path": {
                 "type": "string"
               },

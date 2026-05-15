@@ -164,12 +164,14 @@ impl ChatWidget {
         for image_url in &remote_image_urls {
             items.push(UserInput::Image {
                 url: image_url.clone(),
+                detail: None,
             });
         }
 
         for image in &local_images {
             items.push(UserInput::LocalImage {
                 path: image.path.clone(),
+                detail: None,
             });
         }
 

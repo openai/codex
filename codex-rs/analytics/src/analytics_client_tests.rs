@@ -279,6 +279,7 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
                 },
                 UserInput::Image {
                     url: "https://example.com/a.png".to_string(),
+                    detail: None,
                 },
             ],
             ..Default::default()
@@ -399,6 +400,7 @@ fn sample_turn_steer_request(
                 },
                 UserInput::LocalImage {
                     path: "/tmp/a.png".into(),
+                    detail: None,
                 },
             ],
             responsesapi_client_metadata: None,

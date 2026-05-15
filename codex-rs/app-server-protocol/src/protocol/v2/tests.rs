@@ -15,6 +15,7 @@ use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
@@ -2319,9 +2320,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             },
             CoreUserInput::Image {
                 image_url: "https://example.com/image.png".to_string(),
+                detail: Some(ImageDetail::Original),
             },
             CoreUserInput::LocalImage {
                 path: PathBuf::from("local/image.png"),
+                detail: Some(ImageDetail::Original),
             },
             CoreUserInput::Skill {
                 name: "skill-creator".to_string(),
@@ -2345,9 +2348,11 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 },
                 UserInput::Image {
                     url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::Original),
                 },
                 UserInput::LocalImage {
                     path: PathBuf::from("local/image.png"),
+                    detail: Some(ImageDetail::Original),
                 },
                 UserInput::Skill {
                     name: "skill-creator".to_string(),
@@ -2558,6 +2563,33 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             })),
             error: None,
             duration_ms: Some(42),
+        }
+    );
+}
+
+#[test]
+fn user_input_into_core_preserves_image_detail() {
+    assert_eq!(
+        UserInput::Image {
+            url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::Image {
+            image_url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+    );
+
+    assert_eq!(
+        UserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
         }
     );
 }

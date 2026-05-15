@@ -64,6 +64,7 @@ fn resume_history(
                 images: None,
                 local_images: vec![],
                 text_elements: vec![],
+                ..Default::default()
             })),
             RolloutItem::TurnContext(turn_ctx),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {

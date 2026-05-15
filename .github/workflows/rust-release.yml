@@ -10,7 +10,7 @@
 # archive as a GitHub Release asset, then manually dispatch
 # `release_mode=promote_signed` with `unsigned_run_id` and `signed_macos_asset`.
 # The signed handoff archive should contain target or artifact directories such
-# as `aarch64-apple-darwin/` with signed binaries and signed DMGs.
+# as `aarch64-apple-darwin/` with signed binaries.
 
 name: rust-release
 on:
@@ -644,7 +644,7 @@ jobs:
             bundle: primary
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
+            build_dmg: "false"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
@@ -654,7 +654,7 @@ jobs:
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
+            build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
@@ -770,6 +770,9 @@ jobs:
             codesign --verify --strict --verbose=2 "$release_path"
           done
 
+          # DMG staging is disabled for signed promotion because we no longer
+          # distribute DMGs from this release path. Keep the branch here so the
+          # handoff can opt back in by flipping matrix.build_dmg if needed.
           if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
             dmg_name="codex-${target}.dmg"
             dmg_source="${source_dir}/${dmg_name}"

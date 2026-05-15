@@ -711,13 +711,14 @@ fn view_image_tool_includes_detail_with_original_detail_support() {
     };
     let (properties, _) = expect_object_schema(parameters);
     assert!(properties.contains_key("detail"));
-    let description = expect_string_description(
-        properties
-            .get("detail")
-            .expect("view_image detail should include a description"),
-    );
-    assert!(description.contains("only supported value is `original`"));
-    assert!(description.contains("omit this field for default resized behavior"));
+    let detail_schema = properties
+        .get("detail")
+        .expect("view_image detail should include a description");
+    let description = expect_string_description(detail_schema);
+    let expected = vec![json!("high"), json!("original")];
+    assert_eq!(detail_schema.enum_values.as_ref(), Some(&expected));
+    assert!(description.contains("Supported values are `high` and `original`"));
+    assert!(description.contains("omit this field for default high resized behavior"));
 }
 
 #[test]
@@ -2239,7 +2240,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`.\n  detail: string | null;\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```"
     );
 }
 
