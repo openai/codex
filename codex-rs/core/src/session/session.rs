@@ -994,6 +994,7 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
+            sess.start_mcp_connection_manager_initialization();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {

@@ -77,6 +77,13 @@ impl Session {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
 
+    pub(crate) fn start_mcp_connection_manager_initialization(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        drop(self.services.runtime_handle.spawn(async move {
+            session.ensure_mcp_connection_manager_initialized().await;
+        }));
+    }
+
     fn session_mcp_runtime_environment(
         &self,
         session_configuration: &SessionConfiguration,
