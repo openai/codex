@@ -97,7 +97,8 @@
 
 # Marketplace JSON sample spec
 
-`marketplace.json` depends on where the plugin should live:
+`marketplace.json` depends on where the plugin should live. New plugin creation defaults to the
+personal marketplace unless the caller explicitly requests a repo-local destination:
 
 - Personal plugin: `~/.agents/plugins/marketplace.json`
 - Repo/team plugin: `<repo-root>/.agents/plugins/marketplace.json`
@@ -166,8 +167,24 @@
 - Append new entries unless the user explicitly requests reordering.
 - Replace an existing entry for the same plugin only when overwrite is intentional.
 - Default new plugin creation to the personal marketplace.
-- If the current Git repo already has `.agents/plugins/marketplace.json` and the user has not said
-  personal or team, ask which marketplace to update before creating the entry.
+- Use a repo/team marketplace only when the user specifically requests that destination.
 - Choose marketplace location to match the selected destination:
   - Personal plugin: `~/.agents/plugins/marketplace.json`
   - Repo/team plugin: `<repo-root>/.agents/plugins/marketplace.json`
+
+### Workspace sharing notes
+
+- The share upload path validates plugin manifests against the workspace plugin ingestion schema.
+- Shareable plugin manifests must include real values for `name`, `version`, `description`,
+  `author.name`, and the required `interface` fields.
+- `version` must use strict semver.
+- `websiteURL`, `privacyPolicyURL`, and `termsOfServiceURL` must be absolute `https://` URLs when
+  present.
+- `composerIcon`, `logo`, and `screenshots` must point to real files inside the plugin archive when
+  present.
+- `apps` and `mcpServers` should appear in `plugin.json` only when `.app.json` and `.mcp.json`
+  actually exist.
+- Workspace sharing rejects unsupported manifest fields such as `hooks`, so the scaffold keeps them
+  out of the shareable manifest.
+- Run `scripts/validate_plugin.py <plugin-path>` before sharing. It mirrors the workspace ingestion
+  contract and adds one intentional preflight check that rejects leftover `[TODO: ...]` placeholders.
