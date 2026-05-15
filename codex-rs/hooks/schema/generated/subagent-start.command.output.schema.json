@@ -2,12 +2,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "BlockDecisionWire": {
-      "enum": [
-        "block"
-      ],
-      "type": "string"
-    },
     "HookEventNameWire": {
       "enum": [
         "PreToolUse",
@@ -22,7 +16,7 @@
       ],
       "type": "string"
     },
-    "PostToolUseHookSpecificOutputWire": {
+    "SessionStartHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
@@ -31,9 +25,6 @@
         },
         "hookEventName": {
           "$ref": "#/definitions/HookEventNameWire"
-        },
-        "updatedMCPToolOutput": {
-          "default": null
         }
       },
       "required": [
@@ -47,25 +38,13 @@
       "default": true,
       "type": "boolean"
     },
-    "decision": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/BlockDecisionWire"
-        }
-      ],
-      "default": null
-    },
     "hookSpecificOutput": {
       "allOf": [
         {
-          "$ref": "#/definitions/PostToolUseHookSpecificOutputWire"
+          "$ref": "#/definitions/SessionStartHookSpecificOutputWire"
         }
       ],
       "default": null
-    },
-    "reason": {
-      "default": null,
-      "type": "string"
     },
     "stopReason": {
       "default": null,
@@ -80,6 +59,6 @@
       "type": "string"
     }
   },
-  "title": "post-tool-use.command.output",
+  "title": "subagent-start.command.output",
   "type": "object"
 }

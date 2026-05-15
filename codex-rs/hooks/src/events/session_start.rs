@@ -15,7 +15,9 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::schema::NullableString;
 use crate::schema::SessionStartCommandInput;
+use crate::schema::SubagentStartCommandInput;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SessionStartSource {
@@ -41,7 +43,35 @@ pub struct SessionStartRequest {
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
-    pub source: SessionStartSource,
+    pub target: SessionStartTarget,
+}
+
+#[derive(Debug, Clone)]
+pub enum SessionStartTarget {
+    SessionStart {
+        source: SessionStartSource,
+    },
+    SubagentStart {
+        turn_id: String,
+        agent_id: String,
+        agent_type: String,
+    },
+}
+
+impl SessionStartTarget {
+    fn event_name(&self) -> HookEventName {
+        match self {
+            Self::SessionStart { .. } => HookEventName::SessionStart,
+            Self::SubagentStart { .. } => HookEventName::SubagentStart,
+        }
+    }
+
+    fn matcher_input(&self) -> &str {
+        match self {
+            Self::SessionStart { source } => source.as_str(),
+            Self::SubagentStart { agent_type, .. } => agent_type.as_str(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,8 +95,8 @@ pub(crate) fn preview(
 ) -> Vec<HookRunSummary> {
     dispatcher::select_handlers(
         handlers,
-        HookEventName::SessionStart,
-        Some(request.source.as_str()),
+        request.target.event_name(),
+        Some(request.target.matcher_input()),
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -81,8 +111,8 @@ pub(crate) async fn run(
 ) -> SessionStartOutcome {
     let matched = dispatcher::select_handlers(
         handlers,
-        HookEventName::SessionStart,
-        Some(request.source.as_str()),
+        request.target.event_name(),
+        Some(request.target.matcher_input()),
     );
     if matched.is_empty() {
         return SessionStartOutcome {
@@ -93,21 +123,76 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&SessionStartCommandInput::new(
-        request.session_id.to_string(),
-        request.transcript_path.clone(),
-        request.cwd.display().to_string(),
-        request.model.clone(),
-        request.permission_mode.clone(),
-        request.source.as_str().to_string(),
-    )) {
-        Ok(input_json) => input_json,
-        Err(error) => {
-            return serialization_failure_outcome(common::serialization_failure_hook_events(
-                matched,
-                turn_id,
-                format!("failed to serialize session start hook input: {error}"),
-            ));
+    let (input_json, turn_id, parse_completed) = match request.target {
+        SessionStartTarget::SessionStart { source } => {
+            match serde_json::to_string(&SessionStartCommandInput::new(
+                request.session_id.to_string(),
+                request.transcript_path.clone(),
+                request.cwd.display().to_string(),
+                request.model.clone(),
+                request.permission_mode.clone(),
+                source.as_str().to_string(),
+            )) {
+                Ok(input_json) => (
+                    input_json,
+                    turn_id,
+                    parse_completed
+                        as fn(
+                            &ConfiguredHandler,
+                            CommandRunResult,
+                            Option<String>,
+                        )
+                            -> dispatcher::ParsedHandler<SessionStartHandlerData>,
+                ),
+                Err(error) => {
+                    return serialization_failure_outcome(
+                        common::serialization_failure_hook_events(
+                            matched,
+                            turn_id,
+                            format!("failed to serialize session start hook input: {error}"),
+                        ),
+                    );
+                }
+            }
+        }
+        SessionStartTarget::SubagentStart {
+            turn_id,
+            agent_id,
+            agent_type,
+        } => {
+            let input = SubagentStartCommandInput {
+                session_id: request.session_id.to_string(),
+                turn_id: turn_id.clone(),
+                transcript_path: NullableString::from_path(request.transcript_path.clone()),
+                cwd: request.cwd.display().to_string(),
+                hook_event_name: "SubagentStart".to_string(),
+                model: request.model.clone(),
+                permission_mode: request.permission_mode.clone(),
+                agent_id,
+                agent_type,
+            };
+            match serde_json::to_string(&input) {
+                Ok(input_json) => (
+                    input_json,
+                    Some(turn_id),
+                    parse_subagent_start_completed
+                        as fn(
+                            &ConfiguredHandler,
+                            CommandRunResult,
+                            Option<String>,
+                        )
+                            -> dispatcher::ParsedHandler<SessionStartHandlerData>,
+                ),
+                Err(error) => {
+                    return serialization_failure_outcome(
+                        common::serialization_failure_hook_events(
+                            matched,
+                            Some(turn_id),
+                            format!("failed to serialize subagent start hook input: {error}"),
+                        ),
+                    );
+                }
+            }
         }
     };
 
@@ -144,6 +229,51 @@ fn parse_completed(
     run_result: CommandRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<SessionStartHandlerData> {
+    parse_start_completed(
+        handler,
+        run_result,
+        turn_id,
+        "session start",
+        output_parser::parse_session_start,
+        StartHookSemantics {
+            allow_plain_text_context: true,
+            allow_stop: true,
+        },
+    )
+}
+
+fn parse_subagent_start_completed(
+    handler: &ConfiguredHandler,
+    run_result: CommandRunResult,
+    turn_id: Option<String>,
+) -> dispatcher::ParsedHandler<SessionStartHandlerData> {
+    parse_start_completed(
+        handler,
+        run_result,
+        turn_id,
+        "subagent start",
+        output_parser::parse_subagent_start,
+        StartHookSemantics {
+            allow_plain_text_context: false,
+            allow_stop: false,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct StartHookSemantics {
+    allow_plain_text_context: bool,
+    allow_stop: bool,
+}
+
+fn parse_start_completed(
+    handler: &ConfiguredHandler,
+    run_result: CommandRunResult,
+    turn_id: Option<String>,
+    hook_label: &str,
+    parse_output: fn(&str) -> Option<output_parser::SessionStartOutput>,
+    semantics: StartHookSemantics,
+) -> dispatcher::ParsedHandler<SessionStartHandlerData> {
     let mut entries = Vec::new();
     let mut status = HookRunStatus::Completed;
     let mut should_stop = false;
@@ -162,8 +292,7 @@ fn parse_completed(
             Some(0) => {
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = output_parser::parse_session_start(&run_result.stdout)
-                {
+                } else if let Some(parsed) = parse_output(&run_result.stdout) {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -178,7 +307,7 @@ fn parse_completed(
                         );
                     }
                     let _ = parsed.universal.suppress_output;
-                    if !parsed.universal.continue_processing {
+                    if semantics.allow_stop && !parsed.universal.continue_processing {
                         status = HookRunStatus::Stopped;
                         should_stop = true;
                         stop_reason = parsed.universal.stop_reason.clone();
@@ -190,11 +319,13 @@ fn parse_completed(
                         }
                     }
                 // Preserve plain-text context support without treating malformed JSON as context.
-                } else if output_parser::looks_like_json(&run_result.stdout) {
+                } else if !semantics.allow_plain_text_context
+                    || output_parser::looks_like_json(&run_result.stdout)
+                {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: "hook returned invalid session start JSON output".to_string(),
+                        text: format!("hook returned invalid {hook_label} JSON output"),
                     });
                 } else {
                     let additional_context = trimmed_stdout.to_string();

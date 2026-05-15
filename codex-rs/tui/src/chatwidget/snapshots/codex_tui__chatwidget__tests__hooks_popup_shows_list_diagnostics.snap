@@ -17,6 +17,7 @@ expression: popup
   PostCompact           0           0           After context compaction
   SessionStart          0           0           When a new session starts
   UserPromptSubmit      0           0           When the user submits a prompt
+  SubagentStart         0           0           When a subagent is created
   Stop                  0           0           Right before Codex ends its turn
 
   Press enter to view hooks; esc to close

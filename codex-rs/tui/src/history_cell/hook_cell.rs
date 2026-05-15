@@ -720,6 +720,7 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
         HookEventName::Stop => "Stop",
     }
 }

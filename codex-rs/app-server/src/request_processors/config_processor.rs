@@ -455,6 +455,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         post_compact,
         session_start,
         user_prompt_submit,
+        subagent_start,
         stop,
     } = hooks;
 
@@ -468,6 +469,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         post_compact: map_hook_matcher_groups_to_api(post_compact),
         session_start: map_hook_matcher_groups_to_api(session_start),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
+        subagent_start: map_hook_matcher_groups_to_api(subagent_start),
         stop: map_hook_matcher_groups_to_api(stop),
     }
 }
