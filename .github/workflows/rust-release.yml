@@ -1189,7 +1189,7 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - name: Clean up signed promotion handoff assets
+      - name: Clean up signed promotion handoff and DotSlash assets
         if: ${{ env.RELEASE_MODE == 'promote_signed' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1208,6 +1208,14 @@ jobs:
               if [[ "$asset_name" == *unsigned* || "$asset_name" == "$SIGNED_MACOS_ASSET" ]]; then
                 delete_asset=true
               fi
+
+              # dotslash-publish-release does not clobber existing manifest assets,
+              # so remove stale unsigned manifests and partial failed-rerun output.
+              case "$asset_name" in
+                codex|codex-app-server|codex-responses-api-proxy|bwrap|codex-command-runner|codex-windows-sandbox-setup|codex-zsh|argument-comment-lint)
+                  delete_asset=true
+                  ;;
+              esac
 
               if [[ "$delete_asset" == "true" ]]; then
                 echo "Deleting release asset ${asset_name}"
