@@ -371,6 +371,7 @@ mod model_popups;
 mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
+mod permissions_menu;
 mod protocol;
 mod protocol_requests;
 mod rate_limits;
