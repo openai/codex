@@ -140,6 +140,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
@@ -150,6 +152,7 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -327,7 +330,7 @@ fn default_exec_approval_decisions(
 struct AutoReviewMode {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    permission_profile: PermissionProfile,
+    active_permission_profile: ActivePermissionProfile,
 }
 
 /// Enabling the Auto-review experiment in the TUI should also switch the
@@ -338,7 +341,17 @@ fn auto_review_mode() -> AutoReviewMode {
     AutoReviewMode {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
-        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+        ),
+    }
+}
+
+#[cfg(test)]
+impl AutoReviewMode {
+    fn permission_profile(&self) -> PermissionProfile {
+        builtin_permission_profile_for_active_permission_profile(&self.active_permission_profile)
+            .expect("auto-review mode should use a built-in permission profile")
     }
 }
 

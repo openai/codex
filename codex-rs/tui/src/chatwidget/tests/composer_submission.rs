@@ -93,7 +93,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
-async fn submission_includes_configured_permission_profile() {
+async fn submission_includes_configured_active_permission_profile() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let thread_id = ThreadId::new();
@@ -119,6 +119,7 @@ async fn submission_includes_configured_permission_profile() {
         },
     }
     .into();
+    let expected_active_permission_profile = ActivePermissionProfile::new("custom");
     let configured = crate::session_state::ThreadSessionState {
         thread_id,
         forked_from_id: None,
@@ -129,8 +130,8 @@ async fn submission_includes_configured_permission_profile() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: expected_permission_profile.clone(),
-        active_permission_profile: None,
+        permission_profile: expected_permission_profile,
+        active_permission_profile: Some(expected_active_permission_profile.clone()),
         cwd: test_path_buf("/home/user/project").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
@@ -149,17 +150,21 @@ async fn submission_includes_configured_permission_profile() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let permission_profile = match next_submit_op(&mut op_rx) {
+    let active_permission_profile = match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            permission_profile, ..
-        } => permission_profile,
+            active_permission_profile,
+            ..
+        } => active_permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, expected_permission_profile);
+    assert_eq!(
+        active_permission_profile,
+        Some(expected_active_permission_profile)
+    );
 }
 
 #[tokio::test]
-async fn submission_keeps_profile_when_legacy_projection_is_external() {
+async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let thread_id = ThreadId::new();
@@ -179,7 +184,7 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: expected_permission_profile.clone(),
+        permission_profile: expected_permission_profile,
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         runtime_workspace_roots: Vec::new(),
@@ -196,13 +201,14 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         .set_composer_text("submit".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let permission_profile = match next_submit_op(&mut op_rx) {
+    let active_permission_profile = match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            permission_profile, ..
-        } => permission_profile,
+            active_permission_profile,
+            ..
+        } => active_permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, expected_permission_profile);
+    assert_eq!(active_permission_profile, None);
 }
 
 #[tokio::test]

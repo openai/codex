@@ -199,7 +199,10 @@ mod tests {
         let expected_permission_profile = PermissionProfile::workspace_write();
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
-            .set_permission_profile(expected_permission_profile.clone())
+            .set_permission_profile_from_session_snapshot(
+                expected_permission_profile.clone(),
+                /*active_profile*/ None,
+            )
             .expect("set widget permission profile");
         app.config
             .permissions
