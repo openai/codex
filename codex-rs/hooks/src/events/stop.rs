@@ -78,12 +78,6 @@ struct StopHandlerData {
     continuation_fragments: Vec<HookPromptFragment>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum StopHookKind {
-    Stop,
-    SubagentStop,
-}
-
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &StopRequest,
@@ -217,9 +211,8 @@ fn parse_completed(
     let mut should_block = false;
     let mut block_reason = None;
     let mut continuation_prompt = None;
-    let hook_kind = match handler.event_name {
-        HookEventName::Stop => StopHookKind::Stop,
-        HookEventName::SubagentStop => StopHookKind::SubagentStop,
+    let hook_event_name = match handler.event_name {
+        HookEventName::Stop | HookEventName::SubagentStop => handler.event_name,
         event_name => {
             panic!("expected stop hook event, got {event_name:?}");
         }
@@ -237,11 +230,12 @@ fn parse_completed(
             Some(0) => {
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = match hook_kind {
-                    StopHookKind::Stop => output_parser::parse_stop(&run_result.stdout),
-                    StopHookKind::SubagentStop => {
+                } else if let Some(parsed) = match hook_event_name {
+                    HookEventName::Stop => output_parser::parse_stop(&run_result.stdout),
+                    HookEventName::SubagentStop => {
                         output_parser::parse_subagent_stop(&run_result.stdout)
                     }
+                    _ => unreachable!("validated stop hook event"),
                 } {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
@@ -282,9 +276,10 @@ fn parse_completed(
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Error,
-                                text: match hook_kind {
-                                    StopHookKind::Stop => "Stop hook returned decision:block without a non-empty reason",
-                                    StopHookKind::SubagentStop => "SubagentStop hook returned decision:block without a non-empty reason",
+                                text: match hook_event_name {
+                                    HookEventName::Stop => "Stop hook returned decision:block without a non-empty reason",
+                                    HookEventName::SubagentStop => "SubagentStop hook returned decision:block without a non-empty reason",
+                                    _ => unreachable!("validated stop hook event"),
                                 }
                                 .to_string(),
                             });
@@ -294,11 +289,12 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: match hook_kind {
-                            StopHookKind::Stop => "hook returned invalid stop hook JSON output",
-                            StopHookKind::SubagentStop => {
+                        text: match hook_event_name {
+                            HookEventName::Stop => "hook returned invalid stop hook JSON output",
+                            HookEventName::SubagentStop => {
                                 "hook returned invalid subagent stop hook JSON output"
                             }
+                            _ => unreachable!("validated stop hook event"),
                         }
                         .to_string(),
                     });
@@ -318,13 +314,14 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: match hook_kind {
-                            StopHookKind::Stop => {
+                        text: match hook_event_name {
+                            HookEventName::Stop => {
                                 "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
                             }
-                            StopHookKind::SubagentStop => {
+                            HookEventName::SubagentStop => {
                                 "SubagentStop hook exited with code 2 but did not write a continuation prompt to stderr"
                             }
+                            _ => unreachable!("validated stop hook event"),
                         }
                         .to_string(),
                     });
