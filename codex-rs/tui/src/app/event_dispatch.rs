@@ -1662,18 +1662,18 @@ impl App {
                 self.chat_widget.open_manage_skills_popup();
             }
             AppEvent::SetSkillEnabled { path, enabled } => {
-                let edits = [ConfigEdit::SetSkillConfig {
-                    path: path.to_path_buf(),
+                match crate::config_rpc::write_skill_enabled(
+                    app_server.request_handle(),
+                    path.clone(),
                     enabled,
-                }];
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits(edits)
-                    .apply()
-                    .await
+                )
+                .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        if !app_server.is_remote()
+                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
+                        {
                             tracing::warn!(
                                 error = %err,
                                 "failed to refresh config after skill toggle"
@@ -1691,41 +1691,33 @@ impl App {
             AppEvent::SetAppEnabled { id, enabled } => {
                 let edits = if enabled {
                     vec![
-                        ConfigEdit::ClearPath {
-                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
-                        },
-                        ConfigEdit::ClearPath {
-                            segments: vec![
-                                "apps".to_string(),
-                                id.clone(),
-                                "disabled_reason".to_string(),
-                            ],
-                        },
+                        crate::config_rpc::clear_config_value(format!("apps.{id}.enabled")),
+                        crate::config_rpc::clear_config_value(format!("apps.{id}.disabled_reason")),
                     ]
                 } else {
                     vec![
-                        ConfigEdit::SetPath {
-                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
-                            value: false.into(),
-                        },
-                        ConfigEdit::SetPath {
-                            segments: vec![
-                                "apps".to_string(),
-                                id.clone(),
-                                "disabled_reason".to_string(),
-                            ],
-                            value: "user".into(),
-                        },
+                        crate::config_rpc::replace_config_value(
+                            format!("apps.{id}.enabled"),
+                            serde_json::json!(false),
+                        ),
+                        crate::config_rpc::replace_config_value(
+                            format!("apps.{id}.disabled_reason"),
+                            serde_json::json!("user"),
+                        ),
                     ]
                 };
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits(edits)
-                    .apply()
-                    .await
+                match crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    edits,
+                    /*reload_user_config*/ true,
+                )
+                .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        if !app_server.is_remote()
+                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
+                        {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");
                         }
                         self.chat_widget.submit_op(AppCommand::reload_user_config());
