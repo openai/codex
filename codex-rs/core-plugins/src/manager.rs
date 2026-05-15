@@ -615,7 +615,7 @@ impl PluginsManager {
         Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, &self.store))
     }
 
-    pub async fn fetch_and_cache_remote_installed_marketplaces(
+    pub async fn fetch_remote_installed_plugin_marketplaces_with_cache(
         &self,
         config: &RemotePluginServiceConfig,
         auth: Option<&CodexAuth>,

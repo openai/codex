@@ -906,7 +906,10 @@ impl PluginRequestProcessor {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
             plugins_manager
-                .fetch_and_cache_remote_installed_marketplaces(&remote_plugin_service_config, auth)
+                .fetch_remote_installed_plugin_marketplaces_with_cache(
+                    &remote_plugin_service_config,
+                    auth,
+                )
                 .await
         };
 
