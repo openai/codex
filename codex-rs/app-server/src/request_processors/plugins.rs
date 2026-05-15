@@ -122,7 +122,7 @@ fn share_context_for_source(
     }
 }
 
-fn plugin_marketplace_entry_from_configured_marketplace(
+fn convert_configured_marketplace_to_plugin_marketplace_entry(
     marketplace: codex_core_plugins::ConfiguredMarketplace,
     shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
 ) -> PluginMarketplaceEntry {
@@ -136,7 +136,7 @@ fn plugin_marketplace_entry_from_configured_marketplace(
             .plugins
             .into_iter()
             .map(|plugin| {
-                plugin_summary_from_configured_marketplace_plugin(
+                convert_configured_marketplace_plugin_to_plugin_summary(
                     plugin,
                     shared_plugin_ids_by_local_path,
                 )
@@ -145,7 +145,7 @@ fn plugin_marketplace_entry_from_configured_marketplace(
     }
 }
 
-fn plugin_summary_from_configured_marketplace_plugin(
+fn convert_configured_marketplace_plugin_to_plugin_summary(
     plugin: codex_core_plugins::ConfiguredMarketplacePlugin,
     shared_plugin_ids_by_local_path: &std::collections::BTreeMap<AbsolutePathBuf, String>,
 ) -> PluginSummary {
@@ -768,7 +768,7 @@ impl PluginRequestProcessor {
                     .marketplaces
                     .into_iter()
                     .map(|marketplace| {
-                        plugin_marketplace_entry_from_configured_marketplace(
+                        convert_configured_marketplace_to_plugin_marketplace_entry(
                             marketplace,
                             &shared_plugin_ids_by_local_path,
                         )
@@ -829,7 +829,7 @@ impl PluginRequestProcessor {
                                                 .contains(&plugin.name)
                                     })
                                     .map(|plugin| {
-                                        plugin_summary_from_configured_marketplace_plugin(
+                                        convert_configured_marketplace_plugin_to_plugin_summary(
                                             plugin,
                                             &shared_plugin_ids_by_local_path_for_suggestions,
                                         )
