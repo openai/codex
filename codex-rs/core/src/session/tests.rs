@@ -9592,7 +9592,11 @@ async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<(
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(ready, "shell command should reach the ready marker");
+    if !ready {
+        cancellation_tx.cancel();
+        let _ = timeout(Duration::from_secs(5), handle).await;
+        anyhow::bail!("shell command should reach the ready marker");
+    }
 
     cancellation_tx.cancel();
     timeout(Duration::from_secs(5), handle)

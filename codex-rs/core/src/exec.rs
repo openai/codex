@@ -1366,9 +1366,11 @@ async fn consume_output(
                 }
                 Some(ExecExpirationOutcome::Cancelled) => {
                     let process_group_id = child.id();
-                    if let Some(process_group_id) = process_group_id {
-                        codex_utils_pty::process_group::terminate_process_group(process_group_id)?;
-                    }
+                    let should_escalate = if let Some(process_group_id) = process_group_id {
+                        codex_utils_pty::process_group::terminate_process_group(process_group_id)?
+                    } else {
+                        false
+                    };
                     match tokio::time::timeout(
                         CANCELLATION_TERMINATION_GRACE_PERIOD,
                         child.wait(),
@@ -1377,7 +1379,9 @@ async fn consume_output(
                     {
                         Ok(status) => {
                             status?;
-                            if let Some(process_group_id) = process_group_id {
+                            if should_escalate
+                                && let Some(process_group_id) = process_group_id
+                            {
                                 codex_utils_pty::process_group::kill_process_group(
                                     process_group_id,
                                 )?;

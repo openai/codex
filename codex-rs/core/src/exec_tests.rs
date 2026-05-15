@@ -1226,6 +1226,11 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    if !killed {
+        unsafe {
+            libc::kill(descendant_pid, libc::SIGKILL);
+        }
+    }
     assert!(
         killed,
         "TERM-ignoring descendant process with pid {descendant_pid} is still alive"

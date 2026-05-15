@@ -104,7 +104,7 @@ impl ToolCallRuntime {
             AbortOnDropHandle::new(tokio::spawn(async move {
                 let dispatch_call = call.clone();
                 let dispatch_span_for_future = dispatch_span.clone();
-                let dispatch = async move {
+                let mut dispatch = Box::pin(async move {
                     let _guard = if supports_parallel {
                         Either::Left(lock.read().await)
                     } else {
@@ -122,19 +122,17 @@ impl ToolCallRuntime {
                         )
                         .instrument(dispatch_span_for_future)
                         .await
-                };
-                tokio::pin!(dispatch);
+                });
                 tokio::select! {
                     biased;
                     res = &mut dispatch => res,
                     _ = cancellation_token.cancelled() => {
+                        let secs = started.elapsed().as_secs_f32().max(0.1);
+                        dispatch_span.record("aborted", true);
                         if wait_for_runtime_cancellation {
-                            dispatch.await
-                        } else {
-                            let secs = started.elapsed().as_secs_f32().max(0.1);
-                            dispatch_span.record("aborted", true);
-                            Ok(Self::aborted_response(&call, secs))
+                            let _ = dispatch.as_mut().await;
                         }
+                        Ok(Self::aborted_response(&call, secs))
                     },
                 }
             }));
