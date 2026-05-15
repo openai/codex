@@ -175,6 +175,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
             Constrained::allow_any(AskForApproval::Never),
             Constrained::allow_any(PermissionProfile::read_only()),
         )?,
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,

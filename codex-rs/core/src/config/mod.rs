@@ -538,6 +538,13 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
+    /// Whether config explicitly selected named permissions profiles instead
+    /// of the legacy `sandbox_mode` syntax.
+    pub explicit_permission_profile_mode: bool,
+
+    /// User-defined permission profile IDs available from effective config.
+    pub custom_permission_profile_ids: Vec<String>,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -2594,6 +2601,17 @@ impl Config {
                 Some(PermissionConfigSyntax::Profiles)
             )
             || permission_config_syntax.is_none();
+        let explicit_permission_profile_mode = default_permissions_override.is_some()
+            || matches!(
+                permission_config_syntax,
+                Some(PermissionConfigSyntax::Profiles)
+            );
+        let custom_permission_profile_ids = cfg
+            .permissions
+            .as_ref()
+            .map_or_else(Vec::new, |permissions| {
+                permissions.entries.keys().cloned().collect()
+            });
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
         let should_seed_legacy_workspace_roots = default_permissions.is_none()
@@ -3361,6 +3379,8 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            explicit_permission_profile_mode,
+            custom_permission_profile_ids,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
