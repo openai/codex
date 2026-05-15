@@ -618,7 +618,7 @@ impl PluginsManager {
         ))
     }
 
-    pub async fn fetch_cached_remote_installed_marketplaces(
+    pub async fn fetch_remote_installed_marketplaces(
         &self,
         config: &RemotePluginServiceConfig,
         auth: Option<&CodexAuth>,
