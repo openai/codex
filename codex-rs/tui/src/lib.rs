@@ -993,6 +993,7 @@ pub async fn run_main(
     )
     .await;
 
+    let mut oss_provider_to_persist = None;
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
             cli.oss_provider.as_deref(),
@@ -1004,11 +1005,14 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            let provider = oss_selection::select_oss_provider(&codex_home).await?;
+            let (provider, persist) = oss_selection::select_oss_provider().await?;
             if provider == "__CANCELLED__" {
                 return Err(std::io::Error::other(
                     "OSS provider selection was cancelled by user",
                 ));
+            }
+            if persist {
+                oss_provider_to_persist = Some(provider.clone());
             }
             Some(provider)
         }
@@ -1263,6 +1267,7 @@ pub async fn run_main(
         log_db,
         state_db,
         environment_manager,
+        oss_provider_to_persist,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -1284,6 +1289,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    oss_provider_to_persist: Option<String>,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
@@ -1357,6 +1363,16 @@ async fn run_ratatui_app(
     }
     .with_remote_cwd_override(remote_cwd_override.clone());
     let mut app_server = Some(app_server_session);
+    if let Some(provider) = oss_provider_to_persist {
+        let Some(app_server) = app_server.as_ref() else {
+            unreachable!("app server should exist before OSS provider persistence");
+        };
+        if let Err(err) =
+            crate::config_update::write_oss_provider(app_server.request_handle(), provider).await
+        {
+            tracing::warn!(error = %err, "failed to persist OSS provider preference");
+        }
+    }
 
     let should_show_trust_screen_flag =
         !uses_remote_workspace && should_show_trust_screen(&initial_config);
@@ -1404,6 +1420,25 @@ async fn run_ratatui_app(
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
+        }
+        if matches!(
+            onboarding_result.directory_trust_decision,
+            Some(crate::onboarding::TrustDirectorySelection::Trust)
+        ) {
+            let Some(app_server) = app_server.as_ref() else {
+                unreachable!("app server should exist while onboarding is active");
+            };
+            if let Err(err) = crate::config_update::write_trusted_project(
+                app_server.request_handle(),
+                &initial_config.cwd,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %err,
+                    "failed to persist trusted project state through app server"
+                );
+            }
         }
         trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
         // If this onboarding run included the login step, always refresh cloud requirements and

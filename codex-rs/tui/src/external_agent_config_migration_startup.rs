@@ -4,8 +4,6 @@ use crate::external_agent_config_migration::run_external_agent_config_migration_
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::edit::ConfigEdit;
-use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
@@ -120,40 +118,43 @@ fn unix_seconds_now() -> i64 {
 }
 
 async fn persist_external_agent_config_migration_prompt_shown(
+    app_server: &mut AppServerSession,
     config: &mut Config,
     items: &[ExternalAgentConfigMigrationItem],
     now_unix_seconds: i64,
 ) -> Result<()> {
-    let mut edits = Vec::new();
+    let mut prompt_update = serde_json::Map::new();
     if items.iter().any(|item| item.cwd.is_none()) {
-        edits.push(
-            ConfigEdit::SetNoticeExternalConfigMigrationPromptHomeLastPromptedAt(now_unix_seconds),
+        prompt_update.insert(
+            "home_last_prompted_at".to_string(),
+            serde_json::json!(now_unix_seconds),
         );
     }
 
-    for project in items
+    let project_updates = items
         .iter()
         .filter_map(|item| item.cwd.as_deref())
         .map(external_config_migration_project_key)
-    {
-        edits.push(
-            ConfigEdit::SetNoticeExternalConfigMigrationPromptProjectLastPromptedAt(
-                project,
-                now_unix_seconds,
-            ),
+        .map(|project| (project, serde_json::json!(now_unix_seconds)))
+        .collect::<serde_json::Map<_, _>>();
+    if !project_updates.is_empty() {
+        prompt_update.insert(
+            "project_last_prompted_at".to_string(),
+            serde_json::Value::Object(project_updates),
         );
     }
 
-    if edits.is_empty() {
+    if prompt_update.is_empty() {
         return Ok(());
     }
 
-    ConfigEditsBuilder::for_config(config)
-        .with_edits(edits)
-        .apply()
-        .await
-        .map_err(|err| color_eyre::eyre::eyre!("{err}"))
-        .wrap_err("Failed to save external config migration prompt timestamp")?;
+    crate::config_update::write_upsert_config_value(
+        app_server.request_handle(),
+        "notice.external_config_migration_prompts",
+        serde_json::Value::Object(prompt_update),
+    )
+    .await
+    .wrap_err("Failed to save external config migration prompt timestamp")?;
 
     if items.iter().any(|item| item.cwd.is_none()) {
         config
@@ -177,6 +178,7 @@ async fn persist_external_agent_config_migration_prompt_shown(
 }
 
 async fn persist_external_agent_config_migration_prompt_dismissal(
+    app_server: &mut AppServerSession,
     config: &mut Config,
     items: &[ExternalAgentConfigMigrationItem],
 ) -> Result<()> {
@@ -187,7 +189,7 @@ async fn persist_external_agent_config_migration_prompt_dismissal(
         .map(external_config_migration_project_key)
         .collect::<BTreeSet<_>>();
 
-    let mut edits = Vec::new();
+    let mut prompt_update = serde_json::Map::new();
     if hide_home
         && !config
             .notices
@@ -195,10 +197,9 @@ async fn persist_external_agent_config_migration_prompt_dismissal(
             .home
             .unwrap_or(false)
     {
-        edits.push(ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(
-            true,
-        ));
+        prompt_update.insert("home".to_string(), serde_json::json!(true));
     }
+    let mut project_updates = serde_json::Map::new();
     for project in &projects {
         if !config
             .notices
@@ -208,25 +209,27 @@ async fn persist_external_agent_config_migration_prompt_dismissal(
             .copied()
             .unwrap_or(false)
         {
-            edits.push(
-                ConfigEdit::SetNoticeHideExternalConfigMigrationPromptProject(
-                    project.clone(),
-                    true,
-                ),
-            );
+            project_updates.insert(project.clone(), serde_json::json!(true));
         }
     }
+    if !project_updates.is_empty() {
+        prompt_update.insert(
+            "projects".to_string(),
+            serde_json::Value::Object(project_updates),
+        );
+    }
 
-    if edits.is_empty() {
+    if prompt_update.is_empty() {
         return Ok(());
     }
 
-    ConfigEditsBuilder::for_config(config)
-        .with_edits(edits)
-        .apply()
-        .await
-        .map_err(|err| color_eyre::eyre::eyre!("{err}"))
-        .wrap_err("Failed to save external config migration prompt preference")?;
+    crate::config_update::write_upsert_config_value(
+        app_server.request_handle(),
+        "notice.external_config_migration_prompts",
+        serde_json::Value::Object(prompt_update),
+    )
+    .await
+    .wrap_err("Failed to save external config migration prompt preference")?;
 
     if hide_home {
         config.notices.external_config_migration_prompts.home = Some(true);
@@ -286,6 +289,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
     }
 
     if let Err(err) = persist_external_agent_config_migration_prompt_shown(
+        app_server,
         config,
         &detected_items,
         now_unix_seconds,
@@ -345,6 +349,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
             }
             ExternalAgentConfigMigrationOutcome::SkipForever => {
                 match persist_external_agent_config_migration_prompt_dismissal(
+                    app_server,
                     config,
                     &detected_items,
                 )

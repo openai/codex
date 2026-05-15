@@ -111,7 +111,6 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
-        let codex_home = config.codex_home.to_path_buf();
         let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
@@ -154,7 +153,6 @@ impl OnboardingScreen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 trust_target,
-                codex_home,
                 show_windows_create_sandbox_hint,
                 should_quit: false,
                 selection: None,

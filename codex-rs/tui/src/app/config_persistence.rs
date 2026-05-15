@@ -515,9 +515,7 @@ impl App {
                 message,
                 "feature flag config write was overridden by effective config"
             );
-            self.chat_widget.add_error_message(format!(
-                "Experimental feature changes were saved but not applied: {message}"
-            ));
+            let mut show_overridden_message = true;
             if let Some(effective_config) = self
                 .read_effective_config_after_overridden_write(
                     app_server,
@@ -529,6 +527,36 @@ impl App {
                     &effective_config,
                     &feature_updates_to_apply,
                 );
+                if feature_updates_to_apply
+                    .iter()
+                    .any(|(feature, enabled)| *feature == Feature::GuardianApproval && !*enabled)
+                    && !self.config.features.enabled(Feature::GuardianApproval)
+                {
+                    show_overridden_message = false;
+                    self.sync_active_thread_permission_settings_to_cached_session()
+                        .await;
+                    let op = AppCommand::override_turn_context(
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        Some(ApprovalsReviewer::User),
+                        /*permission_profile*/ None,
+                        /*active_permission_profile*/ None,
+                        /*windows_sandbox_level*/ None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
+                    );
+                    let replay_state_op = ThreadEventStore::op_can_change_pending_replay_state(&op)
+                        .then(|| op.clone());
+                    let submitted = self.chat_widget.submit_op(op);
+                    if submitted && let Some(op) = replay_state_op.as_ref() {
+                        self.note_active_thread_outbound_op(op).await;
+                        self.refresh_pending_thread_approvals().await;
+                    }
+                }
                 self.sync_auto_review_runtime_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
@@ -537,6 +565,17 @@ impl App {
                 if windows_sandbox_changed {
                     self.propagate_windows_sandbox_turn_context();
                 }
+                if let Some(label) = permissions_history_label {
+                    self.chat_widget.add_info_message(
+                        format!("Permissions updated to {label}"),
+                        /*hint*/ None,
+                    );
+                }
+            }
+            if show_overridden_message {
+                self.chat_widget.add_error_message(format!(
+                    "Experimental feature changes were saved but not applied: {message}"
+                ));
             }
             return;
         }
@@ -910,7 +949,8 @@ impl App {
             return;
         }
 
-        self.runtime_permission_profile_override = Some(permission_profile);
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
         self.sync_active_thread_permission_settings_to_cached_session()
             .await;
 

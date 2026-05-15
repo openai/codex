@@ -831,11 +831,15 @@ impl App {
         );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                // Only count a startup tooltip once the fresh thread can actually render it.
+                let startup_tooltip_override = prepare_startup_tooltip_override(
+                    &mut app_server,
+                    &mut config,
+                    &available_models,
+                    is_first_run,
+                )
+                .await;
                 spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
-                // Count a startup tooltip once the initial chat widget can render it.
-                let startup_tooltip_override =
-                    prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
-                        .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),

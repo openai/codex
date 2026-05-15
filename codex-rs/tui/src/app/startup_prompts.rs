@@ -187,11 +187,11 @@ pub(super) fn select_model_availability_nux(
     })
 }
 
-pub(super) async fn prepare_startup_tooltip_override(
-    config: &mut Config,
+pub(super) fn next_startup_tooltip_override(
+    config: &Config,
     available_models: &[ModelPreset],
     is_first_run: bool,
-) -> Option<String> {
+) -> Option<(StartupTooltipOverride, HashMap<String, u32>)> {
     if is_first_run || !config.show_tooltips {
         return None;
     }
@@ -208,11 +208,24 @@ pub(super) async fn prepare_startup_tooltip_override(
     let next_count = shown_count.saturating_add(1);
     let mut updated_shown_count = config.model_availability_nux.shown_count.clone();
     updated_shown_count.insert(tooltip_override.model_slug.clone(), next_count);
+    Some((tooltip_override, updated_shown_count))
+}
 
-    if let Err(err) = ConfigEditsBuilder::for_config(config)
-        .set_model_availability_nux_count(&updated_shown_count)
-        .apply()
-        .await
+pub(super) async fn prepare_startup_tooltip_override(
+    app_server: &mut AppServerSession,
+    config: &mut Config,
+    available_models: &[ModelPreset],
+    is_first_run: bool,
+) -> Option<String> {
+    let (tooltip_override, updated_shown_count) =
+        next_startup_tooltip_override(config, available_models, is_first_run)?;
+
+    if let Err(err) = crate::config_update::write_config_value(
+        app_server.request_handle(),
+        "tui.model_availability_nux",
+        serde_json::json!(updated_shown_count),
+    )
+    .await
     {
         tracing::error!(
             error = %err,

@@ -15,12 +15,16 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
+use codex_config::loader::project_trust_key;
+use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 pub(crate) fn replace_config_value(key_path: impl Into<String>, value: JsonValue) -> ConfigEdit {
@@ -28,6 +32,14 @@ pub(crate) fn replace_config_value(key_path: impl Into<String>, value: JsonValue
         key_path: key_path.into(),
         value,
         merge_strategy: MergeStrategy::Replace,
+    }
+}
+
+pub(crate) fn upsert_config_value(key_path: impl Into<String>, value: JsonValue) -> ConfigEdit {
+    ConfigEdit {
+        key_path: key_path.into(),
+        value,
+        merge_strategy: MergeStrategy::Upsert,
     }
 }
 
@@ -147,6 +159,61 @@ pub(crate) fn build_memory_settings_edits(
             serde_json::json!(generate_memories),
         ),
     ]
+}
+
+pub(crate) async fn write_oss_provider(
+    request_handle: AppServerRequestHandle,
+    provider: String,
+) -> Result<()> {
+    write_config_value(request_handle, "oss_provider", serde_json::json!(provider)).await
+}
+
+pub(crate) async fn write_trusted_project(
+    request_handle: AppServerRequestHandle,
+    cwd: &AbsolutePathBuf,
+) -> Result<PathBuf> {
+    let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
+        .await
+        .map(Into::into)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let mut project_update = serde_json::Map::new();
+    project_update.insert(
+        project_trust_key(trust_target.as_path()),
+        serde_json::json!({ "trust_level": "trusted" }),
+    );
+    write_upsert_config_value(
+        request_handle,
+        "projects",
+        serde_json::Value::Object(project_update),
+    )
+    .await
+    .wrap_err_with(|| {
+        format!(
+            "failed to persist trusted project {}",
+            trust_target.display()
+        )
+    })?;
+    Ok(trust_target)
+}
+
+pub(crate) async fn write_config_value(
+    request_handle: AppServerRequestHandle,
+    key_path: impl Into<String>,
+    value: JsonValue,
+) -> Result<()> {
+    write_config_batch(request_handle, vec![replace_config_value(key_path, value)])
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn write_upsert_config_value(
+    request_handle: AppServerRequestHandle,
+    key_path: impl Into<String>,
+    value: JsonValue,
+) -> Result<()> {
+    write_config_batch(request_handle, vec![upsert_config_value(key_path, value)])
+        .await
+        .map(|_| ())
 }
 
 pub(crate) async fn write_config_batch(
