@@ -1,13 +1,12 @@
 use super::*;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
 use codex_app_server_protocol::NetworkAccess;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -232,9 +231,9 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.config.cwd = test_path_buf("/home/user/main").abs();
 
     let expected_cwd = test_path_buf("/home/user/sub-agent").abs();
-    let expected_app_server_permission_profile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    let expected_app_server_permission_profile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -252,8 +251,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
             glob_scan_max_depth: None,
         },
     };
-    let expected_permission_profile: PermissionProfile =
-        expected_app_server_permission_profile.clone().into();
+    let expected_permission_profile = expected_app_server_permission_profile.clone();
     let expected_core_sandbox = expected_permission_profile
         .to_legacy_sandbox_policy(expected_cwd.as_path())
         .expect("permission profile should project to legacy sandbox policy");
@@ -288,9 +286,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
     assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
-        AppServerPermissionProfile::from(
-            chat.config_ref().permissions.effective_permission_profile()
-        ),
+        chat.config_ref().permissions.effective_permission_profile(),
         expected_app_server_permission_profile
     );
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
@@ -370,11 +366,10 @@ async fn session_configured_preserves_profile_workspace_roots() {
 async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let expected_app_server_permission_profile = AppServerPermissionProfile::External {
-        network: PermissionProfileNetworkPermissions { enabled: false },
+    let expected_app_server_permission_profile = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
     };
-    let expected_permission_profile: PermissionProfile =
-        expected_app_server_permission_profile.clone().into();
+    let expected_permission_profile = expected_app_server_permission_profile.clone();
     let expected_sandbox = SandboxPolicy::ExternalSandbox {
         network_access: NetworkAccess::Restricted,
     };
@@ -404,9 +399,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
     assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
-        AppServerPermissionProfile::from(
-            chat.config_ref().permissions.effective_permission_profile()
-        ),
+        chat.config_ref().permissions.effective_permission_profile(),
         expected_app_server_permission_profile
     );
 }

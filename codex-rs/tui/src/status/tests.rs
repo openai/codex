@@ -15,13 +15,6 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CreditsSnapshot;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_config::LoaderOverrides;
@@ -33,8 +26,13 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use insta::assert_snapshot;
@@ -43,11 +41,13 @@ use ratatui::prelude::*;
 use tempfile::TempDir;
 
 fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfile {
-    AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions {
-            enabled: network_enabled,
+    PermissionProfile::Managed {
+        network: if network_enabled {
+            NetworkSandboxPolicy::Enabled
+        } else {
+            NetworkSandboxPolicy::Restricted
         },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -77,7 +77,6 @@ fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfil
             glob_scan_max_depth: None,
         },
     }
-    .into()
 }
 
 async fn test_config(temp_home: &TempDir) -> Config {
@@ -703,13 +702,10 @@ async fn status_permissions_full_disk_managed_with_network_is_danger_full_access
         .expect("set approval policy");
     config
         .permissions
-        .set_permission_profile(
-            AppServerPermissionProfile::Managed {
-                network: PermissionProfileNetworkPermissions { enabled: true },
-                file_system: PermissionProfileFileSystemPermissions::Unrestricted,
-            }
-            .into(),
-        )
+        .set_permission_profile(PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Enabled,
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+        })
         .expect("set permission profile");
 
     assert_eq!(
@@ -729,13 +725,10 @@ async fn status_permissions_full_disk_managed_without_network_is_external_sandbo
         .expect("set approval policy");
     config
         .permissions
-        .set_permission_profile(
-            AppServerPermissionProfile::Managed {
-                network: PermissionProfileNetworkPermissions { enabled: false },
-                file_system: PermissionProfileFileSystemPermissions::Unrestricted,
-            }
-            .into(),
-        )
+        .set_permission_profile(PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+        })
         .expect("set permission profile");
 
     assert_eq!(
