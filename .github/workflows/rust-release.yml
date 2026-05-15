@@ -1197,6 +1197,10 @@ jobs:
           set -euo pipefail
 
           release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
+          mapfile -t dotslash_asset_names < <(
+            jq -r '.outputs | keys[]' .github/dotslash*.json | sort -u
+          )
+
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
             --jq '.[] | [.id, .name] | @tsv' |
             while IFS=$'\t' read -r asset_id asset_name; do
@@ -1210,12 +1214,13 @@ jobs:
               fi
 
               # dotslash-publish-release does not clobber existing manifest assets,
-              # so remove stale unsigned manifests and partial failed-rerun output.
-              case "$asset_name" in
-                codex|codex-app-server|codex-responses-api-proxy|bwrap|codex-command-runner|codex-windows-sandbox-setup|codex-zsh|argument-comment-lint)
+              # so remove the release assets named by all DotSlash configs.
+              for dotslash_asset_name in "${dotslash_asset_names[@]}"; do
+                if [[ "$asset_name" == "$dotslash_asset_name" ]]; then
                   delete_asset=true
-                  ;;
-              esac
+                  break
+                fi
+              done
 
               if [[ "$delete_asset" == "true" ]]; then
                 echo "Deleting release asset ${asset_name}"
