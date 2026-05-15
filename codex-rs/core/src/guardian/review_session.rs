@@ -9,6 +9,7 @@ use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -698,6 +699,9 @@ async fn run_review_on_session(
         .total_token_usage()
         .await
         .unwrap_or_default();
+    // The legacy SandboxPolicy should match the PermissionProfile.
+    let guardian_permission_profile = PermissionProfile::read_only();
+    let legacy_sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let submit_result = run_before_review_deadline(
         deadline,
@@ -709,8 +713,8 @@ async fn run_review_on_session(
             cwd: params.parent_turn.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            sandbox_policy: legacy_sandbox_policy,
+            permission_profile: Some(guardian_permission_profile),
             model: params.model.clone(),
             effort: params.reasoning_effort,
             summary: Some(params.reasoning_summary),
@@ -892,12 +896,11 @@ pub(crate) fn build_guardian_review_session_config(
     );
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     guardian_config
         .permissions
-        .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())
+        .set_permission_profile(PermissionProfile::read_only())
         .map_err(|err| {
-            anyhow::anyhow!("guardian review session could not set sandbox policy: {err}")
+            anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
     guardian_config.include_apps_instructions = false;
     guardian_config
