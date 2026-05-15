@@ -1879,6 +1879,7 @@ async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -
         /*expected_count*/ 4,
     )
     .await?;
+    wait_for_remote_installed_metadata_request_count(&server, /*expected_count*/ 2).await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
 
     let second_request_id = mcp
@@ -1887,13 +1888,15 @@ async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -
             install_suggestion_plugin_names: None,
         })
         .await?;
-    let _: PluginInstalledResponse = to_response(
+    let second_response: PluginInstalledResponse = to_response(
         timeout(
             DEFAULT_TIMEOUT,
             mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
         )
         .await??,
     )?;
+    assert_eq!(second_response, response);
+    wait_for_remote_installed_metadata_request_count(&server, /*expected_count*/ 2).await?;
     wait_for_remote_plugin_request_count(
         &server,
         "/ps/plugins/installed",
@@ -2819,6 +2822,36 @@ async fn wait_for_remote_plugin_request_count(
     path_suffix: &str,
     expected_count: usize,
 ) -> Result<()> {
+    wait_for_remote_plugin_request_count_matching(server, path_suffix, expected_count, |_request| {
+        true
+    })
+    .await
+}
+
+async fn wait_for_remote_installed_metadata_request_count(
+    server: &MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    wait_for_remote_plugin_request_count_matching(
+        server,
+        "/ps/plugins/installed",
+        expected_count,
+        |request| {
+            !request
+                .url
+                .query_pairs()
+                .any(|(key, _value)| key == "includeDownloadUrls")
+        },
+    )
+    .await
+}
+
+async fn wait_for_remote_plugin_request_count_matching(
+    server: &MockServer,
+    path_suffix: &str,
+    expected_count: usize,
+    request_matches: impl Fn(&wiremock::Request) -> bool,
+) -> Result<()> {
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = server.received_requests().await else {
@@ -2827,7 +2860,9 @@ async fn wait_for_remote_plugin_request_count(
             let request_count = requests
                 .iter()
                 .filter(|request| {
-                    request.method == "GET" && request.url.path().ends_with(path_suffix)
+                    request.method == "GET"
+                        && request.url.path().ends_with(path_suffix)
+                        && request_matches(request)
                 })
                 .count();
             if request_count == expected_count {
