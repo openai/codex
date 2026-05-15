@@ -44,6 +44,9 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    codex_process_hardening::remove_macos_malloc_diagnostic_env_vars();
+
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;

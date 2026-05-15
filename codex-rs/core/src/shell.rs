@@ -44,10 +44,11 @@ impl Shell {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
                 let arg = if use_login_shell { "-lc" } else { "-c" };
+                let command = sanitize_shell_command_for_platform(command);
                 vec![
                     self.shell_path.to_string_lossy().to_string(),
                     arg.to_string(),
-                    command.to_string(),
+                    command,
                 ]
             }
             ShellType::PowerShell => {
@@ -72,6 +73,21 @@ impl Shell {
     /// Return the shell snapshot if existing.
     pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
         self.shell_snapshot.borrow().clone()
+    }
+}
+
+#[cfg(target_os = "macos")]
+const MACOS_MALLOC_DIAGNOSTIC_UNSET_PREFIX: &str = "for env_entry in $(env); do env_key=${env_entry%%=*}; case \"$env_key\" in MallocStackLogging*|MallocLogFile*) unset \"$env_key\" ;; esac; done; ";
+
+fn sanitize_shell_command_for_platform(command: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!("{MACOS_MALLOC_DIAGNOSTIC_UNSET_PREFIX}{command}")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        command.to_string()
     }
 }
 

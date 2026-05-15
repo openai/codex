@@ -103,6 +103,11 @@ fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
 
 #[test]
 fn derive_exec_args() {
+    #[cfg(target_os = "macos")]
+    let echo_hello = "for env_entry in $(env); do env_key=${env_entry%%=*}; case \"$env_key\" in MallocStackLogging*|MallocLogFile*) unset \"$env_key\" ;; esac; done; echo hello";
+    #[cfg(not(target_os = "macos"))]
+    let echo_hello = "echo hello";
+
     let test_bash_shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
@@ -110,11 +115,19 @@ fn derive_exec_args() {
     };
     assert_eq!(
         test_bash_shell.derive_exec_args("echo hello", /*use_login_shell*/ false),
-        vec!["/bin/bash", "-c", "echo hello"]
+        vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            echo_hello.to_string()
+        ]
     );
     assert_eq!(
         test_bash_shell.derive_exec_args("echo hello", /*use_login_shell*/ true),
-        vec!["/bin/bash", "-lc", "echo hello"]
+        vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            echo_hello.to_string()
+        ]
     );
 
     let test_zsh_shell = Shell {
@@ -124,11 +137,19 @@ fn derive_exec_args() {
     };
     assert_eq!(
         test_zsh_shell.derive_exec_args("echo hello", /*use_login_shell*/ false),
-        vec!["/bin/zsh", "-c", "echo hello"]
+        vec![
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            echo_hello.to_string()
+        ]
     );
     assert_eq!(
         test_zsh_shell.derive_exec_args("echo hello", /*use_login_shell*/ true),
-        vec!["/bin/zsh", "-lc", "echo hello"]
+        vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            echo_hello.to_string()
+        ]
     );
 
     let test_powershell_shell = Shell {

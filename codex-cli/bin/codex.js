@@ -6,6 +6,7 @@ import { existsSync, realpathSync } from "fs";
 import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
+import { sanitizeMacosMallocDiagnosticEnv } from "./sanitize-macos-malloc-env.js";
 
 // __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -172,6 +173,7 @@ const packageManagerEnvVar =
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
 env.CODEX_MANAGED_PACKAGE_ROOT = realpathSync(path.join(__dirname, ".."));
+sanitizeMacosMallocDiagnosticEnv(env);
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

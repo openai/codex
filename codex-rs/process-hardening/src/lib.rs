@@ -4,6 +4,10 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
+#[cfg(any(target_os = "macos", all(unix, test)))]
+const MACOS_MALLOC_DIAGNOSTIC_ENV_VAR_PREFIXES: &[&[u8]] =
+    &[b"MallocStackLogging", b"MallocLogFile"];
+
 /// This is designed to be called pre-main() (using `#[ctor::ctor]`) to perform
 /// various process hardening steps, such as
 /// - disabling core dumps
@@ -102,8 +106,17 @@ pub(crate) fn pre_main_hardening_macos() {
     // Remove macOS malloc stack-logging controls so allocator diagnostics from
     // Codex or inherited child processes do not get sprayed into the TUI:
     // https://github.com/openai/codex/issues/11555
-    remove_env_vars_with_prefix(b"MallocStackLogging");
-    remove_env_vars_with_prefix(b"MallocLogFile");
+    remove_macos_malloc_diagnostic_env_vars();
+}
+
+/// Remove macOS malloc stack-logging controls from the current process.
+///
+/// This must run before spawning descendant Codex processes that inherit the
+/// current environment. Direct native binary launches can still emit a libmalloc
+/// warning before Rust reaches `main()`.
+#[cfg(target_os = "macos")]
+pub fn remove_macos_malloc_diagnostic_env_vars() {
+    remove_env_vars_with_prefixes(MACOS_MALLOC_DIAGNOSTIC_ENV_VAR_PREFIXES);
 }
 
 #[cfg(unix)]
@@ -130,23 +143,36 @@ pub(crate) fn pre_main_hardening_windows() {
 
 #[cfg(unix)]
 fn remove_env_vars_with_prefix(prefix: &[u8]) {
-    for key in env_keys_with_prefix(std::env::vars_os(), prefix) {
+    remove_env_vars_with_prefixes(&[prefix]);
+}
+
+#[cfg(unix)]
+fn remove_env_vars_with_prefixes(prefixes: &[&[u8]]) {
+    for key in env_keys_with_prefixes(std::env::vars_os(), prefixes) {
         unsafe {
             std::env::remove_var(key);
         }
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn env_keys_with_prefix<I>(vars: I, prefix: &[u8]) -> Vec<OsString>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    env_keys_with_prefixes(vars, &[prefix])
+}
+
+#[cfg(unix)]
+fn env_keys_with_prefixes<I>(vars: I, prefixes: &[&[u8]]) -> Vec<OsString>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
     vars.into_iter()
         .filter_map(|(key, _)| {
-            key.as_os_str()
-                .as_bytes()
-                .starts_with(prefix)
+            prefixes
+                .iter()
+                .any(|prefix| key.as_os_str().as_bytes().starts_with(prefix))
                 .then_some(key)
         })
         .collect()
@@ -196,5 +222,26 @@ mod tests {
         let keys = env_keys_with_prefix(vars, b"LD_");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
+
+    #[test]
+    fn env_keys_with_prefixes_filters_all_matching_keys() {
+        let keys = env_keys_with_prefixes(
+            vec![
+                (OsString::from("MallocStackLogging"), OsString::from("1")),
+                (OsString::from("MallocLogFile"), OsString::from("/tmp/log")),
+                (OsString::from("MallocNanoZone"), OsString::from("0")),
+            ],
+            MACOS_MALLOC_DIAGNOSTIC_ENV_VAR_PREFIXES,
+        );
+
+        assert_eq!(
+            keys,
+            vec![
+                OsString::from("MallocStackLogging"),
+                OsString::from("MallocLogFile"),
+            ],
+            "only macOS malloc diagnostic env entries should be retained"
+        );
     }
 }

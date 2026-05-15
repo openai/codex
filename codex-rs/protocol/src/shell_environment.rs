@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
+#[cfg(target_os = "macos")]
+const NOISY_MACOS_MALLOC_ENV_PREFIXES: &[&str] = &["MallocStackLogging", "MallocLogFile"];
+
 /// Construct a shell environment from the supplied process environment and
 /// shell-environment policy.
 pub fn create_env(
@@ -105,6 +108,16 @@ where
     if let Some(thread_id) = thread_id {
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
     }
+
+    // Step 7 - On macOS, allocator diagnostic env vars can cause libmalloc to
+    // print warnings into every spawned process. Always remove them from shell
+    // tool environments, even if they were inherited or explicitly configured.
+    #[cfg(target_os = "macos")]
+    env_map.retain(|key, _| {
+        !NOISY_MACOS_MALLOC_ENV_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+    });
 
     env_map
 }
@@ -243,6 +256,41 @@ mod non_windows_tests {
             ("path".to_string(), "/usr/bin".to_string()),
             ("home".to_string(), "/home/codex".to_string()),
             ("TmpDir".to_string(), "/tmp/custom".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_allocator_diagnostic_env_vars_are_removed_after_policy_application() {
+        let vars = make_vars(&[
+            ("PATH", "/usr/bin"),
+            ("MallocStackLogging", "0"),
+            ("MallocStackLoggingNoCompact", "1"),
+            ("MallocStackLoggingDirectory", "/tmp/stack-logs"),
+            ("MallocLogFile", "/tmp/malloc.log"),
+            ("MallocNanoZone", "0"),
+        ]);
+
+        let mut policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("*")],
+            ..Default::default()
+        };
+        policy
+            .r#set
+            .insert("MallocStackLoggingNoCompact".to_string(), "0".to_string());
+        policy
+            .r#set
+            .insert("EXPLICIT_OK".to_string(), "1".to_string());
+
+        let result = populate_env(vars, &policy, /*thread_id*/ None);
+        let expected = HashMap::from([
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("MallocNanoZone".to_string(), "0".to_string()),
+            ("EXPLICIT_OK".to_string(), "1".to_string()),
         ]);
 
         assert_eq!(result, expected);

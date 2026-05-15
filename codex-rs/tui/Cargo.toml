@@ -49,6 +49,7 @@ codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
+codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }

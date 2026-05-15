@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import { sanitizeMacosMallocDiagnosticEnv } from "./sanitize-macos-malloc-env.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,8 +58,11 @@ const binaryPath = path.join(
   process.platform === "win32" ? `${binaryBaseName}.exe` : binaryBaseName,
 );
 
+const env = sanitizeMacosMallocDiagnosticEnv({ ...process.env });
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
+  env,
 });
 
 child.on("error", (err) => {

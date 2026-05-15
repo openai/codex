@@ -821,6 +821,9 @@ fn stage_str(stage: Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    codex_process_hardening::remove_macos_malloc_diagnostic_env_vars();
+
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         cli_main(arg0_paths).await?;
         Ok(())
