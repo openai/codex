@@ -355,12 +355,11 @@ mod tests {
             .config_ref()
             .permissions
             .permission_profile()
-            .get()
             .clone();
         assert_eq!(session.permission_profile, expected_permission_profile);
         assert_ne!(
             session.permission_profile,
-            app.config.permissions.permission_profile().get().clone(),
+            app.config.permissions.permission_profile().clone(),
             "thread/read fallback must use the active widget permissions rather than stale app \
              config defaults"
         );

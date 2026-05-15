@@ -918,7 +918,7 @@ pub(crate) fn build_guardian_review_session_config(
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
-            guardian_config.permissions.permission_profile().get(),
+            guardian_config.permissions.permission_profile(),
         )?);
     }
     for feature in [

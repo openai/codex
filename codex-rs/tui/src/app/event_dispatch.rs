@@ -1426,7 +1426,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_permission_profile_override =
-                    Some(self.config.permissions.permission_profile().get().clone());
+                    Some(self.config.permissions.permission_profile().clone());
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 

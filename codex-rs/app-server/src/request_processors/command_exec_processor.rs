@@ -164,7 +164,7 @@ impl CommandExecRequestProcessor {
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(
-                    self.config.permissions.permission_profile().get(),
+                    self.config.permissions.permission_profile(),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
@@ -243,8 +243,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile()
-                .can_set(&effective_permission_profile)
+                .can_set_permission_profile(&effective_permission_profile)
                 .map_err(|err| invalid_request(format!("invalid permission profile: {err}")))?;
             effective_permission_profile
         } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
@@ -264,8 +263,7 @@ impl CommandExecRequestProcessor {
                 );
             self.config
                 .permissions
-                .permission_profile()
-                .can_set(&permission_profile)
+                .can_set_permission_profile(&permission_profile)
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             permission_profile
         } else {
