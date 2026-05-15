@@ -731,17 +731,8 @@ impl PluginRequestProcessor {
 
         let plugins_input = config.plugins_config_input();
 
-        let (mut data, mut marketplace_load_errors) = self
-            .load_local_installed_plugins(
-                plugins_manager.clone(),
-                &config,
-                &plugins_input,
-                roots.clone(),
-            )
-            .await?;
-
-        let (suggested_data, suggested_errors) = self
-            .load_suggested_plugins(
+        let (mut data, marketplace_load_errors) = self
+            .load_local_installed_and_suggested_plugins(
                 plugins_manager.clone(),
                 &config,
                 &plugins_input,
@@ -749,10 +740,6 @@ impl PluginRequestProcessor {
                 install_suggestion_plugin_names,
             )
             .await?;
-        for marketplace in suggested_data {
-            merge_plugin_marketplace_entry(&mut data, marketplace);
-        }
-        marketplace_load_errors.extend(suggested_errors);
 
         for marketplace in self
             .load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
@@ -767,56 +754,7 @@ impl PluginRequestProcessor {
         })
     }
 
-    async fn load_local_installed_plugins(
-        &self,
-        plugins_manager: Arc<codex_core_plugins::PluginsManager>,
-        config: &Config,
-        plugins_input: &codex_core_plugins::PluginsConfigInput,
-        roots: Vec<AbsolutePathBuf>,
-    ) -> Result<PluginMarketplaceEntriesAndErrors, JSONRPCErrorError> {
-        let config_for_installed_listing = plugins_input.clone();
-        let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
-        match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager.list_marketplaces_for_config(
-                &config_for_installed_listing,
-                &roots,
-                ConfiguredMarketplacePluginFilter::InstalledOnly,
-            )?;
-            Ok::<PluginMarketplaceEntriesAndErrors, MarketplaceError>((
-                outcome
-                    .marketplaces
-                    .into_iter()
-                    .map(|marketplace| {
-                        convert_configured_marketplace_to_plugin_marketplace_entry(
-                            marketplace,
-                            &shared_plugin_ids_by_local_path,
-                        )
-                    })
-                    .collect(),
-                outcome
-                    .errors
-                    .into_iter()
-                    .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
-                        marketplace_path: err.path,
-                        message: err.message,
-                    })
-                    .collect(),
-            ))
-        })
-        .await
-        {
-            Ok(Ok(outcome)) => Ok(outcome),
-            Ok(Err(err)) => Err(Self::marketplace_error(
-                err,
-                "list installed marketplace plugins",
-            )),
-            Err(err) => Err(internal_error(format!(
-                "failed to list installed plugins: {err}"
-            ))),
-        }
-    }
-
-    async fn load_suggested_plugins(
+    async fn load_local_installed_and_suggested_plugins(
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
         config: &Config,
@@ -824,10 +762,6 @@ impl PluginRequestProcessor {
         roots: Vec<AbsolutePathBuf>,
         install_suggestion_plugin_names: HashSet<String>,
     ) -> Result<PluginMarketplaceEntriesAndErrors, JSONRPCErrorError> {
-        if install_suggestion_plugin_names.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
         match tokio::task::spawn_blocking(move || {
@@ -845,8 +779,8 @@ impl PluginRequestProcessor {
                             .plugins
                             .into_iter()
                             .filter(|plugin| {
-                                !plugin.installed
-                                    && install_suggestion_plugin_names.contains(&plugin.name)
+                                plugin.installed
+                                    || install_suggestion_plugin_names.contains(&plugin.name)
                             })
                             .map(|plugin| {
                                 convert_configured_marketplace_plugin_to_plugin_summary(
@@ -883,10 +817,10 @@ impl PluginRequestProcessor {
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(err)) => Err(Self::marketplace_error(
                 err,
-                "list plugin install suggestions",
+                "list installed and suggested marketplace plugins",
             )),
             Err(err) => Err(internal_error(format!(
-                "failed to list plugin install suggestions: {err}"
+                "failed to list installed and suggested plugins: {err}"
             ))),
         }
     }
