@@ -131,6 +131,7 @@ mod tests {
     use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
     use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_config::types::ApprovalsReviewer;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -197,9 +198,14 @@ mod tests {
             codex_config::Constrained::allow_any(AskForApproval::OnRequest.to_core());
         app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         let expected_permission_profile = PermissionProfile::workspace_write();
+        let expected_active_permission_profile =
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
-            .set_permission_profile(expected_permission_profile.clone())
+            .set_permission_profile_from_session_snapshot(
+                expected_permission_profile.clone(),
+                Some(expected_active_permission_profile.clone()),
+            )
             .expect("set widget permission profile");
         app.config
             .permissions
@@ -213,6 +219,7 @@ mod tests {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             permission_profile: expected_permission_profile,
+            active_permission_profile: Some(expected_active_permission_profile),
             ..main_session
         };
         assert_eq!(

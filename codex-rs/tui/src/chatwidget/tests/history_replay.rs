@@ -294,8 +294,11 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
 
     let updated_profile = PermissionProfile::workspace_write();
-    chat.set_permission_profile(updated_profile.clone())
-        .expect("set permission profile");
+    chat.set_permission_profile_from_session_snapshot(
+        updated_profile.clone(),
+        /*active_profile*/ None,
+    )
+    .expect("set permission profile");
     assert_eq!(
         chat.config_ref().permissions.permission_profile(),
         &updated_profile,
