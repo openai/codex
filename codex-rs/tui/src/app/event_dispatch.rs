@@ -57,11 +57,8 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_url.clone() {
-                        Some(websocket_url) => crate::AppServerTarget::Remote {
-                            websocket_url,
-                            auth_token: self.remote_app_server_auth_token.clone(),
-                        },
+                    &match self.remote_app_server_endpoint.clone() {
+                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
                         None => crate::AppServerTarget::Embedded,
                     },
                     self.state_db.clone(),
@@ -204,13 +201,15 @@ impl App {
                     self.insert_history_cell_lines_with_initial_replay_buffer(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 } else {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
                 }
             }
@@ -262,7 +261,8 @@ impl App {
                     self.insert_history_cell_lines(
                         tui,
                         consolidated.as_ref(),
-                        tui.terminal.last_known_screen_size.width,
+                        self.chat_widget
+                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
 
                     self.maybe_finish_stream_reflow(tui)?;
@@ -318,6 +318,14 @@ impl App {
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
+            }
+            AppEvent::SyncThreadGitBranch { thread_id, branch } => {
+                if let Err(err) = app_server
+                    .thread_metadata_update_branch(thread_id, branch)
+                    .await
+                {
+                    tracing::warn!("failed to sync thread git branch from directive: {err}");
+                }
             }
             AppEvent::LookupMessageHistoryEntry {
                 thread_id,
@@ -380,6 +388,30 @@ impl App {
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
+            }
+            AppEvent::PetSelected { pet_id } => {
+                self.handle_pet_selected(tui, pet_id);
+            }
+            AppEvent::PetDisabled => {
+                self.handle_pet_disabled(tui).await;
+            }
+            AppEvent::PetPreviewRequested { pet_id } => {
+                self.chat_widget.start_pet_picker_preview(pet_id);
+            }
+            AppEvent::PetPreviewLoaded { request_id, result } => {
+                self.handle_pet_preview_loaded(tui, request_id, result);
+            }
+            AppEvent::PetSelectionLoaded {
+                request_id,
+                pet_id,
+                result,
+            } => {
+                return self
+                    .handle_pet_selection_loaded(tui, request_id, pet_id, result)
+                    .await;
+            }
+            AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+                self.handle_configured_pet_loaded(tui, pet_id, result);
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
@@ -724,9 +756,6 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
             }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
-            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
@@ -1050,7 +1079,7 @@ impl App {
                     }
                     let profile = self.active_profile.as_deref();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    let builder = ConfigEditsBuilder::for_config(&self.config)
                         .with_profile(profile)
                         .set_windows_sandbox_mode(if elevated_enabled {
                             "elevated"
@@ -1153,7 +1182,7 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::for_config(&self.config)
                     .with_profile(profile)
                     .set_model(Some(model.as_str()), effort)
                     .apply()
@@ -1221,7 +1250,7 @@ impl App {
                 }
             }
             AppEvent::RefreshPluginMentions => {
-                self.refresh_plugin_mentions();
+                self.refresh_plugin_mentions(app_server);
             }
             AppEvent::PluginMentionsLoaded { mut plugins } => {
                 if !self.config.features.enabled(Feature::Plugins) {
@@ -1231,7 +1260,7 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::for_config(&self.config)
                     .with_profile(profile)
                     .set_personality(Some(personality))
                     .apply()
@@ -1268,7 +1297,7 @@ impl App {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
-                let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
+                let mut edits = ConfigEditsBuilder::for_config(&self.config)
                     .with_profile(profile)
                     .set_service_tier(service_tier.clone());
                 if service_tier.is_none() {
@@ -1306,11 +1335,11 @@ impl App {
             AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
                 let builder = match kind {
                     RealtimeAudioDeviceKind::Microphone => {
-                        ConfigEditsBuilder::new(&self.config.codex_home)
+                        ConfigEditsBuilder::for_config(&self.config)
                             .set_realtime_microphone(name.as_deref())
                     }
                     RealtimeAudioDeviceKind::Speaker => {
-                        ConfigEditsBuilder::new(&self.config.codex_home)
+                        ConfigEditsBuilder::for_config(&self.config)
                             .set_realtime_speaker(name.as_deref())
                     }
                 };
@@ -1447,7 +1476,7 @@ impl App {
                 } else {
                     vec!["approvals_reviewer".to_string()]
                 };
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .with_profile(profile)
                     .with_edits([ConfigEdit::SetPath {
                         segments,
@@ -1499,7 +1528,7 @@ impl App {
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_full_access_warning(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1514,7 +1543,7 @@ impl App {
                 }
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_world_writable_warning(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1529,7 +1558,7 @@ impl App {
                 }
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_rate_limit_model_nudge(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1562,7 +1591,7 @@ impl App {
                 } else {
                     ConfigEdit::ClearPath { segments }
                 };
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([edit])
                     .apply()
                     .await
@@ -1586,7 +1615,7 @@ impl App {
                 from_model,
                 to_model,
             } => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .record_model_migration_seen(from_model.as_str(), to_model.as_str())
                     .apply()
                     .await
@@ -1629,7 +1658,7 @@ impl App {
                     path: path.to_path_buf(),
                     enabled,
                 }];
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::for_config(&self.config)
                     .with_edits(edits)
                     .apply()
                     .await
@@ -1681,7 +1710,7 @@ impl App {
                         },
                     ]
                 };
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::for_config(&self.config)
                     .with_edits(edits)
                     .apply()
                     .await
@@ -1844,7 +1873,7 @@ impl App {
                 let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
                 let colors_edit =
                     crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([items_edit, colors_edit])
                     .apply()
                     .await;
@@ -1876,7 +1905,7 @@ impl App {
             AppEvent::TerminalTitleSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = crate::legacy_core::config::edit::terminal_title_items_edit(&ids);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([edit])
                     .apply()
                     .await;
@@ -1902,7 +1931,7 @@ impl App {
             }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([edit])
                     .apply()
                     .await;
@@ -2014,7 +2043,7 @@ impl App {
 
         let edit =
             crate::legacy_core::config::edit::keymap_bindings_edit(&context, &action, &bindings);
-        match ConfigEditsBuilder::new(&self.config.codex_home)
+        match ConfigEditsBuilder::for_config(&self.config)
             .with_edits([edit])
             .apply()
             .await
@@ -2059,7 +2088,7 @@ impl App {
         };
 
         let edit = crate::legacy_core::config::edit::keymap_binding_clear_edit(&context, &action);
-        match ConfigEditsBuilder::new(&self.config.codex_home)
+        match ConfigEditsBuilder::for_config(&self.config)
             .with_edits([edit])
             .apply()
             .await

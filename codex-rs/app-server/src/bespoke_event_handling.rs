@@ -772,6 +772,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 requested_permissions,
                 request_cwd,
                 pending_request_id,
+                outgoing,
                 receiver: rx,
                 request_permissions_guard: permission_guard,
             };
@@ -1745,11 +1746,12 @@ async fn on_request_permissions_response(
         requested_permissions,
         request_cwd,
         pending_request_id,
+        outgoing,
         receiver,
         request_permissions_guard,
     } = pending_response;
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id.clone()).await;
     drop(request_permissions_guard);
     let Some(response) = request_permissions_response_from_client_result(
         requested_permissions,
@@ -1758,6 +1760,7 @@ async fn on_request_permissions_response(
     ) else {
         return;
     };
+    outgoing.track_effective_permissions_approval_response(pending_request_id, response.clone());
 
     if let Err(err) = conversation
         .submit(Op::RequestPermissionsResponse {
@@ -1775,6 +1778,7 @@ struct PendingRequestPermissionsResponse {
     requested_permissions: CoreRequestPermissionProfile,
     request_cwd: AbsolutePathBuf,
     pending_request_id: RequestId,
+    outgoing: ThreadScopedOutgoingMessageSender,
     receiver: oneshot::Receiver<ClientRequestResult>,
     request_permissions_guard: ThreadWatchActiveGuard,
 }

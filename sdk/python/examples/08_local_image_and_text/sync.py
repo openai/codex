@@ -23,7 +23,9 @@ with temporary_sample_image_path() as image_path:
 
         result = thread.turn(
             [
-                TextInput("Read this generated local image and summarize the colors/layout in 2 bullets."),
+                TextInput(
+                    "Read this generated local image and summarize the colors/layout in 2 bullets."
+                ),
                 LocalImageInput(str(image_path.resolve())),
             ]
         ).run()

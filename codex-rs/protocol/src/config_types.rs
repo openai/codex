@@ -9,7 +9,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroU64;
+use std::ops::Deref;
+use std::str::FromStr;
 use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
@@ -75,6 +78,65 @@ pub enum SandboxMode {
 
     #[serde(rename = "danger-full-access")]
     DangerFullAccess,
+}
+
+/// Validated plain profile-v2 name used to select `$CODEX_HOME/<name>.config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileV2Name(String);
+
+impl ProfileV2Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProfileV2NameParseError {
+    value: String,
+}
+
+impl fmt::Display for ProfileV2NameParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid --profile-v2 value `{}`; pass a plain name such as `work`",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ProfileV2NameParseError {}
+
+impl FromStr for ProfileV2Name {
+    type Err = ProfileV2NameParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ProfileV2NameParseError {
+                value: value.to_string(),
+            });
+        }
+
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl Deref for ProfileV2Name {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for ProfileV2Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
@@ -465,22 +527,9 @@ pub enum TrustLevel {
 
 /// Controls whether the TUI uses the terminal's alternate screen buffer.
 ///
-/// **Background:** The alternate screen buffer provides a cleaner fullscreen experience
-/// without polluting the terminal's scrollback history. However, it conflicts with terminal
-/// multiplexers like Zellij that strictly follow the xterm specification, which defines
-/// that alternate screen buffers should not have scrollback.
-///
-/// **Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode
-/// (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This
-/// is by design and not configurable in Zellij—there is no option to enable scrollback in
-/// alternate screen mode.
-///
-/// **Solution:** This setting provides a pragmatic workaround:
-/// - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij,
-///   disable alternate screen to preserve scrollback. Enable it everywhere else.
-/// - `always`: Always use alternate screen mode (original behavior before this fix).
-/// - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback
-///   in all multiplexers.
+/// - `auto` (default): Use alternate screen mode.
+/// - `always`: Always use alternate screen mode.
+/// - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback.
 ///
 /// The CLI flag `--no-alt-screen` can override this setting at runtime.
 #[derive(
@@ -489,10 +538,10 @@ pub enum TrustLevel {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum AltScreenMode {
-    /// Auto-detect: disable alternate screen in Zellij, enable elsewhere.
+    /// Use alternate screen mode.
     #[default]
     Auto,
-    /// Always use alternate screen (original behavior).
+    /// Always use alternate screen mode.
     Always,
     /// Never use alternate screen (inline mode only).
     Never,
@@ -701,6 +750,24 @@ mod tests {
             };
             assert_eq!(expected, reviewer);
         }
+    }
+
+    #[test]
+    fn profile_v2_name_rejects_paths_and_empty_names() {
+        assert_eq!(
+            ProfileV2Name::from_str("../foo"),
+            Err(ProfileV2NameParseError {
+                value: "../foo".to_string(),
+            }),
+            "dots and slashes are disallowed to prevent reading arbitrary files"
+        );
+        assert_eq!(
+            ProfileV2Name::from_str(""),
+            Err(ProfileV2NameParseError {
+                value: String::new(),
+            }),
+            "profile name cannot be empty"
+        );
     }
 
     #[test]

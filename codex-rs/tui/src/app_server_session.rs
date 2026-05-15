@@ -69,6 +69,9 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -492,6 +495,28 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_metadata_update_branch(
+        &mut self,
+        thread_id: ThreadId,
+        branch: String,
+    ) -> Result<ThreadMetadataUpdateResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadMetadataUpdate {
+                request_id,
+                params: ThreadMetadataUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                        sha: None,
+                        branch: Some(Some(branch)),
+                        origin_url: None,
+                    }),
+                },
+            })
+            .await
+            .wrap_err("thread/metadata/update failed while syncing git branch")
     }
 
     pub(crate) async fn thread_inject_items(
@@ -1567,6 +1592,8 @@ mod tests {
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::config_types::Verbosity;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -1587,7 +1614,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                 ..ConfigOverrides::default()
             })
             .build()
@@ -1632,7 +1659,8 @@ mod tests {
     #[test]
     fn embedded_turn_permissions_use_active_profile_selection() {
         let cwd = test_path_buf("/workspace/project").abs();
-        let active_permission_profile = ActivePermissionProfile::new(":workspace");
+        let active_permission_profile =
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         let expected_permissions =
             permissions_selection_from_active_profile(active_permission_profile.clone());
 
@@ -1673,7 +1701,9 @@ mod tests {
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             &PermissionProfile::read_only(),
-            Some(ActivePermissionProfile::new(":read-only")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
             cwd.as_path(),
             ThreadParamsMode::Remote,
         );

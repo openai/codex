@@ -122,9 +122,7 @@ class MessageRouter:
                 if notification.method == "turn/completed":
                     self._pending_turn_notifications.pop(turn_id, None)
                     return
-                self._pending_turn_notifications.setdefault(turn_id, deque()).append(
-                    notification
-                )
+                self._pending_turn_notifications.setdefault(turn_id, deque()).append(notification)
                 return
         turn_queue.put(notification)
 

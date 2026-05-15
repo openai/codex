@@ -378,10 +378,10 @@ fn refresh_non_curated_plugin_cache_with_mode(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn is_full_git_sha(value: &str) -> bool {
@@ -1053,13 +1053,21 @@ fn normalize_plugin_mcp_server_value(
         }
     }
 
-    if let Some(JsonValue::Object(oauth)) = object.remove("oauth")
-        && oauth.contains_key("callbackPort")
-    {
-        warn!(
-            plugin = %plugin_root.display(),
-            "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
-        );
+    if let Some(JsonValue::Object(mut oauth)) = object.remove("oauth") {
+        if oauth.remove("callbackPort").is_some() {
+            warn!(
+                plugin = %plugin_root.display(),
+                "plugin MCP server OAuth callbackPort is ignored; Codex uses global MCP OAuth callback settings"
+            );
+        }
+
+        if let Some(client_id) = oauth.remove("clientId") {
+            oauth.entry("client_id".to_string()).or_insert(client_id);
+        }
+
+        if !oauth.is_empty() {
+            object.insert("oauth".to_string(), JsonValue::Object(oauth));
+        }
     }
 
     if let Some(JsonValue::String(cwd)) = object.get("cwd")

@@ -45,7 +45,8 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "ext/extension-api",
-    "ext/git-attribution",
+    "ext/guardian",
+    "ext/memories",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -107,7 +108,6 @@ members = [
     "test-binary-support",
     "thread-manager-sample",
     "thread-store",
-    "tool-api",
     "uds",
     "codex-experimental-api-macros",
     "plugin",
@@ -162,7 +162,7 @@ codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
-codex-git-attribution = { path = "ext/git-attribution" }
+codex-guardian = { path = "ext/guardian" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -178,6 +178,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
+codex-memories-extension = { path = "ext/memories" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -207,7 +208,6 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
-codex-tool-api = { path = "tool-api" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
@@ -226,7 +226,6 @@ codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
 codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
-codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
@@ -264,6 +263,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.28.1"
@@ -278,7 +278,6 @@ dotenvy = "0.15.7"
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
-env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 flate2 = "1.1.8"
@@ -351,6 +350,7 @@ seccompiler = "0.5.0"
 semver = "1.0"
 sentry = "0.46.0"
 serde = "1"
+serde_ignored = "0.1.14"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
 serde_with = "3.17"
@@ -470,6 +470,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-memories-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

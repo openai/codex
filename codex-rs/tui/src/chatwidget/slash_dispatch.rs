@@ -238,16 +238,6 @@ impl ChatWidget {
                     );
                 }
             }
-            SlashCommand::Collab => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
-                    );
-                    return;
-                }
-                self.open_collaboration_modes_popup();
-            }
             SlashCommand::Side => {
                 self.request_empty_side_conversation();
             }
@@ -404,6 +394,9 @@ impl ChatWidget {
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
+            }
+            SlashCommand::Pets => {
+                self.open_pets_picker();
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
@@ -781,6 +774,17 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
+            SlashCommand::Pets
+                if matches!(
+                    args.trim().to_ascii_lowercase().as_str(),
+                    "disable" | "disabled" | "hide" | "hidden" | "off" | "none"
+                ) =>
+            {
+                self.app_event_tx.send(AppEvent::PetDisabled);
+            }
+            SlashCommand::Pets if !trimmed.is_empty() => {
+                self.select_pet_by_id(args);
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -951,7 +955,6 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
-            | SlashCommand::Collab
             | SlashCommand::Side
             | SlashCommand::Keymap
             | SlashCommand::Agent
@@ -970,7 +973,8 @@ impl ChatWidget {
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
-            | SlashCommand::Theme => QueueDrain::Stop,
+            | SlashCommand::Theme
+            | SlashCommand::Pets => QueueDrain::Stop,
         }
     }
 

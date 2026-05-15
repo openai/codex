@@ -403,6 +403,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_stop_parsing_git_forms() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "git log --% HEAD --output=codex_poc.txt",
+        ])));
+    }
+
+    #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",

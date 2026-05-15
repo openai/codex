@@ -1,6 +1,8 @@
 //! App-level orchestration tests for the TUI.
 
 mod model_catalog;
+mod session_summary;
+mod startup;
 
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
@@ -13,6 +15,7 @@ use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::chatwidget::tests::set_chatgpt_auth;
 use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
@@ -85,6 +88,7 @@ use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -126,182 +130,17 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
 }
 
 #[test]
-fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
-    assert_eq!(
-        App::should_wait_for_initial_session(&SessionSelection::StartFresh),
-        true
+fn bypass_hook_trust_startup_warning_snapshot() {
+    let rendered = lines_to_single_string(
+        &history_cell::new_warning_event(
+            "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
+                .to_string(),
+        )
+        .display_lines(/*width*/ 80),
     );
-    assert_eq!(
-        App::should_wait_for_initial_session(&SessionSelection::Exit),
-        true
-    );
-    assert_eq!(
-        App::should_wait_for_initial_session(&SessionSelection::Resume(
-            crate::resume_picker::SessionTarget {
-                path: Some(PathBuf::from("/tmp/restore")),
-                thread_id: ThreadId::new(),
-            }
-        )),
-        false
-    );
-    assert_eq!(
-        App::should_wait_for_initial_session(&SessionSelection::Fork(
-            crate::resume_picker::SessionTarget {
-                path: Some(PathBuf::from("/tmp/fork")),
-                thread_id: ThreadId::new(),
-            }
-        )),
-        false
-    );
+
+    assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
 }
-
-#[test]
-fn startup_paused_goal_prompt_gate_is_only_for_quiet_resume() {
-    let resume = SessionSelection::Resume(crate::resume_picker::SessionTarget {
-        path: Some(PathBuf::from("/tmp/restore")),
-        thread_id: ThreadId::new(),
-    });
-    let fork = SessionSelection::Fork(crate::resume_picker::SessionTarget {
-        path: Some(PathBuf::from("/tmp/fork")),
-        thread_id: ThreadId::new(),
-    });
-    let no_images: Vec<PathBuf> = Vec::new();
-    let initial_images = vec![PathBuf::from("/tmp/image.png")];
-
-    assert!(App::should_prompt_for_paused_goal_after_startup_resume(
-        &resume, &None, &no_images
-    ));
-    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
-        &resume,
-        &Some("continue from here".to_string()),
-        &no_images
-    ));
-    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
-        &resume,
-        &None,
-        &initial_images
-    ));
-    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
-        &SessionSelection::StartFresh,
-        &None,
-        &no_images
-    ));
-    assert!(!App::should_prompt_for_paused_goal_after_startup_resume(
-        &fork, &None, &no_images
-    ));
-}
-
-#[test]
-fn startup_waiting_gate_holds_active_thread_events_until_primary_thread_configured() {
-    let mut wait_for_initial_session =
-        App::should_wait_for_initial_session(&SessionSelection::StartFresh);
-    assert_eq!(wait_for_initial_session, true);
-    assert_eq!(
-        App::should_handle_active_thread_events(
-            wait_for_initial_session,
-            /*has_active_thread_receiver*/ true
-        ),
-        false
-    );
-
-    assert_eq!(
-        App::should_stop_waiting_for_initial_session(
-            wait_for_initial_session,
-            /*primary_thread_id*/ None
-        ),
-        false
-    );
-    if App::should_stop_waiting_for_initial_session(wait_for_initial_session, Some(ThreadId::new()))
-    {
-        wait_for_initial_session = false;
-    }
-    assert_eq!(wait_for_initial_session, false);
-
-    assert_eq!(
-        App::should_handle_active_thread_events(
-            wait_for_initial_session,
-            /*has_active_thread_receiver*/ true
-        ),
-        true
-    );
-}
-
-#[test]
-fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
-    let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
-        crate::resume_picker::SessionTarget {
-            path: Some(PathBuf::from("/tmp/restore")),
-            thread_id: ThreadId::new(),
-        },
-    ));
-    assert_eq!(
-        App::should_handle_active_thread_events(
-            wait_for_resume,
-            /*has_active_thread_receiver*/ true
-        ),
-        true
-    );
-    let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
-        crate::resume_picker::SessionTarget {
-            path: Some(PathBuf::from("/tmp/fork")),
-            thread_id: ThreadId::new(),
-        },
-    ));
-    assert_eq!(
-        App::should_handle_active_thread_events(
-            wait_for_fork,
-            /*has_active_thread_receiver*/ true
-        ),
-        true
-    );
-}
-
-#[tokio::test]
-async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let thread_id = ThreadId::new();
-    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
-    app.chat_widget.handle_thread_session(session.clone());
-    app.thread_event_channels.insert(
-        thread_id,
-        ThreadEventChannel::new_with_session(THREAD_EVENT_CHANNEL_CAPACITY, session, Vec::new()),
-    );
-    app.activate_thread_channel(thread_id).await;
-    while app_event_rx.try_recv().is_ok() {}
-
-    let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
-        path: Some(test_path_buf("/tmp/project")),
-        thread_id,
-    });
-
-    assert!(ignored);
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected info message after same-thread resume, saw {other:?}"),
-    };
-    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-    assert!(rendered.contains(&format!(
-        "Already viewing {}.",
-        test_path_display("/tmp/project")
-    )));
-}
-
-#[tokio::test]
-async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread() {
-    let mut app = make_test_app().await;
-    let thread_id = ThreadId::new();
-    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
-    app.chat_widget.handle_thread_session(session);
-
-    let ignored = app.ignore_same_thread_resume(&crate::resume_picker::SessionTarget {
-        path: Some(test_path_buf("/tmp/project")),
-        thread_id,
-    });
-
-    assert!(!ignored);
-    assert!(app.transcript_cells.is_empty());
-}
-
 #[tokio::test]
 async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -3653,35 +3492,38 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
 
 #[tokio::test]
 async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
-    let mut app = make_test_app().await;
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-    let parent_thread_id = ThreadId::new();
-    let side_thread_id = ThreadId::new();
-    app.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-    app.agent_navigation.upsert(
-        side_thread_id,
-        Some("Side".to_string()),
-        Some("side".to_string()),
-        /*is_closed*/ false,
-    );
-
-    assert!(
-        !app.discard_side_thread(&mut app_server, side_thread_id)
-            .await
-    );
-
-    assert_eq!(app.active_thread_id, Some(side_thread_id));
-    assert_eq!(
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .get(&side_thread_id)
-            .map(|state| state.parent_thread_id),
-        Some(parent_thread_id)
-    );
-    assert!(app.agent_navigation.get(&side_thread_id).is_some());
-    Ok(())
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            !app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.active_thread_id, Some(side_thread_id));
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .map(|state| state.parent_thread_id),
+            Some(parent_thread_id)
+        );
+        assert!(app.agent_navigation.get(&side_thread_id).is_some());
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]
@@ -3974,6 +3816,7 @@ async fn make_test_app() -> App {
         active_profile: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
+        loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
         file_search,
@@ -3993,8 +3836,7 @@ async fn make_test_app() -> App {
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        remote_app_server_url: None,
-        remote_app_server_auth_token: None,
+        remote_app_server_endpoint: None,
         pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
@@ -4037,6 +3879,7 @@ async fn make_test_app_with_channels() -> (
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
+            loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
             file_search,
@@ -4056,8 +3899,7 @@ async fn make_test_app_with_channels() -> (
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            remote_app_server_url: None,
-            remote_app_server_auth_token: None,
+            remote_app_server_endpoint: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -4160,6 +4002,32 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
     assert_eq!(rendered.lines.len(), 39);
     assert_eq!(rendered_line_text(&rendered.lines[0]), "cell 0");
     assert_eq!(rendered_line_text(&rendered.lines[38]), "cell 19");
+}
+
+#[tokio::test]
+async fn resize_reflow_wraps_transcript_early_when_pet_is_enabled() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![Arc::new(AgentMarkdownCell::new(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda".to_string(),
+        Path::new("/tmp"),
+    ))];
+
+    let without_pet = app.render_transcript_lines_for_reflow(/*width*/ 40);
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let width = app.chat_widget.history_wrap_width(/*width*/ 40);
+    assert!(width < 40);
+    let with_pet = app.render_transcript_lines_for_reflow(width);
+
+    assert!(
+        with_pet.lines.len() > without_pet.lines.len(),
+        "expected pet-enabled transcript reflow to wrap earlier"
+    );
 }
 
 #[tokio::test]
@@ -5382,91 +5250,4 @@ async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
     assert!(!app.backtrack.primed);
     assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
     assert!(app.should_handle_backtrack_esc(esc));
-}
-
-#[tokio::test]
-async fn session_summary_skips_when_no_usage_or_resume_hint() {
-    assert!(
-        session_summary(
-            TokenUsage::default(),
-            /*thread_id*/ None,
-            /*thread_name*/ None,
-            /*rollout_path*/ None,
-        )
-        .is_none()
-    );
-}
-
-#[tokio::test]
-async fn session_summary_skips_resume_hint_until_rollout_exists() {
-    let usage = TokenUsage::default();
-    let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-    let temp_dir = tempdir().expect("temp dir");
-    let rollout_path = temp_dir.path().join("rollout.jsonl");
-
-    assert!(
-        session_summary(
-            usage,
-            Some(conversation),
-            /*thread_name*/ None,
-            Some(&rollout_path),
-        )
-        .is_none()
-    );
-}
-
-#[tokio::test]
-async fn session_summary_includes_resume_hint_for_persisted_rollout() {
-    let usage = TokenUsage {
-        input_tokens: 10,
-        output_tokens: 2,
-        total_tokens: 12,
-        ..Default::default()
-    };
-    let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-    let temp_dir = tempdir().expect("temp dir");
-    let rollout_path = temp_dir.path().join("rollout.jsonl");
-    std::fs::write(&rollout_path, "{}\n").expect("write rollout");
-
-    let summary = session_summary(
-        usage,
-        Some(conversation),
-        /*thread_name*/ None,
-        Some(&rollout_path),
-    )
-    .expect("summary");
-    assert_eq!(
-        summary.usage_line,
-        Some("Token usage: total=12 input=10 output=2".to_string())
-    );
-    assert_eq!(
-        summary.resume_command,
-        Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
-    );
-}
-
-#[tokio::test]
-async fn session_summary_uses_id_even_when_thread_has_name() {
-    let usage = TokenUsage {
-        input_tokens: 10,
-        output_tokens: 2,
-        total_tokens: 12,
-        ..Default::default()
-    };
-    let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
-    let temp_dir = tempdir().expect("temp dir");
-    let rollout_path = temp_dir.path().join("rollout.jsonl");
-    std::fs::write(&rollout_path, "{}\n").expect("write rollout");
-
-    let summary = session_summary(
-        usage,
-        Some(conversation),
-        Some("my-session".to_string()),
-        Some(&rollout_path),
-    )
-    .expect("summary");
-    assert_eq!(
-        summary.resume_command,
-        Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
-    );
 }

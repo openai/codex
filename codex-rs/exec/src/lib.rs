@@ -54,6 +54,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_config::ConfigLoadError;
+use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
 use codex_core::StateDbHandle;
@@ -62,8 +63,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_and_loader_overrides;
+use codex_core::config::load_config_as_toml_with_cli_and_load_options;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
@@ -242,6 +244,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         command,
+        strict_config,
         shared,
         skip_git_repo_check,
         ephemeral,
@@ -262,8 +265,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss,
         oss_provider,
         config_profile,
+        config_profile_v2,
         sandbox_mode: sandbox_mode_cli_arg,
         dangerously_bypass_approvals_and_sandbox,
+        bypass_hook_trust,
         cwd,
         add_dir,
     } = shared;
@@ -316,19 +321,25 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
-
-    #[allow(clippy::print_stderr)]
+    let user_config_path = config_profile_v2
+        .as_ref()
+        .map(|profile_v2| resolve_profile_v2_config_path(&codex_home, profile_v2));
     let loader_overrides = LoaderOverrides {
+        user_config_path,
+        user_config_profile: config_profile_v2,
         ignore_user_config,
         ignore_user_and_project_exec_policy_rules: ignore_rules,
         ..Default::default()
     };
 
-    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_load_options(
         &codex_home,
         Some(&config_cwd),
         cli_kv_overrides.clone(),
-        loader_overrides.clone(),
+        ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
     )
     .await
     {
@@ -418,10 +429,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         developer_instructions: None,
         personality: None,
         compact_prompt: None,
-        include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
+        bypass_hook_trust: bypass_hook_trust.then_some(true),
         additional_writable_roots: add_dir,
     };
 
@@ -429,6 +440,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
         .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
@@ -520,6 +532,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config: std::sync::Arc::new(config.clone()),
         cli_overrides: run_cli_overrides,
         loader_overrides: run_loader_overrides,
+        strict_config,
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         log_db: None,

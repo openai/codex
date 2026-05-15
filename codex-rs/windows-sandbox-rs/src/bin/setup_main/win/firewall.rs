@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fs::File;
 use std::io::Write;
 
+use windows::Win32::Foundation::S_OK;
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
@@ -10,6 +11,8 @@ use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_TCP;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_UDP;
+use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_MODIFY_STATE;
+use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_MODIFY_STATE_OK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_OUT;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
@@ -75,6 +78,7 @@ pub fn ensure_offline_proxy_allowlist(
                         format!("CoCreateInstance NetFwPolicy2 failed: {err:?}"),
                     ))
                 })?;
+            ensure_local_policy_rules_take_effect(&policy)?;
             let rules = policy.Rules().map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallPolicyAccessFailed,
@@ -170,6 +174,7 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
                         format!("CoCreateInstance NetFwPolicy2 failed: {err:?}"),
                     ))
                 })?;
+            ensure_local_policy_rules_take_effect(&policy)?;
             let rules = policy.Rules().map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallPolicyAccessFailed,
@@ -213,6 +218,52 @@ fn remove_rule_if_present(rules: &INetFwRules, internal_name: &str, log: &mut Fi
         log_line(log, &format!("firewall rule removed name={internal_name}"))?;
     }
     Ok(())
+}
+
+fn ensure_local_policy_rules_take_effect(policy: &INetFwPolicy2) -> Result<()> {
+    let mut modify_state = NET_FW_MODIFY_STATE::default();
+    let result = unsafe {
+        (Interface::vtable(policy).LocalPolicyModifyState)(
+            Interface::as_raw(policy),
+            &mut modify_state,
+        )
+    };
+    validate_local_policy_modify_result(result, modify_state)
+}
+
+fn validate_local_policy_modify_result(
+    result: windows::core::HRESULT,
+    modify_state: NET_FW_MODIFY_STATE,
+) -> Result<()> {
+    if result.is_err() {
+        // The COM query itself failed, so Windows never gave us a policy answer.
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallPolicyAccessFailed,
+            format!("INetFwPolicy2::LocalPolicyModifyState failed: {result:?}"),
+        )));
+    }
+
+    if result != S_OK {
+        // S_FALSE means the answer only holds for some active profiles, not all of them.
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallPolicyIneffective,
+            format!(
+                "local firewall policy modifications do not apply to every current profile: LocalPolicyModifyState result={result:?}"
+            ),
+        )));
+    }
+
+    if modify_state == NET_FW_MODIFY_STATE_OK {
+        return Ok(());
+    }
+
+    // Windows answered uniformly, and that answer says local rule edits are ineffective.
+    Err(anyhow::Error::new(SetupFailure::new(
+        SetupErrorCode::HelperFirewallPolicyIneffective,
+        format!(
+            "local firewall policy modifications will not take effect: LocalPolicyModifyState={modify_state:?}"
+        ),
+    )))
 }
 
 fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut File) -> Result<()> {
@@ -410,6 +461,10 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+    use windows::Win32::Foundation::S_FALSE;
+    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_MODIFY_STATE_GP_OVERRIDE;
+
     use super::*;
 
     #[test]
@@ -506,5 +561,38 @@ mod tests {
                 spec.remote_ports
             );
         }
+    }
+
+    #[test]
+    fn local_policy_modify_state_accepts_effective_policy() {
+        assert!(validate_local_policy_modify_result(S_OK, NET_FW_MODIFY_STATE_OK).is_ok());
+    }
+
+    #[test]
+    fn local_policy_modify_state_rejects_ineffective_policy() {
+        let err = validate_local_policy_modify_result(S_OK, NET_FW_MODIFY_STATE_GP_OVERRIDE)
+            .expect_err("group-policy override should fail sandbox firewall setup");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("expected setup failure");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::HelperFirewallPolicyIneffective
+        );
+    }
+
+    #[test]
+    fn local_policy_modify_state_rejects_partial_profile_coverage() {
+        let err = validate_local_policy_modify_result(S_FALSE, NET_FW_MODIFY_STATE_OK)
+            .expect_err("partial profile coverage should fail sandbox firewall setup");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("expected setup failure");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::HelperFirewallPolicyIneffective
+        );
     }
 }

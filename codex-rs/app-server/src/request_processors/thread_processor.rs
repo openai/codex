@@ -1,5 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -969,6 +971,7 @@ impl ThreadRequestProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
+        let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1063,6 +1066,7 @@ impl ThreadRequestProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
             thread,
@@ -1097,6 +1101,12 @@ impl ThreadRequestProcessor {
                 CodexErr::InvalidRequest(message) => invalid_request(message),
                 err => internal_error(format!("error creating thread: {err}")),
             })?;
+        let session_telemetry = thread.session_telemetry();
+        session_telemetry.record_startup_phase(
+            "thread_start_create_thread",
+            create_thread_started_at.elapsed(),
+            Some("ready"),
+        );
 
         Self::set_app_server_client_info(
             thread.as_ref(),
@@ -1198,6 +1208,11 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
+        session_telemetry.record_startup_phase(
+            "thread_start_total",
+            thread_start_started_at.elapsed(),
+            Some("ready"),
+        );
         Ok(())
     }
 
@@ -1426,17 +1441,17 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        self.thread_store
-            .update_thread_metadata(StoreUpdateThreadMetadataParams {
+        self.thread_manager
+            .update_thread_metadata(
                 thread_id,
-                patch: StoreThreadMetadataPatch {
-                    name: Some(name.clone()),
+                StoreThreadMetadataPatch {
+                    name: Some(Some(name.clone())),
                     ..Default::default()
                 },
-                include_archived: false,
-            })
+                /*include_archived*/ false,
+            )
             .await
-            .map_err(|err| thread_store_write_error("set thread name", err))?;
+            .map_err(|err| core_thread_write_error("set thread name", err))?;
 
         Ok((
             ThreadSetNameResponse {},
@@ -1455,33 +1470,17 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            if thread.config_snapshot().await.ephemeral {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support memory mode updates: {thread_id}"
-                )));
-            }
-
-            thread
-                .set_thread_memory_mode(mode.to_core())
-                .await
-                .map_err(|err| {
-                    internal_error(format!("failed to set thread memory mode: {err}"))
-                })?;
-            return Ok(ThreadMemoryModeSetResponse {});
-        }
-
-        self.thread_store
-            .update_thread_metadata(StoreUpdateThreadMetadataParams {
+        self.thread_manager
+            .update_thread_metadata(
                 thread_id,
-                patch: StoreThreadMetadataPatch {
+                StoreThreadMetadataPatch {
                     memory_mode: Some(mode.to_core()),
                     ..Default::default()
                 },
-                include_archived: false,
-            })
+                /*include_archived*/ false,
+            )
             .await
-            .map_err(|err| thread_store_write_error("set thread memory mode", err))?;
+            .map_err(|err| core_thread_write_error("set thread memory mode", err))?;
 
         Ok(ThreadMemoryModeSetResponse {})
     }
@@ -1547,35 +1546,19 @@ impl ThreadRequestProcessor {
             ..Default::default()
         };
 
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let updated_thread = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-            if let Some(loaded_thread) = loaded_thread.as_ref() {
-                if loaded_thread.config_snapshot().await.ephemeral {
-                    return Err(invalid_request(format!(
-                        "ephemeral thread does not support metadata updates: {thread_id}"
-                    )));
-                }
-                loaded_thread
-                    .update_thread_metadata(patch, /*include_archived*/ true)
-                    .await
-            } else {
-                self.thread_store
-                    .update_thread_metadata(StoreUpdateThreadMetadataParams {
-                        thread_id: thread_uuid,
-                        patch,
-                        include_archived: true,
-                    })
-                    .await
-            }
-            .map_err(|err| thread_store_write_error("update thread metadata", err))?
+            self.thread_manager
+                .update_thread_metadata(thread_uuid, patch, /*include_archived*/ true)
+                .await
+                .map_err(|err| core_thread_write_error("update thread metadata", err))?
         };
         let (mut thread, _) = thread_from_stored_thread(
             updated_thread,
             self.config.model_provider_id.as_str(),
             &self.config.cwd,
         );
-        if let Some(loaded_thread) = loaded_thread.as_ref() {
+        if let Ok(loaded_thread) = self.thread_manager.get_thread(thread_uuid).await {
             thread.session_id = loaded_thread.session_configured().session_id.to_string();
         }
         self.attach_thread_name(thread_uuid, &mut thread).await;
@@ -1603,7 +1586,7 @@ impl ThreadRequestProcessor {
                 artifact,
             })
             .await
-            .map_err(|err| thread_store_write_error("create thread artifact", err))?;
+            .map_err(|err| thread_store_artifact_error("create thread artifact", err))?;
         self.notify_thread_artifacts_updated(thread_id).await?;
         Ok(ThreadArtifactCreateResponse {
             artifact: thread_artifact_from_stored_artifact(artifact),
@@ -1618,7 +1601,7 @@ impl ThreadRequestProcessor {
             .thread_store
             .list_thread_artifacts(StoreListThreadArtifactsParams { thread_id })
             .await
-            .map_err(|err| thread_store_write_error("list thread artifacts", err))?
+            .map_err(|err| thread_store_artifact_error("list thread artifacts", err))?
             .into_iter()
             .map(thread_artifact_from_stored_artifact)
             .collect();
@@ -3761,15 +3744,13 @@ fn conversation_summary_rollout_path_read_error(
     }
 }
 
-fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
+fn core_thread_write_error(operation: &str, err: CodexErr) -> JSONRPCErrorError {
     match err {
-        ThreadStoreError::ThreadNotFound { thread_id } => {
+        CodexErr::ThreadNotFound(thread_id) => {
             invalid_request(format!("thread not found: {thread_id}"))
         }
-        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
-        ThreadStoreError::Unsupported { operation } => {
-            unsupported_thread_store_operation(operation)
-        }
+        CodexErr::InvalidRequest(message) => invalid_request(message),
+        CodexErr::UnsupportedOperation(message) => method_not_found(message),
         err => internal_error(format!("failed to {operation}: {err}")),
     }
 }
@@ -3781,6 +3762,19 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
             operation: unsupported_operation,
         } => unsupported_thread_store_operation(unsupported_operation),
         err => internal_error(format!("failed to {operation} thread: {err}")),
+    }
+}
+
+fn thread_store_artifact_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported {
+            operation: unsupported_operation,
+        } => unsupported_thread_store_operation(unsupported_operation),
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("thread not found: {thread_id}"))
+        }
+        err => internal_error(format!("failed to {operation}: {err}")),
     }
 }
 
@@ -4024,7 +4018,9 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
 
     if matches!(
         overrides.default_permissions.as_deref(),
-        Some(":workspace" | ":danger-no-sandbox")
+        Some(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE | BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
+        )
     ) {
         return true;
     }

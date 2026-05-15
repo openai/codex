@@ -175,6 +175,46 @@ fn select_model_availability_nux_returns_none_when_all_models_are_exhausted() {
 }
 
 #[tokio::test]
+async fn prepare_startup_tooltip_override_persists_model_availability_nux_count() {
+    let codex_home = tempdir().expect("temp codex home");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config");
+    let mut presets = all_model_presets();
+    presets.iter_mut().for_each(|preset| {
+        preset.availability_nux = None;
+    });
+    let target = presets
+        .iter_mut()
+        .find(|preset| preset.model == "gpt-5.4")
+        .expect("target preset present");
+    target.availability_nux = Some(ModelAvailabilityNux {
+        message: "gpt-5.4 is available".to_string(),
+    });
+
+    let tooltip =
+        prepare_startup_tooltip_override(&mut config, &presets, /*is_first_run*/ false).await;
+
+    assert_eq!(tooltip.as_deref(), Some("gpt-5.4 is available"));
+    assert_eq!(
+        config.model_availability_nux.shown_count,
+        HashMap::from([("gpt-5.4".to_string(), 1)])
+    );
+
+    let reloaded = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("reloaded config");
+    assert_eq!(
+        reloaded.model_availability_nux.shown_count,
+        HashMap::from([("gpt-5.4".to_string(), 1)])
+    );
+}
+
+#[tokio::test]
 async fn accepted_model_migration_persists_target_default_reasoning_effort() {
     let codex_home = tempdir().expect("temp codex home");
     let mut config = ConfigBuilder::default()

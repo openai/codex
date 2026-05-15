@@ -25,8 +25,6 @@ pub enum ToolSpec {
         description: String,
         parameters: JsonSchema,
     },
-    #[serde(rename = "local_shell")]
-    LocalShell {},
     #[serde(rename = "image_generation")]
     ImageGeneration { output_format: String },
     // TODO: Understand why we get an error on web_search although the API docs
@@ -58,7 +56,6 @@ impl ToolSpec {
             ToolSpec::Function(tool) => tool.name.as_str(),
             ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
-            ToolSpec::LocalShell {} => "local_shell",
             ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
@@ -72,25 +69,6 @@ impl From<LoadableToolSpec> for ToolSpec {
             LoadableToolSpec::Function(tool) => ToolSpec::Function(tool),
             LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConfiguredToolSpec {
-    pub spec: ToolSpec,
-    pub supports_parallel_tool_calls: bool,
-}
-
-impl ConfiguredToolSpec {
-    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool) -> Self {
-        Self {
-            spec,
-            supports_parallel_tool_calls,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        self.spec.name()
     }
 }
 

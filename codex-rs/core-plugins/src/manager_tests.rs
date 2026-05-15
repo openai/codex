@@ -22,6 +22,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::McpServerConfig;
+use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
@@ -230,6 +231,9 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth: Some(McpServerOAuthConfig {
+                        client_id: Some("client-id".to_string()),
+                    }),
                     oauth_resource: None,
                     tools: HashMap::new(),
                 },
@@ -331,7 +335,7 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_config() {
+async fn remote_installed_cache_adds_plugin_skill_roots_without_remote_plugin_flag() {
     let codex_home = TempDir::new().unwrap();
     let plugin_base = codex_home
         .path()
@@ -341,7 +345,6 @@ async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_conf
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -695,6 +698,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
             },
@@ -806,6 +810,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
             },
@@ -967,6 +972,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth: None,
         oauth_resource: None,
         tools: HashMap::new(),
     };
@@ -1541,6 +1547,7 @@ enabled = false
                 ConfiguredMarketplacePlugin {
                     id: "enabled-plugin@debug".to_string(),
                     name: "enabled-plugin".to_string(),
+                    local_version: None,
                     source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                             .unwrap(),
@@ -1558,6 +1565,7 @@ enabled = false
                 ConfiguredMarketplacePlugin {
                     id: "disabled-plugin@debug".to_string(),
                     name: "disabled-plugin".to_string(),
+                    local_version: None,
                     source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/disabled-plugin"),)
                             .unwrap(),
@@ -1678,6 +1686,7 @@ plugins = true
         vec![ConfiguredMarketplacePlugin {
             id: "default-plugin@debug".to_string(),
             name: "default-plugin".to_string(),
+            local_version: None,
             source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo/default-plugin")).unwrap(),
             },
@@ -2109,6 +2118,7 @@ enabled = true
         vec![ConfiguredMarketplacePlugin {
             id: "toolkit@debug".to_string(),
             name: "toolkit".to_string(),
+            local_version: None,
             source: MarketplacePluginSource::Git {
                 url: missing_remote_repo_url,
                 path: Some("plugins/toolkit".to_string()),
@@ -2225,6 +2235,7 @@ plugins = true
             plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
                 name: "linear".to_string(),
+                local_version: None,
                 source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(curated_root.join("plugins/linear")).unwrap(),
                 },
@@ -2519,6 +2530,7 @@ enabled = false
         vec![ConfiguredMarketplacePlugin {
             id: "dup-plugin@debug".to_string(),
             name: "dup-plugin".to_string(),
+            local_version: None,
             source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
             },
@@ -2549,6 +2561,7 @@ enabled = false
         vec![ConfiguredMarketplacePlugin {
             id: "b-only-plugin@debug".to_string(),
             name: "b-only-plugin".to_string(),
+            local_version: None,
             source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
             },
@@ -2633,6 +2646,7 @@ enabled = true
             plugins: vec![ConfiguredMarketplacePlugin {
                 id: "sample-plugin@debug".to_string(),
                 name: "sample-plugin".to_string(),
+                local_version: None,
                 source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin")).unwrap(),
                 },

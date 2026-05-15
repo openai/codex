@@ -39,6 +39,7 @@ pub use share::RemotePluginShareTarget;
 pub use share::RemotePluginShareTargetRole;
 pub use share::RemotePluginShareUpdateDiscoverability;
 pub use share::RemotePluginShareUpdateTargetsResult;
+pub use share::checkout_remote_plugin_share;
 pub use share::delete_remote_plugin_share;
 pub use share::list_remote_plugin_shares;
 pub use share::load_plugin_share_remote_ids_by_local_path;
@@ -47,10 +48,16 @@ pub use share::update_remote_plugin_share_targets;
 
 pub const REMOTE_GLOBAL_MARKETPLACE_NAME: &str = "chatgpt-global";
 pub const REMOTE_WORKSPACE_MARKETPLACE_NAME: &str = "workspace-directory";
-pub const REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME: &str = "shared-with-me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME: &str = "workspace-shared-with-me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME: &str =
+    "workspace-shared-with-me-private";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME: &str =
+    "workspace-shared-with-me-unlisted";
 pub const REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Plugins";
 pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "Workspace Directory";
-pub const REMOTE_SHARED_WITH_ME_MARKETPLACE_DISPLAY_NAME: &str = "Shared with me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME: &str = "Shared with me";
+pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME: &str =
+    "Shared with me (unlisted)";
 
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
@@ -87,6 +94,7 @@ pub struct RemoteInstalledPlugin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemotePluginSummary {
     pub id: String,
+    pub remote_plugin_id: String,
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
     pub installed: bool,
@@ -101,6 +109,7 @@ pub struct RemotePluginSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginShareContext {
     pub remote_plugin_id: String,
+    pub remote_version: Option<String>,
     pub discoverability: RemotePluginShareDiscoverability,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,
@@ -226,6 +235,9 @@ pub enum RemotePluginCatalogError {
     #[error("invalid plugin path `{path}`: {reason}")]
     InvalidPluginPath { path: PathBuf, reason: String },
 
+    #[error("remote plugin `{remote_plugin_id}` is not available for plugin/share/checkout")]
+    PluginShareCheckoutNotAvailable { remote_plugin_id: String },
+
     #[error("failed to archive plugin at `{path}`: {source}")]
     Archive {
         path: PathBuf,
@@ -284,9 +296,10 @@ impl RemotePluginScope {
     fn from_marketplace_name(name: &str) -> Option<Self> {
         match name {
             REMOTE_GLOBAL_MARKETPLACE_NAME => Some(Self::Global),
-            REMOTE_WORKSPACE_MARKETPLACE_NAME | REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME => {
-                Some(Self::Workspace)
-            }
+            REMOTE_WORKSPACE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME
+            | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME => Some(Self::Workspace),
             _ => None,
         }
     }
@@ -379,6 +392,32 @@ struct RemotePluginDirectoryItem {
     release: RemotePluginReleaseResponse,
 }
 
+fn remote_plugin_canonical_marketplace_name(
+    plugin: &RemotePluginDirectoryItem,
+) -> Result<&'static str, RemotePluginCatalogError> {
+    match plugin.scope {
+        RemotePluginScope::Global => Ok(REMOTE_GLOBAL_MARKETPLACE_NAME),
+        RemotePluginScope::Workspace => match workspace_plugin_discoverability(plugin)? {
+            RemotePluginShareDiscoverability::Listed => Ok(REMOTE_WORKSPACE_MARKETPLACE_NAME),
+            RemotePluginShareDiscoverability::Private
+            | RemotePluginShareDiscoverability::Unlisted => {
+                Ok(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME)
+            }
+        },
+    }
+}
+
+fn workspace_plugin_discoverability(
+    plugin: &RemotePluginDirectoryItem,
+) -> Result<RemotePluginShareDiscoverability, RemotePluginCatalogError> {
+    plugin.discoverability.ok_or_else(|| {
+        RemotePluginCatalogError::UnexpectedResponse(format!(
+            "workspace plugin `{}` did not include discoverability",
+            plugin.id
+        ))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RemotePluginDirectorySharePrincipal {
     principal_type: RemotePluginSharePrincipalType,
@@ -434,43 +473,95 @@ pub async fn fetch_remote_marketplaces(
     };
 
     for source in sources {
-        let marketplace = match source {
+        match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
                 let (directory_plugins, installed_plugins) = tokio::try_join!(
                     fetch_directory_plugins_for_scope(config, auth, scope),
                     fetch_installed_plugins_for_scope(config, auth, scope),
                 )?;
-                build_remote_marketplace(
+                if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
                     installed_plugins,
                     /*include_installed_only*/ true,
-                )?
+                )? {
+                    marketplaces.push(marketplace);
+                }
             }
             RemoteMarketplaceSource::WorkspaceDirectory => {
                 let scope = RemotePluginScope::Workspace;
                 let directory_plugins =
                     fetch_directory_plugins_for_scope(config, auth, scope).await?;
-                build_remote_marketplace(
+                if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
                     workspace_installed_plugins.clone().unwrap_or_default(),
                     /*include_installed_only*/ false,
-                )?
+                )? {
+                    marketplaces.push(marketplace);
+                }
             }
-            RemoteMarketplaceSource::SharedWithMe => build_remote_marketplace(
-                REMOTE_SHARED_WITH_ME_MARKETPLACE_NAME,
-                REMOTE_SHARED_WITH_ME_MARKETPLACE_DISPLAY_NAME,
-                fetch_shared_workspace_plugins(config, auth).await?,
-                workspace_installed_plugins.clone().unwrap_or_default(),
-                /*include_installed_only*/ false,
-            )?,
-        };
-        if let Some(marketplace) = marketplace {
-            marketplaces.push(marketplace);
+            RemoteMarketplaceSource::SharedWithMe => {
+                // The shared endpoint is the source of truth for plugins explicitly shared
+                // with the user. Installed unlisted plugins that are not returned there are
+                // link-installed and stay in the separate unlisted bucket.
+                let shared_plugins = fetch_shared_workspace_plugins(config, auth).await?;
+                let shared_plugin_ids = shared_plugins
+                    .iter()
+                    .map(|plugin| plugin.id.clone())
+                    .collect::<BTreeSet<_>>();
+                let directly_shared_plugins = shared_plugins
+                    .into_iter()
+                    .filter_map(|plugin| match workspace_plugin_discoverability(&plugin) {
+                        Ok(
+                            RemotePluginShareDiscoverability::Private
+                            | RemotePluginShareDiscoverability::Unlisted,
+                        ) => Some(Ok(plugin)),
+                        Ok(RemotePluginShareDiscoverability::Listed) => None,
+                        Err(err) => Some(Err(err)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(marketplace) = build_remote_marketplace(
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME,
+                    directly_shared_plugins,
+                    workspace_installed_plugins.clone().unwrap_or_default(),
+                    /*include_installed_only*/ false,
+                )? {
+                    marketplaces.push(marketplace);
+                }
+
+                let unlisted_installed_plugins = workspace_installed_plugins
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(
+                        |plugin| match workspace_plugin_discoverability(&plugin.plugin) {
+                            Ok(RemotePluginShareDiscoverability::Unlisted)
+                                if !shared_plugin_ids.contains(&plugin.plugin.id) =>
+                            {
+                                Some(Ok(plugin))
+                            }
+                            Ok(RemotePluginShareDiscoverability::Unlisted) => None,
+                            Ok(RemotePluginShareDiscoverability::Listed)
+                            | Ok(RemotePluginShareDiscoverability::Private) => None,
+                            Err(err) => Some(Err(err)),
+                        },
+                    )
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(marketplace) = build_remote_marketplace(
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME,
+                    Vec::new(),
+                    unlisted_installed_plugins,
+                    /*include_installed_only*/ true,
+                )? {
+                    marketplaces.push(marketplace);
+                }
+            }
         }
     }
 
@@ -550,12 +641,9 @@ pub async fn fetch_remote_installed_plugins(
     let (global, workspace) = tokio::try_join!(global, workspace)?;
     let mut installed_plugins = [global, workspace]
         .into_iter()
-        .flat_map(|(scope, plugins)| {
-            plugins
-                .into_iter()
-                .map(move |plugin| remote_installed_plugin_to_info(scope, &plugin))
-        })
-        .collect::<Vec<_>>();
+        .flat_map(|(_scope, plugins)| plugins)
+        .map(|plugin| remote_installed_plugin_to_info(&plugin))
+        .collect::<Result<Vec<_>, _>>()?;
     installed_plugins.sort_by(|left, right| {
         left.marketplace_name
             .cmp(&right.marketplace_name)
@@ -655,7 +743,7 @@ async fn fetch_remote_plugin_detail_with_download_url_option(
     let auth = ensure_chatgpt_auth(auth)?;
     let plugin = fetch_plugin_detail(config, auth, plugin_id, include_download_urls).await?;
     let scope = plugin.scope;
-    let marketplace_name = scope.marketplace_name().to_string();
+    let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
     // Remote plugin IDs uniquely identify remote plugins, so the caller-provided
     // marketplace name is not validated here. The backend detail response is the
     // source of truth for the plugin's actual scope/marketplace.
@@ -756,7 +844,7 @@ pub async fn uninstall_remote_plugin(
         config, auth, plugin_id, /*include_download_urls*/ false,
     )
     .await?;
-    let marketplace_name = plugin.scope.marketplace_name().to_string();
+    let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
     let plugin_name = plugin.name;
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
@@ -841,8 +929,17 @@ fn build_remote_plugin_summary(
     plugin: &RemotePluginDirectoryItem,
     installed_plugin: Option<&RemotePluginInstalledItem>,
 ) -> Result<RemotePluginSummary, RemotePluginCatalogError> {
+    let marketplace_name = remote_plugin_canonical_marketplace_name(plugin)?;
+    let plugin_id =
+        PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
+            RemotePluginCatalogError::UnexpectedResponse(format!(
+                "invalid remote plugin config id for `{}` in `{marketplace_name}`: {err}",
+                plugin.name
+            ))
+        })?;
     Ok(RemotePluginSummary {
-        id: plugin.id.clone(),
+        id: plugin_id.as_key(),
+        remote_plugin_id: plugin.id.clone(),
         name: plugin.name.clone(),
         share_context: remote_plugin_share_context(plugin)?,
         installed: installed_plugin.is_some(),
@@ -861,14 +958,10 @@ fn remote_plugin_share_context(
     match plugin.scope {
         RemotePluginScope::Global => Ok(None),
         RemotePluginScope::Workspace => {
-            let discoverability = plugin.discoverability.ok_or_else(|| {
-                RemotePluginCatalogError::UnexpectedResponse(format!(
-                    "workspace plugin `{}` did not include discoverability",
-                    plugin.id
-                ))
-            })?;
+            let discoverability = workspace_plugin_discoverability(plugin)?;
             Ok(Some(RemotePluginShareContext {
                 remote_plugin_id: plugin.id.clone(),
+                remote_version: plugin.release.version.clone(),
                 discoverability,
                 share_url: plugin.share_url.clone(),
                 creator_account_user_id: plugin.creator_account_user_id.clone(),
@@ -890,19 +983,18 @@ fn remote_plugin_share_context(
 }
 
 fn remote_installed_plugin_to_info(
-    scope: RemotePluginScope,
     installed_plugin: &RemotePluginInstalledItem,
-) -> RemoteInstalledPlugin {
+) -> Result<RemoteInstalledPlugin, RemotePluginCatalogError> {
     let plugin = &installed_plugin.plugin;
     // Remote per-skill disabled state (`disabled_skill_names`) is intentionally
     // not projected into skills/list yet; local skills.config remains the
     // supported source for skill enablement.
-    RemoteInstalledPlugin {
-        marketplace_name: scope.marketplace_name().to_string(),
+    Ok(RemoteInstalledPlugin {
+        marketplace_name: remote_plugin_canonical_marketplace_name(plugin)?.to_string(),
         id: plugin.id.clone(),
         name: plugin.name.clone(),
         enabled: installed_plugin.enabled,
-    }
+    })
 }
 
 fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option<PluginInterface> {

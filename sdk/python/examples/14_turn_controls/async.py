@@ -20,8 +20,12 @@ from openai_codex import AsyncCodex, TextInput
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
-        steer_turn = await thread.turn(TextInput("Count from 1 to 40 with commas, then one summary sentence."))
+        thread = await codex.thread_start(
+            model="gpt-5.4", config={"model_reasoning_effort": "high"}
+        )
+        steer_turn = await thread.turn(
+            TextInput("Count from 1 to 40 with commas, then one summary sentence.")
+        )
         steer_result = "sent"
         try:
             _ = await steer_turn.steer(TextInput("Keep it brief and stop after 10 numbers."))
@@ -35,11 +39,17 @@ async def main() -> None:
             steer_event_count += 1
             if event.method == "turn/completed":
                 steer_completed_turn = event.payload.turn
-                steer_completed_status = getattr(event.payload.turn.status, "value", str(event.payload.turn.status))
+                steer_completed_status = getattr(
+                    event.payload.turn.status, "value", str(event.payload.turn.status)
+                )
 
-        steer_preview = assistant_text_from_turn(steer_completed_turn).strip() or "[no assistant text]"
+        steer_preview = (
+            assistant_text_from_turn(steer_completed_turn).strip() or "[no assistant text]"
+        )
 
-        interrupt_turn = await thread.turn(TextInput("Count from 1 to 200 with commas, then one summary sentence."))
+        interrupt_turn = await thread.turn(
+            TextInput("Count from 1 to 200 with commas, then one summary sentence.")
+        )
         interrupt_result = "sent"
         try:
             _ = await interrupt_turn.interrupt()
@@ -53,9 +63,13 @@ async def main() -> None:
             interrupt_event_count += 1
             if event.method == "turn/completed":
                 interrupt_completed_turn = event.payload.turn
-                interrupt_completed_status = getattr(event.payload.turn.status, "value", str(event.payload.turn.status))
+                interrupt_completed_status = getattr(
+                    event.payload.turn.status, "value", str(event.payload.turn.status)
+                )
 
-        interrupt_preview = assistant_text_from_turn(interrupt_completed_turn).strip() or "[no assistant text]"
+        interrupt_preview = (
+            assistant_text_from_turn(interrupt_completed_turn).strip() or "[no assistant text]"
+        )
 
         print("steer.result:", steer_result)
         print("steer.final.status:", steer_completed_status)

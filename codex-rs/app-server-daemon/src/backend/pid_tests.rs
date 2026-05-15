@@ -156,3 +156,17 @@ fn update_loop_uses_hidden_app_server_subcommand() {
         vec!["app-server", "daemon", "pid-update-loop"]
     );
 }
+
+#[test]
+fn app_server_remote_control_uses_runtime_flag() {
+    let backend = PidBackend::new(
+        "codex".into(),
+        "app-server.pid".into(),
+        /*remote_control_enabled*/ true,
+    );
+
+    assert_eq!(
+        backend.command_args(),
+        vec!["app-server", "--remote-control", "--listen", "unix://"]
+    );
+}

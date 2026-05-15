@@ -88,9 +88,7 @@ def pinned_runtime_version() -> str:
     pyproject_text = sdk_pyproject_path().read_text()
     match = re.search(r"(?ms)^dependencies = \[(.*?)\]$", pyproject_text)
     if match is None:
-        raise RuntimeError(
-            "Could not find dependencies array in sdk/python/pyproject.toml"
-        )
+        raise RuntimeError("Could not find dependencies array in sdk/python/pyproject.toml")
 
     pins = re.findall(
         rf'"{re.escape(RUNTIME_DISTRIBUTION_NAME)}==([^"]+)"',
@@ -126,8 +124,7 @@ def pinned_runtime_codex_path() -> Path:
         from codex_cli_bin import bundled_codex_path
     except ImportError as exc:
         raise RuntimeError(
-            f"Installed {RUNTIME_DISTRIBUTION_NAME} package does not expose "
-            "bundled_codex_path."
+            f"Installed {RUNTIME_DISTRIBUTION_NAME} package does not expose bundled_codex_path."
         ) from exc
 
     codex_path = bundled_codex_path()
@@ -148,9 +145,7 @@ def normalize_codex_version(version: str) -> str:
     normalized = re.sub(r"-rc\.?([0-9]+)$", r"rc\1", normalized)
 
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?", normalized):
-        raise RuntimeError(
-            f"Could not normalize Codex version {version!r} to a PEP 440 version"
-        )
+        raise RuntimeError(f"Could not normalize Codex version {version!r} to a PEP 440 version")
     return normalized
 
 
@@ -231,9 +226,7 @@ def _rewrite_project_name(pyproject_text: str, name: str) -> str:
 def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
     match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
     if match is None:
-        raise RuntimeError(
-            "Could not find dependencies array in sdk/python/pyproject.toml"
-        )
+        raise RuntimeError("Could not find dependencies array in sdk/python/pyproject.toml")
 
     raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
     raw_items = [
@@ -285,9 +278,7 @@ def stage_python_runtime_package(
     out_bin.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary_path, out_bin)
     if not _is_windows():
-        out_bin.chmod(
-            out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        )
+        out_bin.chmod(out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     for resource_binary in resource_binaries:
         # Some release targets need helper executables beside the main binary
         # (for example Linux bwrap or Windows sandbox helpers). Keep this
@@ -361,11 +352,7 @@ def _enum_literals(value: Any) -> list[str] | None:
     if not isinstance(value, dict):
         return None
     enum = value.get("enum")
-    if (
-        not isinstance(enum, list)
-        or not enum
-        or not all(isinstance(item, str) for item in enum)
-    ):
+    if not isinstance(enum, list) or not enum or not all(isinstance(item, str) for item in enum):
         return None
     return list(enum)
 
@@ -403,11 +390,7 @@ def _variant_definition_name(base: str, variant: dict[str, Any]) -> str | None:
             return f"{_to_pascal_case(pascal or key)}{base}"
 
     required = variant.get("required")
-    if (
-        isinstance(required, list)
-        and len(required) == 1
-        and isinstance(required[0], str)
-    ):
+    if isinstance(required, list) and len(required) == 1 and isinstance(required[0], str):
         return f"{_to_pascal_case(required[0])}{base}"
 
     enum_literals = _enum_literals(variant)
@@ -419,9 +402,7 @@ def _variant_definition_name(base: str, variant: dict[str, Any]) -> str | None:
     return None
 
 
-def _variant_collision_key(
-    base: str, variant: dict[str, Any], generated_name: str
-) -> str:
+def _variant_collision_key(base: str, variant: dict[str, Any], generated_name: str) -> str:
     parts = [f"base={base}", f"generated={generated_name}"]
     props = variant.get("properties")
     if isinstance(props, dict):
@@ -433,11 +414,7 @@ def _variant_collision_key(
             parts.append(f"only_property={next(iter(props))}")
 
     required = variant.get("required")
-    if (
-        isinstance(required, list)
-        and len(required) == 1
-        and isinstance(required[0], str)
-    ):
+    if isinstance(required, list) and len(required) == 1 and isinstance(required[0], str):
         parts.append(f"required_only={required[0]}")
 
     enum_literals = _enum_literals(variant)
@@ -619,13 +596,9 @@ def generate_v2_all(schema_dir: Path) -> None:
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
     """Map each server notification method to its generated payload model class."""
-    server_notifications = json.loads(
-        (schema_dir / "ServerNotification.json").read_text()
-    )
+    server_notifications = json.loads((schema_dir / "ServerNotification.json").read_text())
     one_of = server_notifications.get("oneOf", [])
-    generated_source = (
-        sdk_root() / "src" / "openai_codex" / "generated" / "v2_all.py"
-    ).read_text()
+    generated_source = (sdk_root() / "src" / "openai_codex" / "generated" / "v2_all.py").read_text()
 
     specs: list[tuple[str, str]] = []
 
@@ -662,9 +635,7 @@ def _notification_turn_id_specs(
     specs: list[tuple[str, str]],
 ) -> tuple[list[str], list[str]]:
     """Classify notification payloads by where their turn id is carried."""
-    server_notifications = json.loads(
-        (schema_dir / "ServerNotification.json").read_text()
-    )
+    server_notifications = json.loads((schema_dir / "ServerNotification.json").read_text())
     definitions = server_notifications.get("definitions", {})
     if not isinstance(definitions, dict):
         return ([], [])
@@ -699,13 +670,7 @@ def _type_tuple_source(class_names: list[str]) -> str:
 
 def generate_notification_registry(schema_dir: Path) -> None:
     """Regenerate notification dispatch metadata from the runtime notification schema."""
-    out = (
-        sdk_root()
-        / "src"
-        / "openai_codex"
-        / "generated"
-        / "notification_registry.py"
-    )
+    out = sdk_root() / "src" / "openai_codex" / "generated" / "notification_registry.py"
     specs = _notification_specs(schema_dir)
     class_names = sorted({class_name for _, class_name in specs})
     direct_turn_id_types, nested_turn_types = _notification_turn_id_specs(
@@ -787,9 +752,7 @@ class PublicFieldSpec:
 class CliOps:
     generate_types: Callable[[], None]
     stage_python_sdk_package: Callable[[Path, str], Path]
-    stage_python_runtime_package: Callable[
-        [Path, str, Path, str | None, Sequence[Path]], Path
-    ]
+    stage_python_runtime_package: Callable[[Path, str, Path, str | None, Sequence[Path]], Path]
     current_sdk_version: Callable[[], str]
 
 
@@ -891,14 +854,9 @@ def _approval_mode_override_signature_lines() -> list[str]:
     return ["        approval_mode: ApprovalMode | None = None,"]
 
 
-def _approval_mode_assignment_line(
-    helper_name: str, *, indent: str = "        "
-) -> str:
+def _approval_mode_assignment_line(helper_name: str, *, indent: str = "        ") -> str:
     """Return the local mapping from public mode to app-server params."""
-    return (
-        f"{indent}approval_policy, approvals_reviewer = "
-        f"{helper_name}(approval_mode)"
-    )
+    return f"{indent}approval_policy, approvals_reviewer = {helper_name}(approval_mode)"
 
 
 def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]:
@@ -909,9 +867,7 @@ def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]
     ]
 
 
-def _model_arg_lines(
-    fields: list[PublicFieldSpec], *, indent: str = "            "
-) -> list[str]:
+def _model_arg_lines(fields: list[PublicFieldSpec], *, indent: str = "            ") -> list[str]:
     return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
 
 
@@ -1224,9 +1180,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single SDK maintenance entrypoint")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser(
-        "generate-types", help="Regenerate Python protocol-derived types"
-    )
+    subparsers.add_parser("generate-types", help="Regenerate Python protocol-derived types")
 
     stage_sdk_parser = subparsers.add_parser(
         "stage-sdk",
@@ -1324,9 +1278,7 @@ def _resolve_codex_version(args: argparse.Namespace) -> str:
 
     normalized_versions = [normalize_codex_version(version) for version in versions]
     if len(set(normalized_versions)) != 1:
-        raise RuntimeError(
-            "SDK and runtime package versions must match; pass one --codex-version"
-        )
+        raise RuntimeError("SDK and runtime package versions must match; pass one --codex-version")
     return normalized_versions[0]
 
 

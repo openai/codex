@@ -190,6 +190,7 @@ async fn run_command_under_sandbox(
             .map_err(anyhow::Error::msg)?,
         codex_linux_sandbox_exe,
         config_options,
+        /*strict_config*/ false,
     )
     .await?;
 
@@ -370,6 +371,11 @@ async fn run_command_under_windows_session(
             cwd.as_path(),
             env,
             None,
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ false,
+            /*write_roots_override*/ None,
+            /*deny_read_paths_override*/ &[],
+            /*deny_write_paths_override*/ &[],
             /*tty*/ false,
             /*stdin_open*/ true,
             config.permissions.windows_sandbox_private_desktop,
@@ -384,6 +390,8 @@ async fn run_command_under_windows_session(
             cwd.as_path(),
             env,
             None,
+            /*additional_deny_read_paths*/ &[],
+            /*additional_deny_write_paths*/ &[],
             /*tty*/ false,
             /*stdin_open*/ true,
             config.permissions.windows_sandbox_private_desktop,
@@ -629,12 +637,14 @@ async fn load_debug_sandbox_config(
     cli_overrides: Vec<(String, TomlValue)>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     options: DebugSandboxConfigOptions,
+    strict_config: bool,
 ) -> anyhow::Result<Config> {
     load_debug_sandbox_config_with_codex_home(
         cli_overrides,
         codex_linux_sandbox_exe,
         options,
         /*codex_home*/ None,
+        strict_config,
     )
     .await
 }
@@ -644,6 +654,7 @@ async fn load_debug_sandbox_config_with_codex_home(
     codex_linux_sandbox_exe: Option<PathBuf>,
     options: DebugSandboxConfigOptions,
     codex_home: Option<PathBuf>,
+    strict_config: bool,
 ) -> anyhow::Result<Config> {
     let DebugSandboxConfigOptions {
         permissions_profile,
@@ -673,6 +684,7 @@ async fn load_debug_sandbox_config_with_codex_home(
         },
         codex_home.clone(),
         managed_requirements_mode,
+        strict_config,
     )
     .await?;
 
@@ -690,6 +702,7 @@ async fn load_debug_sandbox_config_with_codex_home(
         },
         codex_home,
         managed_requirements_mode,
+        strict_config,
     )
     .await
     .map_err(Into::into)
@@ -700,14 +713,16 @@ async fn build_debug_sandbox_config(
     harness_overrides: ConfigOverrides,
     codex_home: Option<PathBuf>,
     managed_requirements_mode: ManagedRequirementsMode,
+    strict_config: bool,
 ) -> std::io::Result<Config> {
     let mut builder = ConfigBuilder::default()
         .cli_overrides(cli_overrides)
-        .harness_overrides(harness_overrides);
-    if let ManagedRequirementsMode::Ignore = managed_requirements_mode {
+        .harness_overrides(harness_overrides)
+        .strict_config(strict_config);
+    if matches!(managed_requirements_mode, ManagedRequirementsMode::Ignore) {
         builder = builder.loader_overrides(LoaderOverrides {
             ignore_managed_requirements: true,
-            ..Default::default()
+            ..LoaderOverrides::default()
         });
     }
     if let Some(codex_home) = codex_home {
@@ -776,6 +791,7 @@ mod tests {
             ConfigOverrides::default(),
             Some(codex_home_path.clone()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
         let legacy_config = build_debug_sandbox_config(
@@ -786,6 +802,7 @@ mod tests {
             },
             Some(codex_home_path.clone()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -798,6 +815,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Include,
             },
             Some(codex_home_path),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -833,6 +851,7 @@ mod tests {
             ConfigOverrides::default(),
             Some(codex_home_path.clone()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
         let read_only_config = build_debug_sandbox_config(
@@ -843,6 +862,7 @@ mod tests {
             },
             Some(codex_home_path.clone()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -855,6 +875,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Include,
             },
             Some(codex_home_path),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -898,6 +919,7 @@ mod tests {
             },
             Some(codex_home_path.clone()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -910,6 +932,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Include,
             },
             Some(codex_home_path),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -935,6 +958,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
             },
             Some(codex_home.path().to_path_buf()),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -968,6 +992,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
             },
             Some(codex_home.path().to_path_buf()),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -997,6 +1022,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
             },
             Some(codex_home.path().to_path_buf()),
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -1008,6 +1034,7 @@ mod tests {
             ConfigOverrides::default(),
             Some(codex_home.path().to_path_buf()),
             ManagedRequirementsMode::Include,
+            /*strict_config*/ false,
         )
         .await?;
 
@@ -1033,6 +1060,7 @@ mod tests {
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
             },
             Some(codex_home.path().to_path_buf()),
+            /*strict_config*/ false,
         )
         .await?;
 

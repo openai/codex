@@ -75,6 +75,7 @@ async fn emits_deprecation_notice_for_experimental_instructions_file() -> anyhow
         let config_layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: test_absolute_path("/tmp/config.toml"),
+                profile: None,
             },
             TomlValue::Table(table),
         );

@@ -639,7 +639,10 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         .await
         .expect_err("remote control should not connect without sqlite state db");
 
-    remote_handle.set_enabled(/*enabled*/ true);
+    assert_eq!(
+        remote_handle.enable().expect_err("enable should fail"),
+        super::RemoteControlUnavailable
+    );
     timeout(Duration::from_millis(100), listener.accept())
         .await
         .expect_err("remote control should remain disabled without sqlite state db");
@@ -655,7 +658,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
 }
 
 #[tokio::test]
-async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
+async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -701,7 +704,14 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     )
     .await;
 
-    remote_handle.set_enabled(/*enabled*/ false);
+    assert_eq!(
+        remote_handle.disable(),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Disabled,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: None,
+        }
+    );
     expect_remote_control_status_snapshot(
         &mut status_rx,
         RemoteControlStatusChangedNotification {
@@ -718,13 +728,20 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         .await
         .expect_err("disabled remote control should not reconnect");
 
-    remote_handle.set_enabled(/*enabled*/ true);
+    assert_eq!(
+        remote_handle.enable().expect("enable should succeed"),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Connecting,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: None,
+        }
+    );
     expect_remote_control_status_snapshot(
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
             installation_id: TEST_INSTALLATION_ID.to_string(),
-            environment_id: Some("env_test".to_string()),
+            environment_id: None,
         },
     )
     .await;

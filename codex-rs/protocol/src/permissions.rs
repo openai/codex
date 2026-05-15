@@ -232,8 +232,39 @@ impl ReadDenyMatcher {
     /// can skip read-deny checks without allocating matcher state. The `cwd`
     /// resolves cwd-relative policy paths and special paths before matching.
     pub fn new(file_system_sandbox_policy: &FileSystemSandboxPolicy, cwd: &Path) -> Option<Self> {
+        match Self::build(
+            file_system_sandbox_policy,
+            cwd,
+            InvalidDenyReadGlobBehavior::FailClosed,
+        ) {
+            Ok(matcher) => matcher,
+            Err(_) => unreachable!("fail-closed glob handling does not return errors"),
+        }
+    }
+
+    /// Builds a matcher for callers that must reject malformed glob patterns.
+    ///
+    /// Runtime read checks intentionally fail closed on malformed deny patterns.
+    /// Host-side expansion work should use this constructor instead so a typo
+    /// cannot broaden the set of paths it mutates before execution starts.
+    pub fn try_new(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+    ) -> Result<Option<Self>, String> {
+        Self::build(
+            file_system_sandbox_policy,
+            cwd,
+            InvalidDenyReadGlobBehavior::ReturnError,
+        )
+    }
+
+    fn build(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+        invalid_glob_behavior: InvalidDenyReadGlobBehavior,
+    ) -> Result<Option<Self>, String> {
         if !file_system_sandbox_policy.has_denied_read_restrictions() {
-            return None;
+            return Ok(None);
         }
 
         // Exact roots are stored as all meaningful path spellings we can derive
@@ -247,22 +278,23 @@ impl ReadDenyMatcher {
         // Pattern entries stay as policy-level globs. They are matched at read
         // time here instead of being snapshotted to startup filesystem state.
         let mut invalid_pattern = false;
-        let deny_read_matchers = file_system_sandbox_policy
-            .get_unreadable_globs_with_cwd(cwd)
-            .into_iter()
-            .filter_map(|pattern| match build_glob_matcher(&pattern) {
-                Some(matcher) => Some(matcher),
-                None => {
-                    invalid_pattern = true;
-                    None
-                }
-            })
-            .collect();
-        Some(Self {
+        let mut deny_read_matchers = Vec::new();
+        for pattern in file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd) {
+            match build_glob_matcher(&pattern) {
+                Ok(matcher) => deny_read_matchers.push(matcher),
+                Err(err) => match invalid_glob_behavior {
+                    InvalidDenyReadGlobBehavior::FailClosed => invalid_pattern = true,
+                    InvalidDenyReadGlobBehavior::ReturnError => {
+                        return Err(format!("invalid deny-read glob pattern `{pattern}`: {err}"));
+                    }
+                },
+            }
+        }
+        Ok(Some(Self {
             denied_candidates,
             deny_read_matchers,
             invalid_pattern,
-        })
+        }))
     }
 
     /// Returns whether `path` is denied by the policy used to build this matcher.
@@ -293,6 +325,12 @@ impl ReadDenyMatcher {
                 .any(|candidate| matcher.is_match(candidate))
         })
     }
+}
+
+#[derive(Clone, Copy)]
+enum InvalidDenyReadGlobBehavior {
+    FailClosed,
+    ReturnError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
@@ -657,7 +695,7 @@ impl FileSystemSandboxPolicy {
         )
     }
 
-    /// Replaces symbolic `:project_roots` entries with absolute paths resolved
+    /// Replaces symbolic `:workspace_roots` entries with absolute paths resolved
     /// against `cwd`.
     ///
     /// Use this when a durable permission profile must survive a cwd-only
@@ -725,7 +763,7 @@ impl FileSystemSandboxPolicy {
     ///
     /// Unlike [`Self::with_additional_writable_roots`], this mirrors legacy
     /// writable-roots semantics by adding exact roots even when they are
-    /// already writable through `:project_roots`, and by adding the default
+    /// already writable through `:workspace_roots`, and by adding the default
     /// read-only protected subpaths for each new root.
     pub fn with_additional_legacy_workspace_writable_roots(
         mut self,
@@ -1291,15 +1329,15 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-fn build_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+fn build_glob_matcher(pattern: &str) -> Result<GlobMatcher, String> {
     // Keep `*` and `?` within a single path component and preserve an unclosed
     // `[` as a literal so matcher behavior stays aligned with config parsing.
     GlobBuilder::new(pattern)
         .literal_separator(true)
         .allow_unclosed_class(true)
         .build()
-        .ok()
         .map(|glob| glob.compile_matcher())
+        .map_err(|err| err.to_string())
 }
 
 fn resolve_file_system_special_path(

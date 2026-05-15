@@ -908,6 +908,30 @@
             },
             "method": {
               "enum": [
+                "plugin/share/checkout"
+              ],
+              "title": "Plugin/share/checkoutRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginShareCheckoutParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/share/checkoutRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/share/delete"
               ],
               "title": "Plugin/share/deleteRequestMethod",
@@ -7146,9 +7170,13 @@
             ]
           },
           "forced_chatgpt_workspace_id": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "forced_login_method": {
@@ -7443,6 +7471,13 @@
                 ],
                 "description": "This is the path to the user's config.toml file, though it is not guaranteed to exist."
               },
+              "profile": {
+                "description": "Name of the selected profile-v2 config layered on top of the base user config, when this layer represents one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "type": {
                 "enum": [
                   "user"
@@ -7584,6 +7619,12 @@
       },
       "ConfigRequirements": {
         "properties": {
+          "allowManagedHooksOnly": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowedApprovalPolicies": {
             "items": {
               "$ref": "#/definitions/v2/AskForApproval"
@@ -7767,6 +7808,12 @@
               },
               "command": {
                 "type": "string"
+              },
+              "commandWindows": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "statusMessage": {
                 "type": [
@@ -8697,6 +8744,20 @@
           "path"
         ],
         "type": "object"
+      },
+      "ForcedChatgptWorkspaceIds": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "description": "Backward-compatible API shape for ChatGPT workspace login restrictions."
       },
       "ForcedLoginMethod": {
         "enum": [
@@ -12300,6 +12361,58 @@
         "title": "PluginReadResponse",
         "type": "object"
       },
+      "PluginShareCheckoutParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "remotePluginId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "remotePluginId"
+        ],
+        "title": "PluginShareCheckoutParams",
+        "type": "object"
+      },
+      "PluginShareCheckoutResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          },
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "pluginId": {
+            "type": "string"
+          },
+          "pluginName": {
+            "type": "string"
+          },
+          "pluginPath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "remotePluginId": {
+            "type": "string"
+          },
+          "remoteVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "marketplacePath",
+          "pluginId",
+          "pluginName",
+          "pluginPath",
+          "remotePluginId"
+        ],
+        "title": "PluginShareCheckoutResponse",
+        "type": "object"
+      },
       "PluginShareContext": {
         "properties": {
           "creatorAccountUserId": {
@@ -12326,6 +12439,14 @@
           },
           "remotePluginId": {
             "type": "string"
+          },
+          "remoteVersion": {
+            "default": null,
+            "description": "Version of the remote shared plugin release when available.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "sharePrincipals": {
             "items": {
@@ -12743,8 +12864,23 @@
             },
             "type": "array"
           },
+          "localVersion": {
+            "default": null,
+            "description": "Version of the locally materialized plugin package when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
+          },
+          "remotePluginId": {
+            "description": "Backend remote plugin identifier when available.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "shareContext": {
             "anyOf": [
@@ -17719,12 +17855,6 @@
       },
       "ToolsV2": {
         "properties": {
-          "view_image": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "web_search": {
             "anyOf": [
               {
