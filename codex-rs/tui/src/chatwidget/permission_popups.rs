@@ -17,7 +17,7 @@ impl ChatWidget {
         let include_read_only = cfg!(target_os = "windows");
         let current_approval =
             AskForApproval::from(self.config.permissions.approval_policy.value());
-        let current_permission_profile = self.config.permissions.permission_profile().get().clone();
+        let current_permission_profile = self.config.permissions.permission_profile().clone();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
