@@ -532,7 +532,7 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
-            target: codex_hooks::SessionStartTarget::SessionStart {
+            target: codex_hooks::StartHookTarget::SessionStart {
                 source: codex_hooks::SessionStartSource::Startup,
             },
         }),
@@ -1306,7 +1306,7 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        target: codex_hooks::SessionStartTarget::SessionStart {
+        target: codex_hooks::StartHookTarget::SessionStart {
             source: codex_hooks::SessionStartSource::Startup,
         },
     };
@@ -1413,7 +1413,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        target: codex_hooks::SessionStartTarget::SessionStart {
+        target: codex_hooks::StartHookTarget::SessionStart {
             source: codex_hooks::SessionStartSource::Startup,
         },
     };

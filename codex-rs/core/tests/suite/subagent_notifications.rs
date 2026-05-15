@@ -439,8 +439,12 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
     let child_requests = wait_for_requests(&child_request_log).await?;
     assert_eq!(child_requests.len(), 1);
 
-    let start_inputs =
-        wait_for_hook_log(test.codex_home_path(), "subagent_start_hook_log.jsonl", 1).await?;
+    let start_inputs = wait_for_hook_log(
+        test.codex_home_path(),
+        "subagent_start_hook_log.jsonl",
+        /*expected_len*/ 1,
+    )
+    .await?;
     assert_eq!(start_inputs.len(), 1);
     assert_eq!(start_inputs[0]["agent_type"].as_str(), Some("worker"));
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
@@ -449,8 +453,12 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
         Some(spawned_id.as_str())
     );
 
-    let session_start_inputs =
-        wait_for_hook_log(test.codex_home_path(), "session_start_hook_log.jsonl", 1).await?;
+    let session_start_inputs = wait_for_hook_log(
+        test.codex_home_path(),
+        "session_start_hook_log.jsonl",
+        /*expected_len*/ 1,
+    )
+    .await?;
     assert_eq!(session_start_inputs.len(), 1);
     assert_eq!(session_start_inputs[0]["source"].as_str(), Some("startup"));
     assert_ne!(
