@@ -28,6 +28,7 @@ async fn remote_control_disable_returns_disabled_status() -> Result<()> {
     let received: RemoteControlDisableResponse = to_response(response)?;
 
     assert_eq!(received.status, RemoteControlConnectionStatus::Disabled);
+    assert!(!received.server_name.is_empty());
     assert_eq!(received.environment_id, None);
     assert!(!received.installation_id.is_empty());
     Ok(())
@@ -48,6 +49,7 @@ async fn remote_control_enable_returns_connecting_status() -> Result<()> {
     let received: RemoteControlEnableResponse = to_response(response)?;
 
     assert_eq!(received.status, RemoteControlConnectionStatus::Connecting);
+    assert!(!received.server_name.is_empty());
     assert_eq!(received.environment_id, None);
     assert!(!received.installation_id.is_empty());
     Ok(())

@@ -13446,12 +13446,16 @@
           "installationId": {
             "type": "string"
           },
+          "serverName": {
+            "type": "string"
+          },
           "status": {
             "$ref": "#/definitions/v2/RemoteControlConnectionStatus"
           }
         },
         "required": [
           "installationId",
+          "serverName",
           "status"
         ],
         "title": "RemoteControlStatusChangedNotification",
