@@ -93,7 +93,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
-use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
@@ -239,13 +238,10 @@ fn cli_overrides_include_approval_policy<T>(cli_kv_overrides: &[(String, T)]) ->
 
 fn exec_approval_policy_override<T>(
     dangerously_bypass_approvals_and_sandbox: bool,
-    approval_policy: Option<ApprovalModeCliArg>,
     cli_kv_overrides: &[(String, T)],
 ) -> Option<AskForApproval> {
     if dangerously_bypass_approvals_and_sandbox {
         Some(AskForApproval::Never)
-    } else if let Some(approval_policy) = approval_policy {
-        Some(approval_policy.into())
     } else if cli_overrides_include_approval_policy(cli_kv_overrides) {
         None
     } else {
@@ -267,7 +263,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         command,
         strict_config,
         shared,
-        approval_policy,
         skip_git_repo_check,
         ephemeral,
         ignore_user_config,
@@ -434,11 +429,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         model,
         review_model: None,
         config_profile,
-        // Default to never ask for approvals in headless mode unless the caller
-        // explicitly selected an approval policy.
+        // Default to never ask for approvals in headless mode unless a config
+        // override explicitly selected an approval policy.
         approval_policy: exec_approval_policy_override(
             dangerously_bypass_approvals_and_sandbox,
-            approval_policy,
             &cli_kv_overrides,
         ),
         approvals_reviewer: None,

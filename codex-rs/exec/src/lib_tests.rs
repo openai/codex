@@ -90,24 +90,9 @@ fn exec_approval_policy_override_defaults_to_never() {
     assert_eq!(
         exec_approval_policy_override(
             /*dangerously_bypass_approvals_and_sandbox*/ false,
-            /*approval_policy*/ None,
             &cli_kv_overrides
         ),
         Some(AskForApproval::Never)
-    );
-}
-
-#[test]
-fn exec_approval_policy_override_uses_cli_approval_policy() {
-    let cli_kv_overrides: Vec<(String, ())> = Vec::new();
-
-    assert_eq!(
-        exec_approval_policy_override(
-            /*dangerously_bypass_approvals_and_sandbox*/ false,
-            Some(ApprovalModeCliArg::Untrusted),
-            &cli_kv_overrides
-        ),
-        Some(AskForApproval::UnlessTrusted)
     );
 }
 
@@ -118,7 +103,6 @@ fn exec_approval_policy_override_allows_config_approval_policy() {
     assert_eq!(
         exec_approval_policy_override(
             /*dangerously_bypass_approvals_and_sandbox*/ false,
-            /*approval_policy*/ None,
             &cli_kv_overrides
         ),
         None
@@ -132,7 +116,6 @@ fn exec_approval_policy_override_yolo_forces_never() {
     assert_eq!(
         exec_approval_policy_override(
             /*dangerously_bypass_approvals_and_sandbox*/ true,
-            Some(ApprovalModeCliArg::Untrusted),
             &cli_kv_overrides
         ),
         Some(AskForApproval::Never)

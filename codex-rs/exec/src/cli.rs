@@ -2,7 +2,6 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
-use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 use std::path::PathBuf;
@@ -23,15 +22,6 @@ pub struct Cli {
 
     #[clap(flatten)]
     pub shared: ExecSharedCliOptions,
-
-    /// Configure when the model requires human approval before executing a command.
-    #[arg(
-        long = "ask-for-approval",
-        short = 'a',
-        global = true,
-        conflicts_with = "dangerously_bypass_approvals_and_sandbox"
-    )]
-    pub approval_policy: Option<ApprovalModeCliArg>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
