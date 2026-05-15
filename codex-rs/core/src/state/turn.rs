@@ -115,7 +115,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: TurnInputQueue,
+    pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
@@ -217,14 +217,6 @@ impl TurnState {
         key: &str,
     ) -> Option<oneshot::Sender<DynamicToolResponse>> {
         self.pending_dynamic_tools.remove(key)
-    }
-
-    pub(crate) fn pending_input_for_input_queue(&self) -> &TurnInputQueue {
-        &self.pending_input
-    }
-
-    pub(crate) fn pending_input_for_input_queue_mut(&mut self) -> &mut TurnInputQueue {
-        &mut self.pending_input
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {

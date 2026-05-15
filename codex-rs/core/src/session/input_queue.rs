@@ -110,7 +110,7 @@ impl InputQueue {
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.clear_pending_waiters();
-        turn_state.pending_input_for_input_queue_mut().items.clear();
+        turn_state.pending_input.items.clear();
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -123,7 +123,7 @@ impl InputQueue {
             return;
         };
         let mut turn_state = turn_state.lock().await;
-        if !turn_state.pending_input_for_input_queue().items.is_empty() {
+        if !turn_state.pending_input.items.is_empty() {
             return;
         }
         turn_state.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
@@ -158,7 +158,7 @@ impl InputQueue {
         input: ResponseInputItem,
     ) {
         let mut turn_state = turn_state.lock().await;
-        turn_state.pending_input_for_input_queue_mut().items.push(input);
+        turn_state.pending_input.items.push(input);
         turn_state.accept_mailbox_delivery_for_current_turn();
     }
 
@@ -167,24 +167,14 @@ impl InputQueue {
         turn_state: &Mutex<TurnState>,
         input: Vec<ResponseInputItem>,
     ) {
-        turn_state
-            .lock()
-            .await
-            .pending_input_for_input_queue_mut()
-            .items
-            .extend(input);
+        turn_state.lock().await.pending_input.items.extend(input);
     }
 
     pub(crate) async fn take_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
     ) -> Vec<ResponseInputItem> {
-        turn_state
-            .lock()
-            .await
-            .pending_input_for_input_queue_mut()
-            .items
-            .split_off(0)
+        turn_state.lock().await.pending_input.items.split_off(0)
     }
 
     #[expect(
@@ -203,7 +193,7 @@ impl InputQueue {
                     .turn_state
                     .lock()
                     .await
-                    .pending_input_for_input_queue_mut()
+                    .pending_input
                     .items
                     .extend(input);
                 Ok(())
@@ -226,7 +216,7 @@ impl InputQueue {
             Some(active_turn) => {
                 let mut turn_state = active_turn.turn_state.lock().await;
                 if !input.is_empty() {
-                    let pending_input = turn_state.pending_input_for_input_queue_mut();
+                    let pending_input = &mut turn_state.pending_input;
                     input.append(&mut pending_input.items);
                     pending_input.items = input;
                 }
@@ -250,10 +240,7 @@ impl InputQueue {
                 Some(active_turn) => {
                     let mut turn_state = active_turn.turn_state.lock().await;
                     (
-                        turn_state
-                            .pending_input_for_input_queue_mut()
-                            .items
-                            .split_off(0),
+                        turn_state.pending_input.items.split_off(0),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),
                     )
                 }
@@ -286,7 +273,7 @@ impl InputQueue {
                 Some(active_turn) => {
                     let turn_state = active_turn.turn_state.lock().await;
                     (
-                        !turn_state.pending_input_for_input_queue().items.is_empty(),
+                        !turn_state.pending_input.items.is_empty(),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),
                     )
                 }

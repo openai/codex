@@ -1,6 +1,7 @@
 use super::*;
 use super::input_queue::InputQueue;
 use crate::goals::GoalRuntimeState;
+use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
