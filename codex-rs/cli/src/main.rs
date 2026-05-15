@@ -1388,7 +1388,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(cmd, &arg0_paths, &root_config_overrides, &interactive).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1485,6 +1485,8 @@ fn profile_v2_for_subcommand<'a>(
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1498,8 +1500,10 @@ async fn run_exec_server_command(
         let executor_id = cmd
             .executor_id
             .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let auth_provider =
+            load_exec_server_remote_auth_provider(root_config_overrides, interactive).await?;
         let mut remote_config =
-            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id, auth_provider)?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
@@ -1513,6 +1517,45 @@ async fn run_exec_server_command(
     codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
+}
+
+async fn load_exec_server_remote_auth_provider(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+) -> anyhow::Result<codex_api::SharedAuthProvider> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(ConfigOverrides {
+            config_profile: interactive.config_profile.clone(),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
+
+    let auth = match auth_manager.auth().await {
+        Some(auth) => auth,
+        None => {
+            auth_manager.reload().await;
+            auth_manager.auth().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "remote exec-server registration requires ChatGPT authentication; run `codex login` first"
+                )
+            })?
+        }
+    };
+
+    if !auth.is_chatgpt_auth() {
+        anyhow::bail!(
+            "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
+        );
+    }
+
+    Ok(codex_model_provider::auth_provider_from_auth(&auth))
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
