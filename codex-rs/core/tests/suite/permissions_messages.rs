@@ -578,9 +578,9 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let permissions = permissions_texts(&req.single_request());
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
     let exec_policy = load_exec_policy(&test.config.config_layer_stack).await?;
-    let sandbox_policy = test.config.legacy_sandbox_policy();
-    let expected = PermissionsInstructions::from_policy(
-        &sandbox_policy,
+    let permission_profile = test.config.permissions.effective_permission_profile();
+    let expected = PermissionsInstructions::from_permission_profile(
+        &permission_profile,
         AskForApproval::OnRequest,
         test.config.approvals_reviewer,
         &exec_policy,

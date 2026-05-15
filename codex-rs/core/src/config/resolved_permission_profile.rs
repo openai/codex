@@ -101,24 +101,6 @@ impl ResolvedPermissionProfile {
         }
     }
 
-    fn with_permission_profile(&self, permission_profile: PermissionProfile) -> Self {
-        match self {
-            Self::Legacy(_) => Self::legacy(permission_profile),
-            Self::BuiltIn(profile) => Self::BuiltIn(BuiltInPermissionProfile {
-                id: profile.id,
-                extends: profile.extends.clone(),
-                permission_profile,
-                profile_workspace_roots: profile.profile_workspace_roots.clone(),
-            }),
-            Self::Named(profile) => Self::Named(NamedPermissionProfile {
-                id: profile.id.clone(),
-                extends: profile.extends.clone(),
-                permission_profile,
-                profile_workspace_roots: profile.profile_workspace_roots.clone(),
-            }),
-        }
-    }
-
     pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
         match self {
             Self::Legacy(_) => None,
@@ -187,19 +169,6 @@ impl PermissionProfileState {
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
         self.resolved_permission_profile.get().permission_profile()
-    }
-
-    pub(crate) fn clone_with_permission_profile(
-        &self,
-        permission_profile: PermissionProfile,
-    ) -> ConstraintResult<Self> {
-        let candidate = self
-            .resolved_permission_profile
-            .get()
-            .with_permission_profile(permission_profile);
-        let mut state = self.clone();
-        state.resolved_permission_profile.set(candidate)?;
-        Ok(state)
     }
 
     pub(crate) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
