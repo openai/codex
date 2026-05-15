@@ -4,6 +4,13 @@
 # git tag -a rust-v0.1.0 -m "Release 0.1.0"
 # git push origin rust-v0.1.0
 # ```
+#
+# To use external macOS signing, manually dispatch `release_mode=build_unsigned`,
+# sign the unsigned macOS artifacts in a secure enclave, upload the signed handoff
+# archive as a GitHub Release asset, then manually dispatch
+# `release_mode=promote_signed` with `unsigned_run_id` and `signed_macos_asset`.
+# The signed handoff archive should contain target or artifact directories such
+# as `aarch64-apple-darwin/` with signed binaries and signed DMGs.
 
 name: rust-release
 on:
@@ -12,11 +19,31 @@ on:
       - "rust-v*.*.*"
   workflow_dispatch:
     inputs:
+      release_mode:
+        description: "build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
+        required: false
+        type: choice
+        default: build_unsigned
+        options:
+          - build_unsigned
+          - promote_signed
       sign_macos:
-        description: "Sign and notarize macOS release artifacts."
+        description: "Deprecated compatibility input; use release_mode instead."
         required: false
         type: boolean
-        default: true
+        default: false
+      unsigned_run_id:
+        description: "For promote_signed: workflow run id from the build_unsigned run."
+        required: false
+        type: string
+      signed_macos_asset:
+        description: "For promote_signed: exact GitHub Release asset name containing signed macOS handoff artifacts."
+        required: false
+        type: string
+      signed_macos_sha256:
+        description: "For promote_signed: optional SHA-256 of signed_macos_asset."
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -33,14 +60,57 @@ jobs:
       - name: Validate tag matches Cargo.toml version
         shell: bash
         env:
-          SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
+          RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
+          REQUESTED_SIGN_MACOS: ${{ inputs.sign_macos }}
+          SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
+          UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${SIGN_MACOS}" == "true" ]]; then
-            echo "❌  Manual rust-release runs must set sign_macos=false"
-            exit 1
+          case "${RELEASE_MODE}" in
+            signed)
+              if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+                echo "❌  Manual rust-release runs must use release_mode=build_unsigned or release_mode=promote_signed"
+                exit 1
+              fi
+              ;;
+            build_unsigned)
+              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+                echo "❌  release_mode=build_unsigned is only valid for manual runs"
+                exit 1
+              fi
+              ;;
+            promote_signed)
+              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+                echo "❌  release_mode=promote_signed is only valid for manual runs"
+                exit 1
+              fi
+              if [[ ! "${UNSIGNED_RUN_ID}" =~ ^[0-9]+$ ]]; then
+                echo "❌  release_mode=promote_signed requires unsigned_run_id to be a workflow run id"
+                exit 1
+              fi
+              if [[ -z "${SIGNED_MACOS_ASSET}" ]]; then
+                echo "❌  release_mode=promote_signed requires signed_macos_asset"
+                exit 1
+              fi
+              if [[ "${SIGNED_MACOS_ASSET}" == */* || "${SIGNED_MACOS_ASSET}" == *"*"* || "${SIGNED_MACOS_ASSET}" == *"?"* || "${SIGNED_MACOS_ASSET}" == *"["* ]]; then
+                echo "❌  signed_macos_asset must be an exact release asset name, not a path or glob"
+                exit 1
+              fi
+              if [[ "${UNSIGNED_RUN_ID}" == "${GITHUB_RUN_ID}" ]]; then
+                echo "❌  unsigned_run_id must refer to the earlier build_unsigned run, not this run"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "❌  Unknown release_mode '${RELEASE_MODE}'"
+              exit 1
+              ;;
+          esac
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${REQUESTED_SIGN_MACOS}" == "true" ]]; then
+            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=build_unsigned or release_mode=promote_signed instead."
           fi
 
           # 1. Must be a tag and match the regex
@@ -62,6 +132,7 @@ jobs:
           echo "::endgroup::"
 
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -78,7 +149,7 @@ jobs:
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
-      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
+      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' }}
 
     strategy:
       fail-fast: false
@@ -310,7 +381,7 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
         name: Stage unsigned macOS artifacts
         shell: bash
         run: |
@@ -335,7 +406,7 @@ jobs:
             zstd -T0 -19 --rm "${unsigned_path}"
           done
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
         name: Upload unsigned macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -553,7 +624,230 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
+  stage-signed-macos:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
+    needs: tag-check
+    name: Stage signed macOS handoff - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: macos-15-xlarge
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download signed macOS handoff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
+          SIGNED_MACOS_SHA256: ${{ inputs.signed_macos_sha256 }}
+        run: |
+          set -euo pipefail
+
+          download_dir="${RUNNER_TEMP}/signed-macos-download"
+          handoff_dir="${RUNNER_TEMP}/signed-macos-handoff"
+          rm -rf "$download_dir" "$handoff_dir"
+          mkdir -p "$download_dir" "$handoff_dir"
+
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$SIGNED_MACOS_ASSET" \
+            --dir "$download_dir"
+
+          asset_count="$(find "$download_dir" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          if [[ "$asset_count" != "1" ]]; then
+            echo "Expected exactly one signed macOS handoff asset named ${SIGNED_MACOS_ASSET}; found ${asset_count}"
+            find "$download_dir" -maxdepth 1 -type f -print
+            exit 1
+          fi
+
+          asset_path="$(find "$download_dir" -maxdepth 1 -type f -print -quit)"
+          if [[ -n "${SIGNED_MACOS_SHA256}" ]]; then
+            expected_sha="$(printf '%s' "$SIGNED_MACOS_SHA256" | tr '[:upper:]' '[:lower:]')"
+            actual_sha="$(shasum -a 256 "$asset_path" | awk '{print $1}')"
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+              echo "signed_macos_sha256 mismatch for ${SIGNED_MACOS_ASSET}"
+              echo "expected: ${expected_sha}"
+              echo "actual:   ${actual_sha}"
+              exit 1
+            fi
+          fi
+
+          asset_name="$(basename "$asset_path")"
+          case "$asset_name" in
+            *.tar.zst)
+              zstd -dc "$asset_path" | tar -C "$handoff_dir" -xf -
+              ;;
+            *.tar.gz|*.tgz)
+              tar -C "$handoff_dir" -xzf "$asset_path"
+              ;;
+            *.zip)
+              ditto -x -k "$asset_path" "$handoff_dir"
+              ;;
+            *)
+              echo "Unsupported signed macOS handoff archive format: ${asset_name}"
+              exit 1
+              ;;
+          esac
+
+          echo "SIGNED_MACOS_HANDOFF_DIR=$handoff_dir" >> "$GITHUB_ENV"
+
+      - name: Stage signed macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          artifact_name="${{ matrix.artifact_name }}"
+          source_dir="${SIGNED_MACOS_HANDOFF_DIR}/${artifact_name}"
+          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}" ]]; then
+            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}"
+          fi
+          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/${target}" ]]; then
+            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/${target}"
+          fi
+          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}" ]]; then
+            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}"
+          fi
+          if [[ ! -d "$source_dir" ]]; then
+            echo "Signed macOS handoff is missing ${artifact_name}/"
+            echo "Expected either:"
+            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/${artifact_name}"
+            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}"
+            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/${target}"
+            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}"
+            find "$SIGNED_MACOS_HANDOFF_DIR" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          dest="dist/${target}"
+          mkdir -p "$dest"
+
+          for binary in ${{ matrix.binaries }}; do
+            source_path="${source_dir}/${binary}"
+            if [[ ! -f "$source_path" ]]; then
+              source_path="${source_dir}/${binary}-${target}"
+            fi
+            if [[ ! -f "$source_path" ]]; then
+              echo "Signed macOS handoff is missing ${binary} for ${artifact_name}"
+              exit 1
+            fi
+
+            release_path="${dest}/${binary}-${target}"
+            ditto "$source_path" "$release_path"
+            chmod 0755 "$release_path"
+            codesign --verify --strict --verbose=2 "$release_path"
+          done
+
+          if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
+            dmg_name="codex-${target}.dmg"
+            dmg_source="${source_dir}/${dmg_name}"
+            if [[ ! -f "$dmg_source" ]]; then
+              echo "Signed macOS handoff is missing ${dmg_name} for ${artifact_name}"
+              exit 1
+            fi
+
+            codesign --verify --strict --verbose=2 "$dmg_source"
+            xcrun stapler validate "$dmg_source"
+            cp "$dmg_source" "$dest/$dmg_name"
+          fi
+
+      - name: Build Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              platform_tag="macosx_11_0_arm64"
+              ;;
+            x86_64-apple-darwin)
+              platform_tag="macosx_10_9_x86_64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
+          python3 \
+            "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime \
+            "$stage_dir" \
+            "${GITHUB_WORKSPACE}/codex-rs/dist/${{ matrix.target }}/codex-${{ matrix.target }}" \
+            --codex-version "${GITHUB_REF_NAME}" \
+            --platform-tag "$platform_tag"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+
+      - name: Upload Python runtime wheel
+        if: ${{ matrix.bundle == 'primary' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheel-${{ matrix.target }}
+          path: python-runtime-dist/${{ matrix.target }}/*.whl
+          if-no-files-found: error
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dest="dist/${{ matrix.target }}"
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            zstd -T0 -19 --rm "$dest/$base"
+          done
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*
+
   build-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -561,6 +855,7 @@ jobs:
     secrets: inherit
 
   argument-comment-lint-release-assets:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -568,23 +863,53 @@ jobs:
       publish: true
 
   zsh-release-assets:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
 
   release:
     needs:
+      - tag-check
       - build
+      - stage-signed-macos
       - build-windows
       - argument-comment-lint-release-assets
       - zsh-release-assets
+    if: >-
+      ${{
+        always() &&
+        needs.tag-check.result == 'success' &&
+        (
+          (
+            github.event_name == 'workflow_dispatch' &&
+            inputs.release_mode == 'promote_signed' &&
+            needs.stage-signed-macos.result == 'success' &&
+            needs.build.result == 'skipped' &&
+            needs.build-windows.result == 'skipped' &&
+            needs.argument-comment-lint-release-assets.result == 'skipped' &&
+            needs.zsh-release-assets.result == 'skipped'
+          ) ||
+          (
+            (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
+            needs.build.result == 'success' &&
+            needs.stage-signed-macos.result == 'skipped' &&
+            needs.build-windows.result == 'success' &&
+            needs.argument-comment-lint-release-assets.result == 'success' &&
+            needs.zsh-release-assets.result == 'success'
+          )
+        )
+      }}
     name: release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
     env:
-      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.sign_macos }}
+      RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
+      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'promote_signed' }}
+      SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
+      UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
     outputs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
@@ -602,6 +927,7 @@ jobs:
       - name: Define release mode
         id: release_mode
         run: |
+          echo "release_mode=${RELEASE_MODE}" >> "$GITHUB_OUTPUT"
           echo "sign_macos=${SIGN_MACOS}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes from tag commit message
@@ -627,6 +953,100 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
+
+      - name: Validate unsigned build run
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          run_summary="$(gh run view "$UNSIGNED_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json conclusion,event,headBranch,headSha,status,workflowName,url \
+            --jq '[.workflowName, .event, .headBranch, .headSha, .status, .conclusion, .url] | @tsv')"
+          IFS=$'\t' read -r workflow_name event head_branch head_sha status conclusion run_url <<< "$run_summary"
+          expected_head_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+
+          if [[ "$workflow_name" != "$GITHUB_WORKFLOW" ]]; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} is for workflow '${workflow_name}', expected '${GITHUB_WORKFLOW}'"
+            echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+          if [[ "$event" != "workflow_dispatch" ]]; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} was triggered by '${event}', expected 'workflow_dispatch'"
+            echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+          if [[ "$head_branch" != "$GITHUB_REF_NAME" ]]; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} used ref '${head_branch}', expected '${GITHUB_REF_NAME}'"
+            echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+          if [[ "$head_sha" != "$expected_head_sha" ]]; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} used head SHA '${head_sha}', expected '${expected_head_sha}'"
+            echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} is ${status}/${conclusion}, expected completed/success"
+            echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+      - name: Download artifacts from unsigned build run
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$UNSIGNED_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir dist
+
+      - name: Remove unsigned macOS staging artifacts
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        run: |
+          set -euo pipefail
+          find dist -mindepth 1 -maxdepth 1 -type d \
+            -name '*-apple-darwin*-unsigned' \
+            -exec rm -rf {} +
+
+      - name: Re-upload promoted Linux x64 artifacts
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: x86_64-unknown-linux-musl
+          path: dist/x86_64-unknown-linux-musl/*
+          if-no-files-found: error
+
+      - name: Re-upload promoted Linux arm64 artifacts
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aarch64-unknown-linux-musl
+          path: dist/aarch64-unknown-linux-musl/*
+          if-no-files-found: error
+
+      - name: Re-upload promoted Windows x64 artifacts
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: x86_64-pc-windows-msvc
+          path: dist/x86_64-pc-windows-msvc/*
+          if-no-files-found: error
+
+      - name: Re-upload promoted Windows arm64 artifacts
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aarch64-pc-windows-msvc
+          path: dist/aarch64-pc-windows-msvc/*
+          if-no-files-found: error
 
       - name: List
         run: ls -R dist/
@@ -742,8 +1162,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
         run: |
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           ./scripts/stage_npm_packages.py \
             --release-version "$RELEASE_VERSION" \
+            --workflow-url "$workflow_url" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
@@ -761,10 +1183,37 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
+          overwrite_files: true
           make_latest: ${{ env.SIGN_MACOS == 'true' && !contains(steps.release_name.outputs.name, '-') }}
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+
+      - name: Clean up signed promotion handoff assets
+        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
+            --jq '.[] | [.id, .name] | @tsv' |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              if [[ -z "$asset_id" || -z "$asset_name" ]]; then
+                continue
+              fi
+
+              delete_asset=false
+              if [[ "$asset_name" == *unsigned* || "$asset_name" == "$SIGNED_MACOS_ASSET" ]]; then
+                delete_asset=true
+              fi
+
+              if [[ "$delete_asset" == "true" ]]; then
+                echo "Deleting release asset ${asset_name}"
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              fi
+            done
 
       - if: ${{ env.SIGN_MACOS == 'true' }}
         uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
