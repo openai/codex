@@ -208,9 +208,10 @@ pub(crate) async fn run(
 
 /// Interprets completed `SessionStart` and `SubagentStart` hook runs.
 ///
-/// The two events have different input payloads but share output handling:
-/// hook JSON can emit warnings/context or stop the session being started,
-/// invalid JSON-looking stdout fails, and plain stdout becomes model context.
+/// The two events have different input payloads but share most output
+/// handling: hook JSON can emit warnings/context, invalid JSON-looking stdout
+/// fails, and plain stdout becomes model context. Only `SessionStart` honors
+/// `continue:false`; `SubagentStart` stays context-injection-only.
 fn parse_completed(
     handler: &ConfiguredHandler,
     run_result: CommandRunResult,
@@ -259,7 +260,9 @@ fn parse_completed(
                         );
                     }
                     let _ = parsed.universal.suppress_output;
-                    if !parsed.universal.continue_processing {
+                    if handler.event_name == HookEventName::SessionStart
+                        && !parsed.universal.continue_processing
+                    {
                         status = HookRunStatus::Stopped;
                         should_stop = true;
                         stop_reason = parsed.universal.stop_reason.clone();
@@ -473,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_start_continue_false_stops_subagent() {
+    fn subagent_start_continue_false_is_ignored() {
         let parsed = parse_completed(
             &handler_for(HookEventName::SubagentStart),
             run_result(
@@ -487,25 +490,19 @@ mod tests {
         assert_eq!(
             parsed.data,
             SessionStartHandlerData {
-                should_stop: true,
-                stop_reason: Some("skip child".to_string()),
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: vec!["child context".to_string()],
             }
         );
         assert_eq!(parsed.completed.turn_id.as_deref(), Some("turn-1"));
-        assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
         assert_eq!(
             parsed.completed.run.entries,
-            vec![
-                HookOutputEntry {
-                    kind: HookOutputEntryKind::Context,
-                    text: "child context".to_string(),
-                },
-                HookOutputEntry {
-                    kind: HookOutputEntryKind::Stop,
-                    text: "skip child".to_string(),
-                },
-            ]
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Context,
+                text: "child context".to_string(),
+            }]
         );
     }
 
