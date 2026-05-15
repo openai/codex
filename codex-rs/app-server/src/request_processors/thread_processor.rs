@@ -1199,7 +1199,6 @@ impl ThreadRequestProcessor {
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -2554,7 +2553,6 @@ impl ThreadRequestProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -3215,7 +3213,6 @@ impl ThreadRequestProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
