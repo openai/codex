@@ -1231,6 +1231,13 @@ impl Config {
         Ok(())
     }
 
+    pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let mut workspace_roots = self.workspace_roots.clone();
+        workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
+        dedupe_absolute_paths(&mut workspace_roots);
+        workspace_roots
+    }
+
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
