@@ -588,14 +588,11 @@ impl App {
                     let config = self.chat_widget.config_ref();
                     let approvals_reviewer =
                         approvals_reviewer.unwrap_or(config.approvals_reviewer);
-                    let active_permission_profile =
-                        if config.permissions.effective_permission_profile()
-                            == permission_profile.clone()
-                        {
-                            config.permissions.active_permission_profile()
-                        } else {
-                            None
-                        };
+                    let permissions_override = Self::turn_permissions_override_from_config(
+                        config,
+                        permission_profile,
+                        self.runtime_permission_profile_override.as_ref(),
+                    );
                     app_server
                         .turn_start(
                             thread_id,
@@ -603,8 +600,7 @@ impl App {
                             cwd.clone(),
                             *approval_policy,
                             approvals_reviewer,
-                            permission_profile.clone(),
-                            active_permission_profile,
+                            permissions_override,
                             config.permissions.user_visible_workspace_roots(),
                             model.to_string(),
                             *effort,
@@ -698,6 +694,36 @@ impl App {
             }
             _ => Ok(false),
         }
+    }
+
+    fn turn_permissions_override_from_config(
+        config: &Config,
+        permission_profile: &PermissionProfile,
+        runtime_permission_profile_override: Option<&PermissionProfile>,
+    ) -> TurnPermissionsOverride {
+        let effective_permission_profile = config.permissions.effective_permission_profile();
+        if &effective_permission_profile == permission_profile
+            && let Some(active_permission_profile) = config.permissions.active_permission_profile()
+        {
+            return TurnPermissionsOverride::ActiveProfile(active_permission_profile);
+        }
+
+        let runtime_permission_profile_override =
+            runtime_permission_profile_override.map(|profile| {
+                profile
+                    .clone()
+                    .materialize_project_roots_with_workspace_roots(
+                        &config.effective_workspace_roots(),
+                    )
+            });
+        if runtime_permission_profile_override
+            .as_ref()
+            .is_some_and(|profile| profile == permission_profile)
+        {
+            return TurnPermissionsOverride::LegacySandbox(permission_profile.clone());
+        }
+
+        TurnPermissionsOverride::Preserve
     }
 
     pub(super) fn handle_skills_list_result(
@@ -1455,5 +1481,81 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::models::ActivePermissionProfile;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+
+    async fn config_with_workspace_profile() -> Config {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+                ..ConfigOverrides::default()
+            })
+            .build()
+            .await
+            .expect("config should build")
+    }
+
+    #[tokio::test]
+    async fn turn_permissions_use_active_profile_when_available() {
+        let config = config_with_workspace_profile().await;
+        let permission_profile = config.permissions.effective_permission_profile();
+
+        assert_eq!(
+            App::turn_permissions_override_from_config(
+                &config,
+                &permission_profile,
+                /*runtime_permission_profile_override*/ None,
+            ),
+            TurnPermissionsOverride::ActiveProfile(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_permissions_preserve_server_snapshot_without_local_override() {
+        let mut config = config_with_workspace_profile().await;
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("read-only profile should be allowed");
+        let permission_profile = config.permissions.effective_permission_profile();
+
+        assert_eq!(
+            App::turn_permissions_override_from_config(
+                &config,
+                &permission_profile,
+                /*runtime_permission_profile_override*/ None,
+            ),
+            TurnPermissionsOverride::Preserve
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_permissions_send_legacy_sandbox_for_local_override() {
+        let mut config = config_with_workspace_profile().await;
+        let permission_profile = PermissionProfile::workspace_write();
+        config
+            .permissions
+            .set_permission_profile(permission_profile.clone())
+            .expect("workspace profile should be allowed");
+        let effective_permission_profile = config.permissions.effective_permission_profile();
+
+        assert_eq!(
+            App::turn_permissions_override_from_config(
+                &config,
+                &effective_permission_profile,
+                Some(&permission_profile),
+            ),
+            TurnPermissionsOverride::LegacySandbox(effective_permission_profile)
+        );
     }
 }

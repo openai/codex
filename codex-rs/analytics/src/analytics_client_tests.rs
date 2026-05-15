@@ -206,7 +206,6 @@ fn sample_thread_start_response(
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
     })
@@ -263,7 +262,6 @@ fn sample_thread_resume_response_with_source(
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
     })
