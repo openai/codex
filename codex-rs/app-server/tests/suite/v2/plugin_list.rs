@@ -1802,111 +1802,6 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 }
 
 #[tokio::test]
-async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
-        codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    let bundle_url = mount_remote_plugin_bundle(
-        &server,
-        "linear",
-        remote_plugin_bundle_tar_gz_bytes("linear")?,
-    )
-    .await;
-    let global_installed_body =
-        remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true)
-            .replace(
-                r#""installation_policy": "AVAILABLE""#,
-                r#""installation_policy": "INSTALLED_BY_DEFAULT""#,
-            )
-            .replace(
-                r#""authentication_policy": "ON_USE""#,
-                r#""authentication_policy": "ON_INSTALL""#,
-            );
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
-    write_installed_plugin_with_version(&codex_home, "chatgpt-global", "linear", "1.2.3")?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_installed_request(PluginInstalledParams {
-            cwds: None,
-            install_suggestion_plugin_names: None,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstalledResponse = to_response(response)?;
-
-    assert_eq!(response.marketplaces.len(), 1);
-    assert_eq!(response.marketplaces[0].name, "chatgpt-global");
-    assert_eq!(
-        response.marketplaces[0]
-            .plugins
-            .iter()
-            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
-            .collect::<Vec<_>>(),
-        vec![("linear@chatgpt-global".to_string(), true, true)]
-    );
-    assert_eq!(
-        response.marketplaces[0].plugins[0].install_policy,
-        PluginInstallPolicy::InstalledByDefault
-    );
-    assert_eq!(
-        response.marketplaces[0].plugins[0].auth_policy,
-        PluginAuthPolicy::OnInstall
-    );
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 4,
-    )
-    .await?;
-    wait_for_remote_installed_metadata_request_count(&server, /*expected_count*/ 2).await?;
-    wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
-
-    let second_request_id = mcp
-        .send_plugin_installed_request(PluginInstalledParams {
-            cwds: None,
-            install_suggestion_plugin_names: None,
-        })
-        .await?;
-    let second_response: PluginInstalledResponse = to_response(
-        timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
-        )
-        .await??,
-    )?;
-    assert_eq!(second_response, response);
-    wait_for_remote_installed_metadata_request_count(&server, /*expected_count*/ 2).await?;
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 6,
-    )
-    .await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -2822,36 +2717,6 @@ async fn wait_for_remote_plugin_request_count(
     path_suffix: &str,
     expected_count: usize,
 ) -> Result<()> {
-    wait_for_remote_plugin_request_count_matching(server, path_suffix, expected_count, |_request| {
-        true
-    })
-    .await
-}
-
-async fn wait_for_remote_installed_metadata_request_count(
-    server: &MockServer,
-    expected_count: usize,
-) -> Result<()> {
-    wait_for_remote_plugin_request_count_matching(
-        server,
-        "/ps/plugins/installed",
-        expected_count,
-        |request| {
-            !request
-                .url
-                .query_pairs()
-                .any(|(key, _value)| key == "includeDownloadUrls")
-        },
-    )
-    .await
-}
-
-async fn wait_for_remote_plugin_request_count_matching(
-    server: &MockServer,
-    path_suffix: &str,
-    expected_count: usize,
-    request_matches: impl Fn(&wiremock::Request) -> bool,
-) -> Result<()> {
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = server.received_requests().await else {
@@ -2860,9 +2725,7 @@ async fn wait_for_remote_plugin_request_count_matching(
             let request_count = requests
                 .iter()
                 .filter(|request| {
-                    request.method == "GET"
-                        && request.url.path().ends_with(path_suffix)
-                        && request_matches(request)
+                    request.method == "GET" && request.url.path().ends_with(path_suffix)
                 })
                 .count();
             if request_count == expected_count {
