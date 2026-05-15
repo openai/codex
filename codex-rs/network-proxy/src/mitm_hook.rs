@@ -116,6 +116,7 @@ pub enum SecretSource {
 pub struct CredentialedRouteProxyActionConfig {
     pub connector_id: String,
     pub link_id: String,
+    pub proxy_headers: Vec<CredentialedRouteProxyHeader>,
     pub proxy_url: String,
 }
 
@@ -123,7 +124,23 @@ pub struct CredentialedRouteProxyActionConfig {
 pub struct CredentialedRouteProxyAction {
     pub connector_id: String,
     pub link_id: String,
+    pub proxy_headers: Vec<CredentialedRouteProxyHeader>,
     pub proxy_url: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialedRouteProxyHeader {
+    pub name: HeaderName,
+    pub value: HeaderValue,
+}
+
+impl std::fmt::Debug for CredentialedRouteProxyHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialedRouteProxyHeader")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,6 +356,7 @@ where
                 .map(|action| CredentialedRouteProxyAction {
                     connector_id: action.connector_id.clone(),
                     link_id: action.link_id.clone(),
+                    proxy_headers: action.proxy_headers.clone(),
                     proxy_url: action.proxy_url.clone(),
                 });
 

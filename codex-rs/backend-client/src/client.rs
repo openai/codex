@@ -204,12 +204,17 @@ impl Client {
     }
 
     fn headers(&self) -> HeaderMap {
-        let mut h = HeaderMap::new();
+        let mut h = self.auth_headers();
         if let Some(ua) = &self.user_agent {
             h.insert(USER_AGENT, ua.clone());
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
+        h
+    }
+
+    fn auth_headers(&self) -> HeaderMap {
+        let mut h = HeaderMap::new();
         self.auth_provider.add_auth_headers(&mut h);
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
@@ -421,6 +426,10 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/credential_routes/proxy", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/credential_routes/proxy", self.base_url),
         }
+    }
+
+    pub fn credential_routes_proxy_auth_headers(&self) -> HeaderMap {
+        self.auth_headers()
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path
