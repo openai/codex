@@ -1991,47 +1991,38 @@ async fn run_interactive_tui(
             remote_endpoint.clone(),
         )
     };
-    match start_tui().await {
-        Ok(exit_info) => Ok(exit_info),
-        Err(err) => {
-            let Some(startup_error) = local_state_db::startup_error(&err) else {
-                return Err(err);
-            };
-            if local_state_db::is_locked(startup_error.detail()) {
-                local_state_db::print_locked_guidance(startup_error);
-                return Ok(AppExitInfo::fatal(startup_error.to_string()));
-            }
-            if !local_state_db::confirm_repair(startup_error)? {
+    let mut attempted_repair = false;
+    loop {
+        let err = match start_tui().await {
+            Ok(exit_info) => return Ok(exit_info),
+            Err(err) => err,
+        };
+        let Some(startup_error) = local_state_db::startup_error(&err) else {
+            return Err(err);
+        };
+        if local_state_db::is_locked(startup_error.detail()) {
+            local_state_db::print_locked_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if attempted_repair {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if !local_state_db::confirm_repair(startup_error)? {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+
+        match local_state_db::repair_files(startup_error).await {
+            Ok(backups) => local_state_db::print_repair_backups(&backups),
+            Err(repair_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
-                return Ok(AppExitInfo::fatal(startup_error.to_string()));
-            }
-
-            match local_state_db::repair_files(startup_error).await {
-                Ok(backups) => local_state_db::print_repair_backups(&backups),
-                Err(repair_err) => {
-                    local_state_db::print_diagnostic_guidance(startup_error);
-                    return Ok(AppExitInfo::fatal(format!(
-                        "failed to repair Codex local data automatically: {repair_err}"
-                    )));
-                }
-            }
-
-            match start_tui().await {
-                Ok(exit_info) => Ok(exit_info),
-                Err(retry_err) => {
-                    let Some(retry_startup_error) = local_state_db::startup_error(&retry_err)
-                    else {
-                        return Err(retry_err);
-                    };
-                    if local_state_db::is_locked(retry_startup_error.detail()) {
-                        local_state_db::print_locked_guidance(retry_startup_error);
-                    } else {
-                        local_state_db::print_diagnostic_guidance(retry_startup_error);
-                    }
-                    Ok(AppExitInfo::fatal(retry_startup_error.to_string()))
-                }
+                return Ok(AppExitInfo::fatal(format!(
+                    "failed to repair Codex local data automatically: {repair_err}"
+                )));
             }
         }
+        attempted_repair = true;
     }
 }
 

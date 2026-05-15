@@ -1,3 +1,8 @@
+//! CLI recovery for local state database startup failures.
+//!
+//! This keeps user-facing repair and lock-contention handling out of the main
+//! CLI dispatch path while preserving the TUI startup error as the boundary type.
+
 use codex_tui::LocalStateDbStartupError;
 use std::path::PathBuf;
 
