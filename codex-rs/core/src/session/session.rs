@@ -1074,12 +1074,16 @@ impl Session {
                     InitialHistory::New | InitialHistory::Forked(_)
                 )
             );
+            let should_run_session_start =
+                !matches!(session_configuration.session_source, SessionSource::SubAgent(_));
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
             sess.record_initial_history(initial_history).await;
             {
                 let mut state = sess.state.lock().await;
-                state.set_pending_session_start_source(Some(session_start_source));
+                state.set_pending_session_start_source(
+                    should_run_session_start.then_some(session_start_source),
+                );
                 state.set_pending_subagent_start(should_run_subagent_start);
             }
 

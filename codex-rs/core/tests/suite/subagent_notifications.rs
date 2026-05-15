@@ -114,6 +114,21 @@ fn write_home_skill(codex_home: &Path, dir: &str, name: &str, description: &str)
 }
 
 fn write_subagent_lifecycle_hooks(home: &Path, stop_prompts: &[&str]) -> Result<()> {
+    let session_start_script_path = home.join("session_start_hook.py");
+    let session_start_log_path = home.join("session_start_hook_log.jsonl");
+    let session_start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{session_start_log_path}")
+payload = json.load(sys.stdin)
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        session_start_log_path = session_start_log_path.display(),
+    );
+
     let start_script_path = home.join("subagent_start_hook.py");
     let start_log_path = home.join("subagent_start_hook_log.jsonl");
     let start_script = format!(
@@ -177,6 +192,13 @@ print(json.dumps({{"systemMessage": "root stop complete"}}))
 
     let hooks = serde_json::json!({
         "hooks": {
+            "SessionStart": [{
+                "matcher": "startup",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", session_start_script_path.display()),
+                }]
+            }],
             "SubagentStart": [{
                 "matcher": "worker",
                 "hooks": [{
@@ -200,6 +222,7 @@ print(json.dumps({{"systemMessage": "root stop complete"}}))
         }
     });
 
+    fs::write(&session_start_script_path, session_start_script)?;
     fs::write(&start_script_path, start_script)?;
     fs::write(&subagent_stop_script_path, subagent_stop_script)?;
     fs::write(&stop_script_path, stop_script)?;
@@ -482,6 +505,15 @@ async fn subagent_start_injects_context_once_for_child() -> Result<()> {
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
     assert_eq!(
         start_inputs[0]["agent_id"].as_str(),
+        Some(spawned_id.as_str())
+    );
+
+    let session_start_inputs =
+        read_hook_log(test.codex_home_path(), "session_start_hook_log.jsonl")?;
+    assert_eq!(session_start_inputs.len(), 1);
+    assert_eq!(session_start_inputs[0]["source"].as_str(), Some("startup"));
+    assert_ne!(
+        session_start_inputs[0]["session_id"].as_str(),
         Some(spawned_id.as_str())
     );
 
