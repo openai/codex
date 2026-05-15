@@ -1393,7 +1393,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths, &root_config_overrides, &interactive).await?;
+            run_exec_server_command(
+                cmd,
+                &arg0_paths,
+                &root_config_overrides,
+                interactive.config_profile.clone(),
+            )
+            .await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1491,7 +1497,7 @@ async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
     root_config_overrides: &CliConfigOverrides,
-    interactive: &TuiCli,
+    config_profile: Option<String>,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1507,7 +1513,7 @@ async fn run_exec_server_command(
             .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
         let auth_provider = load_exec_server_remote_auth_provider(
             root_config_overrides,
-            interactive,
+            config_profile,
             cmd.allow_agent_identity_auth,
         )
         .await?;
@@ -1530,16 +1536,61 @@ async fn run_exec_server_command(
 
 async fn load_exec_server_remote_auth_provider(
     root_config_overrides: &CliConfigOverrides,
-    interactive: &TuiCli,
+    config_profile: Option<String>,
     allow_agent_identity_auth: bool,
 ) -> anyhow::Result<codex_api::SharedAuthProvider> {
+    if !allow_agent_identity_auth {
+        return load_chatgpt_exec_server_remote_auth_provider(
+            root_config_overrides,
+            config_profile,
+        )
+        .await;
+    }
+
+    let auth = load_exec_server_remote_auth(
+        root_config_overrides,
+        config_profile,
+        "remote exec-server registration requires ChatGPT authentication or Agent Identity auth from CODEX_ACCESS_TOKEN",
+    )
+    .await?;
+
+    validate_agent_identity_enabled_exec_server_remote_auth_mode(auth.auth_mode())?;
+
+    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+}
+
+async fn load_chatgpt_exec_server_remote_auth_provider(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+) -> anyhow::Result<codex_api::SharedAuthProvider> {
+    let auth = load_exec_server_remote_auth(
+        root_config_overrides,
+        config_profile,
+        "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
+    )
+    .await?;
+
+    if !auth.is_chatgpt_auth() {
+        anyhow::bail!(
+            "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
+        );
+    }
+
+    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+}
+
+async fn load_exec_server_remote_auth(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+    missing_auth_error: &'static str,
+) -> anyhow::Result<codex_login::CodexAuth> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(ConfigOverrides {
-            config_profile: interactive.config_profile.clone(),
+            config_profile,
             ..Default::default()
         })
         .build()
@@ -1551,37 +1602,24 @@ async fn load_exec_server_remote_auth_provider(
         Some(auth) => auth,
         None => {
             auth_manager.reload().await;
-            auth_manager.auth().await.ok_or_else(|| {
-                if allow_agent_identity_auth {
-                    anyhow::anyhow!(
-                        "remote exec-server registration requires ChatGPT authentication or Agent Identity auth from CODEX_ACCESS_TOKEN"
-                    )
-                } else {
-                    anyhow::anyhow!(
-                        "remote exec-server registration requires ChatGPT authentication; run `codex login` first"
-                    )
-                }
-            })?
+            auth_manager
+                .auth()
+                .await
+                .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
         }
     };
 
-    validate_exec_server_remote_auth_mode(auth.auth_mode(), allow_agent_identity_auth)?;
-
-    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+    Ok(auth)
 }
 
-fn validate_exec_server_remote_auth_mode(
+fn validate_agent_identity_enabled_exec_server_remote_auth_mode(
     auth_mode: AuthMode,
-    allow_agent_identity_auth: bool,
 ) -> anyhow::Result<()> {
     match auth_mode {
         AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => Ok(()),
-        AuthMode::AgentIdentity if allow_agent_identity_auth => Ok(()),
-        AuthMode::AgentIdentity => anyhow::bail!(
-            "remote exec-server registration requires ChatGPT authentication unless --allow-agent-identity-auth is set"
-        ),
+        AuthMode::AgentIdentity => Ok(()),
         AuthMode::ApiKey => anyhow::bail!(
-            "remote exec-server registration requires ChatGPT authentication; API key auth is not supported"
+            "remote exec-server registration requires ChatGPT authentication or Agent Identity auth; API key auth is not supported"
         ),
     }
 }
@@ -3017,20 +3055,16 @@ mod tests {
     }
 
     #[test]
-    fn remote_exec_server_auth_mode_allows_agent_identity_only_with_flag() {
-        validate_exec_server_remote_auth_mode(AuthMode::Chatgpt, false)
+    fn agent_identity_enabled_remote_exec_server_auth_mode_accepts_codex_backend_auth() {
+        validate_agent_identity_enabled_exec_server_remote_auth_mode(AuthMode::Chatgpt)
             .expect("ChatGPT auth should remain supported");
-        validate_exec_server_remote_auth_mode(AuthMode::AgentIdentity, true)
+        validate_agent_identity_enabled_exec_server_remote_auth_mode(AuthMode::AgentIdentity)
             .expect("Agent Identity auth should be available behind the flag");
-
-        let err = validate_exec_server_remote_auth_mode(AuthMode::AgentIdentity, false)
-            .expect_err("Agent Identity auth should remain opt-in");
-        assert!(err.to_string().contains("--allow-agent-identity-auth"));
     }
 
     #[test]
     fn remote_exec_server_auth_mode_rejects_api_keys() {
-        let err = validate_exec_server_remote_auth_mode(AuthMode::ApiKey, true)
+        let err = validate_agent_identity_enabled_exec_server_remote_auth_mode(AuthMode::ApiKey)
             .expect_err("API-key auth should not register remote exec-server");
         assert!(err.to_string().contains("API key auth is not supported"));
     }
