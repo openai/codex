@@ -1,6 +1,7 @@
 mod backend;
 mod client;
 mod managed_install;
+mod remote_control_client;
 mod settings;
 mod update_loop;
 
@@ -13,6 +14,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 pub use backend::BackendKind;
 use backend::BackendPaths;
+use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
@@ -96,6 +98,20 @@ pub enum RemoteControlStartOutput {
     Start(LifecycleOutput),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteControlReadyStatus {
+    pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
+    pub environment_id: Option<String>,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteControlReadyOutput {
+    pub daemon: RemoteControlStartOutput,
+    pub remote_control: RemoteControlReadyStatus,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteControlMode {
     Enabled,
@@ -176,6 +192,13 @@ pub async fn ensure_remote_control_started() -> Result<RemoteControlStartOutput>
     ensure_supported_platform()?;
     Daemon::from_environment()?
         .ensure_remote_control_started()
+        .await
+}
+
+pub async fn ensure_remote_control_ready() -> Result<RemoteControlReadyOutput> {
+    ensure_supported_platform()?;
+    Daemon::from_environment()?
+        .ensure_remote_control_ready()
         .await
 }
 
@@ -395,15 +418,20 @@ impl Daemon {
                     sleep(START_POLL_INTERVAL).await;
                 }
                 Err(err) => {
-                    return Err(err).with_context(|| {
-                        format!(
-                            "app server did not become ready on {}",
-                            self.socket_path.display()
-                        )
-                    });
+                    let context = self.app_server_not_ready_context().await;
+                    return Err(err).context(context);
                 }
             }
         }
+    }
+
+    async fn app_server_not_ready_context(&self) -> String {
+        let mut context = format!(
+            "app server did not become ready on {}",
+            self.socket_path.display()
+        );
+        backend::append_stderr_log_tail_context(&self.pid_file, &mut context).await;
+        context
     }
 
     async fn bootstrap(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
@@ -428,6 +456,16 @@ impl Daemon {
             })
             .await?;
         Ok(RemoteControlStartOutput::Bootstrap(output))
+    }
+
+    async fn ensure_remote_control_ready(&self) -> Result<RemoteControlReadyOutput> {
+        let daemon = self.ensure_remote_control_started().await?;
+        let remote_control =
+            remote_control_client::enable_remote_control(&self.socket_path).await?;
+        Ok(RemoteControlReadyOutput {
+            daemon,
+            remote_control,
+        })
     }
 
     async fn set_remote_control(&self, mode: RemoteControlMode) -> Result<RemoteControlOutput> {
