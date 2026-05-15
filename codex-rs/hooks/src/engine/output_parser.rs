@@ -87,7 +87,6 @@ use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
 use crate::schema::SubagentStartCommandOutputWire;
-use crate::schema::SubagentStopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
@@ -274,35 +273,11 @@ pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitO
     })
 }
 
-pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
+pub(crate) fn parse_stop(stdout: &str, event_name: &str) -> Option<StopOutput> {
     let wire: StopCommandOutputWire = parse_json(stdout)?;
-    Some(stop_output_from_parts(
-        "Stop",
-        wire.decision,
-        wire.reason,
-        wire.universal,
-    ))
-}
-
-pub(crate) fn parse_subagent_stop(stdout: &str) -> Option<StopOutput> {
-    let wire: SubagentStopCommandOutputWire = parse_json(stdout)?;
-    Some(stop_output_from_parts(
-        "SubagentStop",
-        wire.decision,
-        wire.reason,
-        wire.universal,
-    ))
-}
-
-fn stop_output_from_parts(
-    event_name: &str,
-    decision: Option<BlockDecisionWire>,
-    reason: Option<String>,
-    universal_wire: HookUniversalOutputWire,
-) -> StopOutput {
-    let should_block = matches!(decision, Some(BlockDecisionWire::Block));
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
     let invalid_block_reason = if should_block
-        && match reason.as_deref() {
+        && match wire.reason.as_deref() {
             Some(reason) => reason.trim().is_empty(),
             None => true,
         } {
@@ -310,12 +285,12 @@ fn stop_output_from_parts(
     } else {
         None
     };
-    StopOutput {
-        universal: UniversalOutput::from(universal_wire),
+    Some(StopOutput {
+        universal: UniversalOutput::from(wire.universal),
         should_block: should_block && invalid_block_reason.is_none(),
-        reason,
+        reason: wire.reason,
         invalid_block_reason,
-    }
+    })
 }
 
 impl From<HookUniversalOutputWire> for UniversalOutput {

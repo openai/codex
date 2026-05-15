@@ -126,13 +126,7 @@ pub(super) fn parse_completed(
     run_result: CommandRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<StopHandlerData> {
-    parse_stop_completed(
-        handler,
-        run_result,
-        turn_id,
-        "Stop",
-        output_parser::parse_stop,
-    )
+    parse_stop_completed(handler, run_result, turn_id, "Stop")
 }
 
 pub(super) fn parse_subagent_stop_completed(
@@ -140,13 +134,7 @@ pub(super) fn parse_subagent_stop_completed(
     run_result: CommandRunResult,
     turn_id: Option<String>,
 ) -> dispatcher::ParsedHandler<StopHandlerData> {
-    parse_stop_completed(
-        handler,
-        run_result,
-        turn_id,
-        "SubagentStop",
-        output_parser::parse_subagent_stop,
-    )
+    parse_stop_completed(handler, run_result, turn_id, "SubagentStop")
 }
 
 fn parse_stop_completed(
@@ -154,7 +142,6 @@ fn parse_stop_completed(
     run_result: CommandRunResult,
     turn_id: Option<String>,
     hook_name: &str,
-    parse_output: fn(&str) -> Option<output_parser::StopOutput>,
 ) -> dispatcher::ParsedHandler<StopHandlerData> {
     let invalid_json_hook_name = if hook_name == "Stop" {
         "stop"
@@ -181,7 +168,9 @@ fn parse_stop_completed(
             Some(0) => {
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = parse_output(&run_result.stdout) {
+                } else if let Some(parsed) =
+                    output_parser::parse_stop(&run_result.stdout, hook_name)
+                {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
