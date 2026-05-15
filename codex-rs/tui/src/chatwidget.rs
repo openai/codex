@@ -442,6 +442,7 @@ use crate::workspace_command::WorkspaceCommandRunner;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
 use codex_file_search::FileMatch;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;

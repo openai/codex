@@ -43,6 +43,7 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
@@ -743,7 +744,10 @@ pub(crate) enum AppEvent {
     UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current permission profile in the running app and widget.
-    UpdatePermissionProfile(PermissionProfile),
+    UpdatePermissionProfile {
+        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    },
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
