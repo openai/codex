@@ -14,7 +14,7 @@ need to live in `core/src/tools/spec.rs` or `core/src/client_common.rs`:
 - host adapters such as schema sanitization, MCP/dynamic conversion, code-mode
   augmentation, and image-detail normalization
 - shared executable-tool and planning contracts such as `ToolExecutor`,
-  `ToolSource`, `ToolSetBuilder`, `ToolCall`, and `ToolOutput`
+  `ToolSetBuilder`, `ToolCall`, and `ToolOutput`
 
 That extraction is the first step in a longer migration. The goal is not to
 move all of `core/src/tools` into this crate in one shot. Instead, the plan is

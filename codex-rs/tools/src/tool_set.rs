@@ -1,14 +1,5 @@
 use crate::ToolSpec;
 
-/// Source of tools for one host-specific planning context.
-///
-/// Implementations add runtime tools, hosted model tools, or both to the
-/// supplied tool set. The context and runtime type are host-owned so this
-/// abstraction can stay independent of `codex-core`.
-pub trait ToolSource<C, R>: Send + Sync {
-    fn add_tools(&self, ctx: &C, tools: &mut ToolSetBuilder<R>);
-}
-
 /// Accumulates the concrete tools available for one model request.
 ///
 /// Runtime tools carry both their executable handler and model-visible spec.

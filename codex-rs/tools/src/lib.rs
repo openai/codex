@@ -86,7 +86,6 @@ pub use tool_output::ToolOutput;
 pub use tool_payload::ToolPayload;
 pub use tool_set::ToolSet;
 pub use tool_set::ToolSetBuilder;
-pub use tool_set::ToolSource;
 pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;
 pub use tool_spec::ToolSpec;
