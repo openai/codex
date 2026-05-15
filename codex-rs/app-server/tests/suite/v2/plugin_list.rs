@@ -1802,7 +1802,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 }
 
 #[tokio::test]
-async fn plugin_installed_does_not_fetch_remote_installed_when_cache_is_empty() -> Result<()> {
+async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -1827,6 +1827,7 @@ async fn plugin_installed_does_not_fetch_remote_installed_when_cache_is_empty() 
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
         .await;
+    write_installed_plugin_with_version(&codex_home, "chatgpt-global", "linear", "1.2.3")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -1845,14 +1846,43 @@ async fn plugin_installed_does_not_fetch_remote_installed_when_cache_is_empty() 
     .await??;
     let response: PluginInstalledResponse = to_response(response)?;
 
-    assert_eq!(response.marketplaces, Vec::new());
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "chatgpt-global");
+    assert_eq!(
+        response.marketplaces[0]
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![("linear@chatgpt-global".to_string(), true, true)]
+    );
     wait_for_remote_plugin_request_count(
         &server,
         "/ps/plugins/installed",
-        /*expected_count*/ 0,
+        /*expected_count*/ 2,
     )
     .await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
+
+    let second_request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let _: PluginInstalledResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
+        )
+        .await??,
+    )?;
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 2,
+    )
+    .await?;
     Ok(())
 }
 

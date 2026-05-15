@@ -864,14 +864,40 @@ impl PluginRequestProcessor {
         }
 
         if config.features.enabled(Feature::RemotePlugin) {
-            if let Some(remote_marketplaces) =
+            let remote_marketplaces = if let Some(remote_marketplaces) =
                 plugins_manager.remote_installed_marketplaces_from_cache()
             {
-                for remote_marketplace in remote_marketplaces
-                    .into_iter()
-                    .map(remote_marketplace_to_info)
-                {
-                    merge_plugin_marketplace_entry(&mut data, remote_marketplace);
+                Ok(remote_marketplaces)
+            } else {
+                let remote_plugin_service_config = RemotePluginServiceConfig {
+                    chatgpt_base_url: config.chatgpt_base_url.clone(),
+                };
+                plugins_manager
+                    .fetch_and_cache_remote_installed_marketplaces(
+                        &remote_plugin_service_config,
+                        auth.as_ref(),
+                    )
+                    .await
+            };
+
+            match remote_marketplaces {
+                Ok(remote_marketplaces) => {
+                    for remote_marketplace in remote_marketplaces
+                        .into_iter()
+                        .map(remote_marketplace_to_info)
+                    {
+                        merge_plugin_marketplace_entry(&mut data, remote_marketplace);
+                    }
+                }
+                Err(
+                    RemotePluginCatalogError::AuthRequired
+                    | RemotePluginCatalogError::UnsupportedAuthMode,
+                ) => {}
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/installed remote installed plugin fetch failed; returning local marketplaces only"
+                    );
                 }
             }
         }
