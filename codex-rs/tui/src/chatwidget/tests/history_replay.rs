@@ -293,7 +293,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.set_permission_profile(updated_profile.clone())
         .expect("set permission profile");
     assert_eq!(
-        chat.config_ref().permissions.permission_profile().get(),
+        chat.config_ref().permissions.permission_profile(),
         &updated_profile,
         "local permission changes should replace SessionConfigured canonical permissions"
     );

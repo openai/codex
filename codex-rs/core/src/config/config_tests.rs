@@ -105,6 +105,18 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
+fn active_permission_profile_state(
+    permission_profile: PermissionProfile,
+    profile_id: impl Into<String>,
+) -> PermissionProfileState {
+    PermissionProfileState::from_constrained_active_profile(
+        Constrained::allow_any(permission_profile),
+        Some(ActivePermissionProfile::new(profile_id)),
+        Vec::new(),
+    )
+    .expect("active permission profile state should be valid")
+}
+
 fn stdio_mcp(command: &str) -> McpServerConfig {
     McpServerConfig {
         transport: McpServerTransportConfig::Stdio {
@@ -1893,8 +1905,9 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     )
     .await?;
 
+    let profile_root_abs = profile_root.abs();
     let policy = config.permissions.file_system_sandbox_policy();
-    for root in [cwd.abs(), runtime_root.abs(), profile_root.abs()] {
+    for root in [cwd.abs(), runtime_root.abs(), profile_root_abs.clone()] {
         assert!(
             policy.can_write_path_with_cwd(root.as_path(), cwd.as_path()),
             "expected workspace root to be writable, policy: {policy:?}"
@@ -1908,6 +1921,10 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
             "expected .codex carveout under {root:?}, policy: {policy:?}"
         );
     }
+    assert_eq!(
+        config.permissions.profile_workspace_roots(),
+        std::slice::from_ref(&profile_root_abs)
+    );
     assert_eq!(
         config.permissions.active_permission_profile(),
         Some(ActivePermissionProfile::new("dev"))
@@ -7541,12 +7558,10 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                constrained_permissions_profile: Constrained::allow_any(
-                    PermissionProfile::read_only()
-                ),
-                active_permission_profile: Some(ActivePermissionProfile::new(
+                permission_profile_state: active_permission_profile_state(
+                    PermissionProfile::read_only(),
                     BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-                )),
+                ),
                 workspace_roots: vec![fixture.cwd()],
                 network: None,
                 allow_login_shell: true,
@@ -7993,10 +8008,10 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            constrained_permissions_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(
+            permission_profile_state: active_permission_profile_state(
+                PermissionProfile::read_only(),
                 BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            )),
+            ),
             workspace_roots: vec![fixture.cwd()],
             network: None,
             allow_login_shell: true,
@@ -8157,10 +8172,10 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            constrained_permissions_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(
+            permission_profile_state: active_permission_profile_state(
+                PermissionProfile::read_only(),
                 BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            )),
+            ),
             workspace_roots: vec![fixture.cwd()],
             network: None,
             allow_login_shell: true,
@@ -8306,10 +8321,10 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            constrained_permissions_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(
+            permission_profile_state: active_permission_profile_state(
+                PermissionProfile::read_only(),
                 BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            )),
+            ),
             workspace_roots: vec![fixture.cwd()],
             network: None,
             allow_login_shell: true,
