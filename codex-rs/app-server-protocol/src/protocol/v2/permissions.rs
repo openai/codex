@@ -21,7 +21,9 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use ts_rs::TS;
@@ -456,31 +458,100 @@ impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfileSelectionParams {
-    /// Select a named built-in or user-defined profile and optionally apply
-    /// bounded modifications that Codex knows how to validate.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Profile {
-        id: String,
-        #[ts(optional = nullable)]
-        modifications: Option<Vec<PermissionProfileModificationParams>>,
-    },
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionProfileSelectionParams {
+    id: String,
+    legacy_additional_writable_roots: Vec<AbsolutePathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfileModificationParams {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
+impl PermissionProfileSelectionParams {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            legacy_additional_writable_roots: Vec::new(),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn into_id(self) -> String {
+        self.id
+    }
+
+    pub fn legacy_additional_writable_roots(&self) -> &[AbsolutePathBuf] {
+        &self.legacy_additional_writable_roots
+    }
+}
+
+impl From<String> for PermissionProfileSelectionParams {
+    fn from(id: String) -> Self {
+        Self::new(id)
+    }
+}
+
+impl Serialize for PermissionProfileSelectionParams {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.id)
+    }
+}
+
+impl<'de> Deserialize<'de> for PermissionProfileSelectionParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Id(String),
+            LegacyProfile {
+                #[serde(rename = "type")]
+                _type: LegacyPermissionProfileSelectionType,
+                id: String,
+                #[serde(default)]
+                modifications: Option<Vec<LegacyPermissionProfileModificationParams>>,
+            },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum LegacyPermissionProfileSelectionType {
+            Profile,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "camelCase")]
+        enum LegacyPermissionProfileModificationParams {
+            #[serde(rename_all = "camelCase")]
+            AdditionalWritableRoot { path: AbsolutePathBuf },
+        }
+
+        match Wire::deserialize(deserializer)? {
+            Wire::Id(id) => Ok(Self::new(id)),
+            Wire::LegacyProfile {
+                id, modifications, ..
+            } => {
+                let legacy_additional_writable_roots = modifications
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|modification| match modification {
+                        LegacyPermissionProfileModificationParams::AdditionalWritableRoot {
+                            path,
+                        } => path,
+                    })
+                    .collect();
+                Ok(Self {
+                    id,
+                    legacy_additional_writable_roots,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
