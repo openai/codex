@@ -1850,31 +1850,6 @@
         }
       ]
     },
-    "PermissionProfileModificationParams": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootPermissionProfileModificationParams",
-          "type": "object"
-        }
-      ]
-    },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
@@ -1885,40 +1860,6 @@
         "enabled"
       ],
       "type": "object"
-    },
-    "PermissionProfileSelectionParams": {
-      "oneOf": [
-        {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "modifications": {
-              "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "profile"
-              ],
-              "title": "ProfilePermissionProfileSelectionParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "type"
-          ],
-          "title": "ProfilePermissionProfileSelectionParams",
-          "type": "object"
-        }
-      ]
     },
     "Personality": {
       "enum": [
