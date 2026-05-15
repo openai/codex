@@ -173,6 +173,7 @@ use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
+use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
@@ -617,8 +618,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            permission_profile: session_permission_profile_from_config(&config)?,
-            active_permission_profile: config.permissions.active_permission_profile(),
+            permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -818,18 +818,18 @@ fn get_service_tier(
         .then_some(ServiceTier::Fast.request_value().to_string())
 }
 
-fn session_permission_profile_from_config(
+fn session_permission_profile_state_from_config(
     config: &Config,
-) -> CodexResult<codex_config::Constrained<PermissionProfile>> {
-    let mut session_permission_profile = config.permissions.permission_profile().clone();
-    session_permission_profile
-        .set(config.permissions.effective_permission_profile())
+) -> CodexResult<PermissionProfileState> {
+    config
+        .permissions
+        .permission_profile_state()
+        .clone_with_permission_profile(config.permissions.effective_permission_profile())
         .map_err(|err| {
             CodexErr::Fatal(format!(
                 "failed to materialize workspace roots for session permissions: {err}"
             ))
-        })?;
-    Ok(session_permission_profile)
+        })
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {

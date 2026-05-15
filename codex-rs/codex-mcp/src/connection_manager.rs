@@ -81,13 +81,20 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         permission_profile: &Constrained<PermissionProfile>,
     ) -> Self {
+        Self::new_uninitialized_with_permission_profile(approval_policy, permission_profile.get())
+    }
+
+    pub fn new_uninitialized_with_permission_profile(
+        approval_policy: &Constrained<AskForApproval>,
+        permission_profile: &PermissionProfile,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
-                permission_profile.get().clone(),
+                permission_profile.clone(),
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
