@@ -34,7 +34,6 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -780,10 +779,11 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permissions: Some(PermissionProfileSelectionParams::Profile {
-                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                modifications: None,
-            }),
+            permissions: Some(
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
+                    .to_string()
+                    .into(),
+            ),
             ..Default::default()
         })
         .await?;
@@ -1891,6 +1891,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
+            runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
@@ -1932,6 +1933,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(second_cwd.clone()),
+            runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
@@ -1987,6 +1989,152 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_start_permission_profile_rebinds_runtime_workspace_roots_between_turns() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let old_root = tmp.path().join("old-root");
+    let new_root = tmp.path().join("new-root");
+    std::fs::create_dir(&old_root)?;
+    std::fs::create_dir(&new_root)?;
+    let old_root_text = old_root.to_string_lossy().into_owned();
+    let new_root_text = new_root.to_string_lossy().into_owned();
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message("msg-1", "done first"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-2", "done second"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let server_uri = server.uri();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+default_permissions = "dev"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[permissions.dev.filesystem.":workspace_roots"]
+"." = "write"
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let first_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "select dev profile".to_string(),
+                text_elements: Vec::new(),
+            }],
+            runtime_workspace_roots: Some(vec![old_root]),
+            permissions: Some("dev".to_string().into()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let second_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "write in new root".to_string(),
+                text_elements: Vec::new(),
+            }],
+            runtime_workspace_roots: Some(vec![new_root]),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_id)),
+    )
+    .await??;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two Responses API requests");
+    let latest_permissions_instructions =
+        |request: &core_test_support::responses::ResponsesRequest| {
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .rev()
+                .find(|text| text.contains("<permissions instructions>"))
+                .expect("permissions instructions")
+        };
+    let first_permissions = latest_permissions_instructions(&requests[0]);
+    assert!(first_permissions.contains(&old_root_text));
+    assert!(
+        !first_permissions.contains(&new_root_text),
+        "first turn should materialize the initial runtime workspace root"
+    );
+
+    let second_permissions = latest_permissions_instructions(&requests[1]);
+    assert!(second_permissions.contains(&new_root_text));
+    assert!(
+        !second_permissions.contains(&old_root_text),
+        "second turn should rebind :workspace_roots to the updated runtime workspace root"
+    );
 
     Ok(())
 }

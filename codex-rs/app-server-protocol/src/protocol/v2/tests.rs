@@ -656,6 +656,61 @@ fn permissions_request_approval_response_accepts_strict_auto_review() {
 }
 
 #[test]
+fn permission_profile_selection_accepts_legacy_object_shape() {
+    let additional_root = absolute_path("additional-root");
+    let params = json!({
+        "permissions": {
+            "type": "profile",
+            "id": ":workspace",
+            "modifications": [
+                {
+                    "type": "additionalWritableRoot",
+                    "path": additional_root,
+                }
+            ],
+        },
+    });
+
+    let start: ThreadStartParams =
+        serde_json::from_value(params.clone()).expect("thread/start params deserialize");
+    assert_legacy_permission_profile_selection(start.permissions, &additional_root);
+
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": params["permissions"].clone(),
+    }))
+    .expect("thread/resume params deserialize");
+    assert_legacy_permission_profile_selection(resume.permissions, &additional_root);
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": params["permissions"].clone(),
+    }))
+    .expect("thread/fork params deserialize");
+    assert_legacy_permission_profile_selection(fork.permissions, &additional_root);
+
+    let turn: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "input": [],
+        "permissions": params["permissions"].clone(),
+    }))
+    .expect("turn/start params deserialize");
+    assert_legacy_permission_profile_selection(turn.permissions, &additional_root);
+}
+
+fn assert_legacy_permission_profile_selection(
+    selection: Option<PermissionProfileSelectionParams>,
+    additional_root: &AbsolutePathBuf,
+) {
+    let selection = selection.expect("permissions should be present");
+    assert_eq!(selection.id(), ":workspace");
+    assert_eq!(
+        selection.legacy_additional_writable_roots(),
+        std::slice::from_ref(additional_root)
+    );
+}
+
+#[test]
 fn fs_get_metadata_response_round_trips_minimal_fields() {
     let response = FsGetMetadataResponse {
         is_directory: false,
@@ -3473,6 +3528,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         responsesapi_client_metadata: None,
         environments: None,
         cwd: None,
+        runtime_workspace_roots: None,
         approval_policy: None,
         approvals_reviewer: None,
         sandbox_policy: None,
