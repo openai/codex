@@ -5,9 +5,6 @@ use anyhow::Result;
 use codex_config::types::AppToolApproval;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_login::CodexAuth;
-use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -21,6 +18,10 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
+use core_test_support::apps_test_server::search_capable_apps_builder;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -31,47 +32,12 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::TestCodexBuilder;
-use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
-use wiremock::MockServer;
-
-const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
-
-fn configure_search_capable_model(config: &mut Config) {
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let model = model_catalog
-        .models
-        .iter_mut()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 exists in bundled models.json");
-    config.model = Some("gpt-5.4".to_string());
-    model.supports_search_tool = true;
-    config.model_catalog = Some(model_catalog);
-}
-
-fn configure_apps(config: &mut Config, apps_base_url: &str) {
-    config
-        .features
-        .enable(Feature::Apps)
-        .expect("test config should allow feature update");
-    config.chatgpt_base_url = apps_base_url.to_string();
-    configure_search_capable_model(config);
-}
-
-fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
-    test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| configure_apps(config, apps_base_url.as_str()))
-}
 
 fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApproval) {
     let approval_mode = match approval_mode {
@@ -124,39 +90,6 @@ async fn submit_user_turn(
     Ok(())
 }
 
-fn app_tool_call_id(body: &Value) -> Option<&str> {
-    body.get("params")?
-        .get("_meta")?
-        .get(MCP_TOOL_CODEX_APPS_META_KEY)?
-        .get("call_id")?
-        .as_str()
-}
-
-async fn recorded_apps_tool_call(server: &MockServer, call_id: &str) -> Value {
-    let matches = server
-        .received_requests()
-        .await
-        .expect("mock server should capture requests")
-        .into_iter()
-        .filter_map(|request| {
-            let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/apps"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call")
-                && app_tool_call_id(&body) == Some(call_id))
-            .then_some(body)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        matches.len(),
-        1,
-        "expected exactly one apps tools/call request for call_id {call_id}"
-    );
-    matches
-        .into_iter()
-        .next()
-        .expect("matching apps tools/call request should be recorded")
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -190,8 +123,8 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     )
     .await;
 
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
             config
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
@@ -241,7 +174,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     .await;
 
     assert_eq!(mock.requests().len(), 2);
-    let apps_tool_call = recorded_apps_tool_call(&server, call_id).await;
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
 
     assert_eq!(
         apps_tool_call
@@ -310,8 +243,8 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
     )
     .await;
 
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
             set_calendar_approval_mode(config, AppToolApproval::Approve);
         });
     let test = builder.build(&server).await?;
@@ -367,7 +300,7 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
     .await;
 
     assert_eq!(mock.requests().len(), 3);
-    let apps_tool_call = recorded_apps_tool_call(&server, calendar_call_id).await;
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, calendar_call_id).await;
 
     assert_eq!(
         apps_tool_call
