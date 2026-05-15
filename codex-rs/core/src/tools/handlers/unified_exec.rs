@@ -1,5 +1,6 @@
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -79,6 +80,12 @@ fn effective_max_output_tokens(
     resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
 }
 
+#[derive(Debug)]
+pub(crate) struct ResolvedCommand {
+    pub(crate) command: Vec<String>,
+    pub(crate) shell_type: ShellType,
+}
+
 fn post_unified_exec_tool_use_payload(
     invocation: &ToolInvocation,
     result: &ExecCommandToolOutput,
@@ -107,7 +114,7 @@ pub(crate) fn get_command(
     session_shell: Arc<Shell>,
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<ResolvedCommand, String> {
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
             return Err(
@@ -126,13 +133,19 @@ pub(crate) fn get_command(
                 shell
             });
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-            Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+            Ok(ResolvedCommand {
+                command: shell.derive_exec_args(&args.cmd, use_login_shell),
+                shell_type: shell.shell_type.clone(),
+            })
         }
-        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
-            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
-            if use_login_shell { "-lc" } else { "-c" }.to_string(),
-            args.cmd.clone(),
-        ]),
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(ResolvedCommand {
+            command: vec![
+                zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+                if use_login_shell { "-lc" } else { "-c" }.to_string(),
+                args.cmd.clone(),
+            ],
+            shell_type: ShellType::Zsh,
+        }),
     }
 }
 

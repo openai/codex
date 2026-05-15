@@ -166,8 +166,8 @@ fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs::default(),
@@ -439,8 +439,8 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -475,8 +475,8 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -503,8 +503,8 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ true,
         &ProxyPolicyInputs {
@@ -793,8 +793,8 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {

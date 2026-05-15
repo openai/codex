@@ -5,10 +5,12 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::build_specs_with_discoverable_tools;
+use crate::tools::spec::collect_tool_router_parts;
+use crate::tools::spec_plan::build_tool_registry_builder_from_executors;
 use codex_extension_api::ExtensionToolExecutor;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -53,7 +55,7 @@ impl ToolRouter {
             extension_tool_executors,
             dynamic_tools,
         } = params;
-        let builder = build_specs_with_discoverable_tools(
+        let parts = collect_tool_router_parts(
             config,
             mcp_tools,
             deferred_mcp_tools,
@@ -61,6 +63,15 @@ impl ToolRouter {
             &extension_tool_executors,
             dynamic_tools,
         );
+        Self::from_executors(config, parts.executors, parts.hosted_specs)
+    }
+
+    pub(crate) fn from_executors(
+        config: &ToolsConfig,
+        executors: Vec<Arc<dyn RegisteredTool>>,
+        hosted_specs: Vec<ToolSpec>,
+    ) -> Self {
+        let builder = build_tool_registry_builder_from_executors(config, executors, hosted_specs);
         let (specs, registry) = builder.build();
         let model_visible_specs = specs
             .into_iter()

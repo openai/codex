@@ -291,6 +291,8 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
     );
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -304,7 +306,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
                 arguments: serde_json::json!({
                     "command": "echo hi",
                     "login": false,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": expiration_ms,
                     "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
                     "additional_permissions": PermissionProfile {
@@ -392,6 +394,8 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
     );
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -405,7 +409,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                 arguments: serde_json::json!({
                     "command": "echo hi",
                     "login": false,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                     "timeout_ms": 1_000_u64,
                 })
                 .to_string(),
@@ -558,6 +562,8 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
     );
+    #[allow(deprecated)]
+    let workdir = Some(turn_context.cwd.to_string_lossy().to_string());
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
@@ -572,7 +578,7 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
                     "command": "echo hi",
                     "login": false,
                     "timeout_ms": 1_000_u64,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": workdir,
                 })
                 .to_string(),
             },

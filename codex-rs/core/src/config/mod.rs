@@ -18,6 +18,7 @@ use codex_config::FeatureRequirementsToml;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
+use codex_config::ProfileV2Name;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
@@ -177,12 +178,17 @@ pub(crate) const AGENTS_MD_MAX_BYTES: usize = DEFAULT_PROJECT_DOC_MAX_BYTES; // 
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usize = 4;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
-pub(crate) const MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
+pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
+pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
+    DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -478,15 +484,6 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional commit attribution text for commit message co-author trailers.
-    /// This top-level setting only takes effect when `[features].codex_git_commit`
-    /// is enabled.
-    ///
-    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
-    /// - `Some("")` or whitespace-only: disable commit attribution
-    /// - `Some("...")`: use the provided attribution text verbatim
-    pub commit_attribution: Option<String>,
-
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -755,23 +752,17 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread persistence backend.
     pub experimental_thread_store: ThreadStoreConfig,
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_chatgpt_workspace_id: Option<String>,
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
-
-    /// Include the `apply_patch` tool for models that benefit from invoking
-    /// file edits as a structured tool call. When unset, this falls back to the
-    /// model info's default preference.
-    pub include_apply_patch_tool: bool,
 
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
@@ -806,9 +797,6 @@ pub struct Config {
     /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
     pub active_project: ProjectConfig,
 
-    /// Tracks whether the Windows onboarding screen has been acknowledged.
-    pub windows_wsl_setup_acknowledged: bool,
-
     /// Collection of various notices we show the user
     pub notices: Notice,
 
@@ -841,6 +829,8 @@ pub struct Config {
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
     pub min_wait_timeout_ms: i64,
+    pub max_wait_timeout_ms: i64,
+    pub default_wait_timeout_ms: i64,
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
@@ -855,6 +845,8 @@ impl Default for MultiAgentV2Config {
             max_concurrent_threads_per_session:
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
+            max_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS,
+            default_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
@@ -890,7 +882,7 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
-    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
     }
 
@@ -1272,6 +1264,52 @@ impl Config {
         )
         .await
     }
+    /// This is a secondary way of creating [Config], which is appropriate when
+    /// the harness is meant to be used with a specific configuration that
+    /// ignores user settings. For example, the `codex exec` subcommand is
+    /// designed to use [AskForApproval::Never] exclusively.
+    ///
+    /// Further, [ConfigOverrides] contains some options that are not supported
+    /// in [ConfigToml], such as `cwd`, `codex_self_exe`, `codex_linux_sandbox_exe`, and
+    /// `main_execve_wrapper_exe`.
+    pub async fn load_with_cli_overrides_and_harness_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+        harness_overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .harness_overrides(harness_overrides)
+            .build()
+            .await
+    }
+}
+
+pub fn resolve_profile_v2_config_path(
+    codex_home: &Path,
+    profile_name: &ProfileV2Name,
+) -> AbsolutePathBuf {
+    AbsolutePathBuf::resolve_path_against_base(
+        format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}"),
+        codex_home,
+    )
+}
+
+/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
+/// with [ConfigToml] directly means that [ConfigRequirements] have not been
+/// applied yet, which risks failing to enforce required constraints.
+pub async fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_loader_overrides(
+        codex_home,
+        cwd,
+        cli_overrides,
+        loader_overrides,
+    )
+    .await
 }
 
 /// DEPRECATED for most callers: prefer [Config::load_with_cli_overrides()] or
@@ -1881,7 +1919,6 @@ pub struct ConfigOverrides {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
-    pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
@@ -1973,6 +2010,14 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.min_wait_timeout_ms)
         .or_else(|| base.and_then(|config| config.min_wait_timeout_ms))
         .unwrap_or(default.min_wait_timeout_ms);
+    let max_wait_timeout_ms = profile
+        .and_then(|config| config.max_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.max_wait_timeout_ms))
+        .unwrap_or(default.max_wait_timeout_ms);
+    let default_wait_timeout_ms = profile
+        .and_then(|config| config.default_wait_timeout_ms)
+        .or_else(|| base.and_then(|config| config.default_wait_timeout_ms))
+        .unwrap_or(default.default_wait_timeout_ms);
     let usage_hint_enabled = profile
         .and_then(|config| config.usage_hint_enabled)
         .or_else(|| base.and_then(|config| config.usage_hint_enabled))
@@ -2004,6 +2049,8 @@ fn resolve_multi_agent_v2_config(
     MultiAgentV2Config {
         max_concurrent_threads_per_session,
         min_wait_timeout_ms,
+        max_wait_timeout_ms,
+        default_wait_timeout_ms,
         usage_hint_enabled,
         usage_hint_text,
         root_agent_usage_hint_text,
@@ -2084,6 +2131,22 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     }
 
     WebSearchMode::Disabled
+}
+
+fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Result<()> {
+    if value < HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at least {HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS}"),
+        ));
+    }
+    if value > HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} must be at most {HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS}"),
+        ));
+    }
+    Ok(())
 }
 
 impl Config {
@@ -2170,7 +2233,6 @@ impl Config {
             developer_instructions,
             personality,
             compact_prompt,
-            include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
@@ -2224,22 +2286,16 @@ impl Config {
         };
         let tool_suggest = resolve_tool_suggest_config(&cfg, &config_layer_stack);
         let feature_overrides = FeatureOverrides {
-            include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
         };
 
         let configured_features = Features::from_sources(
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
-                include_apply_patch_tool: None,
-                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             },
             FeatureConfigSource {
                 features: config_profile.features.as_ref(),
-                include_apply_patch_tool: config_profile.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: config_profile
-                    .experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: config_profile
                     .experimental_use_unified_exec_tool,
             },
@@ -2530,7 +2586,7 @@ impl Config {
                 // Keep legacy behavior for extra writable roots while storing
                 // the result as the canonical permission profile. Explicit
                 // extra roots are concrete paths, so their metadata carveouts
-                // are also concrete rather than symbolic `:project_roots`
+                // are also concrete rather than symbolic `:workspace_roots`
                 // entries.
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_legacy_workspace_writable_roots(&additional_writable_roots);
@@ -2614,6 +2670,7 @@ impl Config {
                 .and_then(|config| config.path.as_ref())
                 .or_else(|| base.and_then(|config| config.path.as_ref()))
                 .cloned()
+                .or_else(|| Some("/ps/mcp".to_string()))
         } else {
             None
         };
@@ -2659,18 +2716,34 @@ impl Config {
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
             ));
         }
-        if multi_agent_v2.min_wait_timeout_ms <= 0 {
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.min_wait_timeout_ms",
+            multi_agent_v2.min_wait_timeout_ms,
+        )?;
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.max_wait_timeout_ms",
+            multi_agent_v2.max_wait_timeout_ms,
+        )?;
+        validate_multi_agent_v2_wait_timeout(
+            "features.multi_agent_v2.default_wait_timeout_ms",
+            multi_agent_v2.default_wait_timeout_ms,
+        )?;
+        if multi_agent_v2.min_wait_timeout_ms > multi_agent_v2.max_wait_timeout_ms {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "features.multi_agent_v2.min_wait_timeout_ms must be at least 1",
+                "features.multi_agent_v2.min_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
-        if multi_agent_v2.min_wait_timeout_ms > MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS {
+        if multi_agent_v2.default_wait_timeout_ms < multi_agent_v2.min_wait_timeout_ms {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "features.multi_agent_v2.min_wait_timeout_ms must be at most {MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS}"
-                ),
+                "features.multi_agent_v2.default_wait_timeout_ms must be at least features.multi_agent_v2.min_wait_timeout_ms",
+            ));
+        }
+        if multi_agent_v2.default_wait_timeout_ms > multi_agent_v2.max_wait_timeout_ms {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
@@ -2761,18 +2834,20 @@ impl Config {
             config
         };
 
-        let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id =
-            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
+        let forced_chatgpt_workspace_id = cfg
+            .forced_chatgpt_workspace_id
+            .clone()
+            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 
@@ -2806,8 +2881,6 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
-
-        let commit_attribution = cfg.commit_attribution;
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -3050,7 +3123,6 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
-            commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,
@@ -3173,7 +3245,6 @@ impl Config {
             experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
             forced_chatgpt_workspace_id,
             forced_login_method,
-            include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             use_experimental_unified_exec_tool,
@@ -3186,7 +3257,6 @@ impl Config {
                 .unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
-            windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices,
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),

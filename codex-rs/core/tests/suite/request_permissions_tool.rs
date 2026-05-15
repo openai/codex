@@ -340,7 +340,6 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
     let permission_profile_for_config = permission_profile.clone();
 
     let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
             .permissions

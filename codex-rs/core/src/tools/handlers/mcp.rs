@@ -45,6 +45,7 @@ impl McpHandler {
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for McpHandler {
     type Output = McpToolOutput;
 

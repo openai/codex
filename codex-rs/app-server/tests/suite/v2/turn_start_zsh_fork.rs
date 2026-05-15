@@ -537,8 +537,8 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![workspace.clone().try_into()?],
                 network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
             }),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),

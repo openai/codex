@@ -1,7 +1,6 @@
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolFuture;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
@@ -15,7 +14,8 @@ use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
 
 use super::backend_error_to_function_call;
-use super::function_tool;
+use super::memory_function_tool;
+use super::memory_tool_name;
 use super::parse_args;
 
 #[derive(Deserialize, JsonSchema)]
@@ -33,35 +33,39 @@ pub(super) struct ReadTool<B> {
     pub(super) backend: B,
 }
 
-impl<B> ExtensionToolExecutor for ReadTool<B>
+#[async_trait::async_trait]
+impl<B> ToolExecutor<ToolCall> for ReadTool<B>
 where
     B: MemoriesBackend,
 {
+    type Output = JsonToolOutput;
+
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(READ_TOOL_NAME)
+        memory_tool_name(READ_TOOL_NAME)
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(function_tool::<ReadArgs, ReadMemoryResponse>(
+        Some(memory_function_tool::<ReadArgs, ReadMemoryResponse>(
             READ_TOOL_NAME,
             "Read a Codex memory file by relative path, optionally starting at a 1-indexed line offset and limiting the number of lines returned.",
         ))
     }
 
-    fn handle(&self, call: ToolCall) -> ExtensionToolFuture<'_> {
+    async fn handle(
+        &self,
+        call: ToolCall,
+    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
         let backend = self.backend.clone();
-        Box::pin(async move {
-            let args: ReadArgs = parse_args(&call)?;
-            let response = backend
-                .read(ReadMemoryRequest {
-                    path: args.path,
-                    line_offset: args.line_offset.unwrap_or(1),
-                    max_lines: args.max_lines,
-                    max_tokens: DEFAULT_READ_MAX_TOKENS,
-                })
-                .await
-                .map_err(backend_error_to_function_call)?;
-            Ok(JsonToolOutput::new(json!(response)))
-        })
+        let args: ReadArgs = parse_args(&call)?;
+        let response = backend
+            .read(ReadMemoryRequest {
+                path: args.path,
+                line_offset: args.line_offset.unwrap_or(1),
+                max_lines: args.max_lines,
+                max_tokens: DEFAULT_READ_MAX_TOKENS,
+            })
+            .await
+            .map_err(backend_error_to_function_call)?;
+        Ok(JsonToolOutput::new(json!(response)))
     }
 }

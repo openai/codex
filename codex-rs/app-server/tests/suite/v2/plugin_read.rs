@@ -300,74 +300,76 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_plugin_read_request(PluginReadParams {
-            marketplace_path: None,
-            remote_marketplace_name: Some("workspace-shared-with-me-private".to_string()),
-            plugin_name: "plugins~Plugin_11111111111111111111111111111111".to_string(),
-        })
-        .await?;
+    for remote_marketplace_name in [
+        "workspace-shared-with-me-private",
+        "workspace-shared-with-me",
+    ] {
+        let request_id = mcp
+            .send_plugin_read_request(PluginReadParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some(remote_marketplace_name.to_string()),
+                plugin_name: "plugins~Plugin_11111111111111111111111111111111".to_string(),
+            })
+            .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginReadResponse = to_response(response)?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(
-        response.plugin.marketplace_name,
-        "workspace-shared-with-me-private"
-    );
-    assert_eq!(
-        response.plugin.summary.id,
-        "shared-linear@workspace-shared-with-me-private"
-    );
-    assert_eq!(
-        response.plugin.summary.remote_plugin_id.as_deref(),
-        Some("plugins~Plugin_11111111111111111111111111111111")
-    );
-    let share_context = response
-        .plugin
-        .summary
-        .share_context
-        .as_ref()
-        .expect("expected share context");
-    assert_eq!(
-        share_context.remote_plugin_id,
-        "plugins~Plugin_11111111111111111111111111111111"
-    );
-    assert_eq!(share_context.remote_version.as_deref(), Some("2.3.4"));
-    assert_eq!(
-        share_context.discoverability,
-        Some(PluginShareDiscoverability::Private)
-    );
-    assert_eq!(
-        share_context.creator_account_user_id.as_deref(),
-        Some("user-gavin__account-123")
-    );
-    assert_eq!(share_context.creator_name.as_deref(), Some("Gavin"));
-    assert_eq!(
-        share_context.share_url.as_deref(),
-        Some("https://chatgpt.example/plugins/share/share-key-1")
-    );
-    assert_eq!(
-        share_context.share_principals,
-        Some(vec![
-            PluginSharePrincipal {
-                principal_type: PluginSharePrincipalType::User,
-                principal_id: "user-gavin__account-123".to_string(),
-                role: PluginSharePrincipalRole::Owner,
-                name: "Gavin".to_string(),
-            },
-            PluginSharePrincipal {
-                principal_type: PluginSharePrincipalType::User,
-                principal_id: "user-ada__account-123".to_string(),
-                role: PluginSharePrincipalRole::Reader,
-                name: "Ada".to_string(),
-            },
-        ])
-    );
+        assert_eq!(response.plugin.marketplace_name, "workspace-shared-with-me");
+        assert_eq!(
+            response.plugin.summary.id,
+            "shared-linear@workspace-shared-with-me"
+        );
+        assert_eq!(
+            response.plugin.summary.remote_plugin_id.as_deref(),
+            Some("plugins~Plugin_11111111111111111111111111111111")
+        );
+        let share_context = response
+            .plugin
+            .summary
+            .share_context
+            .as_ref()
+            .expect("expected share context");
+        assert_eq!(
+            share_context.remote_plugin_id,
+            "plugins~Plugin_11111111111111111111111111111111"
+        );
+        assert_eq!(share_context.remote_version.as_deref(), Some("2.3.4"));
+        assert_eq!(
+            share_context.discoverability,
+            Some(PluginShareDiscoverability::Private)
+        );
+        assert_eq!(
+            share_context.creator_account_user_id.as_deref(),
+            Some("user-gavin__account-123")
+        );
+        assert_eq!(share_context.creator_name.as_deref(), Some("Gavin"));
+        assert_eq!(
+            share_context.share_url.as_deref(),
+            Some("https://chatgpt.example/plugins/share/share-key-1")
+        );
+        assert_eq!(
+            share_context.share_principals,
+            Some(vec![
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-gavin__account-123".to_string(),
+                    role: PluginSharePrincipalRole::Owner,
+                    name: "Gavin".to_string(),
+                },
+                PluginSharePrincipal {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-ada__account-123".to_string(),
+                    role: PluginSharePrincipalRole::Reader,
+                    name: "Ada".to_string(),
+                },
+            ])
+        );
+    }
     Ok(())
 }
 

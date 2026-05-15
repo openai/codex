@@ -99,7 +99,7 @@ pub enum Feature {
     ShellZshFork,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
-    /// Include the freeform apply_patch tool.
+    /// Removed compatibility flag for the deleted apply_patch fallback feature.
     ApplyPatchFreeform,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
@@ -130,7 +130,7 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
-    /// Enable git commit attribution guidance via model instructions.
+    /// Removed legacy git commit attribution guidance flag.
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
@@ -284,25 +284,17 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
-    pub include_apply_patch_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
-        LegacyFeatureToggles {
-            include_apply_patch_tool: self.include_apply_patch_tool,
-            ..Default::default()
-        }
-        .apply(features);
         if let Some(enabled) = self.web_search_request {
             if enabled {
                 features.enable(Feature::WebSearchRequest);
@@ -426,6 +418,12 @@ impl Features {
                 "js_repl_tools_only" => {
                     continue;
                 }
+                "remote_control" => {
+                    continue;
+                }
+                "apply_patch_freeform" => {
+                    continue;
+                }
                 "image_detail_original" => {
                     continue;
                 }
@@ -467,8 +465,6 @@ impl Features {
 
         for source in [base, profile] {
             LegacyFeatureToggles {
-                include_apply_patch_tool: source.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
@@ -782,11 +778,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Removed,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -826,8 +821,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,
@@ -1118,7 +1113,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteControl,
         key: "remote_control",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

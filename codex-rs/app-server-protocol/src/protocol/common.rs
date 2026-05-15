@@ -621,12 +621,12 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global_shared_read("plugin-read"),
+        serialization: None,
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
-        serialization: global_shared_read("plugin-read"),
+        serialization: None,
         response: v2::PluginReadResponse,
     },
     PluginSkillRead => "plugin/skill/read" {
@@ -798,6 +798,18 @@ client_request_definitions! {
         params: v2::ExperimentalFeatureEnablementSetParams,
         serialization: global("config"),
         response: v2::ExperimentalFeatureEnablementSetResponse,
+    },
+    #[experimental("remoteControl/enable")]
+    RemoteControlEnable => "remoteControl/enable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlEnableResponse,
+    },
+    #[experimental("remoteControl/disable")]
+    RemoteControlDisable => "remoteControl/disable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlDisableResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -1688,12 +1700,7 @@ mod tests {
                 marketplace_kinds: None,
             },
         };
-        assert_eq!(
-            plugin_list.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead(
-                "plugin-read"
-            ))
-        );
+        assert_eq!(plugin_list.serialization_scope(), None);
 
         let plugin_read = ClientRequest::PluginRead {
             request_id: request_id(),
@@ -1703,12 +1710,7 @@ mod tests {
                 plugin_name: "plugin-a".to_string(),
             },
         };
-        assert_eq!(
-            plugin_read.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead(
-                "plugin-read"
-            ))
-        );
+        assert_eq!(plugin_read.serialization_scope(), None);
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),

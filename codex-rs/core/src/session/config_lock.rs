@@ -194,7 +194,6 @@ fn drop_lockfile_inputs(lock_config: &mut ConfigToml) {
     lock_config.default_permissions = None;
     lock_config.permissions = None;
     lock_config.experimental_use_unified_exec_tool = None;
-    lock_config.experimental_use_freeform_apply_patch = None;
 }
 
 fn resolved_config_to_toml<Toml>(
@@ -264,6 +263,8 @@ mod tests {
                 enabled: Some(false),
                 max_concurrent_threads_per_session: Some(_),
                 min_wait_timeout_ms: Some(_),
+                max_wait_timeout_ms: Some(_),
+                default_wait_timeout_ms: Some(_),
                 usage_hint_enabled: Some(_),
                 hide_spawn_agent_metadata: Some(_),
                 ..

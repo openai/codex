@@ -22,6 +22,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::McpServerConfig;
+use codex_config::McpServerOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
@@ -214,6 +215,9 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth: Some(McpServerOAuthConfig {
+                        client_id: Some("client-id".to_string()),
+                    }),
                     oauth_resource: None,
                     tools: HashMap::new(),
                 },
@@ -315,7 +319,7 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_config() {
+async fn remote_installed_cache_adds_plugin_skill_roots_without_remote_plugin_flag() {
     let codex_home = TempDir::new().unwrap();
     let plugin_base = codex_home
         .path()
@@ -325,7 +329,6 @@ async fn remote_installed_cache_adds_plugin_skill_roots_without_marketplace_conf
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
@@ -679,6 +682,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
             },
@@ -790,6 +794,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
             },
@@ -951,6 +956,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth: None,
         oauth_resource: None,
         tools: HashMap::new(),
     };

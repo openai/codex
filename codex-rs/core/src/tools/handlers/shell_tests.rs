@@ -88,6 +88,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let expected_command = session
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
+    #[allow(deprecated)]
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,

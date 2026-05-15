@@ -56,6 +56,7 @@ impl FeedbackRequestProcessor {
             extra_log_files,
             tags,
         } = params;
+        let mut upload_tags = tags.unwrap_or_default();
 
         let conversation_id = match thread_id.as_deref() {
             Some(thread_id) => match ThreadId::from_string(thread_id) {
@@ -197,14 +198,27 @@ impl FeedbackRequestProcessor {
             }
         }
 
+        let mut extra_attachments = Vec::new();
+        if include_logs
+            && let Some(doctor_report) =
+                super::feedback_doctor_report::doctor_feedback_report(&self.config).await
+        {
+            extra_attachments.push(doctor_report.attachment);
+            for (key, value) in doctor_report.tags {
+                upload_tags.entry(key).or_insert(value);
+            }
+        }
+
         let session_source = self.thread_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
+            let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
             snapshot.upload_feedback(FeedbackUploadOptions {
                 classification: &classification,
                 reason: reason.as_deref(),
-                tags: tags.as_ref(),
+                tags,
                 include_logs,
+                extra_attachments: &extra_attachments,
                 extra_attachment_paths: &attachment_paths,
                 session_source: Some(session_source),
                 logs_override: sqlite_feedback_logs,
