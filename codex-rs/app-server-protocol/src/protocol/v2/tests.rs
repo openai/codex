@@ -1531,7 +1531,7 @@ fn config_granular_approval_policy_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
-        app_settings: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -1565,7 +1565,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
-        app_settings: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -1621,7 +1621,7 @@ fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
-        app_settings: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -1671,7 +1671,7 @@ fn config_nested_profile_approvals_reviewer_is_marked_experimental() {
         service_tier: None,
         analytics: None,
         apps: None,
-        app_settings: None,
+        desktop: None,
         additional: HashMap::new(),
     });
 

@@ -412,16 +412,16 @@ default_tools_approval_mode = "prompt"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_app_settings() -> Result<()> {
+async fn config_read_includes_desktop_settings() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
         &codex_home,
         r#"
-[app_settings]
+[desktop]
 appearanceTheme = "dark"
 selected-avatar-id = "codex"
 
-[app_settings.workspace]
+[desktop.workspace]
 collapsed = true
 width = 320
 "#,
@@ -443,14 +443,11 @@ width = 320
     .await??;
     let ConfigReadResponse { config, .. } = to_response(resp)?;
 
-    let app_settings = config.app_settings.expect("app settings present");
-    assert_eq!(app_settings.get("appearanceTheme"), Some(&json!("dark")));
+    let desktop = config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
+    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
     assert_eq!(
-        app_settings.get("selected-avatar-id"),
-        Some(&json!("codex"))
-    );
-    assert_eq!(
-        app_settings.get("workspace"),
+        desktop.get("workspace"),
         Some(&json!({
             "collapsed": true,
             "width": 320,
@@ -699,7 +696,7 @@ model = "gpt-old"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_value_write_updates_app_settings() -> Result<()> {
+async fn config_value_write_updates_desktop_settings() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let codex_home = temp_dir.path().canonicalize()?;
     write_config(&temp_dir, "")?;
@@ -710,7 +707,7 @@ async fn config_value_write_updates_app_settings() -> Result<()> {
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
             file_path: None,
-            key_path: "app_settings.appearanceTheme".to_string(),
+            key_path: "desktop.appearanceTheme".to_string(),
             value: json!("dark"),
             merge_strategy: MergeStrategy::Replace,
             expected_version: None,
@@ -736,8 +733,8 @@ async fn config_value_write_updates_app_settings() -> Result<()> {
     )
     .await??;
     let read: ConfigReadResponse = to_response(read_resp)?;
-    let app_settings = read.config.app_settings.expect("app settings present");
-    assert_eq!(app_settings.get("appearanceTheme"), Some(&json!("dark")));
+    let desktop = read.config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
 
     Ok(())
 }
@@ -897,7 +894,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_batch_write_updates_multiple_app_settings() -> Result<()> {
+async fn config_batch_write_updates_multiple_desktop_settings() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(&tmp_dir, "")?;
@@ -910,12 +907,12 @@ async fn config_batch_write_updates_multiple_app_settings() -> Result<()> {
             file_path: Some(codex_home.join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
-                    key_path: "app_settings.selected-avatar-id".to_string(),
+                    key_path: "desktop.selected-avatar-id".to_string(),
                     value: json!("codex"),
                     merge_strategy: MergeStrategy::Replace,
                 },
                 ConfigEdit {
-                    key_path: "app_settings.workspace".to_string(),
+                    key_path: "desktop.workspace".to_string(),
                     value: json!({
                         "collapsed": true,
                         "width": 320,
@@ -947,13 +944,10 @@ async fn config_batch_write_updates_multiple_app_settings() -> Result<()> {
     )
     .await??;
     let read: ConfigReadResponse = to_response(read_resp)?;
-    let app_settings = read.config.app_settings.expect("app settings present");
+    let desktop = read.config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
     assert_eq!(
-        app_settings.get("selected-avatar-id"),
-        Some(&json!("codex"))
-    );
-    assert_eq!(
-        app_settings.get("workspace"),
+        desktop.get("workspace"),
         Some(&json!({
             "collapsed": true,
             "width": 320,

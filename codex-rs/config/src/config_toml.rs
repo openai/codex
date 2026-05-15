@@ -475,9 +475,9 @@ pub struct ConfigToml {
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
-    /// Opaque desktop app settings stored alongside the rest of config.toml.
+    /// Opaque desktop settings stored alongside the rest of config.toml.
     #[serde(default)]
-    pub app_settings: Option<HashMap<String, JsonValue>>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,

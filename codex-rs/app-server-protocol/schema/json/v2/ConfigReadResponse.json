@@ -201,13 +201,6 @@
             }
           ]
         },
-        "app_settings": {
-          "additionalProperties": true,
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "approval_policy": {
           "anyOf": [
             {
@@ -232,6 +225,13 @@
         "compact_prompt": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "desktop": {
+          "additionalProperties": true,
+          "type": [
+            "object",
             "null"
           ]
         },
