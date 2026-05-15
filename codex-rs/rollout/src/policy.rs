@@ -197,9 +197,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
-        | EventMsg::WebSearchBegin(_)
-        | EventMsg::PlanUpdate(_)
-        | EventMsg::ShutdownComplete
+        | EventMsg::WebSearchBegin(_) => None,
+        EventMsg::PlanUpdate(_) => Some(EventPersistenceMode::Limited),
+        EventMsg::ShutdownComplete
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::HookStarted(_)

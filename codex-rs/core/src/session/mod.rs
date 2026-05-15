@@ -1226,8 +1226,6 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
-                self.hydrate_latest_plan_update_from_rollout(&rollout_items)
-                    .await;
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
@@ -1245,8 +1243,6 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
-                self.hydrate_latest_plan_update_from_rollout(&rollout_items)
-                    .await;
 
                 // If persisting, persist all rollout items as-is (the store filters).
                 if !rollout_items.is_empty() {
@@ -1278,6 +1274,10 @@ impl Session {
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        {
+            let mut state = self.state.lock().await;
+            state.set_latest_plan_update(reconstructed_rollout.latest_plan_update);
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
@@ -1288,19 +1288,6 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
-    }
-
-    fn last_plan_update_from_rollout(rollout_items: &[RolloutItem]) -> Option<UpdatePlanArgs> {
-        rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::PlanUpdate(update)) => Some(update.clone()),
-            _ => None,
-        })
-    }
-
-    async fn hydrate_latest_plan_update_from_rollout(&self, rollout_items: &[RolloutItem]) {
-        let latest_plan_update = Self::last_plan_update_from_rollout(rollout_items);
-        let mut state = self.state.lock().await;
-        state.set_latest_plan_update(latest_plan_update);
     }
 
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
@@ -1641,8 +1628,9 @@ impl Session {
     pub(crate) async fn reset_in_progress_plan_steps_for_terminal_turn(
         &self,
         turn_context: &TurnContext,
+        preserve_active_goals: bool,
     ) {
-        if self.has_active_thread_goal_for_plan_cleanup().await {
+        if preserve_active_goals && self.has_active_thread_goal_for_plan_cleanup().await {
             return;
         }
 

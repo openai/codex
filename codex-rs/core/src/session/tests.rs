@@ -2623,6 +2623,93 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
 }
 
 #[tokio::test]
+async fn thread_rollback_refreshes_latest_plan_update_from_surviving_history() {
+    let (mut sess, _tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let surviving_plan = UpdatePlanArgs {
+        explanation: Some("surviving plan".to_string()),
+        plan: vec![PlanItemArg {
+            step: "keep this".to_string(),
+            status: StepStatus::Pending,
+        }],
+    };
+    let rolled_back_plan = UpdatePlanArgs {
+        explanation: Some("rolled back plan".to_string()),
+        plan: vec![PlanItemArg {
+            step: "drop this".to_string(),
+            status: StepStatus::InProgress,
+        }],
+    };
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        })),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 1 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::EventMsg(EventMsg::PlanUpdate(surviving_plan.clone())),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            started_at: None,
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        })),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 2 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::ResponseItem(user_message("turn 2 user")),
+        RolloutItem::EventMsg(EventMsg::PlanUpdate(rolled_back_plan.clone())),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ])
+    .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_latest_plan_update(Some(rolled_back_plan));
+    }
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+
+    let latest_plan_update = {
+        let state = sess.state.lock().await;
+        state.latest_plan_update()
+    };
+    assert_eq!(
+        serde_json::to_value(latest_plan_update).expect("serialize refreshed plan update"),
+        serde_json::to_value(Some(surviving_plan)).expect("serialize surviving plan update")
+    );
+}
+
+#[tokio::test]
 async fn thread_rollback_restores_cleared_reference_context_item_after_compaction() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
     attach_thread_persistence(
@@ -8160,6 +8247,74 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn interrupted_active_goal_resets_plan_progress_before_turn_abort() -> anyhow::Result<()> {
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Pause this goal on interrupt".to_string()),
+            status: Some(ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    )
+    .await?;
+    while rx.try_recv().is_ok() {}
+
+    sess.send_event(
+        tc.as_ref(),
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: Some("interrupt should reset this plan".to_string()),
+            plan: vec![PlanItemArg {
+                step: "continue work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        }),
+    )
+    .await;
+    while let Ok(event) = rx.recv().await {
+        if matches!(event.msg, EventMsg::PlanUpdate(_)) {
+            break;
+        }
+    }
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let mut saw_cleanup_before_abort = false;
+    while let Ok(event) = rx.recv().await {
+        match event.msg {
+            EventMsg::PlanUpdate(UpdatePlanArgs { plan, .. }) => {
+                saw_cleanup_before_abort |= plan
+                    .iter()
+                    .any(|item| matches!(item.status, StepStatus::Pending));
+            }
+            EventMsg::TurnAborted(_) => break,
+            _ => {}
+        }
+    }
+    assert!(
+        saw_cleanup_before_abort,
+        "interrupt cleanup should reset in-progress plan items before TurnAborted"
+    );
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(ThreadGoalStatus::Paused, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn terminal_plan_cleanup_skips_active_goal() -> anyhow::Result<()> {
     let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -8192,8 +8347,11 @@ async fn terminal_plan_cleanup_skips_active_goal() -> anyhow::Result<()> {
         }
     }
 
-    sess.reset_in_progress_plan_steps_for_terminal_turn(tc.as_ref())
-        .await;
+    sess.reset_in_progress_plan_steps_for_terminal_turn(
+        tc.as_ref(),
+        /*preserve_active_goals*/ true,
+    )
+    .await;
 
     let emitted_cleanup = std::iter::from_fn(|| rx.try_recv().ok())
         .any(|event| matches!(event.msg, EventMsg::PlanUpdate(UpdatePlanArgs { .. })));

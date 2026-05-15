@@ -18,8 +18,10 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::EventPersistenceMode;
 use crate::INTERACTIVE_SESSION_SOURCES;
 use crate::find_thread_path_by_id_str;
+use crate::is_persisted_rollout_item;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
 use crate::list::ThreadSortKey;
@@ -31,6 +33,9 @@ use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -44,6 +49,22 @@ use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
+
+#[test]
+fn plan_updates_are_persisted_in_limited_rollouts() {
+    let item = RolloutItem::EventMsg(EventMsg::PlanUpdate(UpdatePlanArgs {
+        explanation: Some("keep plan state durable".to_string()),
+        plan: vec![PlanItemArg {
+            step: "finish persistence".to_string(),
+            status: StepStatus::InProgress,
+        }],
+    }));
+
+    assert!(is_persisted_rollout_item(
+        &item,
+        EventPersistenceMode::Limited
+    ));
+}
 
 fn provider_vec(providers: &[&str]) -> Vec<String> {
     providers

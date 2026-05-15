@@ -8,6 +8,7 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
+    pub(super) latest_plan_update: Option<UpdatePlanArgs>,
 }
 
 #[derive(Debug, Default)]
@@ -33,6 +34,7 @@ struct ActiveReplaySegment<'a> {
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
     base_replacement_history: Option<&'a [ResponseItem]>,
+    latest_plan_update: Option<UpdatePlanArgs>,
 }
 
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
@@ -45,6 +47,7 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
+    latest_plan_update: &mut Option<UpdatePlanArgs>,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -81,6 +84,14 @@ fn finalize_active_segment<'a>(
     {
         *reference_context_item = active_segment.reference_context_item;
     }
+
+    // Plan updates follow turn rollback semantics too. The newest surviving reverse-replay
+    // segment that contains one becomes the plan snapshot to hydrate into live session state.
+    if latest_plan_update.is_none()
+        && let Some(segment_latest_plan_update) = active_segment.latest_plan_update
+    {
+        *latest_plan_update = Some(segment_latest_plan_update);
+    }
 }
 
 impl Session {
@@ -97,6 +108,7 @@ impl Session {
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
+        let mut latest_plan_update = None;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -198,8 +210,16 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
+                            &mut latest_plan_update,
                             &mut pending_rollback_turns,
                         );
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::PlanUpdate(update)) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    if active_segment.latest_plan_update.is_none() {
+                        active_segment.latest_plan_update = Some(update.clone());
                     }
                 }
                 RolloutItem::ResponseItem(response_item) => {
@@ -213,6 +233,7 @@ impl Session {
             if base_replacement_history.is_some()
                 && previous_turn_settings.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+                && latest_plan_update.is_some()
             {
                 // At this point we have both eager resume metadata values and the replacement-
                 // history base for the surviving tail, so older rollout items cannot affect this
@@ -227,6 +248,7 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
+                &mut latest_plan_update,
                 &mut pending_rollback_turns,
             );
         }
@@ -296,6 +318,7 @@ impl Session {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
             reference_context_item,
+            latest_plan_update,
         }
     }
 }

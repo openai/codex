@@ -768,8 +768,11 @@ impl Session {
             warn!("failed to apply goal runtime turn-finished event: {err}");
         }
         if should_clear_active_turn {
-            self.reset_in_progress_plan_steps_for_terminal_turn(turn_context.as_ref())
-                .await;
+            self.reset_in_progress_plan_steps_for_terminal_turn(
+                turn_context.as_ref(),
+                /*preserve_active_goals*/ true,
+            )
+            .await;
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
@@ -871,8 +874,11 @@ impl Session {
             }
         }
 
-        self.reset_in_progress_plan_steps_for_terminal_turn(task.turn_context.as_ref())
-            .await;
+        self.reset_in_progress_plan_steps_for_terminal_turn(
+            task.turn_context.as_ref(),
+            reason != TurnAbortReason::Interrupted,
+        )
+        .await;
         let (completed_at, duration_ms) = task
             .turn_context
             .turn_timing_state
