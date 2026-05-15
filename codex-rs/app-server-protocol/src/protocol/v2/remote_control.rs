@@ -34,6 +34,16 @@ pub struct RemoteControlDisableResponse {
     pub environment_id: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlStatusReadResponse {
+    pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
+    pub installation_id: String,
+    pub environment_id: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
