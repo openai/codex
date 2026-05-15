@@ -395,14 +395,9 @@ pub(crate) fn gather_write_roots(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // Always include the command CWD for workspace-write.
-    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        roots.push(command_cwd.to_path_buf());
-    }
     let AllowDenyPaths { allow, .. } =
         compute_allow_paths(policy, policy_cwd, command_cwd, env_map);
-    roots.extend(allow);
+    let roots: Vec<PathBuf> = allow.into_iter().collect();
     let mut dedup: HashSet<PathBuf> = HashSet::new();
     let mut out: Vec<PathBuf> = Vec::new();
     for r in canonical_existing(&roots) {
