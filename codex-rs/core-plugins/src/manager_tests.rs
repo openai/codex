@@ -399,7 +399,7 @@ remote_plugin = true
 }
 
 #[test]
-fn remote_installed_marketplaces_from_cache_read_cached_bundle_metadata() {
+fn cached_remote_installed_plugin_marketplaces_read_bundle_metadata() {
     let codex_home = TempDir::new().unwrap();
     let plugin_base = codex_home
         .path()
@@ -430,7 +430,7 @@ fn remote_installed_marketplaces_from_cache_read_cached_bundle_metadata() {
     }]);
 
     let marketplaces = manager
-        .remote_installed_marketplaces_from_cache()
+        .cached_remote_installed_plugin_marketplaces()
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "chatgpt-global");

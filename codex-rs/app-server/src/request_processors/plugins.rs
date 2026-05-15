@@ -898,7 +898,7 @@ impl PluginRequestProcessor {
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.remote_installed_marketplaces_from_cache()
+            plugins_manager.cached_remote_installed_plugin_marketplaces()
         {
             Ok(remote_marketplaces)
         } else {

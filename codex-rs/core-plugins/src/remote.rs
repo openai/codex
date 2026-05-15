@@ -658,7 +658,7 @@ pub async fn fetch_remote_installed_plugins(
     Ok(installed_plugins)
 }
 
-pub fn remote_installed_marketplaces_from_cache(
+pub fn remote_installed_plugins_to_marketplaces(
     plugins: &[RemoteInstalledPlugin],
     store: &PluginStore,
 ) -> Vec<RemoteMarketplace> {
@@ -689,9 +689,7 @@ pub fn remote_installed_marketplaces_from_cache(
                 install_policy: plugin.install_policy,
                 auth_policy: plugin.auth_policy,
                 availability: plugin.availability,
-                interface: manifest
-                    .interface
-                    .map(cached_remote_plugin_interface_to_info),
+                interface: manifest.interface.map(bundle_manifest_interface_to_info),
                 keywords: manifest.keywords,
             });
     }
@@ -1087,7 +1085,7 @@ fn remote_installed_plugin_to_info(
     })
 }
 
-fn cached_remote_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
+fn bundle_manifest_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
     PluginInterface {
         display_name: interface.display_name,
         short_description: interface.short_description,
