@@ -353,6 +353,10 @@ impl ActivePermissionProfile {
             extends: None,
         }
     }
+
+    pub fn read_only() -> Self {
+        Self::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY)
+    }
 }
 
 impl Default for PermissionProfile {
