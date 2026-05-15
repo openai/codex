@@ -132,6 +132,14 @@ impl ResolvedPermissionProfile {
             }),
         }
     }
+
+    pub(crate) fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        match self {
+            Self::Legacy(_) => &[],
+            Self::BuiltIn(profile) => &profile.profile_workspace_roots,
+            Self::Named(profile) => &profile.profile_workspace_roots,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +206,12 @@ impl PermissionProfileState {
         self.resolved_permission_profile
             .get()
             .active_permission_profile()
+    }
+
+    pub(crate) fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.resolved_permission_profile
+            .get()
+            .profile_workspace_roots()
     }
 
     pub(crate) fn can_set_legacy_permission_profile(

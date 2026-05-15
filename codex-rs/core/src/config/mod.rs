@@ -395,6 +395,10 @@ impl Permissions {
         &self.workspace_roots
     }
 
+    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.permission_profile_state.profile_workspace_roots()
+    }
+
     fn materialized_permission_profile(&self) -> PermissionProfile {
         self.permission_profile()
             .clone()
@@ -1235,6 +1239,13 @@ impl Config {
             .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())?;
         self.workspace_roots = self.permissions.workspace_roots().to_vec();
         Ok(())
+    }
+
+    pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let mut workspace_roots = self.workspace_roots.clone();
+        workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
+        dedupe_absolute_paths(&mut workspace_roots);
+        workspace_roots
     }
 
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
@@ -2591,6 +2602,7 @@ impl Config {
             permission_profile,
             file_system_sandbox_policy,
             mut active_permission_profile,
+            mut profile_workspace_roots,
         ) = if let Some(mut permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
@@ -2643,6 +2655,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 None,
+                Vec::new(),
             )
         } else if profiles_are_active {
             let default_permissions = default_permissions.unwrap_or_else(|| {
@@ -2733,6 +2746,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 active_permission_profile,
+                configured_workspace_roots,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -2791,6 +2805,7 @@ impl Config {
                 permission_profile,
                 file_system_sandbox_policy,
                 None,
+                Vec::new(),
             )
         };
         if enable_network_proxy && permission_profile.network_sandbox_policy().is_enabled() {
@@ -3212,6 +3227,7 @@ impl Config {
             // The selected profile no longer describes the effective
             // permissions after requirements forced a fallback.
             active_permission_profile = None;
+            profile_workspace_roots.clear();
         }
         apply_requirement_constrained_value(
             "web_search_mode",
@@ -3285,7 +3301,7 @@ impl Config {
         let permission_profile_state = PermissionProfileState::from_constrained_active_profile(
             constrained_permission_profile.value,
             active_permission_profile,
-            Vec::new(),
+            profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
