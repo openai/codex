@@ -14,6 +14,7 @@ use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
+use codex_hooks::StopOutcome;
 use codex_hooks::SubagentStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
@@ -67,12 +68,6 @@ pub(crate) enum PendingInputRecord {
     ConversationItem {
         response_item: ResponseItem,
     },
-}
-
-pub(crate) struct TurnStopHookOutcome {
-    pub should_stop: bool,
-    pub should_block: bool,
-    pub continuation_fragments: Vec<codex_protocol::items::HookPromptFragment>,
 }
 
 struct SubagentHookMetadata {
@@ -345,9 +340,9 @@ pub(crate) async fn run_turn_stop_hooks(
     turn_context: &Arc<TurnContext>,
     stop_hook_active: bool,
     last_assistant_message: Option<String>,
-) -> TurnStopHookOutcome {
+) -> StopOutcome {
     let hooks = sess.hooks();
-    let outcome = if let Some(metadata) = subagent_hook_metadata(sess, turn_context).await {
+    let mut outcome = if let Some(metadata) = subagent_hook_metadata(sess, turn_context).await {
         // Subagents use SubagentStop instead of generic Stop.
         let request = codex_hooks::SubagentStopRequest {
             session_id: sess.session_id().into(),
@@ -380,13 +375,8 @@ pub(crate) async fn run_turn_stop_hooks(
         emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
         hooks.run_stop(request).await
     };
-    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
-
-    TurnStopHookOutcome {
-        should_stop: outcome.should_stop,
-        should_block: outcome.should_block,
-        continuation_fragments: outcome.continuation_fragments,
-    }
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
 }
 
 pub(crate) async fn run_pre_compact_hooks(
