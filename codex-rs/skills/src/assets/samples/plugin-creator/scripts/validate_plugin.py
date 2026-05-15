@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a generated plugin against the workspace share ingestion contract."""
+"""Validate a generated plugin against the plugin ingestion contract."""
 
 from __future__ import annotations
 
@@ -26,9 +26,7 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-F]{6}$", re.IGNORECASE)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Validate a local plugin before sharing it from Codex."
-    )
+    parser = argparse.ArgumentParser(description="Validate a local Codex plugin.")
     parser.add_argument("plugin_path", help="Path to the plugin root directory")
     return parser.parse_args()
 
@@ -42,7 +40,7 @@ def main() -> None:
         for error in errors:
             print(f"- {error}")
         raise SystemExit(1)
-    print(f"Plugin is ready for workspace sharing: {plugin_root}")
+    print(f"Plugin validation passed: {plugin_root}")
 
 
 def validate_plugin(plugin_root: Path) -> list[str]:
@@ -110,7 +108,7 @@ def validate_manifest_shape(
         "keywords",
     }
     for key in sorted(set(manifest) - allowed_keys):
-        errors.append(f"plugin.json field `{key}` is not accepted by workspace sharing")
+        errors.append(f"plugin.json field `{key}` is not accepted by plugin validation")
 
     validate_optional_non_empty_string(manifest, "id", errors)
     require_non_empty_string(manifest, "name", errors)
@@ -256,7 +254,7 @@ def reject_unknown_fields(
     errors: list[str],
 ) -> None:
     for key in sorted(set(payload) - allowed_keys):
-        errors.append(f"plugin.json field `{prefix}.{key}` is not accepted by workspace sharing")
+        errors.append(f"plugin.json field `{prefix}.{key}` is not accepted by plugin validation")
 
 
 def validate_optional_https_url(
@@ -357,7 +355,7 @@ def reject_companion_unknown_fields(
     errors: list[str],
 ) -> None:
     for key in sorted(set(payload) - allowed_keys):
-        errors.append(f"{prefix} field `{key}` is not accepted by workspace sharing")
+        errors.append(f"{prefix} field `{key}` is not accepted by plugin validation")
 
 
 def validate_skill_manifests(plugin_root: Path, errors: list[str]) -> None:
@@ -542,7 +540,7 @@ def reject_skill_agent_unknown_fields(
     for key in sorted(set(payload) - allowed_keys):
         field = f"{prefix}.{key}" if prefix is not None else key
         errors.append(
-            f"skill `{skill_root.name}` agent field `{field}` is not accepted by workspace sharing"
+            f"skill `{skill_root.name}` agent field `{field}` is not accepted by plugin validation"
         )
 
 

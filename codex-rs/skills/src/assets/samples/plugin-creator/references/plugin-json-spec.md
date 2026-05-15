@@ -172,10 +172,11 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
   - Personal plugin: `~/.agents/plugins/marketplace.json`
   - Repo/team plugin: `<repo-root>/.agents/plugins/marketplace.json`
 
-### Workspace sharing notes
+### Plugin validation notes
 
-- The share upload path validates plugin manifests against the workspace plugin ingestion schema.
-- Shareable plugin manifests must include real values for `name`, `version`, `description`,
+- The validator mirrors the workspace plugin ingestion schema so generated plugins follow the same
+  manifest contract from the start.
+- Plugin manifests must include real values for `name`, `version`, `description`,
   `author.name`, and the required `interface` fields.
 - `version` must use strict semver.
 - `websiteURL`, `privacyPolicyURL`, and `termsOfServiceURL` must be absolute `https://` URLs when
@@ -184,7 +185,7 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
   present.
 - `apps` and `mcpServers` should appear in `plugin.json` only when `.app.json` and `.mcp.json`
   actually exist.
-- Workspace sharing rejects unsupported manifest fields such as `hooks`, so the scaffold keeps them
-  out of the shareable manifest.
-- Run `scripts/validate_plugin.py <plugin-path>` before sharing. It mirrors the workspace ingestion
-  contract and adds one intentional preflight check that rejects leftover `[TODO: ...]` placeholders.
+- Validation rejects unsupported manifest fields such as `hooks`, so the scaffold keeps them out of
+  generated manifests.
+- Run `scripts/validate_plugin.py <plugin-path>` before handing back a generated plugin. It adds one
+  intentional preflight check that rejects leftover `[TODO: ...]` placeholders.

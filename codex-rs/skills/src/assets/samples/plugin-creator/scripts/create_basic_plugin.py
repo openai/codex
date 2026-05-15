@@ -172,7 +172,7 @@ def create_stub_file(path: Path, payload: dict, force: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a plugin skeleton with a share-safe plugin.json."
+        description="Create a plugin skeleton with a validation-ready plugin.json."
     )
     parser.add_argument("plugin_name")
     parser.add_argument(
