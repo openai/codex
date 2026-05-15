@@ -1491,10 +1491,12 @@ fn json_object_to_env_toml_table(
     object: &serde_json::Map<String, JsonValue>,
 ) -> toml::map::Map<String, TomlValue> {
     let mut table = toml::map::Map::new();
-    for (key, value) in object {
-        if let Some(value) = json_env_value_to_string(value) {
-            table.insert(key.clone(), TomlValue::String(value));
-        }
+    for (key, value) in object
+        .iter()
+        .filter_map(|(key, value)| json_env_value_to_string(value).map(|value| (key, value)))
+        .collect::<BTreeMap<_, _>>()
+    {
+        table.insert(key.clone(), TomlValue::String(value));
     }
     table
 }

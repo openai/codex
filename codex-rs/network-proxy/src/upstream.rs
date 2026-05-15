@@ -1,5 +1,6 @@
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::state::NetworkProxyState;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
@@ -225,6 +226,7 @@ fn build_http_connector(
     EstablishedClientConnection<HttpClientService<Body>, Request<Body>>,
     BoxError,
 > {
+    ensure_rustls_crypto_provider();
     let proxy = HttpProxyConnectorLayer::optional().into_layer(transport);
     let tls_config = TlsConnectorDataBuilder::new()
         .with_alpn_protocols_http_auto()
