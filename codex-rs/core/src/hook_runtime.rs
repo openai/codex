@@ -13,7 +13,7 @@ use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
-use codex_hooks::SessionStartTarget;
+use codex_hooks::StartHookTarget;
 use codex_hooks::StopHookTarget;
 use codex_hooks::StopOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
@@ -120,6 +120,9 @@ pub(crate) async fn run_pending_session_start_hooks(
         return false;
     };
 
+    // Pending session-start hooks are reused to dispatch thread-spawn subagent
+    // starts. Other subagent sessions are internal/system work and do not run
+    // start hooks.
     let target = match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
             if matches!(
@@ -127,15 +130,17 @@ pub(crate) async fn run_pending_session_start_hooks(
                 codex_hooks::SessionStartSource::Startup
             ) =>
         {
-            let metadata = subagent_hook_metadata(sess, agent_role);
-            SessionStartTarget::SubagentStart {
+            let agent_type = agent_role
+                .clone()
+                .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
+            StartHookTarget::SubagentStart {
                 turn_id: turn_context.sub_id.clone(),
-                agent_id: metadata.agent_id,
-                agent_type: metadata.agent_type,
+                agent_id: sess.thread_id().to_string(),
+                agent_type,
             }
         }
         SessionSource::SubAgent(_) => return false,
-        _ => SessionStartTarget::SessionStart {
+        _ => StartHookTarget::SessionStart {
             source: session_start_source,
         },
     };
@@ -309,7 +314,9 @@ pub(crate) async fn run_turn_stop_hooks(
             parent_thread_id,
             ..
         }) => {
-            let metadata = subagent_hook_metadata(sess, agent_role);
+            let agent_type = agent_role
+                .clone()
+                .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
             let agent_transcript_path = sess.hook_transcript_path().await;
             let parent_transcript_path = match sess
                 .services
@@ -333,8 +340,8 @@ pub(crate) async fn run_turn_stop_hooks(
             };
             (
                 StopHookTarget::SubagentStop {
-                    agent_id: metadata.agent_id,
-                    agent_type: metadata.agent_type,
+                    agent_id: sess.thread_id().to_string(),
+                    agent_type,
                     agent_transcript_path,
                 },
                 parent_transcript_path,
@@ -686,23 +693,6 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
-}
-
-struct SubagentHookMetadata {
-    agent_id: String,
-    agent_type: String,
-}
-
-fn subagent_hook_metadata(
-    sess: &Arc<Session>,
-    agent_role: &Option<String>,
-) -> SubagentHookMetadata {
-    SubagentHookMetadata {
-        agent_id: sess.thread_id().to_string(),
-        agent_type: agent_role
-            .clone()
-            .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string()),
-    }
 }
 
 fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
