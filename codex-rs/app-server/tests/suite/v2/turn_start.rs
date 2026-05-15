@@ -34,7 +34,6 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -780,10 +779,11 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permissions: Some(PermissionProfileSelectionParams::Profile {
-                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                modifications: None,
-            }),
+            permissions: Some(
+                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
+                    .to_string()
+                    .into(),
+            ),
             ..Default::default()
         })
         .await?;
@@ -1891,6 +1891,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(first_cwd.clone()),
+            runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
@@ -1932,6 +1933,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             responsesapi_client_metadata: None,
             cwd: Some(second_cwd.clone()),
+            runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
@@ -1987,6 +1989,152 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_start_permission_profile_rebinds_runtime_workspace_roots_between_turns() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let old_root = tmp.path().join("old-root");
+    let new_root = tmp.path().join("new-root");
+    std::fs::create_dir(&old_root)?;
+    std::fs::create_dir(&new_root)?;
+    let old_file = old_root.join("old.txt");
+    let new_file = new_root.join("new.txt");
+    let old_file_arg = shlex::try_quote(&old_file.to_string_lossy())?;
+    let new_file_arg = shlex::try_quote(&new_file.to_string_lossy())?;
+    let command = format!("printf new > {new_file_arg} && ! printf old > {old_file_arg}");
+
+    let responses = vec![
+        create_final_assistant_message_sse_response("done first")?,
+        create_shell_command_sse_response(
+            vec!["sh".to_string(), "-lc".to_string(), command],
+            /*workdir*/ None,
+            Some(5000),
+            "call-write-new-root",
+        )?,
+        create_final_assistant_message_sse_response("done second")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    let server_uri = server.uri();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+default_permissions = "read-only"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[permissions.dev.filesystem.":workspace_roots"]
+"." = "write"
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let first_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "select dev profile".to_string(),
+                text_elements: Vec::new(),
+            }],
+            runtime_workspace_roots: Some(vec![old_root]),
+            permissions: Some("dev".to_string().into()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let second_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "write in new root".to_string(),
+                text_elements: Vec::new(),
+            }],
+            runtime_workspace_roots: Some(vec![new_root]),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_id)),
+    )
+    .await??;
+
+    let completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { exit_code, .. } = completed_command_execution else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(exit_code, Some(0));
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(std::fs::read_to_string(new_file)?, "new");
+    assert!(
+        !old_file.exists(),
+        "runtime workspace roots update should drop the old root"
+    );
 
     Ok(())
 }

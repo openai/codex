@@ -1231,6 +1231,13 @@ impl Config {
         Ok(())
     }
 
+    pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        let mut workspace_roots = self.workspace_roots.clone();
+        workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
+        dedupe_absolute_paths(&mut workspace_roots);
+        workspace_roots
+    }
+
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -2671,8 +2678,6 @@ impl Config {
                 configured_workspace_roots.extend(sandbox_workspace_write.writable_roots.clone());
             }
             dedupe_absolute_paths(&mut configured_workspace_roots);
-            workspace_roots.extend(configured_workspace_roots.iter().cloned());
-            dedupe_absolute_paths(&mut workspace_roots);
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);
             let mut permission_profile = if let Some(permission_profile) =
