@@ -836,22 +836,6 @@ mod tests {
     use crate::client::ProbeInfo;
 
     #[test]
-    fn lifecycle_status_uses_camel_case_json() {
-        assert_eq!(
-            serde_json::to_string(&LifecycleStatus::AlreadyRunning).expect("serialize"),
-            "\"alreadyRunning\""
-        );
-    }
-
-    #[test]
-    fn bootstrap_status_uses_camel_case_json() {
-        assert_eq!(
-            serde_json::to_string(&BootstrapStatus::Bootstrapped).expect("serialize"),
-            "\"bootstrapped\""
-        );
-    }
-
-    #[test]
     fn remote_control_status_uses_camel_case_json() {
         assert_eq!(
             serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),

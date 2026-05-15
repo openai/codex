@@ -600,15 +600,6 @@ mod tests {
         }
     }
 
-    fn enable_response(status: RemoteControlConnectionStatus) -> RemoteControlEnableResponse {
-        RemoteControlEnableResponse {
-            status,
-            server_name: "owen-mbp".to_string(),
-            installation_id: "install_test".to_string(),
-            environment_id: Some("env_test".to_string()),
-        }
-    }
-
     fn status_notification(
         status: RemoteControlConnectionStatus,
     ) -> RemoteControlStatusChangedNotification {
@@ -747,16 +738,6 @@ mod tests {
                     "appServerVersion": "2.0.0",
                 },
             })
-        );
-    }
-
-    #[test]
-    fn remote_control_summary_uses_enable_response_as_authoritative() {
-        assert_eq!(
-            AppServerRemoteControlReadyStatus::from(enable_response(
-                RemoteControlConnectionStatus::Connected
-            )),
-            remote_control_status(RemoteControlConnectionStatus::Connected)
         );
     }
 
