@@ -70,6 +70,7 @@ pub struct PluginManifestInterface {
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
     pub default_prompt: Option<Vec<String>>,
+    pub default_prompt_alias: Option<String>,
     pub brand_color: Option<String>,
     pub composer_icon: Option<AbsolutePathBuf>,
     pub logo: Option<AbsolutePathBuf>,
@@ -102,6 +103,8 @@ struct RawPluginManifestInterface {
     terms_of_service_url: Option<String>,
     #[serde(default)]
     default_prompt: Option<RawPluginManifestDefaultPrompt>,
+    #[serde(default)]
+    default_prompt_alias: Option<String>,
     #[serde(default)]
     brand_color: Option<String>,
     #[serde(default)]
@@ -175,6 +178,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                     privacy_policy_url,
                     terms_of_service_url,
                     default_prompt,
+                    default_prompt_alias,
                     brand_color,
                     composer_icon,
                     logo,
@@ -192,6 +196,9 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                     privacy_policy_url,
                     terms_of_service_url,
                     default_prompt: resolve_default_prompts(plugin_root, default_prompt.as_ref()),
+                    default_prompt_alias: non_empty_collapsed_string(
+                        default_prompt_alias.as_deref(),
+                    ),
                     brand_color,
                     composer_icon: resolve_interface_asset_path(
                         plugin_root,
@@ -225,6 +232,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                     || interface.privacy_policy_url.is_some()
                     || interface.terms_of_service_url.is_some()
                     || interface.default_prompt.is_some()
+                    || interface.default_prompt_alias.is_some()
                     || interface.brand_color.is_some()
                     || interface.composer_icon.is_some()
                     || interface.logo.is_some()
@@ -370,6 +378,11 @@ fn resolve_default_prompt_str(plugin_root: &Path, field: &str, prompt: &str) -> 
         return None;
     }
     Some(prompt)
+}
+
+fn non_empty_collapsed_string(value: Option<&str>) -> Option<String> {
+    let value = value?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!value.is_empty()).then_some(value)
 }
 
 fn warn_invalid_default_prompt(plugin_root: &Path, field: &str, message: &str) {
@@ -554,6 +567,28 @@ mod tests {
         let interface = manifest.interface.expect("plugin interface");
 
         assert_eq!(interface.default_prompt, None);
+    }
+
+    #[test]
+    fn plugin_interface_normalizes_default_prompt_alias() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            /*version*/ None,
+            r#"{
+    "displayName": "Demo Plugin",
+    "defaultPromptAlias": "  Demo   Alias  "
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let interface = manifest.interface.expect("plugin interface");
+
+        assert_eq!(
+            interface.default_prompt_alias,
+            Some("Demo Alias".to_string())
+        );
     }
 
     #[test]

@@ -409,6 +409,7 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
                     privacy_policy_url: None,
                     terms_of_service_url: None,
                     default_prompt: None,
+                    default_prompt_alias: None,
                     brand_color: None,
                     composer_icon: None,
                     logo: None,
@@ -1232,6 +1233,7 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
             privacy_policy_url: None,
             terms_of_service_url: None,
             default_prompt: None,
+            default_prompt_alias: None,
             brand_color: None,
             composer_icon: Some(
                 AbsolutePathBuf::try_from(plugin_root.join("assets/icon.png")).unwrap(),
@@ -1348,6 +1350,7 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
             privacy_policy_url: None,
             terms_of_service_url: None,
             default_prompt: None,
+            default_prompt_alias: None,
             brand_color: None,
             composer_icon: None,
             logo: None,

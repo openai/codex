@@ -8,7 +8,11 @@ export type PluginInterface = { displayName: string | null, shortDescription: st
  * Starter prompts for the plugin. Capped at 3 entries with a maximum of
  * 128 characters per entry.
  */
-defaultPrompt: Array<string> | null, brandColor: string | null,
+defaultPrompt: Array<string> | null,
+/**
+ * Mention label used before starter prompts on plugin detail surfaces.
+ */
+defaultPromptAlias: string | null, brandColor: string | null,
 /**
  * Local composer icon path, resolved from the installed plugin package.
  */

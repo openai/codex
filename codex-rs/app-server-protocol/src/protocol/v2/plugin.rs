@@ -644,6 +644,8 @@ pub struct PluginInterface {
     /// Starter prompts for the plugin. Capped at 3 entries with a maximum of
     /// 128 characters per entry.
     pub default_prompt: Option<Vec<String>>,
+    /// Mention label used before starter prompts on plugin detail surfaces.
+    pub default_prompt_alias: Option<String>,
     pub brand_color: Option<String>,
     /// Local composer icon path, resolved from the installed plugin package.
     pub composer_icon: Option<AbsolutePathBuf>,

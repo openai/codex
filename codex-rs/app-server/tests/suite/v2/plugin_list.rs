@@ -554,6 +554,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                         privacy_policy_url: None,
                         terms_of_service_url: None,
                         default_prompt: None,
+                        default_prompt_alias: None,
                         brand_color: None,
                         composer_icon: None,
                         composer_icon_url: None,

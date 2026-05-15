@@ -61,6 +61,7 @@ fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginI
         privacy_policy_url: interface.privacy_policy_url,
         terms_of_service_url: interface.terms_of_service_url,
         default_prompt: interface.default_prompt,
+        default_prompt_alias: interface.default_prompt_alias,
         brand_color: interface.brand_color,
         composer_icon: interface.composer_icon,
         composer_icon_url: None,

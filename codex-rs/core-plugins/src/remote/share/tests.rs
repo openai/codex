@@ -152,6 +152,7 @@ fn expected_plugin_interface() -> PluginInterface {
         privacy_policy_url: None,
         terms_of_service_url: None,
         default_prompt: None,
+        default_prompt_alias: None,
         brand_color: None,
         composer_icon: None,
         composer_icon_url: None,

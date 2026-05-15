@@ -1015,6 +1015,7 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
         privacy_policy_url: interface.privacy_policy_url.clone(),
         terms_of_service_url: interface.terms_of_service_url.clone(),
         default_prompt,
+        default_prompt_alias: None,
         brand_color: interface.brand_color.clone(),
         composer_icon: None,
         composer_icon_url: interface.composer_icon_url.clone(),
@@ -1033,6 +1034,7 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
         || result.privacy_policy_url.is_some()
         || result.terms_of_service_url.is_some()
         || result.default_prompt.is_some()
+        || result.default_prompt_alias.is_some()
         || result.brand_color.is_some()
         || result.composer_icon_url.is_some()
         || result.logo_url.is_some()

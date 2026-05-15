@@ -8638,6 +8638,13 @@
             "null"
           ]
         },
+        "defaultPromptAlias": {
+          "description": "Mention label used before starter prompts on plugin detail surfaces.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "developerName": {
           "type": [
             "string",
