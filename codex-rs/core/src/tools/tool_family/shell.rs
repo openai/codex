@@ -7,6 +7,7 @@ use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::WriteStdinHandler;
+use crate::tools::tool_set::CoreToolSetBuilderExt;
 use crate::tools::tool_set::ToolSetBuilder;
 
 #[derive(Clone, Copy, Debug)]
