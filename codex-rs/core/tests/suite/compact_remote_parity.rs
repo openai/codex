@@ -933,6 +933,28 @@ fn normalize_string(value: &str) -> String {
 
     let mut text = value.to_string();
     normalize_tmp_prefix_before_marker(&mut text, "/skills/");
+    normalize_tmp_prefix_before_marker(&mut text, "\\skills\\");
+
+    let mut search_start = 0;
+    let wall_time_prefix = "Wall time: ";
+    let wall_time_suffix = " seconds";
+    while let Some(relative_start) = text[search_start..].find(wall_time_prefix) {
+        let value_start = search_start + relative_start + wall_time_prefix.len();
+        let Some(relative_end) = text[value_start..].find(wall_time_suffix) else {
+            break;
+        };
+        let value_end = value_start + relative_end;
+        let value = &text[value_start..value_end];
+        if !value.is_empty()
+            && value.chars().any(|ch| ch.is_ascii_digit())
+            && value.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+        {
+            text.replace_range(value_start..value_end, "<WALL_TIME>");
+            search_start = value_start + "<WALL_TIME>".len() + wall_time_suffix.len();
+        } else {
+            search_start = value_end + wall_time_suffix.len();
+        }
+    }
     text
 }
 
@@ -951,11 +973,22 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
     while let Some(relative_marker_index) = text[search_start..].find(marker) {
         let marker_index = search_start + relative_marker_index;
         let prefix = &text[..marker_index];
+        let windows_appdata_temp_start = prefix
+            .rfind("/AppData/Local/Temp/.tmp")
+            .and_then(|temp_index| prefix[..temp_index].rfind(":/Users/"))
+            .and_then(|colon_index| colon_index.checked_sub(1))
+            .or_else(|| {
+                prefix
+                    .rfind("\\AppData\\Local\\Temp\\.tmp")
+                    .and_then(|temp_index| prefix[..temp_index].rfind(":\\Users\\"))
+                    .and_then(|colon_index| colon_index.checked_sub(1))
+            });
         let start = prefix
             .rfind("/private/var/folders/")
             .or_else(|| prefix.rfind("/var/folders/"))
             .or_else(|| prefix.rfind("/private/tmp/.tmp"))
-            .or_else(|| prefix.rfind("/tmp/.tmp"));
+            .or_else(|| prefix.rfind("/tmp/.tmp"))
+            .or(windows_appdata_temp_start);
         if let Some(start_index) = start {
             text.replace_range(start_index..marker_index, "<CODEX_HOME>");
             search_start = start_index + "<CODEX_HOME>".len() + marker.len();
@@ -976,6 +1009,34 @@ fn normalize_string_rewrites_linux_temp_skill_paths() {
         text,
         "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
          <CODEX_HOME>/skills/custom/SKILL.md"
+    );
+}
+
+#[test]
+fn normalize_string_rewrites_windows_temp_skill_paths() {
+    let text = normalize_string(
+        "file: C:/Users/runneradmin/AppData/Local/Temp/.tmpDuYxa3/skills/.system/imagegen/SKILL.md and \
+         C:\\Users\\runneradmin\\AppData\\Local\\Temp\\.tmpiP36Yr\\skills\\custom\\SKILL.md",
+    );
+
+    assert_eq!(
+        text,
+        "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
+         <CODEX_HOME>\\skills\\custom\\SKILL.md"
+    );
+}
+
+#[test]
+fn normalize_string_rewrites_shell_wall_times() {
+    let text = normalize_string(
+        "Exit code: 0\nWall time: 0 seconds\nOutput:\nok\n\
+         Exit code: 0\nWall time: 0.1 seconds\nOutput:\nok",
+    );
+
+    assert_eq!(
+        text,
+        "Exit code: 0\nWall time: <WALL_TIME> seconds\nOutput:\nok\n\
+         Exit code: 0\nWall time: <WALL_TIME> seconds\nOutput:\nok"
     );
 }
 
