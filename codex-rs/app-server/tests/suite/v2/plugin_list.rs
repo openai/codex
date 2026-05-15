@@ -1823,7 +1823,8 @@ async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -
         remote_plugin_bundle_tar_gz_bytes("linear")?,
     )
     .await;
-    let global_installed_body = remote_installed_plugin_body(&bundle_url, "1.2.3", true);
+    let global_installed_body =
+        remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
         .await;
@@ -1909,7 +1910,8 @@ async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> 
         remote_plugin_bundle_tar_gz_bytes("linear")?,
     )
     .await;
-    let global_installed_body = remote_installed_plugin_body(&bundle_url, "1.2.3", true);
+    let global_installed_body =
+        remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
     mount_remote_plugin_list(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
