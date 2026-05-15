@@ -1542,16 +1542,17 @@ impl Session {
         )
         .await;
 
-        let state = self.state.lock().await;
-        // A newer refresh may have updated the config while this hook build was in flight.
-        // Only publish hooks derived from the current config snapshot.
-        if Arc::ptr_eq(
-            &state.session_configuration.original_config_do_not_use,
-            &config,
-        ) {
-            self.services.hooks.store(Arc::new(hooks));
+        {
+            let state = self.state.lock().await;
+            // A newer refresh may have updated the config while this hook build was in flight.
+            // Only publish hooks derived from the current config snapshot.
+            if Arc::ptr_eq(
+                &state.session_configuration.original_config_do_not_use,
+                &config,
+            ) {
+                self.services.hooks.store(Arc::new(hooks));
+            }
         }
-        drop(state);
         self.refresh_credentialed_routes_for_managed_proxy().await;
     }
 
