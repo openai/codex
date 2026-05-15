@@ -1906,6 +1906,11 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     .await?;
 
     let profile_root_abs = profile_root.abs();
+    assert_eq!(
+        config.effective_workspace_roots(),
+        vec![cwd.abs(), runtime_root.abs(), profile_root_abs.clone()]
+    );
+
     let policy = config.permissions.file_system_sandbox_policy();
     for root in [cwd.abs(), runtime_root.abs(), profile_root_abs.clone()] {
         assert!(
