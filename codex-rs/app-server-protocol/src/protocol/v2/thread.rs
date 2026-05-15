@@ -193,6 +193,7 @@ pub struct ThreadTurnContextUpdateParams {
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Select a named permissions profile for subsequent turns. Cannot be
     /// combined with `sandboxPolicy`.
+    #[experimental("thread/turnContext/update.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,
     /// Override the model for subsequent turns.
@@ -223,6 +224,7 @@ pub struct ThreadTurnContextUpdateParams {
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// Set a pre-set collaboration mode for subsequent turns.
+    #[experimental("thread/turnContext/update.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
 }

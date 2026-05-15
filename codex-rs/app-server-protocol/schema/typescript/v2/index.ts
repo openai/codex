@@ -410,8 +410,6 @@ export type { ThreadStatusChangedNotification } from "./ThreadStatusChangedNotif
 export type { ThreadTokenUsage } from "./ThreadTokenUsage";
 export type { ThreadTokenUsageUpdatedNotification } from "./ThreadTokenUsageUpdatedNotification";
 export type { ThreadTurnContext } from "./ThreadTurnContext";
-export type { ThreadTurnContextUpdateParams } from "./ThreadTurnContextUpdateParams";
-export type { ThreadTurnContextUpdateResponse } from "./ThreadTurnContextUpdateResponse";
 export type { ThreadTurnContextUpdatedNotification } from "./ThreadTurnContextUpdatedNotification";
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
 export type { ThreadUnarchiveResponse } from "./ThreadUnarchiveResponse";
