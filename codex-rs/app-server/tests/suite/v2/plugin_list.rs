@@ -1805,7 +1805,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_remote_plugin_catalog_config(
+    write_plugins_enabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
