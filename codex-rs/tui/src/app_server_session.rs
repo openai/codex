@@ -565,7 +565,6 @@ impl AppServerSession {
             active_permission_profile,
             cwd.as_path(),
             workspace_roots,
-            self.thread_params_mode(),
         );
         self.client
             .request_typed(ClientRequest::TurnStart {
@@ -1189,19 +1188,12 @@ fn turn_permissions_overrides(
     active_permission_profile: Option<ActivePermissionProfile>,
     cwd: &std::path::Path,
     _workspace_roots: &[AbsolutePathBuf],
-    thread_params_mode: ThreadParamsMode,
 ) -> (
     Option<codex_app_server_protocol::SandboxPolicy>,
     Option<PermissionProfileSelectionParams>,
 ) {
-    let permissions = if matches!(thread_params_mode, ThreadParamsMode::Embedded) {
-        active_permission_profile.map(permissions_selection_from_active_profile)
-    } else {
-        None
-    };
-    let sandbox_policy = (matches!(thread_params_mode, ThreadParamsMode::Remote)
-        || permissions.is_none())
-    .then(|| {
+    let permissions = active_permission_profile.map(permissions_selection_from_active_profile);
+    let sandbox_policy = permissions.is_none().then(|| {
         let legacy_profile = legacy_compatible_permission_profile(permission_profile, cwd);
         let policy = legacy_profile
             .to_legacy_sandbox_policy(cwd)
@@ -1694,7 +1686,6 @@ mod tests {
             Some(active_permission_profile),
             cwd.as_path(),
             &workspace_roots,
-            ThreadParamsMode::Embedded,
         );
 
         assert_eq!(sandbox_policy, None);
@@ -1714,7 +1705,6 @@ mod tests {
             Some(active_permission_profile),
             cwd.as_path(),
             &workspace_roots,
-            ThreadParamsMode::Embedded,
         );
 
         assert_eq!(sandbox_policy, None);
@@ -1727,7 +1717,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_turn_permissions_fall_back_to_sandbox_without_active_profile() {
+    fn turn_permissions_fall_back_to_sandbox_without_active_profile() {
         let cwd = test_path_buf("/workspace/project").abs();
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
@@ -1735,7 +1725,6 @@ mod tests {
             /*active_permission_profile*/ None,
             cwd.as_path(),
             std::slice::from_ref(&cwd),
-            ThreadParamsMode::Embedded,
         );
 
         assert_eq!(
@@ -1748,26 +1737,44 @@ mod tests {
     }
 
     #[test]
-    fn remote_turn_permissions_use_sandbox_even_with_active_profile() {
+    fn remote_turn_permissions_preserve_active_profile_selection() {
         let cwd = test_path_buf("/workspace/project").abs();
+        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
+            file_system: PermissionProfileFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::ProjectRoots {
+                                subpath: Some(".env".into()),
+                            },
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: PermissionProfileNetworkPermissions { enabled: false },
+        }
+        .into();
+        let active_permission_profile = ActivePermissionProfile::new("strict");
+        let expected_permissions =
+            permissions_selection_from_active_profile(active_permission_profile.clone());
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
-            &PermissionProfile::read_only(),
-            Some(ActivePermissionProfile::new(
-                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
-            )),
+            &permission_profile,
+            Some(active_permission_profile),
             cwd.as_path(),
             std::slice::from_ref(&cwd),
-            ThreadParamsMode::Remote,
         );
 
-        assert_eq!(
-            sandbox_policy,
-            Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                network_access: false
-            })
-        );
-        assert_eq!(permissions, None);
+        assert_eq!(sandbox_policy, None);
+        assert_eq!(permissions, Some(expected_permissions));
     }
 
     #[tokio::test]
