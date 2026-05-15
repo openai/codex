@@ -697,7 +697,7 @@ async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<()> {
+async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -721,7 +721,7 @@ async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<(
                 serde_json::json!({
                     "type": "response.output_item.done",
                     "item": {
-                        "type": "context_compaction",
+                        "type": "compaction",
                         "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
                     }
                 }),
@@ -778,8 +778,8 @@ async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<(
     assert_eq!(compact_request.path(), "/v1/responses");
     let compact_body = compact_request.body_json().to_string();
     assert!(
-        compact_body.contains("\"type\":\"context_compaction\""),
-        "expected v2 compaction request to include the context_compaction trigger item"
+        compact_body.contains("\"type\":\"compaction_trigger\""),
+        "expected v2 compaction request to include the compaction_trigger item"
     );
     assert!(
         !compact_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
@@ -789,12 +789,12 @@ async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<(
     let follow_up_request = response_requests.last().expect("follow-up request missing");
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
-        follow_up_body.contains("\"type\":\"context_compaction\""),
-        "expected follow-up request to preserve the v2 context_compaction item"
+        follow_up_body.contains("\"type\":\"compaction\""),
+        "expected follow-up request to preserve the compaction item"
     );
     assert!(
         follow_up_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
-        "expected follow-up request to include the context compaction payload"
+        "expected follow-up request to include the compaction payload"
     );
     assert!(
         follow_up_body.contains("hello remote compact"),
@@ -805,8 +805,7 @@ async fn remote_compact_v2_reuses_context_compaction_for_followups() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_accepts_additional_output_items_before_context_compaction() -> Result<()>
-{
+async fn remote_compact_v2_accepts_additional_output_items_before_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -831,7 +830,7 @@ async fn remote_compact_v2_accepts_additional_output_items_before_context_compac
                 serde_json::json!({
                     "type": "response.output_item.done",
                     "item": {
-                        "type": "context_compaction",
+                        "type": "compaction",
                         "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
                     }
                 }),
@@ -878,12 +877,12 @@ async fn remote_compact_v2_accepts_additional_output_items_before_context_compac
     let follow_up_request = response_requests.last().expect("follow-up request missing");
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
-        follow_up_body.contains("\"type\":\"context_compaction\""),
-        "expected follow-up request to preserve the v2 context_compaction item"
+        follow_up_body.contains("\"type\":\"compaction\""),
+        "expected follow-up request to preserve the compaction item"
     );
     assert!(
         follow_up_body.contains("ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"),
-        "expected follow-up request to include the context compaction payload"
+        "expected follow-up request to include the compaction payload"
     );
     assert!(
         !follow_up_body.contains("IGNORED_COMPACT_REPLY"),
