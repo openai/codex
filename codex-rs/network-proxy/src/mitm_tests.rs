@@ -282,10 +282,18 @@ fn credentialed_route_proxy_request_rewrites_upstream_target() {
     let action = crate::mitm_hook::CredentialedRouteProxyAction {
         connector_id: "connector_123".to_string(),
         link_id: "link_123".to_string(),
+        proxy_headers: vec![crate::mitm_hook::CredentialedRouteProxyHeader {
+            name: HeaderName::from_static("authorization"),
+            value: HeaderValue::from_static("Bearer codex-token"),
+        }],
         proxy_url: "http://localhost:8080/api/codex/credential_routes/proxy".to_string(),
     };
     let request_uri: Uri = "https://api.example.com/v1/items?limit=5".parse().unwrap();
     let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("authorization"),
+        HeaderValue::from_static("Bearer provider-token"),
+    );
     headers.insert(
         HeaderName::from_static(CREDENTIAL_ROUTE_REQUEST_URL_HEADER),
         HeaderValue::from_static("https://spoofed.example.com"),
@@ -299,6 +307,10 @@ fn credentialed_route_proxy_request_rewrites_upstream_target() {
         "http://localhost:8080/api/codex/credential_routes/proxy"
     );
     assert_eq!(proxy_authority, "localhost:8080");
+    assert_eq!(
+        headers.get("authorization"),
+        Some(&HeaderValue::from_static("Bearer codex-token"))
+    );
     assert_eq!(
         headers.get(CREDENTIAL_ROUTE_CONNECTOR_ID_HEADER),
         Some(&HeaderValue::from_static("connector_123"))

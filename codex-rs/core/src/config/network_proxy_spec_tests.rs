@@ -97,6 +97,7 @@ fn credentialed_routes_add_runtime_allowlist_and_mitm_hooks() {
             auth_type: CredentialRouteAuthType::OAuth,
             base_url: "https://api.example.com/v1".to_string(),
         }],
+        proxy_headers: Vec::new(),
         proxy_url: Some("https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string()),
     };
 

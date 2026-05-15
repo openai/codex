@@ -2,9 +2,11 @@ use codex_backend_client::Client as BackendClient;
 use codex_backend_client::ResolvedCredentialRoute;
 use codex_login::CodexAuth;
 use codex_network_proxy::CredentialedRouteProxyActionConfig;
+use codex_network_proxy::CredentialedRouteProxyHeader;
 use codex_network_proxy::MitmHookActionsConfig;
 use codex_network_proxy::MitmHookConfig;
 use codex_network_proxy::MitmHookMatchConfig;
+use http::HeaderMap;
 use tracing::debug;
 use tracing::warn;
 use url::Url;
@@ -12,6 +14,7 @@ use url::Url;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CredentialedRoutesSessionConfig {
     pub(crate) routes: Vec<ResolvedCredentialRoute>,
+    pub(crate) proxy_headers: Vec<CredentialedRouteProxyHeader>,
     pub(crate) proxy_url: Option<String>,
 }
 
@@ -39,6 +42,9 @@ pub(crate) async fn load_for_session(
             );
             CredentialedRoutesSessionConfig {
                 routes: response.routes,
+                proxy_headers: credentialed_route_proxy_headers(
+                    client.credential_routes_proxy_auth_headers(),
+                ),
                 proxy_url: Some(client.credential_routes_proxy_url()),
             }
         }
@@ -57,25 +63,28 @@ impl CredentialedRoutesSessionConfig {
 
         self.routes
             .iter()
-            .filter_map(|route| match route_mitm_hook(route, proxy_url) {
-                Ok(hook) => Some(hook),
-                Err(err) => {
-                    warn!(
-                        connector_id = %route.connector_id,
-                        link_id = %route.link_id,
-                        base_url = %route.base_url,
-                        error = %err,
-                        "skipping invalid credentialed route"
-                    );
-                    None
-                }
-            })
+            .filter_map(
+                |route| match route_mitm_hook(route, &self.proxy_headers, proxy_url) {
+                    Ok(hook) => Some(hook),
+                    Err(err) => {
+                        warn!(
+                            connector_id = %route.connector_id,
+                            link_id = %route.link_id,
+                            base_url = %route.base_url,
+                            error = %err,
+                            "skipping invalid credentialed route"
+                        );
+                        None
+                    }
+                },
+            )
             .collect()
     }
 }
 
 fn route_mitm_hook(
     route: &ResolvedCredentialRoute,
+    proxy_headers: &[CredentialedRouteProxyHeader],
     proxy_url: &str,
 ) -> anyhow::Result<MitmHookConfig> {
     let base_url = Url::parse(&route.base_url)?;
@@ -117,11 +126,22 @@ fn route_mitm_hook(
             credentialed_route_proxy: Some(CredentialedRouteProxyActionConfig {
                 connector_id: route.connector_id.clone(),
                 link_id: route.link_id.clone(),
+                proxy_headers: proxy_headers.to_vec(),
                 proxy_url: proxy_url.to_string(),
             }),
             ..MitmHookActionsConfig::default()
         },
     })
+}
+
+fn credentialed_route_proxy_headers(headers: HeaderMap) -> Vec<CredentialedRouteProxyHeader> {
+    headers
+        .iter()
+        .map(|(name, value)| CredentialedRouteProxyHeader {
+            name: name.clone(),
+            value: value.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -139,6 +159,10 @@ mod tests {
                 auth_type: CredentialRouteAuthType::OAuth,
                 base_url: "https://api.example.com/v1".to_string(),
             }],
+            proxy_headers: vec![CredentialedRouteProxyHeader {
+                name: http::header::AUTHORIZATION,
+                value: http::HeaderValue::from_static("Bearer codex-token"),
+            }],
             proxy_url: Some(
                 "https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string(),
             ),
@@ -154,6 +178,10 @@ mod tests {
             Some(CredentialedRouteProxyActionConfig {
                 connector_id: "connector_123".to_string(),
                 link_id: "link_123".to_string(),
+                proxy_headers: vec![CredentialedRouteProxyHeader {
+                    name: http::header::AUTHORIZATION,
+                    value: http::HeaderValue::from_static("Bearer codex-token"),
+                }],
                 proxy_url: "https://chatgpt.com/backend-api/wham/credential_routes/proxy"
                     .to_string(),
             })

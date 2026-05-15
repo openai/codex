@@ -584,6 +584,9 @@ fn apply_credentialed_route_proxy_headers(
     action: &crate::mitm_hook::CredentialedRouteProxyAction,
     request_uri: &Uri,
 ) -> Result<()> {
+    for proxy_header in &action.proxy_headers {
+        headers.insert(proxy_header.name.clone(), proxy_header.value.clone());
+    }
     headers.insert(
         HeaderName::from_static(CREDENTIAL_ROUTE_CONNECTOR_ID_HEADER),
         HeaderValue::from_str(&action.connector_id)?,
