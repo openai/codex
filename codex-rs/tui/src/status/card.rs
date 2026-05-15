@@ -256,7 +256,7 @@ impl StatusHistoryCell {
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
         let permission_profile = config.permissions.effective_permission_profile();
-        let workspace_roots = config.permissions.user_visible_workspace_roots();
+        let workspace_roots = config.effective_workspace_roots();
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
@@ -267,7 +267,11 @@ impl StatusHistoryCell {
             ),
             (
                 "sandbox",
-                summarize_permission_profile(&permission_profile, &config.cwd, workspace_roots),
+                summarize_permission_profile(
+                    &permission_profile,
+                    &config.cwd,
+                    workspace_roots.as_slice(),
+                ),
             ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
@@ -291,8 +295,9 @@ impl StatusHistoryCell {
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
         let active_permission_profile = config.permissions.active_permission_profile();
-        let sandbox = status_permission_summary(&permission_profile, &config.cwd, workspace_roots);
-        let workspace_root_suffix = workspace_root_suffix(workspace_roots, &config.cwd);
+        let sandbox =
+            status_permission_summary(&permission_profile, &config.cwd, workspace_roots.as_slice());
+        let workspace_root_suffix = workspace_root_suffix(workspace_roots.as_slice(), &config.cwd);
         let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
         let permissions = status_permissions_label(
             active_permission_profile.as_ref(),
