@@ -1182,13 +1182,36 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort)
-                    .apply()
-                    .await
+                let scoped_key = |key: &str| {
+                    if let Some(profile) = profile {
+                        format!("profiles.{profile}.{key}")
+                    } else {
+                        key.to_string()
+                    }
+                };
+                let effort_edit = effort.map_or_else(
+                    || crate::config_rpc::clear_config_value(scoped_key("model_reasoning_effort")),
+                    |effort| {
+                        crate::config_rpc::replace_config_value(
+                            scoped_key("model_reasoning_effort"),
+                            serde_json::json!(effort.to_string()),
+                        )
+                    },
+                );
+                match crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    vec![
+                        crate::config_rpc::replace_config_value(
+                            scoped_key("model"),
+                            serde_json::json!(model.as_str()),
+                        ),
+                        effort_edit,
+                    ],
+                    /*reload_user_config*/ true,
+                )
+                .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let effort_label = effort
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
@@ -1260,13 +1283,22 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_personality(Some(personality))
-                    .apply()
-                    .await
+                let key_path = if let Some(profile) = profile {
+                    format!("profiles.{profile}.personality")
+                } else {
+                    "personality".to_string()
+                };
+                match crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_rpc::replace_config_value(
+                        key_path,
+                        serde_json::json!(personality.to_string()),
+                    )],
+                    /*reload_user_config*/ true,
+                )
+                .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let label = Self::personality_label(personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
@@ -1297,15 +1329,45 @@ impl App {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
-                let mut edits = ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_service_tier(service_tier.clone());
+                let scoped_key = |key: &str| {
+                    if let Some(profile) = profile {
+                        format!("profiles.{profile}.{key}")
+                    } else {
+                        key.to_string()
+                    }
+                };
+                let mut edits = vec![service_tier.as_ref().map_or_else(
+                    || crate::config_rpc::clear_config_value(scoped_key("service_tier")),
+                    |service_tier| {
+                        let config_value =
+                            match codex_protocol::config_types::ServiceTier::from_request_value(
+                                service_tier,
+                            ) {
+                                Some(codex_protocol::config_types::ServiceTier::Fast) => "fast",
+                                Some(codex_protocol::config_types::ServiceTier::Flex) => "flex",
+                                None => service_tier.as_str(),
+                            };
+                        crate::config_rpc::replace_config_value(
+                            scoped_key("service_tier"),
+                            serde_json::json!(config_value),
+                        )
+                    },
+                )];
                 if service_tier.is_none() {
                     self.config.notices.fast_default_opt_out = Some(true);
-                    edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
+                    edits.push(crate::config_rpc::replace_config_value(
+                        "notice.fast_default_opt_out",
+                        serde_json::json!(true),
+                    ));
                 }
-                match edits.apply().await {
-                    Ok(()) => {
+                match crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    edits,
+                    /*reload_user_config*/ true,
+                )
+                .await
+                {
+                    Ok(_) => {
                         let mut message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
                         } else {
@@ -1468,23 +1530,20 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "approvals_reviewer".to_string(),
-                    ]
+                let key_path = if let Some(profile) = profile {
+                    format!("profiles.{profile}.approvals_reviewer")
                 } else {
-                    vec!["approvals_reviewer".to_string()]
+                    "approvals_reviewer".to_string()
                 };
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments,
-                        value: policy.to_string().into(),
-                    }])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_rpc::replace_config_value(
+                        key_path,
+                        serde_json::json!(policy.to_string()),
+                    )],
+                    /*reload_user_config*/ true,
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1575,27 +1634,25 @@ impl App {
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "plan_mode_reasoning_effort".to_string(),
-                    ]
+                let key_path = if let Some(profile) = profile {
+                    format!("profiles.{profile}.plan_mode_reasoning_effort")
                 } else {
-                    vec!["plan_mode_reasoning_effort".to_string()]
+                    "plan_mode_reasoning_effort".to_string()
                 };
                 let edit = if let Some(effort) = effort {
-                    ConfigEdit::SetPath {
-                        segments,
-                        value: effort.to_string().into(),
-                    }
+                    crate::config_rpc::replace_config_value(
+                        key_path,
+                        serde_json::json!(effort.to_string()),
+                    )
                 } else {
-                    ConfigEdit::ClearPath { segments }
+                    crate::config_rpc::clear_config_value(key_path)
                 };
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits([edit])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_rpc::write_config_batch(
+                    app_server.request_handle(),
+                    vec![edit],
+                    /*reload_user_config*/ true,
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
