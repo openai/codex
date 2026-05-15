@@ -700,7 +700,7 @@ impl PluginsManager {
         );
     }
 
-    fn maybe_start_remote_installed_plugin_bundle_sync(
+    pub fn maybe_start_remote_installed_plugin_bundle_sync(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,

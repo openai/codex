@@ -1876,7 +1876,7 @@ async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -
     wait_for_remote_plugin_request_count(
         &server,
         "/ps/plugins/installed",
-        /*expected_count*/ 2,
+        /*expected_count*/ 4,
     )
     .await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
@@ -1897,7 +1897,7 @@ async fn plugin_installed_falls_back_to_remote_installed_and_caches_response() -
     wait_for_remote_plugin_request_count(
         &server,
         "/ps/plugins/installed",
-        /*expected_count*/ 2,
+        /*expected_count*/ 6,
     )
     .await?;
     Ok(())
@@ -1993,7 +1993,7 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
 }
 
 #[tokio::test]
-async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> Result<()> {
+async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -2017,7 +2017,6 @@ async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> 
     .await;
     let global_installed_body =
         remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
-    mount_remote_plugin_list(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
         .await;
@@ -2028,31 +2027,6 @@ async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> 
     )
     .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let plugin_list_request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            marketplace_kinds: None,
-        })
-        .await?;
-    let _: PluginListResponse = to_response(
-        timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(plugin_list_request_id)),
-        )
-        .await??,
-    )?;
-
-    let installed_path = codex_home
-        .path()
-        .join("plugins/cache/chatgpt-global/linear/1.2.3/.codex-plugin/plugin.json");
-    wait_for_path_exists(&installed_path).await?;
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 7,
-    )
-    .await?;
 
     let plugin_installed_request_id = mcp
         .send_plugin_installed_request(PluginInstalledParams {
@@ -2078,10 +2052,14 @@ async fn plugin_installed_reuses_remote_installed_cache_without_refetching() -> 
             .collect::<Vec<_>>(),
         vec![("linear@chatgpt-global".to_string(), true, true)]
     );
+    let installed_path = codex_home
+        .path()
+        .join("plugins/cache/chatgpt-global/linear/1.2.3/.codex-plugin/plugin.json");
+    wait_for_path_exists(&installed_path).await?;
     wait_for_remote_plugin_request_count(
         &server,
         "/ps/plugins/installed",
-        /*expected_count*/ 7,
+        /*expected_count*/ 6,
     )
     .await?;
     Ok(())
