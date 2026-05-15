@@ -1662,7 +1662,7 @@ impl App {
                 self.chat_widget.open_manage_skills_popup();
             }
             AppEvent::SetSkillEnabled { path, enabled } => {
-                match crate::config_rpc::write_skill_enabled(
+                match crate::config_update::write_skill_enabled(
                     app_server.request_handle(),
                     path.clone(),
                     enabled,
@@ -1691,26 +1691,22 @@ impl App {
             AppEvent::SetAppEnabled { id, enabled } => {
                 let edits = if enabled {
                     vec![
-                        crate::config_rpc::clear_config_value(format!("apps.{id}.enabled")),
-                        crate::config_rpc::clear_config_value(format!("apps.{id}.disabled_reason")),
+                        crate::config_update::clear_config_value(format!("apps.{id}.enabled")),
+                        crate::config_update::clear_config_value(format!("apps.{id}.disabled_reason")),
                     ]
                 } else {
                     vec![
-                        crate::config_rpc::replace_config_value(
+                        crate::config_update::replace_config_value(
                             format!("apps.{id}.enabled"),
                             serde_json::json!(false),
                         ),
-                        crate::config_rpc::replace_config_value(
+                        crate::config_update::replace_config_value(
                             format!("apps.{id}.disabled_reason"),
                             serde_json::json!("user"),
                         ),
                     ]
                 };
-                match crate::config_rpc::write_config_batch(
-                    app_server.request_handle(),
-                    edits,
-                    /*reload_user_config*/ true,
-                )
+                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                 .await
                 {
                     Ok(_) => {
