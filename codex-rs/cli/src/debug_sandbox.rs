@@ -230,7 +230,7 @@ async fn run_command_under_sandbox(
     let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
             spec.start_proxy(
-                config.permissions.permission_profile().get(),
+                config.permissions.permission_profile(),
                 /*policy_decider*/ None,
                 /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
@@ -965,7 +965,6 @@ mod tests {
         let actual = config
             .permissions
             .permission_profile()
-            .get()
             .file_system_sandbox_policy();
         let expected = codex_protocol::models::PermissionProfile::workspace_write()
             .file_system_sandbox_policy();
@@ -1008,7 +1007,6 @@ mod tests {
         let actual = config
             .permissions
             .permission_profile()
-            .get()
             .file_system_sandbox_policy();
         let expected = codex_protocol::models::PermissionProfile::workspace_write()
             .file_system_sandbox_policy();

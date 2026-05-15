@@ -66,18 +66,25 @@ impl ChatWidget {
         let permission_sync = self
             .config
             .permissions
-            .set_permission_profile_with_active_profile(
+            .set_permission_profile_from_session_snapshot(
                 session.permission_profile.clone(),
                 session.active_permission_profile.clone(),
             );
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            self.config
+            if let Err(replace_err) = self
+                .config
                 .permissions
-                .set_constrained_permission_profile_with_active_profile(
+                .replace_permission_profile_from_session_snapshot(
                     Constrained::allow_only(session.permission_profile.clone()),
                     session.active_permission_profile.clone(),
+                )
+            {
+                tracing::error!(
+                    %replace_err,
+                    "failed to replace permissions from SessionConfigured after constraint fallback"
                 );
+            }
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
         self.status_line_project_root_name_cache = None;

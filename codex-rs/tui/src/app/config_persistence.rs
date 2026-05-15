@@ -301,7 +301,7 @@ impl App {
         }
         let permission_profile_override_value = permission_profile_override
             .is_some()
-            .then(|| self.config.permissions.permission_profile().get().clone());
+            .then(|| self.config.permissions.permission_profile().clone());
         if let Some(permission_profile) = permission_profile_override_value.as_ref()
             && let Err(err) = self
                 .chat_widget

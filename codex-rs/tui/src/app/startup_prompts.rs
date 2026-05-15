@@ -67,7 +67,7 @@ pub(super) fn emit_project_config_warnings(app_event_tx: &AppEventSender, config
 
 pub(super) fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
     let Some(message) =
-        codex_sandboxing::system_bwrap_warning(config.permissions.permission_profile().get())
+        codex_sandboxing::system_bwrap_warning(config.permissions.permission_profile())
     else {
         return;
     };

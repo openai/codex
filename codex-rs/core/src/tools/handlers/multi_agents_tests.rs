@@ -3900,7 +3900,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 #[tokio::test]
 async fn build_agent_spawn_config_uses_turn_context_values() {
     fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<PermissionProfile>,
+        permissions: &crate::config::Permissions,
         base: SandboxPolicy,
         cwd: &std::path::Path,
     ) -> SandboxPolicy {
@@ -3915,16 +3915,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
                 if *candidate == base {
                     return false;
                 }
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(candidate, cwd);
-                let network_sandbox_policy = NetworkSandboxPolicy::from(candidate);
-                let permission_profile =
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(candidate),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    );
-                constraint.can_set(&permission_profile).is_ok()
+                permissions
+                    .can_set_legacy_sandbox_policy(candidate, cwd)
+                    .is_ok()
             })
             .unwrap_or(base)
     }
@@ -3948,7 +3941,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
-        turn.config.permissions.permission_profile(),
+        &turn.config.permissions,
         turn.config.legacy_sandbox_policy(),
         turn_cwd.as_path(),
     );
