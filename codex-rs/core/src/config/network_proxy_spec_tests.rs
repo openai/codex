@@ -86,7 +86,7 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
 fn credentialed_routes_add_runtime_allowlist_and_mitm_hooks() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
-        None,
+        /*requirements*/ None,
         &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
     )
     .expect("config should load");
