@@ -142,7 +142,11 @@ impl App {
         Some(permission_profile)
     }
 
-    pub(super) async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
+    pub(super) async fn update_feature_flags(
+        &mut self,
+        app_server: &mut AppServerSession,
+        updates: Vec<(Feature, bool)>,
+    ) {
         if updates.is_empty() {
             return;
         }
@@ -150,11 +154,11 @@ impl App {
         let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
-        let scoped_segments = |key: &str| {
+        let scoped_key_path = |key: &str| {
             if let Some(profile) = active_profile.as_deref() {
-                vec!["profiles".to_string(), profile.to_string(), key.to_string()]
+                format!("profiles.{profile}.{key}")
             } else {
-                vec![key.to_string()]
+                key.to_string()
             }
         };
         let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
@@ -189,8 +193,7 @@ impl App {
             (root_blocks_disable, profile_configured)
         };
         let mut permissions_history_label: Option<&'static str> = None;
-        let mut builder = ConfigEditsBuilder::for_config(&self.config)
-            .with_profile(self.active_profile.as_deref());
+        let mut config_edits = Vec::new();
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
@@ -225,18 +228,18 @@ impl App {
                     // experiment's matching `/permissions` mode until the user
                     // changes it explicitly.
                     feature_config.approvals_reviewer = auto_review_preset.approvals_reviewer;
-                    feature_edits.push(ConfigEdit::SetPath {
-                        segments: scoped_segments("approvals_reviewer"),
-                        value: auto_review_preset.approvals_reviewer.to_string().into(),
-                    });
+                    feature_edits.push(crate::config_rpc::replace_config_value(
+                        scoped_key_path("approvals_reviewer"),
+                        serde_json::json!(auto_review_preset.approvals_reviewer.to_string()),
+                    ));
                     if previous_approvals_reviewer != auto_review_preset.approvals_reviewer {
                         permissions_history_label = Some("Auto-review");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
-                        feature_edits.push(ConfigEdit::ClearPath {
-                            segments: scoped_segments("approvals_reviewer"),
-                        });
+                        feature_edits.push(crate::config_rpc::clear_config_value(scoped_key_path(
+                            "approvals_reviewer",
+                        )));
                     }
                     feature_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
@@ -269,14 +272,14 @@ impl App {
                     continue;
                 };
                 feature_edits.extend([
-                    ConfigEdit::SetPath {
-                        segments: scoped_segments("approval_policy"),
-                        value: "on-request".into(),
-                    },
-                    ConfigEdit::SetPath {
-                        segments: scoped_segments("sandbox_mode"),
-                        value: "workspace-write".into(),
-                    },
+                    crate::config_rpc::replace_config_value(
+                        scoped_key_path("approval_policy"),
+                        serde_json::json!("on-request"),
+                    ),
+                    crate::config_rpc::replace_config_value(
+                        scoped_key_path("sandbox_mode"),
+                        serde_json::json!("workspace-write"),
+                    ),
                 ]);
                 approval_policy_override = Some(auto_review_preset.approval_policy);
                 permission_profile_override = Some(permission_profile);
@@ -285,15 +288,38 @@ impl App {
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
-            builder = builder
-                .with_edits(feature_edits)
-                .set_feature_enabled(feature_key, effective_enabled);
+            config_edits.extend(feature_edits);
+            let feature_key_path = if let Some(profile) = active_profile.as_deref() {
+                format!("profiles.{profile}.features.{feature_key}")
+            } else {
+                format!("features.{feature_key}")
+            };
+            let is_default_false_feature = FEATURES
+                .iter()
+                .find(|spec| spec.key == feature_key)
+                .is_some_and(|spec| !spec.default_enabled);
+            config_edits.push(
+                if effective_enabled || active_profile.is_some() || !is_default_false_feature {
+                    crate::config_rpc::replace_config_value(
+                        feature_key_path,
+                        serde_json::json!(effective_enabled),
+                    )
+                } else {
+                    crate::config_rpc::clear_config_value(feature_key_path)
+                },
+            );
         }
 
         // Persist first so the live session does not diverge from disk if the
         // config edit fails. Runtime/UI state is patched below only after the
         // durable config update succeeds.
-        if let Err(err) = builder.apply().await {
+        if let Err(err) = crate::config_rpc::write_config_batch(
+            app_server.request_handle(),
+            config_edits,
+            /*reload_user_config*/ true,
+        )
+        .await
+        {
             tracing::error!(error = %err, "failed to persist feature flags");
             self.chat_widget
                 .add_error_message(format!("Failed to update experimental features: {err}"));
@@ -410,37 +436,35 @@ impl App {
 
     pub(super) async fn update_memory_settings(
         &mut self,
+        app_server: &mut AppServerSession,
         use_memories: bool,
         generate_memories: bool,
     ) -> bool {
         let active_profile = self.active_profile.clone();
-        let scoped_memory_segments = |key: &str| {
+        let scoped_memory_key_path = |key: &str| {
             if let Some(profile) = active_profile.as_deref() {
-                vec![
-                    "profiles".to_string(),
-                    profile.to_string(),
-                    "memories".to_string(),
-                    key.to_string(),
-                ]
+                format!("profiles.{profile}.memories.{key}")
             } else {
-                vec!["memories".to_string(), key.to_string()]
+                format!("memories.{key}")
             }
         };
-        let edits = [
-            ConfigEdit::SetPath {
-                segments: scoped_memory_segments("use_memories"),
-                value: use_memories.into(),
-            },
-            ConfigEdit::SetPath {
-                segments: scoped_memory_segments("generate_memories"),
-                value: generate_memories.into(),
-            },
+        let edits = vec![
+            crate::config_rpc::replace_config_value(
+                scoped_memory_key_path("use_memories"),
+                serde_json::json!(use_memories),
+            ),
+            crate::config_rpc::replace_config_value(
+                scoped_memory_key_path("generate_memories"),
+                serde_json::json!(generate_memories),
+            ),
         ];
 
-        if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-            .with_edits(edits)
-            .apply()
-            .await
+        if let Err(err) = crate::config_rpc::write_config_batch(
+            app_server.request_handle(),
+            edits,
+            /*reload_user_config*/ true,
+        )
+        .await
         {
             tracing::error!(error = %err, "failed to persist memory settings");
             self.chat_widget
@@ -463,7 +487,7 @@ impl App {
     ) {
         let previous_generate_memories = self.config.memories.generate_memories;
         if !self
-            .update_memory_settings(use_memories, generate_memories)
+            .update_memory_settings(app_server, use_memories, generate_memories)
             .await
         {
             return;

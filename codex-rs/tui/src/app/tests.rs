@@ -1606,8 +1606,9 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     let auto_review = auto_review_mode();
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -1695,6 +1696,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1733,8 +1735,9 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
             PermissionProfile::workspace_write(),
         ))?;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
@@ -1787,6 +1790,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     assert!(!config.contains("approvals_reviewer ="));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1808,8 +1812,9 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::User);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -1854,6 +1859,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1879,8 +1885,9 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::User);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
@@ -1913,6 +1920,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("guardian_approval = true"));
     assert!(!config.contains("approvals_reviewer ="));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1935,8 +1943,9 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::User);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -1984,6 +1993,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
         profile_config.get("approvals_reviewer"),
         Some(&TomlValue::String("guardian_subagent".to_string()))
     );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -2019,8 +2029,9 @@ guardian_approval = true
     app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
@@ -2072,6 +2083,7 @@ guardian_approval = true
             .and_then(|table| table.get("approvals_reviewer")),
         Some(&TomlValue::String("user".to_string()))
     );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -2098,8 +2110,9 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
     app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -2138,6 +2151,7 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
             .and_then(|table| table.get("approvals_reviewer")),
         Some(&TomlValue::String("guardian_subagent".to_string()))
     );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -5333,4 +5347,7 @@ async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
         "side_backtrack_rejection_reports_unavailable_message",
         rendered
     );
+}
+async fn start_config_write_test_app_server(app: &App) -> Result<AppServerSession> {
+    Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await
 }
