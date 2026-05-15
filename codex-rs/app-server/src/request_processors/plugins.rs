@@ -149,38 +149,6 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     }
 }
 
-fn merge_plugin_marketplace_entry(
-    data: &mut Vec<PluginMarketplaceEntry>,
-    incoming: PluginMarketplaceEntry,
-) {
-    let Some(existing) = data
-        .iter_mut()
-        .find(|marketplace| marketplace.name == incoming.name)
-    else {
-        data.push(incoming);
-        return;
-    };
-
-    if existing.interface.is_none() {
-        existing.interface = incoming.interface;
-    }
-    if incoming.path.is_some() {
-        existing.path = incoming.path.clone();
-    }
-
-    let mut seen_plugin_ids = existing
-        .plugins
-        .iter()
-        .map(|plugin| plugin.id.clone())
-        .collect::<HashSet<_>>();
-    existing.plugins.extend(
-        incoming
-            .plugins
-            .into_iter()
-            .filter(|plugin| seen_plugin_ids.insert(plugin.id.clone())),
-    );
-}
-
 fn remote_plugin_share_discoverability(
     discoverability: PluginShareDiscoverability,
 ) -> codex_core_plugins::remote::RemotePluginShareDiscoverability {
@@ -726,12 +694,10 @@ impl PluginRequestProcessor {
             )
             .await?;
 
-        for marketplace in self
-            .load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
-            .await
-        {
-            merge_plugin_marketplace_entry(&mut data, marketplace);
-        }
+        data.extend(
+            self.load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
+                .await,
+        );
 
         Ok(PluginInstalledResponse {
             marketplaces: data,
