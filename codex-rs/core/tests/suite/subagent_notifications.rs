@@ -296,6 +296,30 @@ async fn wait_for_requests(
     }
 }
 
+async fn wait_for_matching_requests(
+    mock: &core_test_support::responses::ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+) -> Result<Vec<ResponsesRequest>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let requests = mock
+            .requests()
+            .into_iter()
+            .filter(|request| predicate(request))
+            .collect::<Vec<_>>();
+        if !requests.is_empty() {
+            return Ok(requests);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "expected at least 1 matching request, got {}",
+                requests.len()
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn setup_turn_one_with_spawned_child(
     server: &MockServer,
     child_response_delay: Option<Duration>,
@@ -496,7 +520,12 @@ async fn subagent_start_injects_context_once_for_child() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let child_requests = wait_for_requests(&child_request_log).await?;
+    let child_requests = wait_for_matching_requests(&child_request_log, |request| {
+        request.body_contains_text(CHILD_PROMPT)
+            && request.body_contains_text(SUBAGENT_START_CONTEXT)
+            && !request.body_contains_text(SPAWN_CALL_ID)
+    })
+    .await?;
     assert_eq!(child_requests.len(), 1);
 
     let start_inputs = read_hook_log(test.codex_home_path(), "subagent_start_hook_log.jsonl")?;
