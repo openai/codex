@@ -740,8 +740,8 @@ impl PluginRequestProcessor {
             )
             .await?;
 
-        let (suggestion_data, suggestion_errors) = self
-            .load_suggestion_plugins(
+        let (suggested_data, suggested_errors) = self
+            .load_suggested_plugins(
                 plugins_manager.clone(),
                 &config,
                 &plugins_input,
@@ -749,10 +749,10 @@ impl PluginRequestProcessor {
                 install_suggestion_plugin_names,
             )
             .await?;
-        for marketplace in suggestion_data {
+        for marketplace in suggested_data {
             merge_plugin_marketplace_entry(&mut data, marketplace);
         }
-        marketplace_load_errors.extend(suggestion_errors);
+        marketplace_load_errors.extend(suggested_errors);
 
         for marketplace in self
             .load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
@@ -816,7 +816,7 @@ impl PluginRequestProcessor {
         }
     }
 
-    async fn load_suggestion_plugins(
+    async fn load_suggested_plugins(
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
         config: &Config,
