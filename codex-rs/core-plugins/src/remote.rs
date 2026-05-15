@@ -645,7 +645,7 @@ pub async fn fetch_remote_installed_plugins(
     let mut installed_plugins = [global, workspace]
         .into_iter()
         .flat_map(|(_scope, plugins)| plugins)
-        .map(|plugin| remote_installed_item_to_cache_entry(&plugin))
+        .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
         .collect::<Result<Vec<_>, _>>()?;
     installed_plugins.sort_by(|left, right| {
         left.marketplace_name
@@ -1052,7 +1052,7 @@ fn remote_plugin_share_context(
     }
 }
 
-fn remote_installed_item_to_cache_entry(
+fn remote_installed_plugin_to_cache_entry(
     installed_plugin: &RemotePluginInstalledItem,
 ) -> Result<RemoteInstalledPlugin, RemotePluginCatalogError> {
     let plugin = &installed_plugin.plugin;
