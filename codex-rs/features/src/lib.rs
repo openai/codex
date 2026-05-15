@@ -99,7 +99,7 @@ pub enum Feature {
     ShellZshFork,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
-    /// Include the freeform apply_patch tool.
+    /// Removed compatibility flag for the deleted apply_patch fallback feature.
     ApplyPatchFreeform,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
@@ -292,7 +292,6 @@ pub struct FeatureOverrides {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
-    pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
@@ -424,6 +423,9 @@ impl Features {
                 "remote_control" => {
                     continue;
                 }
+                "apply_patch_freeform" => {
+                    continue;
+                }
                 "image_detail_original" => {
                     continue;
                 }
@@ -465,7 +467,6 @@ impl Features {
 
         for source in [base, profile] {
             LegacyFeatureToggles {
-                include_apply_patch_tool: source.include_apply_patch_tool,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
@@ -822,8 +823,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,

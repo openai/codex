@@ -481,9 +481,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub windows: Option<WindowsToml>,
 
-    /// Tracks whether the Windows onboarding screen has been acknowledged.
-    pub windows_wsl_setup_acknowledged: Option<bool>,
-
     /// Collection of in-product notices (different from notifications)
     /// See [`crate::types::Notice`] for more details
     pub notice: Option<Notice>,

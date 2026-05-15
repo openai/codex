@@ -1162,7 +1162,6 @@ async fn test_mcp_tool_array_without_items_gets_default_string_items() {
     let model_info = construct_model_info_offline("gpt-5.4", &config);
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
-    features.enable(Feature::ApplyPatchFreeform);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,

@@ -1034,7 +1034,7 @@ mod tests {
         let deny_sids = workspace_write_cap_sids_for_path(
             &codex_home,
             &workspace,
-            &[workspace.clone(), active_root.clone()],
+            &[workspace.clone(), active_root],
             &deny_path,
         )
         .expect("deny sids");
@@ -1070,7 +1070,7 @@ mod tests {
         let deny_sids = workspace_write_cap_sids_for_path(
             &codex_home,
             &workspace,
-            &[workspace.clone(), active_root.clone()],
+            &[workspace.clone(), active_root],
             &deny_path,
         )
         .expect("deny sids");

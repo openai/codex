@@ -151,7 +151,6 @@ struct GuardianReviewSessionReuseKey {
     main_execve_wrapper_exe: Option<PathBuf>,
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
-    include_apply_patch_tool: bool,
     use_experimental_unified_exec_tool: bool,
 }
 
@@ -176,7 +175,6 @@ impl GuardianReviewSessionReuseKey {
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
-            include_apply_patch_tool: spawn_config.include_apply_patch_tool,
             use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
         }
     }

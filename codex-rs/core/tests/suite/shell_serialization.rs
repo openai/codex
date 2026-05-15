@@ -62,11 +62,7 @@ async fn shell_output_preserves_fixture_json_as_freeform() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.include_apply_patch_tool = true;
-        });
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -117,11 +113,7 @@ async fn shell_output_records_duration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.include_apply_patch_tool = true;
-        });
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-freeform";
@@ -278,11 +270,7 @@ async fn shell_output_is_freeform_for_nonzero_exit() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(move |config| {
-            config.include_apply_patch_tool = true;
-        });
+    let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-nonzero-exit";
@@ -316,9 +304,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-    });
+    let mut builder = test_codex();
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";

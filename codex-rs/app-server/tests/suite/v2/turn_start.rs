@@ -2476,13 +2476,26 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
         &server.uri(),
         "never",
         &BTreeMap::from([
-            (Feature::ApplyPatchFreeform, true),
             (Feature::ApplyPatchStreamingEvents, true),
             (Feature::Plugins, false),
             (Feature::RemoteModels, false),
             (Feature::ShellSnapshot, false),
         ]),
     )?;
+    write_models_cache(&codex_home)?;
+    let cache_path = codex_home.join("models_cache.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
+    let models = cache["models"]
+        .as_array_mut()
+        .expect("models_cache.json models should be an array");
+    let model = models
+        .first_mut()
+        .expect("models_cache.json should contain at least one model");
+    model["slug"] = serde_json::Value::from("mock-model");
+    model["display_name"] = serde_json::Value::from("mock-model");
+    model["apply_patch_tool_type"] = serde_json::Value::from("freeform");
+    std::fs::write(&cache_path, serde_json::to_string_pretty(&cache)?)?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

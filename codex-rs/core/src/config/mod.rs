@@ -764,11 +764,6 @@ pub struct Config {
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
 
-    /// Include the `apply_patch` tool for models that benefit from invoking
-    /// file edits as a structured tool call. When unset, this falls back to the
-    /// model info's default preference.
-    pub include_apply_patch_tool: bool,
-
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
 
@@ -801,9 +796,6 @@ pub struct Config {
     /// The currently active project config, resolved by checking if cwd:
     /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
     pub active_project: ProjectConfig,
-
-    /// Tracks whether the Windows onboarding screen has been acknowledged.
-    pub windows_wsl_setup_acknowledged: bool,
 
     /// Collection of various notices we show the user
     pub notices: Notice,
@@ -2301,12 +2293,10 @@ impl Config {
         let configured_features = Features::from_sources(
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
-                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             },
             FeatureConfigSource {
                 features: config_profile.features.as_ref(),
-                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: config_profile
                     .experimental_use_unified_exec_tool,
             },
@@ -2845,7 +2835,6 @@ impl Config {
             config
         };
 
-        let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
         let forced_chatgpt_workspace_id = cfg
@@ -3257,7 +3246,6 @@ impl Config {
             experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
             forced_chatgpt_workspace_id,
             forced_login_method,
-            include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             use_experimental_unified_exec_tool,
@@ -3270,7 +3258,6 @@ impl Config {
                 .unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
-            windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices,
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),

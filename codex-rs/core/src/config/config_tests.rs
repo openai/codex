@@ -4320,7 +4320,6 @@ async fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     .await?;
 
     assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
-    assert!(!config.include_apply_patch_tool);
 
     Ok(())
 }
@@ -7505,7 +7504,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: true,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -7516,7 +7514,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
@@ -7954,7 +7951,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         compact_prompt: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -7965,7 +7961,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
         active_project: ProjectConfig { trust_level: None },
-        windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,
@@ -8117,7 +8112,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         compact_prompt: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -8128,7 +8122,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
         active_project: ProjectConfig { trust_level: None },
-        windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,
@@ -8265,7 +8258,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         compact_prompt: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: true,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -8276,7 +8268,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
         active_project: ProjectConfig { trust_level: None },
-        windows_wsl_setup_acknowledged: false,
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,

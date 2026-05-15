@@ -457,9 +457,6 @@
             "in_app_browser": {
               "type": "boolean"
             },
-            "include_apply_patch_tool": {
-              "type": "boolean"
-            },
             "js_repl": {
               "type": "boolean"
             },
@@ -4224,9 +4221,6 @@
         "in_app_browser": {
           "type": "boolean"
         },
-        "include_apply_patch_tool": {
-          "type": "boolean"
-        },
         "js_repl": {
           "type": "boolean"
         },
@@ -4798,10 +4792,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "windows_wsl_setup_acknowledged": {
-      "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
-      "type": "boolean"
     },
     "zsh_path": {
       "allOf": [
