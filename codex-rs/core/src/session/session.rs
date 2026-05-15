@@ -1074,6 +1074,7 @@ impl Session {
                     InitialHistory::New | InitialHistory::Forked(_)
                 )
             );
+            // Subagents use SubagentStart instead of generic SessionStart.
             let should_run_session_start =
                 !matches!(session_configuration.session_source, SessionSource::SubAgent(_));
 

@@ -348,6 +348,7 @@ pub(crate) async fn run_turn_stop_hooks(
 ) -> TurnStopHookOutcome {
     let hooks = sess.hooks();
     let outcome = if let Some(metadata) = subagent_hook_metadata(sess, turn_context).await {
+        // Subagents use SubagentStop instead of generic Stop.
         let request = codex_hooks::SubagentStopRequest {
             session_id: sess.session_id().into(),
             turn_id: turn_context.sub_id.clone(),
