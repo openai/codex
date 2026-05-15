@@ -664,34 +664,29 @@ pub fn group_remote_installed_plugins_by_marketplaces(
 ) -> Vec<RemoteMarketplace> {
     let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
 
-    for plugin in plugins {
-        let Ok(plugin_id) = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
-        else {
-            continue;
+    for (marketplace_name, plugin_summary) in plugins.iter().filter_map(|plugin| {
+        let plugin_id = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone()).ok()?;
+        let plugin_root = store.active_plugin_root(&plugin_id)?;
+        let manifest = load_plugin_manifest(plugin_root.as_path())?;
+        let plugin_summary = RemotePluginSummary {
+            id: plugin_id.as_key(),
+            remote_plugin_id: plugin.id.clone(),
+            name: plugin.name.clone(),
+            share_context: plugin.share_context.clone(),
+            installed: true,
+            enabled: plugin.enabled,
+            install_policy: plugin.install_policy,
+            auth_policy: plugin.auth_policy,
+            availability: plugin.availability,
+            interface: manifest.interface.map(bundle_manifest_interface_to_info),
+            keywords: manifest.keywords,
         };
-        let Some(plugin_root) = store.active_plugin_root(&plugin_id) else {
-            continue;
-        };
-        let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
-            continue;
-        };
-
+        Some((plugin.marketplace_name.clone(), plugin_summary))
+    }) {
         plugins_by_marketplace
-            .entry(plugin.marketplace_name.clone())
+            .entry(marketplace_name)
             .or_default()
-            .push(RemotePluginSummary {
-                id: plugin_id.as_key(),
-                remote_plugin_id: plugin.id.clone(),
-                name: plugin.name.clone(),
-                share_context: plugin.share_context.clone(),
-                installed: true,
-                enabled: plugin.enabled,
-                install_policy: plugin.install_policy,
-                auth_policy: plugin.auth_policy,
-                availability: plugin.availability,
-                interface: manifest.interface.map(bundle_manifest_interface_to_info),
-                keywords: manifest.keywords,
-            });
+            .push(plugin_summary);
     }
 
     [
@@ -715,16 +710,13 @@ pub fn group_remote_installed_plugins_by_marketplaces(
     .into_iter()
     .filter_map(|(marketplace_name, display_name)| {
         let mut marketplace_plugins = plugins_by_marketplace.remove(marketplace_name)?;
-        if marketplace_plugins.is_empty() {
-            return None;
-        }
         marketplace_plugins.sort_by(|left, right| {
-            remote_plugin_display_name(left)
+            let left_display_name = remote_plugin_display_name(left);
+            let right_display_name = remote_plugin_display_name(right);
+            left_display_name
                 .to_ascii_lowercase()
-                .cmp(&remote_plugin_display_name(right).to_ascii_lowercase())
-                .then_with(|| {
-                    remote_plugin_display_name(left).cmp(remote_plugin_display_name(right))
-                })
+                .cmp(&right_display_name.to_ascii_lowercase())
+                .then_with(|| left_display_name.cmp(right_display_name))
                 .then_with(|| left.id.cmp(&right.id))
         });
         Some(RemoteMarketplace {
