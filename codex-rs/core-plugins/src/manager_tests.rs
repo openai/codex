@@ -359,6 +359,8 @@ plugins = true
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         share_context: None,
+        interface: None,
+        keywords: Vec::new(),
     }]);
 
     let outcome = manager.plugins_for_config(&config).await;
@@ -392,6 +394,8 @@ remote_plugin = true
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         share_context: None,
+        interface: None,
+        keywords: Vec::new(),
     }]);
 
     let outcome = manager.plugins_for_config(&config).await;
@@ -399,23 +403,8 @@ remote_plugin = true
 }
 
 #[test]
-fn build_remote_installed_plugin_marketplaces_from_cache_reads_bundle_metadata() {
+fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() {
     let codex_home = TempDir::new().unwrap();
-    let plugin_base = codex_home
-        .path()
-        .join("plugins/cache/chatgpt-global/linear");
-    write_file(
-        &plugin_base.join("local/.codex-plugin/plugin.json"),
-        r##"{
-  "name": "linear",
-  "keywords": ["issues"],
-  "interface": {
-    "displayName": "Linear",
-    "shortDescription": "Track cached work",
-    "brandColor": "#111111"
-  }
-}"##,
-    );
 
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
     manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
@@ -427,6 +416,26 @@ fn build_remote_installed_plugin_marketplaces_from_cache_reads_bundle_metadata()
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
         availability: codex_app_server_protocol::PluginAvailability::Available,
         share_context: None,
+        interface: Some(codex_app_server_protocol::PluginInterface {
+            display_name: Some("Linear".to_string()),
+            short_description: Some("Track remote work".to_string()),
+            long_description: None,
+            developer_name: None,
+            category: None,
+            capabilities: Vec::new(),
+            website_url: None,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            default_prompt: None,
+            brand_color: Some("#111111".to_string()),
+            composer_icon: None,
+            composer_icon_url: None,
+            logo: None,
+            logo_url: None,
+            screenshots: Vec::new(),
+            screenshot_urls: Vec::new(),
+        }),
+        keywords: vec!["issues".to_string()],
     }]);
 
     let marketplaces = manager
@@ -455,7 +464,7 @@ fn build_remote_installed_plugin_marketplaces_from_cache_reads_bundle_metadata()
             .interface
             .as_ref()
             .and_then(|interface| interface.short_description.as_deref()),
-        Some("Track cached work")
+        Some("Track remote work")
     );
 }
 

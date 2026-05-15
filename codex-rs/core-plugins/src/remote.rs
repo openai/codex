@@ -1,5 +1,3 @@
-use crate::manifest::PluginManifestInterface;
-use crate::manifest::load_plugin_manifest;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -95,6 +93,8 @@ pub struct RemoteInstalledPlugin {
     pub auth_policy: PluginAuthPolicy,
     pub availability: PluginAvailability,
     pub share_context: Option<RemotePluginShareContext>,
+    pub interface: Option<PluginInterface>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -660,14 +660,11 @@ pub async fn fetch_remote_installed_plugins(
 
 pub fn group_remote_installed_plugins_by_marketplaces(
     plugins: &[RemoteInstalledPlugin],
-    store: &PluginStore,
 ) -> Vec<RemoteMarketplace> {
     let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
 
     for (marketplace_name, plugin_summary) in plugins.iter().filter_map(|plugin| {
         let plugin_id = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone()).ok()?;
-        let plugin_root = store.active_plugin_root(&plugin_id)?;
-        let manifest = load_plugin_manifest(plugin_root.as_path())?;
         let plugin_summary = RemotePluginSummary {
             id: plugin_id.as_key(),
             remote_plugin_id: plugin.id.clone(),
@@ -678,8 +675,8 @@ pub fn group_remote_installed_plugins_by_marketplaces(
             install_policy: plugin.install_policy,
             auth_policy: plugin.auth_policy,
             availability: plugin.availability,
-            interface: manifest.interface.map(bundle_manifest_interface_to_info),
-            keywords: manifest.keywords,
+            interface: plugin.interface.clone(),
+            keywords: plugin.keywords.clone(),
         };
         Some((plugin.marketplace_name.clone(), plugin_summary))
     }) {
@@ -1074,29 +1071,9 @@ fn remote_installed_item_to_cache_entry(
         auth_policy: plugin.authentication_policy,
         availability: plugin.availability,
         share_context: remote_plugin_share_context(plugin)?,
+        interface: remote_plugin_interface_to_info(plugin),
+        keywords: plugin.release.keywords.clone(),
     })
-}
-
-fn bundle_manifest_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
-    PluginInterface {
-        display_name: interface.display_name,
-        short_description: interface.short_description,
-        long_description: interface.long_description,
-        developer_name: interface.developer_name,
-        category: interface.category,
-        capabilities: interface.capabilities,
-        website_url: interface.website_url,
-        privacy_policy_url: interface.privacy_policy_url,
-        terms_of_service_url: interface.terms_of_service_url,
-        default_prompt: interface.default_prompt,
-        brand_color: interface.brand_color,
-        composer_icon: interface.composer_icon,
-        composer_icon_url: None,
-        logo: interface.logo,
-        logo_url: None,
-        screenshots: interface.screenshots,
-        screenshot_urls: Vec::new(),
-    }
 }
 
 fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option<PluginInterface> {
