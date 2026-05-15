@@ -666,7 +666,7 @@ fn missing_request_input_is_reducer_error() -> anyhow::Result<()> {
 }
 
 #[test]
-fn unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
+fn initial_untraced_websocket_prewarm_response_reduces_full_delta_input() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -679,6 +679,46 @@ fn unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
         }),
     )?;
     append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let inference = &rollout.inference_calls["inference-1"];
+
+    assert_eq!(inference.request_item_ids.len(), 1);
+    assert_eq!(
+        rollout.conversation_items[&inference.request_item_ids[0]]
+            .body
+            .parts,
+        vec![ConversationPart::Text {
+            text: "still here".to_string(),
+        }],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn later_unknown_previous_response_id_is_reducer_error() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let first_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [message("user", "first")]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", first_request)?;
+
+    start_turn(&writer, "turn-2")?;
+    let later_request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "previous_response_id": "resp-missing",
+            "input": [message("user", "later")]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-2", "turn-2", later_request)?;
 
     expect_replay_error(&temp, "unknown previous_response_id resp-missing")
 }

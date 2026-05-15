@@ -95,6 +95,10 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
     let turn = connection.get(1).expect("missing turn request").body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
+    // Rollout trace reduction relies on startup prewarm carrying no model-visible
+    // conversation input: the first real request may reference this response id,
+    // while prewarm itself intentionally remains outside inference tracing.
+    assert_eq!(warmup["input"], serde_json::json!([]));
     assert!(
         turn["tools"]
             .as_array()

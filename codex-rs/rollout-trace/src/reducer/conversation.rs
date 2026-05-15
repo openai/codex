@@ -84,10 +84,30 @@ impl TraceReducer {
                     ids.extend(inference.response_item_ids.clone());
                     ids
                 });
-            let Some(mut item_ids) = previous_items else {
-                bail!(
-                    "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
-                );
+            let mut item_ids = if let Some(previous_items) = previous_items {
+                previous_items
+            } else {
+                // Startup WebSocket prewarm requests intentionally stay outside rollout
+                // traces, but the first traced request on that thread may reuse the warmup
+                // response id. Startup prewarm is built with empty conversation input and
+                // `generate=false`, so that unresolved parent can omit no traceable request or
+                // response items. No later unresolved id is valid: once a traced inference or
+                // transcript snapshot exists, the reducer should be able to resolve the link.
+                let first_traced_inference_for_thread = !self
+                    .rollout
+                    .inference_calls
+                    .values()
+                    .any(|inference| inference.thread_id == thread_id);
+                let thread_snapshot_is_empty = self
+                    .thread_conversation_snapshots
+                    .get(thread_id)
+                    .is_none_or(Vec::is_empty);
+                if !first_traced_inference_for_thread || !thread_snapshot_is_empty {
+                    bail!(
+                        "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
+                    );
+                }
+                Vec::new()
             };
             let delta_item_ids = self.reconcile_conversation_items(
                 items,
