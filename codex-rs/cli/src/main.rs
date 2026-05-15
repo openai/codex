@@ -34,7 +34,6 @@ use codex_state::state_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
-use codex_tui::LocalStateDbStartupError;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -52,6 +51,7 @@ mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
+mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -59,6 +59,7 @@ use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use doctor::DoctorCommand;
+use state_db_recovery as local_state_db;
 
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
@@ -1993,22 +1994,22 @@ async fn run_interactive_tui(
     match start_tui().await {
         Ok(exit_info) => Ok(exit_info),
         Err(err) => {
-            let Some(startup_error) = local_state_db_startup_error(&err) else {
+            let Some(startup_error) = local_state_db::startup_error(&err) else {
                 return Err(err);
             };
-            if local_state_db_is_locked(startup_error.detail()) {
-                print_local_state_db_locked_guidance(startup_error);
+            if local_state_db::is_locked(startup_error.detail()) {
+                local_state_db::print_locked_guidance(startup_error);
                 return Ok(AppExitInfo::fatal(startup_error.to_string()));
             }
-            if !confirm_local_state_db_repair(startup_error)? {
-                print_local_state_db_diagnostic_guidance(startup_error);
+            if !local_state_db::confirm_repair(startup_error)? {
+                local_state_db::print_diagnostic_guidance(startup_error);
                 return Ok(AppExitInfo::fatal(startup_error.to_string()));
             }
 
-            match repair_local_state_db_files(startup_error).await {
-                Ok(backups) => print_local_state_db_repair_backups(&backups),
+            match local_state_db::repair_files(startup_error).await {
+                Ok(backups) => local_state_db::print_repair_backups(&backups),
                 Err(repair_err) => {
-                    print_local_state_db_diagnostic_guidance(startup_error);
+                    local_state_db::print_diagnostic_guidance(startup_error);
                     return Ok(AppExitInfo::fatal(format!(
                         "failed to repair Codex local data automatically: {repair_err}"
                     )));
@@ -2018,13 +2019,14 @@ async fn run_interactive_tui(
             match start_tui().await {
                 Ok(exit_info) => Ok(exit_info),
                 Err(retry_err) => {
-                    let Some(retry_startup_error) = local_state_db_startup_error(&retry_err) else {
+                    let Some(retry_startup_error) = local_state_db::startup_error(&retry_err)
+                    else {
                         return Err(retry_err);
                     };
-                    if local_state_db_is_locked(retry_startup_error.detail()) {
-                        print_local_state_db_locked_guidance(retry_startup_error);
+                    if local_state_db::is_locked(retry_startup_error.detail()) {
+                        local_state_db::print_locked_guidance(retry_startup_error);
                     } else {
-                        print_local_state_db_diagnostic_guidance(retry_startup_error);
+                        local_state_db::print_diagnostic_guidance(retry_startup_error);
                     }
                     Ok(AppExitInfo::fatal(retry_startup_error.to_string()))
                 }
@@ -2040,131 +2042,6 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim();
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
-fn local_state_db_startup_error(err: &std::io::Error) -> Option<&LocalStateDbStartupError> {
-    err.get_ref()
-        .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
-}
-
-fn local_state_db_is_locked(detail: &str) -> bool {
-    let detail = detail.to_ascii_lowercase();
-    detail.contains("database is locked") || detail.contains("database is busy")
-}
-
-fn confirm_local_state_db_repair(
-    startup_error: &LocalStateDbStartupError,
-) -> std::io::Result<bool> {
-    eprintln!("Codex couldn't start because its local database appears to be damaged.");
-    eprintln!("Codex can try a safe repair by backing up those files and rebuilding them.");
-    print_local_state_db_technical_details(startup_error);
-    confirm("Repair Codex local data now? [y/N]: ")
-}
-
-async fn repair_local_state_db_files(
-    startup_error: &LocalStateDbStartupError,
-) -> std::io::Result<Vec<PathBuf>> {
-    let state_db_path = startup_error.state_db_path();
-    let sqlite_home = state_db_path.parent().ok_or_else(|| {
-        std::io::Error::other("state database path does not have a parent directory")
-    })?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    let repair_suffix = format!("codex-repair-{timestamp}");
-    let mut backups = Vec::new();
-
-    match tokio::fs::metadata(sqlite_home).await {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => {
-            backups.push(backup_local_state_path(sqlite_home, &repair_suffix).await?);
-            tokio::fs::create_dir_all(sqlite_home).await?;
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::create_dir_all(sqlite_home).await?;
-        }
-        Err(err) => return Err(err),
-    }
-
-    let logs_db_path = codex_state::logs_db_path(sqlite_home);
-    for path in sqlite_repair_paths(state_db_path)
-        .into_iter()
-        .chain(sqlite_repair_paths(logs_db_path.as_path()))
-    {
-        if tokio::fs::try_exists(path.as_path()).await? {
-            backups.push(backup_local_state_path(path.as_path(), &repair_suffix).await?);
-        }
-    }
-
-    if backups.is_empty() {
-        return Err(std::io::Error::other(
-            "no repairable Codex local data files were found",
-        ));
-    }
-
-    Ok(backups)
-}
-
-fn sqlite_repair_paths(db_path: &std::path::Path) -> Vec<PathBuf> {
-    let mut wal_path = db_path.as_os_str().to_os_string();
-    wal_path.push("-wal");
-    let mut shm_path = db_path.as_os_str().to_os_string();
-    shm_path.push("-shm");
-    vec![
-        db_path.to_path_buf(),
-        PathBuf::from(wal_path),
-        PathBuf::from(shm_path),
-    ]
-}
-
-async fn backup_local_state_path(
-    path: &std::path::Path,
-    repair_suffix: &str,
-) -> std::io::Result<PathBuf> {
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::other(format!(
-            "cannot create a repair backup name for {}",
-            path.display()
-        ))
-    })?;
-    let mut sequence = 0;
-    loop {
-        let mut backup_name = file_name.to_os_string();
-        backup_name.push(format!(".{repair_suffix}.{sequence}.bak"));
-        let backup_path = path.with_file_name(backup_name);
-        if !tokio::fs::try_exists(backup_path.as_path()).await? {
-            tokio::fs::rename(path, backup_path.as_path()).await?;
-            return Ok(backup_path);
-        }
-        sequence += 1;
-    }
-}
-
-fn print_local_state_db_repair_backups(backups: &[PathBuf]) {
-    eprintln!("Backed up Codex local data before repair:");
-    for backup in backups {
-        eprintln!("  {}", backup.display());
-    }
-    eprintln!("Retrying startup with rebuilt local data...");
-}
-
-fn print_local_state_db_diagnostic_guidance(startup_error: &LocalStateDbStartupError) {
-    eprintln!("Codex couldn't start because its local database appears to be damaged.");
-    eprintln!("Run `codex doctor` to check your setup and get next-step guidance.");
-    eprintln!("If this keeps happening, share the technical details below when asking for help.");
-    print_local_state_db_technical_details(startup_error);
-}
-
-fn print_local_state_db_technical_details(startup_error: &LocalStateDbStartupError) {
-    eprintln!("Technical details:");
-    eprintln!("  Location: {}", startup_error.state_db_path().display());
-    eprintln!("  Cause: {}", startup_error.detail());
-}
-
-fn print_local_state_db_locked_guidance(startup_error: &LocalStateDbStartupError) {
-    eprintln!("Codex couldn't start because another Codex process is using its local data.");
-    eprintln!("Quit any other copies of Codex that may still be running, then try again.");
-    print_local_state_db_technical_details(startup_error);
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.
@@ -2270,7 +2147,6 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -3493,56 +3369,5 @@ mod tests {
         cli.feature_toggles
             .to_overrides()
             .expect_err("feature should be rejected")
-    }
-
-    #[tokio::test]
-    async fn local_state_db_repair_backs_up_owned_database_files() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let state_path = codex_state::state_db_path(temp_dir.path());
-        let logs_path = codex_state::logs_db_path(temp_dir.path());
-        let state_sidecars = sqlite_repair_paths(state_path.as_path());
-        tokio::fs::write(state_path.as_path(), b"state").await?;
-        tokio::fs::write(state_sidecars[1].as_path(), b"state-wal").await?;
-        tokio::fs::write(logs_path.as_path(), b"logs").await?;
-
-        let startup_error =
-            LocalStateDbStartupError::new(state_path.clone(), "corrupt".to_string());
-        let backups = repair_local_state_db_files(&startup_error).await?;
-
-        assert_eq!(backups.len(), 3);
-        assert!(!tokio::fs::try_exists(state_path.as_path()).await?);
-        assert!(!tokio::fs::try_exists(state_sidecars[1].as_path()).await?);
-        assert!(!tokio::fs::try_exists(logs_path.as_path()).await?);
-        for backup in backups {
-            assert!(tokio::fs::try_exists(backup.as_path()).await?);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn local_state_db_repair_replaces_blocking_sqlite_home_file() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let sqlite_home = temp_dir.path().join("sqlite-home");
-        tokio::fs::write(sqlite_home.as_path(), b"not-a-directory").await?;
-        let startup_error = LocalStateDbStartupError::new(
-            codex_state::state_db_path(sqlite_home.as_path()),
-            "File exists".to_string(),
-        );
-
-        let backups = repair_local_state_db_files(&startup_error).await?;
-
-        assert_eq!(backups.len(), 1);
-        assert!(tokio::fs::metadata(sqlite_home.as_path()).await?.is_dir());
-        assert!(tokio::fs::try_exists(backups[0].as_path()).await?);
-        Ok(())
-    }
-
-    #[test]
-    fn local_state_db_lock_failures_skip_repair() {
-        assert!(local_state_db_is_locked("database is locked"));
-        assert!(local_state_db_is_locked("database is busy"));
-        assert!(!local_state_db_is_locked(
-            "database disk image is malformed"
-        ));
     }
 }
