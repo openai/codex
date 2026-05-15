@@ -6,9 +6,8 @@ run-name: >-
       ' windows-nextest-{0} arm64-shards-{1}{2}',
       inputs.windows_nextest_threads || 'default',
       inputs.windows_arm64_partitions || '1',
-      inputs.windows_arm64_archive == 'true' && ' arm64-archive' || ''
+      inputs.windows_arm64_archive != 'false' && ' arm64-archive' || ''
     ) ||
-    contains(github.ref_name, 'arm64-cross-archive') && ' arm64-cross-archive' ||
     contains(github.ref_name, 'arm64-shards-4') && ' arm64-shards-4' ||
     contains(github.ref_name, 'arm64-shards-2') && ' arm64-shards-2' ||
     ''
@@ -36,7 +35,7 @@ on:
       windows_arm64_archive:
         description: "Build Windows arm64 nextest archive on Windows x64, then run it on Windows arm64"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options:
           - "false"
@@ -586,8 +585,7 @@ jobs:
       WINDOWS_ARM64_ARCHIVE: >-
         ${{
           github.event_name == 'workflow_dispatch' && inputs.windows_arm64_archive ||
-          contains(github.ref_name, 'arm64-cross-archive') && 'true' ||
-          'false'
+          'true'
         }}
     steps:
       - name: Build test matrix
