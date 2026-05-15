@@ -285,7 +285,7 @@ impl ChatWidget {
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
-                /*permission_profile*/ None,
+                /*active_permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 Some(switch_model_for_events.clone()),
                 Some(Some(default_effort)),

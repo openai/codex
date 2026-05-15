@@ -140,6 +140,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
@@ -327,6 +329,7 @@ fn default_exec_approval_decisions(
 struct AutoReviewMode {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
+    active_permission_profile: ActivePermissionProfile,
     permission_profile: PermissionProfile,
 }
 
@@ -338,6 +341,9 @@ fn auto_review_mode() -> AutoReviewMode {
     AutoReviewMode {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
+        active_permission_profile: ActivePermissionProfile::new(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+        ),
         permission_profile: PermissionProfile::workspace_write(),
     }
 }

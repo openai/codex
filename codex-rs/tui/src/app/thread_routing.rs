@@ -510,7 +510,7 @@ impl App {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                permission_profile,
+                active_permission_profile,
                 model,
                 effort,
                 summary,
@@ -590,7 +590,7 @@ impl App {
                         approvals_reviewer.unwrap_or(config.approvals_reviewer);
                     let permissions_override = Self::turn_permissions_override_from_config(
                         config,
-                        permission_profile,
+                        active_permission_profile.as_ref(),
                         self.runtime_permission_profile_override.as_ref(),
                     );
                     app_server
@@ -698,16 +698,14 @@ impl App {
 
     fn turn_permissions_override_from_config(
         config: &Config,
-        permission_profile: &PermissionProfile,
+        active_permission_profile: Option<&ActivePermissionProfile>,
         runtime_permission_profile_override: Option<&PermissionProfile>,
     ) -> TurnPermissionsOverride {
-        let effective_permission_profile = config.permissions.effective_permission_profile();
-        if &effective_permission_profile == permission_profile
-            && let Some(active_permission_profile) = config.permissions.active_permission_profile()
-        {
-            return TurnPermissionsOverride::ActiveProfile(active_permission_profile);
+        if let Some(active_permission_profile) = active_permission_profile {
+            return TurnPermissionsOverride::ActiveProfile(active_permission_profile.clone());
         }
 
+        let effective_permission_profile = config.permissions.effective_permission_profile();
         let runtime_permission_profile_override =
             runtime_permission_profile_override.map(|profile| {
                 profile
@@ -718,9 +716,9 @@ impl App {
             });
         if runtime_permission_profile_override
             .as_ref()
-            .is_some_and(|profile| profile == permission_profile)
+            .is_some_and(|profile| profile == &effective_permission_profile)
         {
-            return TurnPermissionsOverride::LegacySandbox(permission_profile.clone());
+            return TurnPermissionsOverride::LegacySandbox(effective_permission_profile);
         }
 
         TurnPermissionsOverride::Preserve
@@ -1506,12 +1504,12 @@ mod tests {
     #[tokio::test]
     async fn turn_permissions_use_active_profile_when_available() {
         let config = config_with_workspace_profile().await;
-        let permission_profile = config.permissions.effective_permission_profile();
+        let active_permission_profile = config.permissions.active_permission_profile();
 
         assert_eq!(
             App::turn_permissions_override_from_config(
                 &config,
-                &permission_profile,
+                active_permission_profile.as_ref(),
                 /*runtime_permission_profile_override*/ None,
             ),
             TurnPermissionsOverride::ActiveProfile(ActivePermissionProfile::new(
@@ -1527,12 +1525,10 @@ mod tests {
             .permissions
             .set_permission_profile(PermissionProfile::read_only())
             .expect("read-only profile should be allowed");
-        let permission_profile = config.permissions.effective_permission_profile();
 
         assert_eq!(
             App::turn_permissions_override_from_config(
-                &config,
-                &permission_profile,
+                &config, /*active_permission_profile*/ None,
                 /*runtime_permission_profile_override*/ None,
             ),
             TurnPermissionsOverride::Preserve
@@ -1552,7 +1548,7 @@ mod tests {
         assert_eq!(
             App::turn_permissions_override_from_config(
                 &config,
-                &effective_permission_profile,
+                /*active_permission_profile*/ None,
                 Some(&permission_profile),
             ),
             TurnPermissionsOverride::LegacySandbox(effective_permission_profile)
