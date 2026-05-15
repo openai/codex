@@ -953,7 +953,9 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
         let prefix = &text[..marker_index];
         let start = prefix
             .rfind("/private/var/folders/")
-            .or_else(|| prefix.rfind("/var/folders/"));
+            .or_else(|| prefix.rfind("/var/folders/"))
+            .or_else(|| prefix.rfind("/private/tmp/.tmp"))
+            .or_else(|| prefix.rfind("/tmp/.tmp"));
         if let Some(start_index) = start {
             text.replace_range(start_index..marker_index, "<CODEX_HOME>");
             search_start = start_index + "<CODEX_HOME>".len() + marker.len();
@@ -961,6 +963,20 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
             search_start = marker_index + marker.len();
         }
     }
+}
+
+#[test]
+fn normalize_string_rewrites_linux_temp_skill_paths() {
+    let text = normalize_string(
+        "file: /tmp/.tmp5YYdK3/skills/.system/imagegen/SKILL.md and \
+         /private/tmp/.tmpw3wqF9/skills/custom/SKILL.md",
+    );
+
+    assert_eq!(
+        text,
+        "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
+         <CODEX_HOME>/skills/custom/SKILL.md"
+    );
 }
 
 fn canonical_json(value: &Value) -> Value {
