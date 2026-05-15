@@ -77,6 +77,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -555,6 +556,10 @@ pub struct Config {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Controls whether `model_auto_compact_token_limit` applies to the full
+    /// active context or only tokens after the carried compaction-window prefix.
+    pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -3299,6 +3304,9 @@ impl Config {
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
+            model_auto_compact_token_limit_scope: cfg
+                .model_auto_compact_token_limit_scope
+                .unwrap_or_default(),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,

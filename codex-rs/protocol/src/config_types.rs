@@ -21,6 +21,21 @@ use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
 
+/// Selects which part of the active context is charged against
+/// `model_auto_compact_token_limit`.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AutoCompactTokenLimitScope {
+    /// Count the full active context against the limit.
+    #[default]
+    Total,
+    /// Count sampled output and later growth after the carried window prefix.
+    BodyAfterPrefix,
+}
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries

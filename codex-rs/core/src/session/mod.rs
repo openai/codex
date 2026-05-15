@@ -80,6 +80,7 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -1104,6 +1105,11 @@ impl Session {
     pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
+    }
+
+    pub(crate) async fn auto_compact_window_prefix_input_tokens(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        state.auto_compact_window_prefix_input_tokens()
     }
 
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
@@ -2941,6 +2947,12 @@ impl Session {
                 let mut state = self.state.lock().await;
                 state
                     .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                if matches!(
+                    turn_context.config.model_auto_compact_token_limit_scope,
+                    AutoCompactTokenLimitScope::BodyAfterPrefix
+                ) {
+                    state.ensure_auto_compact_window_prefix_input_tokens(token_usage);
+                }
                 state.token_info()
             };
             if let Some(token_info) = token_info.as_ref() {
