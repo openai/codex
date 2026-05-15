@@ -41,7 +41,6 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -1003,14 +1002,9 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         remote_control_status = status.clone();
+                        let notification = ServerNotification::RemoteControlStatusChanged(status);
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
-                                RemoteControlStatusChangedNotification {
-                                    status: status.status,
-                                    installation_id: status.installation_id,
-                                    environment_id: status.environment_id,
-                                },
-                            ))
+                            .send_server_notification(notification)
                             .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
