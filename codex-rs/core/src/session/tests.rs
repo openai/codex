@@ -47,6 +47,9 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -8154,6 +8157,96 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     assert!(sess.active_turn.lock().await.is_none());
 
     Ok(())
+}
+
+#[tokio::test]
+async fn terminal_plan_cleanup_skips_active_goal() -> anyhow::Result<()> {
+    let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep the current work moving".to_string()),
+            status: Some(ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    while rx.try_recv().is_ok() {}
+
+    sess.send_event(
+        tc.as_ref(),
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: Some("active goal should preserve progress".to_string()),
+            plan: vec![PlanItemArg {
+                step: "continue work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        }),
+    )
+    .await;
+
+    while let Ok(event) = rx.recv().await {
+        if matches!(event.msg, EventMsg::PlanUpdate(_)) {
+            break;
+        }
+    }
+
+    sess.reset_in_progress_plan_steps_for_terminal_turn(tc.as_ref())
+        .await;
+
+    let emitted_cleanup = std::iter::from_fn(|| rx.try_recv().ok())
+        .any(|event| matches!(event.msg, EventMsg::PlanUpdate(UpdatePlanArgs { .. })));
+    assert!(
+        !emitted_cleanup,
+        "active goals should suppress terminal plan cleanup updates"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_finish_without_terminal_turn_does_not_reset_plan_progress() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+    sess.send_event(
+        tc.as_ref(),
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: Some("keep in progress until the turn really ends".to_string()),
+            plan: vec![PlanItemArg {
+                step: "continue work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        }),
+    )
+    .await;
+
+    while let Ok(event) = rx.recv().await {
+        if matches!(event.msg, EventMsg::PlanUpdate(_)) {
+            break;
+        }
+    }
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+
+    let mut saw_cleanup_update = false;
+    while let Ok(event) = rx.recv().await {
+        match event.msg {
+            EventMsg::PlanUpdate(UpdatePlanArgs { plan, .. }) => {
+                saw_cleanup_update |= plan
+                    .iter()
+                    .any(|item| matches!(item.status, StepStatus::Pending));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        !saw_cleanup_update,
+        "non-terminal task completion should not reset in-progress plan items"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

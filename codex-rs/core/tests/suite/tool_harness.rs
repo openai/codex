@@ -155,6 +155,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         "plan": [
             {"step": "Inspect workspace", "status": "in_progress"},
             {"step": "Report results", "status": "pending"},
+            {"step": "Ship fix", "status": "completed"},
         ],
     })
     .to_string();
@@ -199,16 +200,10 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         })
         .await?;
 
-    let mut saw_plan_update = false;
+    let mut plan_updates = Vec::new();
     wait_for_event(&codex, |event| match event {
         EventMsg::PlanUpdate(update) => {
-            saw_plan_update = true;
-            assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
-            assert_eq!(update.plan.len(), 2);
-            assert_eq!(update.plan[0].step, "Inspect workspace");
-            assert_matches!(update.plan[0].status, StepStatus::InProgress);
-            assert_eq!(update.plan[1].step, "Report results");
-            assert_matches!(update.plan[1].status, StepStatus::Pending);
+            plan_updates.push(update.clone());
             false
         }
         EventMsg::TurnComplete(_) => true,
@@ -216,7 +211,37 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     })
     .await;
 
-    assert!(saw_plan_update, "expected PlanUpdate event");
+    assert_eq!(
+        plan_updates.len(),
+        2,
+        "expected original and cleanup plan updates"
+    );
+
+    let initial_update = &plan_updates[0];
+    assert_eq!(
+        initial_update.explanation.as_deref(),
+        Some("Tool harness check")
+    );
+    assert_eq!(initial_update.plan.len(), 3);
+    assert_eq!(initial_update.plan[0].step, "Inspect workspace");
+    assert_matches!(initial_update.plan[0].status, StepStatus::InProgress);
+    assert_eq!(initial_update.plan[1].step, "Report results");
+    assert_matches!(initial_update.plan[1].status, StepStatus::Pending);
+    assert_eq!(initial_update.plan[2].step, "Ship fix");
+    assert_matches!(initial_update.plan[2].status, StepStatus::Completed);
+
+    let cleanup_update = &plan_updates[1];
+    assert_eq!(
+        cleanup_update.explanation.as_deref(),
+        Some("Tool harness check")
+    );
+    assert_eq!(cleanup_update.plan.len(), 3);
+    assert_eq!(cleanup_update.plan[0].step, "Inspect workspace");
+    assert_matches!(cleanup_update.plan[0].status, StepStatus::Pending);
+    assert_eq!(cleanup_update.plan[1].step, "Report results");
+    assert_matches!(cleanup_update.plan[1].status, StepStatus::Pending);
+    assert_eq!(cleanup_update.plan[2].step, "Ship fix");
+    assert_matches!(cleanup_update.plan[2].status, StepStatus::Completed);
 
     let req = second_mock.single_request();
     let (output_text, _success_flag) = call_output(&req, call_id);

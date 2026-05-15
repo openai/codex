@@ -97,6 +97,8 @@ use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -107,6 +109,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -1223,6 +1226,8 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
+                self.hydrate_latest_plan_update_from_rollout(&rollout_items)
+                    .await;
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
@@ -1240,6 +1245,8 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
+                self.hydrate_latest_plan_update_from_rollout(&rollout_items)
+                    .await;
 
                 // If persisting, persist all rollout items as-is (the store filters).
                 if !rollout_items.is_empty() {
@@ -1281,6 +1288,19 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    fn last_plan_update_from_rollout(rollout_items: &[RolloutItem]) -> Option<UpdatePlanArgs> {
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::PlanUpdate(update)) => Some(update.clone()),
+            _ => None,
+        })
+    }
+
+    async fn hydrate_latest_plan_update_from_rollout(&self, rollout_items: &[RolloutItem]) {
+        let latest_plan_update = Self::last_plan_update_from_rollout(rollout_items);
+        let mut state = self.state.lock().await;
+        state.set_latest_plan_update(latest_plan_update);
     }
 
     async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
@@ -1586,6 +1606,10 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        if let EventMsg::PlanUpdate(update) = &legacy_source {
+            let mut state = self.state.lock().await;
+            state.set_latest_plan_update(Some(update.clone()));
+        }
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -1611,6 +1635,52 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+    }
+
+    pub(crate) async fn reset_in_progress_plan_steps_for_terminal_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        if self.has_active_thread_goal_for_plan_cleanup().await {
+            return;
+        }
+
+        let Some(mut latest_plan_update) = ({
+            let state = self.state.lock().await;
+            state.latest_plan_update()
+        }) else {
+            return;
+        };
+
+        let mut changed = false;
+        for item in &mut latest_plan_update.plan {
+            if matches!(item.status, StepStatus::InProgress) {
+                item.status = StepStatus::Pending;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.send_event(turn_context, EventMsg::PlanUpdate(latest_plan_update))
+                .await;
+        }
+    }
+
+    async fn has_active_thread_goal_for_plan_cleanup(&self) -> bool {
+        if !self.enabled(Feature::Goals) {
+            return false;
+        }
+
+        match self.get_thread_goal().await {
+            Ok(Some(goal)) => goal.status == ThreadGoalStatus::Active,
+            Ok(None) => false,
+            Err(err) => {
+                warn!(
+                    "failed to inspect thread goal before terminal plan cleanup; preserving in-progress plan steps: {err}"
+                );
+                true
+            }
         }
     }
 

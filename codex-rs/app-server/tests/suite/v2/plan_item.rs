@@ -14,6 +14,8 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnPlanStepStatus;
+use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -24,6 +26,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use core_test_support::responses;
+use core_test_support::responses::ev_function_call;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -127,6 +130,90 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_plan_cleanup_reaches_app_server_before_turn_completion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let plan_args = serde_json::json!({
+        "explanation": "track remaining work",
+        "plan": [
+            {"step": "inspect", "status": "in_progress"},
+            {"step": "report", "status": "pending"},
+            {"step": "finished", "status": "completed"},
+        ],
+    })
+    .to_string();
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            ev_function_call("call-update-plan", "update_plan", &plan_args),
+            responses::ev_completed("resp-1"),
+        ]),
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let turn = start_default_turn(&mut mcp).await?;
+    let mut methods = Vec::new();
+    let mut updates = Vec::new();
+    let completed = loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        methods.push(notification.method.clone());
+        match notification.method.as_str() {
+            "turn/plan/updated" => {
+                let params = notification.params.ok_or_else(|| {
+                    anyhow!("turn/plan/updated notifications must include params")
+                })?;
+                updates.push(serde_json::from_value::<TurnPlanUpdatedNotification>(
+                    params,
+                )?);
+            }
+            "turn/completed" => {
+                let params = notification
+                    .params
+                    .ok_or_else(|| anyhow!("turn/completed notifications must include params"))?;
+                break serde_json::from_value::<TurnCompletedNotification>(params)?;
+            }
+            _ => {}
+        }
+    };
+    wait_for_responses_request_count(&server, /*expected_count*/ 2).await?;
+
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(updates.len(), 2, "expected original and cleanup updates");
+    assert_eq!(updates[0].plan[0].status, TurnPlanStepStatus::InProgress);
+    assert_eq!(updates[1].plan[0].status, TurnPlanStepStatus::Pending);
+    assert_eq!(updates[1].plan[1].status, TurnPlanStepStatus::Pending);
+    assert_eq!(updates[1].plan[2].status, TurnPlanStepStatus::Completed);
+
+    let completed_index = methods
+        .iter()
+        .position(|method| method == "turn/completed")
+        .expect("turn completion should be observed");
+    let cleanup_index = methods
+        .iter()
+        .rposition(|method| method == "turn/plan/updated")
+        .expect("cleanup plan update should be observed");
+    assert!(
+        cleanup_index < completed_index,
+        "cleanup plan notification should precede turn completion"
+    );
+
+    Ok(())
+}
+
 async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<codex_app_server_protocol::Turn> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -157,6 +244,38 @@ async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<codex_app_server_p
                 text_elements: Vec::new(),
             }],
             collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    Ok(to_response::<TurnStartResponse>(turn_resp)?.turn)
+}
+
+async fn start_default_turn(mcp: &mut McpProcess) -> Result<codex_app_server_protocol::Turn> {
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let thread = to_response::<ThreadStartResponse>(thread_resp)?.thread;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Update the todo list".to_string(),
+                text_elements: Vec::new(),
+            }],
             ..Default::default()
         })
         .await?;

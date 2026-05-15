@@ -2,6 +2,7 @@
 
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -28,6 +29,10 @@ pub(crate) struct SessionState {
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Latest todo/checklist plan update observed for the thread. The durable
+    /// source of truth remains the persisted event stream; this cache lets core
+    /// emit terminal-state corrections without rereading rollout storage.
+    latest_plan_update: Option<UpdatePlanArgs>,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
@@ -48,6 +53,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
+            latest_plan_update: None,
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
@@ -73,6 +79,14 @@ impl SessionState {
         previous_turn_settings: Option<PreviousTurnSettings>,
     ) {
         self.previous_turn_settings = previous_turn_settings;
+    }
+
+    pub(crate) fn latest_plan_update(&self) -> Option<UpdatePlanArgs> {
+        self.latest_plan_update.clone()
+    }
+
+    pub(crate) fn set_latest_plan_update(&mut self, update: Option<UpdatePlanArgs>) {
+        self.latest_plan_update = update;
     }
 
     pub(crate) fn set_next_turn_is_first(&mut self, value: bool) {
