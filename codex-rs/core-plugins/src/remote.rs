@@ -658,7 +658,7 @@ pub async fn fetch_remote_installed_plugins(
     Ok(installed_plugins)
 }
 
-pub fn cached_remote_installed_marketplaces(
+pub fn remote_installed_marketplaces_from_cache(
     plugins: &[RemoteInstalledPlugin],
     store: &PluginStore,
 ) -> Vec<RemoteMarketplace> {

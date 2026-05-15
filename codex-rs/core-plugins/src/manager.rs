@@ -604,7 +604,7 @@ impl PluginsManager {
         remote_installed_plugins_to_config(plugins, &self.store)
     }
 
-    pub fn cached_remote_installed_marketplaces(
+    pub fn remote_installed_marketplaces_from_cache(
         &self,
     ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
         let cache = match self.remote_installed_plugins_cache.read() {
@@ -612,20 +612,8 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         let plugins = cache.as_ref()?;
-        Some(crate::remote::cached_remote_installed_marketplaces(
+        Some(crate::remote::remote_installed_marketplaces_from_cache(
             plugins,
-            &self.store,
-        ))
-    }
-
-    pub async fn fetch_remote_installed_marketplaces(
-        &self,
-        config: &RemotePluginServiceConfig,
-        auth: Option<&CodexAuth>,
-    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        let plugins = crate::remote::fetch_remote_installed_plugins(config, auth).await?;
-        Ok(crate::remote::cached_remote_installed_marketplaces(
-            &plugins,
             &self.store,
         ))
     }

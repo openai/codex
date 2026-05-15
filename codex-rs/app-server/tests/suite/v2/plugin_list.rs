@@ -1802,7 +1802,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 }
 
 #[tokio::test]
-async fn plugin_installed_skips_remote_installed_rows_without_cached_bundle() -> Result<()> {
+async fn plugin_installed_does_not_fetch_remote_installed_when_cache_is_empty() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -1846,6 +1846,12 @@ async fn plugin_installed_skips_remote_installed_rows_without_cached_bundle() ->
     let response: PluginInstalledResponse = to_response(response)?;
 
     assert_eq!(response.marketplaces, Vec::new());
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 0,
+    )
+    .await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
