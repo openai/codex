@@ -261,9 +261,13 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let environment = environment_manager
+    let runtime_environment = environment_manager
         .default_environment()
-        .unwrap_or_else(|| environment_manager.local_environment());
+        .or_else(|| environment_manager.try_local_environment())
+        .map_or_else(
+            || McpRuntimeEnvironment::without_environment(config.cwd.to_path_buf()),
+            |environment| McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+        );
 
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
@@ -273,7 +277,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+        runtime_environment,
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,

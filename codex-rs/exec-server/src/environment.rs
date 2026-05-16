@@ -33,7 +33,9 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 /// the default environment unset while still keeping an explicit local
 /// environment available through `local_environment()`. Callers use
 /// `default_environment().is_some()` as the signal for model-facing
-/// shell/filesystem tool availability.
+/// shell/filesystem tool availability. Cloud-hosted runtimes can use
+/// `disabled_without_local()` to make local access absent even for internal
+/// fallback paths.
 ///
 /// Remote environments create remote filesystem and execution backends that
 /// lazy-connect to the configured exec-server on first use. The remote
@@ -42,7 +44,8 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub struct EnvironmentManager {
     default_environment: Option<String>,
     environments: RwLock<HashMap<String, Arc<Environment>>>,
-    local_environment: Arc<Environment>,
+    local_environment: Option<Arc<Environment>>,
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -64,22 +67,40 @@ impl EnvironmentManagerArgs {
 impl EnvironmentManager {
     /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
+        let local_environment = Arc::new(Environment::default_for_tests());
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::from([(
                 LOCAL_ENVIRONMENT_ID.to_string(),
-                Arc::new(Environment::default_for_tests()),
+                local_environment.clone(),
             )])),
-            local_environment: Arc::new(Environment::default_for_tests()),
+            local_environment: Some(local_environment),
+            local_runtime_paths: None,
         }
     }
 
     /// Builds a test-only manager with environment access disabled.
     pub fn disabled_for_tests(local_runtime_paths: ExecServerRuntimePaths) -> Self {
+        let local_environment = Arc::new(Environment::local(local_runtime_paths.clone()));
         Self {
             default_environment: None,
             environments: RwLock::new(HashMap::new()),
-            local_environment: Arc::new(Environment::local(local_runtime_paths)),
+            local_environment: Some(local_environment),
+            local_runtime_paths: Some(local_runtime_paths),
+        }
+    }
+
+    /// Builds a manager with no default or local environment available.
+    ///
+    /// This is intended for cloud-hosted orchestrator runtimes that must not
+    /// have a worker-local filesystem or process fallback. Remote environments
+    /// may still be added explicitly.
+    pub fn disabled_without_local() -> Self {
+        Self {
+            default_environment: None,
+            environments: RwLock::new(HashMap::new()),
+            local_environment: None,
+            local_runtime_paths: None,
         }
     }
 
@@ -171,7 +192,7 @@ impl EnvironmentManager {
         } = snapshot;
         let mut environment_map =
             HashMap::with_capacity(environments.len() + usize::from(include_local));
-        let local_environment = Arc::new(Environment::local(local_runtime_paths));
+        let local_environment = Arc::new(Environment::local(local_runtime_paths.clone()));
         if include_local {
             environment_map.insert(
                 LOCAL_ENVIRONMENT_ID.to_string(),
@@ -212,7 +233,8 @@ impl EnvironmentManager {
         Ok(Self {
             default_environment,
             environments: RwLock::new(environment_map),
-            local_environment,
+            local_environment: Some(local_environment),
+            local_runtime_paths: Some(local_runtime_paths),
         })
     }
 
@@ -250,7 +272,15 @@ impl EnvironmentManager {
 
     /// Returns the local environment instance used for internal runtime work.
     pub fn local_environment(&self) -> Arc<Environment> {
-        Arc::clone(&self.local_environment)
+        let Some(environment) = self.try_local_environment() else {
+            panic!("local environment is disabled for this runtime");
+        };
+        environment
+    }
+
+    /// Returns the local environment if this runtime is allowed to access it.
+    pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
+        self.local_environment.as_ref().map(Arc::clone)
     }
 
     /// Returns a named environment instance.
@@ -274,6 +304,11 @@ impl EnvironmentManager {
                 "environment id cannot be empty".to_string(),
             ));
         }
+        if environment_id == LOCAL_ENVIRONMENT_ID {
+            return Err(ExecServerError::Protocol(format!(
+                "environment id `{LOCAL_ENVIRONMENT_ID}` is reserved for EnvironmentManager"
+            )));
+        }
         let (exec_server_url, disabled) = normalize_exec_server_url(Some(exec_server_url));
         if disabled {
             return Err(ExecServerError::Protocol(
@@ -285,10 +320,8 @@ impl EnvironmentManager {
                 "remote environment requires an exec-server url".to_string(),
             ));
         };
-        let environment = Environment::remote_inner(
-            exec_server_url,
-            self.local_environment.local_runtime_paths.clone(),
-        );
+        let environment =
+            Environment::remote_inner(exec_server_url, self.local_runtime_paths.clone());
         self.environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -512,7 +545,19 @@ mod tests {
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);
+        assert!(manager.try_local_environment().is_some());
         assert!(!manager.local_environment().is_remote());
+        assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
+        assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_without_local_environment_removes_worker_local_fallback() {
+        let manager = EnvironmentManager::disabled_without_local();
+
+        assert!(manager.default_environment().is_none());
+        assert_eq!(manager.default_environment_id(), None);
+        assert!(manager.try_local_environment().is_none());
         assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
@@ -765,6 +810,7 @@ mod tests {
         assert_eq!(manager.default_environment_id(), None);
         assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
+        assert!(manager.try_local_environment().is_some());
         assert!(!manager.local_environment().is_remote());
     }
 
@@ -801,6 +847,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn environment_manager_without_local_can_upsert_named_remote_environment() {
+        let manager = EnvironmentManager::disabled_without_local();
+
+        manager
+            .upsert_environment("executor-a".to_string(), "ws://127.0.0.1:8765".to_string())
+            .expect("remote environment");
+        let environment = manager
+            .get_environment("executor-a")
+            .expect("remote environment");
+
+        assert!(environment.is_remote());
+        assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
+        assert_eq!(environment.local_runtime_paths(), None);
+    }
+
+    #[tokio::test]
     async fn environment_manager_rejects_empty_remote_environment_url() {
         let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
 
@@ -811,6 +873,23 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "exec-server protocol error: remote environment requires an exec-server url"
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_manager_rejects_upserted_local_environment_id() {
+        let manager = EnvironmentManager::disabled_without_local();
+
+        let err = manager
+            .upsert_environment(
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                "ws://127.0.0.1:8765".to_string(),
+            )
+            .expect_err("local environment id should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: environment id `local` is reserved for EnvironmentManager"
         );
     }
 

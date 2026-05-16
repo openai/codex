@@ -33,19 +33,26 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct FsRequestProcessor {
-    file_system: Arc<dyn ExecutorFileSystem>,
+    file_system: Option<Arc<dyn ExecutorFileSystem>>,
     fs_watch_manager: FsWatchManager,
 }
 
 impl FsRequestProcessor {
     pub(crate) fn new(
-        file_system: Arc<dyn ExecutorFileSystem>,
+        file_system: Option<Arc<dyn ExecutorFileSystem>>,
         fs_watch_manager: FsWatchManager,
     ) -> Self {
         Self {
             file_system,
             fs_watch_manager,
         }
+    }
+
+    fn file_system(&self) -> Result<Arc<dyn ExecutorFileSystem>, JSONRPCErrorError> {
+        self.file_system
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| invalid_request("local filesystem access is disabled for this runtime"))
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
@@ -57,7 +64,7 @@ impl FsRequestProcessor {
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
-            .file_system
+            .file_system()?
             .read_file(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -75,7 +82,7 @@ impl FsRequestProcessor {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        self.file_system
+        self.file_system()?
             .write_file(&params.path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -86,7 +93,7 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .create_directory(
                 &params.path,
                 CreateDirectoryOptions {
@@ -104,7 +111,7 @@ impl FsRequestProcessor {
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
-            .file_system
+            .file_system()?
             .get_metadata(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -122,7 +129,7 @@ impl FsRequestProcessor {
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
-            .file_system
+            .file_system()?
             .read_directory(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -142,7 +149,7 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .remove(
                 &params.path,
                 RemoveOptions {
@@ -160,7 +167,7 @@ impl FsRequestProcessor {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .copy(
                 &params.source_path,
                 &params.destination_path,
@@ -179,6 +186,7 @@ impl FsRequestProcessor {
         connection_id: ConnectionId,
         params: FsWatchParams,
     ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+        self.file_system()?;
         self.fs_watch_manager.watch(connection_id, params).await
     }
 
@@ -196,5 +204,69 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+    use crate::outgoing_message::OutgoingMessageSender;
+    use codex_analytics::AnalyticsEventsClient;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use std::path::PathBuf;
+    use tokio::sync::mpsc;
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute path")
+    }
+
+    fn processor_without_file_system() -> FsRequestProcessor {
+        let (tx, _rx) = mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        FsRequestProcessor::new(/*file_system*/ None, FsWatchManager::new(outgoing))
+    }
+
+    fn assert_local_filesystem_disabled(err: JSONRPCErrorError) {
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert_eq!(
+            err.message,
+            "local filesystem access is disabled for this runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_fails_when_local_filesystem_is_disabled() {
+        let processor = processor_without_file_system();
+
+        let err = processor
+            .read_file(FsReadFileParams {
+                path: absolute_path("/tmp/disabled-read"),
+            })
+            .await
+            .expect_err("read should fail");
+
+        assert_local_filesystem_disabled(err);
+    }
+
+    #[tokio::test]
+    async fn watch_fails_when_local_filesystem_is_disabled() {
+        let processor = processor_without_file_system();
+
+        let err = processor
+            .watch(
+                ConnectionId(1),
+                FsWatchParams {
+                    watch_id: "disabled-watch".to_string(),
+                    path: absolute_path("/tmp/disabled-watch"),
+                },
+            )
+            .await
+            .expect_err("watch should fail");
+
+        assert_local_filesystem_disabled(err);
     }
 }

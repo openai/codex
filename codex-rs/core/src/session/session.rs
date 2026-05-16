@@ -1045,13 +1045,24 @@ impl Session {
                     Arc::clone(&turn_environment.environment),
                     turn_environment.cwd.to_path_buf(),
                 ),
-                None => McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
+                None => sess
+                    .services
+                    .environment_manager
+                    .default_environment()
+                    .or_else(|| sess.services.environment_manager.try_local_environment())
+                    .map_or_else(
+                        || {
+                            McpRuntimeEnvironment::without_environment(
+                                session_configuration.cwd.to_path_buf(),
+                            )
+                        },
+                        |environment| {
+                            McpRuntimeEnvironment::new(
+                                environment,
+                                session_configuration.cwd.to_path_buf(),
+                            )
+                        },
+                    ),
             };
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,

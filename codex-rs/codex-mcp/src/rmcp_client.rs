@@ -574,7 +574,12 @@ async fn make_rmcp_client(
     let remote_environment = match experimental_environment.as_deref() {
         None | Some("local") => false,
         Some("remote") => {
-            if !runtime_environment.environment().is_remote() {
+            let Some(environment) = runtime_environment.environment() else {
+                return Err(StartupOutcomeError::from(anyhow!(
+                    "remote MCP server `{server_name}` requires an environment"
+                )));
+            };
+            if !environment.is_remote() {
                 return Err(StartupOutcomeError::from(anyhow!(
                     "remote MCP server `{server_name}` requires a remote environment"
                 )));
@@ -604,11 +609,21 @@ async fn make_rmcp_client(
                     .collect::<HashMap<_, _>>()
             });
             let launcher = if remote_environment {
+                let Some(environment) = runtime_environment.environment() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote MCP server `{server_name}` requires an environment"
+                    )));
+                };
                 Arc::new(ExecutorStdioServerLauncher::new(
-                    runtime_environment.environment().get_exec_backend(),
+                    environment.get_exec_backend(),
                     runtime_environment.fallback_cwd(),
                 ))
             } else {
+                if runtime_environment.environment().is_none() {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "local stdio MCP server `{server_name}` is disabled because no local environment is available"
+                    )));
+                }
                 Arc::new(LocalStdioServerLauncher::new(
                     runtime_environment.fallback_cwd(),
                 )) as Arc<dyn StdioServerLauncher>
@@ -628,7 +643,12 @@ async fn make_rmcp_client(
             bearer_token_env_var,
         } => {
             let http_client: Arc<dyn HttpClient> = if remote_environment {
-                runtime_environment.environment().get_http_client()
+                let Some(environment) = runtime_environment.environment() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote MCP server `{server_name}` requires an environment"
+                    )));
+                };
+                environment.get_http_client()
             } else {
                 Arc::new(ReqwestHttpClient)
             };
@@ -658,6 +678,32 @@ mod tests {
     use super::*;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
+
+    fn stdio_server_config(command: &str) -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: command.to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        }
+    }
 
     fn tool_with_connector_meta() -> RmcpTool {
         RmcpTool {
@@ -721,6 +767,32 @@ mod tests {
         assert_eq!(
             meta.0.get("custom").and_then(|value| value.as_str()),
             Some("kept")
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_mcp_fails_closed_without_local_environment() {
+        let server = EffectiveMcpServer::configured(stdio_server_config("echo"));
+        let runtime_environment = McpRuntimeEnvironment::without_environment(
+            std::env::current_dir().expect("current dir"),
+        );
+
+        let result = make_rmcp_client(
+            "local-test",
+            server,
+            OAuthCredentialsStoreMode::File,
+            runtime_environment,
+            /*runtime_auth_provider*/ None,
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("stdio MCP should be disabled without an environment");
+        };
+
+        assert!(err.to_string().contains("local stdio MCP server"));
+        assert!(
+            err.to_string()
+                .contains("no local environment is available")
         );
     }
 

@@ -38,20 +38,27 @@ pub struct SandboxState {
 /// process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
-    environment: Arc<Environment>,
+    environment: Option<Arc<Environment>>,
     fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeEnvironment {
     pub fn new(environment: Arc<Environment>, fallback_cwd: PathBuf) -> Self {
         Self {
-            environment,
+            environment: Some(environment),
             fallback_cwd,
         }
     }
 
-    pub(crate) fn environment(&self) -> Arc<Environment> {
-        Arc::clone(&self.environment)
+    pub fn without_environment(fallback_cwd: PathBuf) -> Self {
+        Self {
+            environment: None,
+            fallback_cwd,
+        }
+    }
+
+    pub(crate) fn environment(&self) -> Option<Arc<Environment>> {
+        self.environment.as_ref().map(Arc::clone)
     }
 
     pub(crate) fn fallback_cwd(&self) -> PathBuf {

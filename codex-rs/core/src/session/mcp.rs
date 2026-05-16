@@ -294,14 +294,18 @@ impl Session {
                 Arc::clone(&turn_environment.environment),
                 turn_environment.cwd.to_path_buf(),
             ),
-            None => McpRuntimeEnvironment::new(
+            None => {
+                #[allow(deprecated)]
+                let fallback_cwd = turn_context.cwd.to_path_buf();
                 self.services
                     .environment_manager
                     .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
+                    .or_else(|| self.services.environment_manager.try_local_environment())
+                    .map_or_else(
+                        || McpRuntimeEnvironment::without_environment(fallback_cwd.clone()),
+                        |environment| McpRuntimeEnvironment::new(environment, fallback_cwd.clone()),
+                    )
+            }
         };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;

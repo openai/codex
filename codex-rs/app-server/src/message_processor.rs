@@ -464,8 +464,8 @@ impl MessageProcessor {
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
-                .local_environment()
-                .get_filesystem(),
+                .try_local_environment()
+                .map(|environment| environment.get_filesystem()),
             fs_watch_manager,
         );
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(

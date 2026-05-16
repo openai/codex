@@ -205,17 +205,17 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
-        };
+        // Status listing has no turn cwd. This fallback is used only by MCPs
+        // whose config omits `cwd`; when the runtime has no local environment,
+        // stdio MCP startup will fail closed while HTTP MCPs can still be
+        // queried.
+        let runtime_environment = environment_manager
+            .default_environment()
+            .or_else(|| environment_manager.try_local_environment())
+            .map_or_else(
+                || McpRuntimeEnvironment::without_environment(config.cwd.to_path_buf()),
+                |environment| McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+            );
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -371,12 +371,14 @@ impl McpRequestProcessor {
         let auth = self.auth_manager.auth().await;
         let runtime_environment = {
             let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
+            let fallback_cwd = config.cwd.to_path_buf();
+            environment_manager
                 .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+                .or_else(|| environment_manager.try_local_environment())
+                .map_or_else(
+                    || McpRuntimeEnvironment::without_environment(fallback_cwd.clone()),
+                    |environment| McpRuntimeEnvironment::new(environment, fallback_cwd.clone()),
+                )
         };
         let request_id = request_id.clone();
 
