@@ -113,7 +113,7 @@ def _approval_mode_override_settings(
 
 
 class Codex:
-    """Minimal typed SDK surface for app-server v2."""
+    """Typed Python client for app-server v2 workflows."""
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self._client = AppServerClient(config=config)
