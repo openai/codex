@@ -36,6 +36,7 @@ pub struct NetworkProxyConstraints {
     pub denylist_expansion_enabled: Option<bool>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+    pub required_mitm_hook_prefix: Option<Vec<MitmHookConfig>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +127,18 @@ pub fn validate_policy_against_constraints(
     let config_allow_unix_sockets = config.network.allow_unix_sockets();
     validate_mitm_hook_config(config).map_err(invalid_mitm_hook_configuration)?;
     validate_non_global_wildcard_domain_patterns("network.denied_domains", &config_denied_domains)?;
+    if let Some(required_mitm_hook_prefix) = constraints.required_mitm_hook_prefix.as_ref()
+        && !config
+            .network
+            .mitm_hooks
+            .starts_with(required_mitm_hook_prefix)
+    {
+        return Err(invalid_value(
+            "network.mitm_hooks",
+            "managed MITM hooks were replaced or reordered",
+            "managed MITM hooks preserved before lower-trust hooks",
+        ));
+    }
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {

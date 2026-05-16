@@ -1530,6 +1530,61 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_preserves_managed_mitm_hooks() {
+        let managed_hook = crate::mitm_hook::MitmHookConfig {
+            host: "api.github.com".to_string(),
+            matcher: crate::mitm_hook::MitmHookMatchConfig {
+                methods: vec!["POST".to_string()],
+                path_prefixes: vec!["/repos/openai/".to_string()],
+                ..crate::mitm_hook::MitmHookMatchConfig::default()
+            },
+            actions: crate::mitm_hook::MitmHookActionsConfig {
+                strip_request_headers: vec!["authorization".to_string()],
+                ..crate::mitm_hook::MitmHookActionsConfig::default()
+            },
+        };
+        let extra_hook = crate::mitm_hook::MitmHookConfig {
+            host: "api.example.com".to_string(),
+            matcher: crate::mitm_hook::MitmHookMatchConfig {
+                methods: vec!["GET".to_string()],
+                path_prefixes: vec!["/".to_string()],
+                ..crate::mitm_hook::MitmHookMatchConfig::default()
+            },
+            ..crate::mitm_hook::MitmHookConfig::default()
+        };
+        let constraints = NetworkProxyConstraints {
+            required_mitm_hook_prefix: Some(vec![managed_hook.clone()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                mitm: true,
+                mitm_hooks: vec![managed_hook.clone(), extra_hook],
+                ..NetworkProxySettings::default()
+            },
+        };
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                mitm: true,
+                mitm_hooks: vec![crate::mitm_hook::MitmHookConfig {
+                    actions: crate::mitm_hook::MitmHookActionsConfig {
+                        strip_request_headers: vec!["x-api-key".to_string()],
+                        ..crate::mitm_hook::MitmHookActionsConfig::default()
+                    },
+                    ..managed_hook
+                }],
+                ..NetworkProxySettings::default()
+            },
+        };
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
     fn validate_policy_against_constraints_allows_narrowing_wildcard_allowlist() {
         let constraints = NetworkProxyConstraints {
             allowed_domains: Some(vec!["*.example.com".to_string()]),

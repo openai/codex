@@ -122,6 +122,7 @@ fn network_constraints_from_trusted_layers(
     layers: &ConfigLayerStack,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
+    let mut trusted_network = NetworkConfigAccumulator::default();
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
@@ -132,9 +133,13 @@ fn network_constraints_from_trusted_layers(
 
         let parsed = network_tables_from_toml(&layer.config)?;
         if let Some(network) = selected_network_from_tables(parsed)? {
-            apply_network_constraints(network, &mut constraints);
+            apply_network_constraints(network.clone(), &mut constraints);
+            trusted_network.apply_network(network);
         }
     }
+    let trusted_mitm_hooks = trusted_network.finish()?.network.mitm_hooks;
+    constraints.required_mitm_hook_prefix =
+        (!trusted_mitm_hooks.is_empty()).then_some(trusted_mitm_hooks);
     Ok(constraints)
 }
 

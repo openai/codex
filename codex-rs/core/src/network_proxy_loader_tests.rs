@@ -175,6 +175,72 @@ strip_request_headers = ["x-api-key"]
 }
 
 #[test]
+fn trusted_named_mitm_actions_become_required_hook_constraints() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "full"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mode = "full"
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["x-api-key"]
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let mut trusted_network = NetworkConfigAccumulator::default();
+    trusted_network
+        .apply_network_tables(
+            network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+        )
+        .expect("lower layer should apply");
+    trusted_network
+        .apply_network_tables(
+            network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+        )
+        .expect("higher layer should apply");
+
+    let constraints = NetworkProxyConstraints {
+        required_mitm_hook_prefix: Some(
+            trusted_network
+                .finish()
+                .expect("trusted network should build")
+                .network
+                .mitm_hooks,
+        ),
+        ..NetworkProxyConstraints::default()
+    };
+
+    assert_eq!(
+        constraints
+            .required_mitm_hook_prefix
+            .expect("trusted hooks should be constrained")[0]
+            .actions
+            .strip_request_headers,
+        vec!["x-api-key"]
+    );
+}
+
+#[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
     config
