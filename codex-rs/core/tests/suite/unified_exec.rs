@@ -190,24 +190,33 @@ async fn submit_unified_exec_turn(
     let session_model = test.session_configured.model.clone();
 
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -274,24 +283,33 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let session_model = test.session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "apply patch via unified exec".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2116,24 +2134,33 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "keep unified exec process after turn end".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2211,24 +2238,33 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "interrupt long-running unified exec".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2685,25 +2721,33 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            // Important!
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2801,24 +2845,33 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     let session_model = session_configured.model.clone();
     let read_only_policy = SandboxPolicy::new_read_only_policy();
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "read the fixture files".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: read_only_policy,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(read_only_policy),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2931,24 +2984,33 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "start python under seatbelt".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 

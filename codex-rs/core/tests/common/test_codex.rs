@@ -198,8 +198,7 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
-/// Returns the permission fields required by `Op::UserTurn` for tests that
-/// construct the op directly.
+/// Returns the permission fields required by test turn-context overrides.
 pub fn turn_permission_fields(
     permission_profile: PermissionProfile,
     cwd: &Path,
@@ -762,24 +761,33 @@ impl TestCodex {
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
-            .submit(Op::UserTurn {
-                environments,
+            .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
+                environments: environments,
                 final_output_json_schema: None,
-                cwd: self.config.cwd.to_path_buf(),
-                approval_policy,
-                approvals_reviewer: None,
-                sandbox_policy,
-                permission_profile,
-                model: session_model,
-                effort: None,
-                summary: None,
-                service_tier,
-                collaboration_mode: None,
-                personality: None,
+                responsesapi_client_metadata: None,
+                turn_context: codex_protocol::protocol::TurnContextOverrides {
+                    cwd: Some(self.config.cwd.to_path_buf()),
+                    approval_policy: Some(approval_policy),
+                    approvals_reviewer: None,
+                    sandbox_policy: Some(sandbox_policy),
+                    permission_profile: permission_profile,
+                    summary: None,
+                    service_tier: service_tier,
+                    personality: None,
+                    collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: session_model,
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
             })
             .await?;
 

@@ -51,9 +51,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -190,84 +187,28 @@ pub(super) async fn user_input_or_turn_inner(
     mirror_user_text_to_realtime: Option<()>,
 ) {
     let (items, updates, responsesapi_client_metadata, emit_turn_context_applied) = match op {
-        Op::UserTurn {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = collaboration_mode.or_else(|| {
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: model.clone(),
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    },
-                })
-            });
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer,
-                    sandbox_policy: Some(sandbox_policy),
-                    workspace_roots: None,
-                    profile_workspace_roots: None,
-                    permission_profile,
-                    active_permission_profile: None,
-                    windows_sandbox_level: None,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                None,
-                false,
-            )
-        }
-        Op::UserInputWithTurnContext {
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            environments,
-            turn_context,
-        } => {
-            let mut updates = turn_context_settings_update(sess, turn_context).await;
-            updates.final_output_json_schema = Some(final_output_json_schema);
-            updates.environments = environments;
-            (items, updates, responsesapi_client_metadata, true)
-        }
         Op::UserInput {
             items,
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
-        } => (
-            items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
-                environments,
-                ..Default::default()
-            },
-            responsesapi_client_metadata,
-            false,
-        ),
+            turn_context,
+        } => {
+            let emit_turn_context_applied = turn_context != TurnContextOverrides::default();
+            let mut updates = if emit_turn_context_applied {
+                turn_context_settings_update(sess, turn_context).await
+            } else {
+                SessionSettingsUpdate::default()
+            };
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (
+                items,
+                updates,
+                responsesapi_client_metadata,
+                emit_turn_context_applied,
+            )
+        }
         _ => unreachable!(),
     };
 
@@ -823,9 +764,7 @@ pub(super) async fn submission_loop(
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
                     false
                 }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                Op::UserInput { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
