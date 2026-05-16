@@ -30,7 +30,7 @@ pub(crate) fn clear_config_value(key_path: impl Into<String>) -> ConfigEdit {
 
 pub(crate) fn profile_scoped_key_path(profile: Option<&str>, key_path: &str) -> String {
     if let Some(profile) = profile {
-        let profile = serde_json::to_string(profile).expect("profile names serialize as JSON");
+        let profile = serde_json::Value::String(profile.to_string()).to_string();
         format!("profiles.{profile}.{key_path}")
     } else {
         key_path.to_string()
