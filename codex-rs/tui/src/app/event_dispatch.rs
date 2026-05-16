@@ -1692,7 +1692,9 @@ impl App {
                 let edits = if enabled {
                     vec![
                         crate::config_update::clear_config_value(format!("apps.{id}.enabled")),
-                        crate::config_update::clear_config_value(format!("apps.{id}.disabled_reason")),
+                        crate::config_update::clear_config_value(format!(
+                            "apps.{id}.disabled_reason"
+                        )),
                     ]
                 } else {
                     vec![
@@ -1707,7 +1709,7 @@ impl App {
                     ]
                 };
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
-                .await
+                    .await
                 {
                     Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
@@ -1716,7 +1718,6 @@ impl App {
                         {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");
                         }
-                        self.chat_widget.submit_op(AppCommand::reload_user_config());
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
