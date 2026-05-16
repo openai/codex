@@ -1572,7 +1572,7 @@ impl Session {
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
-            /*personality_enabled*/ true,
+            /*personality_feature_enabled*/ true,
         )
     }
 
