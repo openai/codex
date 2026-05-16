@@ -656,14 +656,6 @@ pub(crate) async fn fetch_remote_installed_plugins(
     auth: Option<&CodexAuth>,
     scopes: &[RemotePluginScope],
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
-    fetch_remote_installed_plugins_for_scopes(config, auth, scopes).await
-}
-
-pub(crate) async fn fetch_remote_installed_plugins_for_scopes(
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    scopes: &[RemotePluginScope],
-) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
     if scopes.is_empty() {
         return Ok(Vec::new());
     }

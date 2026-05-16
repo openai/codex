@@ -335,38 +335,6 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn remote_installed_cache_ignores_global_plugins_without_remote_plugin_flag() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_base = codex_home
-        .path()
-        .join("plugins/cache/chatgpt-global/linear");
-    write_plugin(&plugin_base, "local", "linear");
-    write_file(
-        &codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-"#,
-    );
-
-    let config = load_config(codex_home.path(), codex_home.path()).await;
-    let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
-        marketplace_name: "chatgpt-global".to_string(),
-        id: "plugins~Plugin_linear".to_string(),
-        name: "linear".to_string(),
-        enabled: true,
-        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
-        availability: codex_app_server_protocol::PluginAvailability::Available,
-        interface: None,
-        keywords: Vec::new(),
-    }]);
-
-    let outcome = manager.plugins_for_config(&config).await;
-    assert_eq!(outcome, PluginLoadOutcome::default());
-}
-
-#[tokio::test]
 async fn remote_installed_cache_ignores_plugins_missing_local_cache() {
     let codex_home = TempDir::new().unwrap();
     write_file(

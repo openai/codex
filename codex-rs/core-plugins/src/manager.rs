@@ -640,7 +640,7 @@ impl PluginsManager {
         if scopes.is_empty() {
             return Ok(Vec::new());
         }
-        let plugins = crate::remote::fetch_remote_installed_plugins_for_scopes(
+        let plugins = crate::remote::fetch_remote_installed_plugins(
             &remote_plugin_service_config(config),
             auth,
             scopes,
