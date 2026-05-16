@@ -3,9 +3,13 @@ use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_protocol::protocol::GroupSpendControlLimitSnapshot as CoreGroupSpendControlLimitSnapshot;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
+use codex_protocol::protocol::SpendControlLimitType as CoreSpendControlLimitType;
+use codex_protocol::protocol::SpendControlSnapshot as CoreSpendControlSnapshot;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -260,6 +264,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -272,6 +277,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
+            spend_control: value.spend_control.map(SpendControlSnapshot::from),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type
@@ -367,6 +373,114 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpendControlSnapshot {
+    pub reached: bool,
+    pub reached_limit_type: Option<SpendControlLimitType>,
+    pub individual_limit: Option<SpendControlLimitSnapshot>,
+    pub group_default_limit: Option<GroupSpendControlLimitSnapshot>,
+    pub workspace_default_limit: Option<SpendControlLimitSnapshot>,
+    pub role_budget_limit: Option<SpendControlLimitSnapshot>,
+    pub group_shared_limit: Option<GroupSpendControlLimitSnapshot>,
+    pub workspace_shared_limit: Option<SpendControlLimitSnapshot>,
+}
+
+impl From<CoreSpendControlSnapshot> for SpendControlSnapshot {
+    fn from(value: CoreSpendControlSnapshot) -> Self {
+        Self {
+            reached: value.reached,
+            reached_limit_type: value.reached_limit_type.map(SpendControlLimitType::from),
+            individual_limit: value.individual_limit.map(SpendControlLimitSnapshot::from),
+            group_default_limit: value
+                .group_default_limit
+                .map(GroupSpendControlLimitSnapshot::from),
+            workspace_default_limit: value
+                .workspace_default_limit
+                .map(SpendControlLimitSnapshot::from),
+            role_budget_limit: value.role_budget_limit.map(SpendControlLimitSnapshot::from),
+            group_shared_limit: value
+                .group_shared_limit
+                .map(GroupSpendControlLimitSnapshot::from),
+            workspace_shared_limit: value
+                .workspace_shared_limit
+                .map(SpendControlLimitSnapshot::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum SpendControlLimitType {
+    Individual,
+    GroupDefault,
+    WorkspaceDefault,
+    RoleBudget,
+    GroupShared,
+    WorkspaceShared,
+}
+
+impl From<CoreSpendControlLimitType> for SpendControlLimitType {
+    fn from(value: CoreSpendControlLimitType) -> Self {
+        match value {
+            CoreSpendControlLimitType::Individual => Self::Individual,
+            CoreSpendControlLimitType::GroupDefault => Self::GroupDefault,
+            CoreSpendControlLimitType::WorkspaceDefault => Self::WorkspaceDefault,
+            CoreSpendControlLimitType::RoleBudget => Self::RoleBudget,
+            CoreSpendControlLimitType::GroupShared => Self::GroupShared,
+            CoreSpendControlLimitType::WorkspaceShared => Self::WorkspaceShared,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpendControlLimitSnapshot {
+    pub limit: String,
+    pub used: String,
+    pub remaining: String,
+    pub used_percent: i32,
+    pub remaining_percent: i32,
+    pub reset_after_seconds: i32,
+    pub reset_at: i32,
+}
+
+impl From<CoreSpendControlLimitSnapshot> for SpendControlLimitSnapshot {
+    fn from(value: CoreSpendControlLimitSnapshot) -> Self {
+        Self {
+            limit: value.limit,
+            used: value.used,
+            remaining: value.remaining,
+            used_percent: value.used_percent,
+            remaining_percent: value.remaining_percent,
+            reset_after_seconds: value.reset_after_seconds,
+            reset_at: value.reset_at,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GroupSpendControlLimitSnapshot {
+    pub group_id: String,
+    pub group_name: String,
+    pub details: SpendControlLimitSnapshot,
+}
+
+impl From<CoreGroupSpendControlLimitSnapshot> for GroupSpendControlLimitSnapshot {
+    fn from(value: CoreGroupSpendControlLimitSnapshot) -> Self {
+        Self {
+            group_id: value.group_id,
+            group_name: value.group_name,
+            details: SpendControlLimitSnapshot::from(value.details),
         }
     }
 }

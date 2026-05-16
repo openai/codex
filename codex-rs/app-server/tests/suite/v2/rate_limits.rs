@@ -181,6 +181,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: Some(secondary_reset_timestamp),
             }),
             credits: None,
+            spend_control: None,
             plan_type: Some(AccountPlanType::Pro),
             rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
@@ -202,6 +203,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                             resets_at: Some(secondary_reset_timestamp),
                         }),
                         credits: None,
+                        spend_control: None,
                         plan_type: Some(AccountPlanType::Pro),
                         rate_limit_reached_type: Some(
                             RateLimitReachedType::WorkspaceMemberUsageLimitReached,
@@ -220,6 +222,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         }),
                         secondary: None,
                         credits: None,
+                        spend_control: None,
                         plan_type: Some(AccountPlanType::Pro),
                         rate_limit_reached_type: None,
                     },

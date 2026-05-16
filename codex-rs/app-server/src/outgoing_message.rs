@@ -788,6 +788,7 @@ mod tests {
                     }),
                     secondary: None,
                     credits: None,
+                    spend_control: None,
                     plan_type: Some(PlanType::Plus),
                     rate_limit_reached_type: None,
                 },

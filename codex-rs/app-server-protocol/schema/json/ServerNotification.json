@@ -1421,6 +1421,25 @@
       },
       "type": "object"
     },
+    "GroupSpendControlLimitSnapshot": {
+      "properties": {
+        "details": {
+          "$ref": "#/definitions/SpendControlLimitSnapshot"
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "groupName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "details",
+        "groupId",
+        "groupName"
+      ],
+      "type": "object"
+    },
     "GuardianApprovalReview": {
       "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
       "properties": {
@@ -2598,6 +2617,16 @@
               "type": "null"
             }
           ]
+        },
+        "spendControl": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
@@ -2852,6 +2881,137 @@
     },
     "SkillsChangedNotification": {
       "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
+    },
+    "SpendControlLimitSnapshot": {
+      "properties": {
+        "limit": {
+          "type": "string"
+        },
+        "remaining": {
+          "type": "string"
+        },
+        "remainingPercent": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "resetAfterSeconds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "resetAt": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "used": {
+          "type": "string"
+        },
+        "usedPercent": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit",
+        "remaining",
+        "remainingPercent",
+        "resetAfterSeconds",
+        "resetAt",
+        "used",
+        "usedPercent"
+      ],
+      "type": "object"
+    },
+    "SpendControlLimitType": {
+      "enum": [
+        "individual",
+        "group_default",
+        "workspace_default",
+        "role_budget",
+        "group_shared",
+        "workspace_shared"
+      ],
+      "type": "string"
+    },
+    "SpendControlSnapshot": {
+      "properties": {
+        "groupDefaultLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GroupSpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groupSharedLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GroupSpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "individualLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reached": {
+          "type": "boolean"
+        },
+        "reachedLimitType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roleBudgetLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceDefaultLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceSharedLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "reached"
+      ],
       "type": "object"
     },
     "SubAgentSource": {

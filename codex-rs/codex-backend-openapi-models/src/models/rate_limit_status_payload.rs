@@ -38,6 +38,13 @@ pub struct RateLimitStatusPayload {
     )]
     pub additional_rate_limits: Option<Option<Vec<models::AdditionalRateLimitDetails>>>,
     #[serde(
+        rename = "spend_control",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub spend_control: Option<Option<Box<models::SpendControlStatusDetails>>>,
+    #[serde(
         rename = "rate_limit_reached_type",
         default,
         with = "::serde_with::rust::double_option",
@@ -53,6 +60,7 @@ impl RateLimitStatusPayload {
             rate_limit: None,
             credits: None,
             additional_rate_limits: None,
+            spend_control: None,
             rate_limit_reached_type: None,
         }
     }

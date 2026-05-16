@@ -2083,6 +2083,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub spend_control: Option<SpendControlSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -2115,6 +2116,48 @@ pub struct CreditsSnapshot {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpendControlSnapshot {
+    pub reached: bool,
+    pub reached_limit_type: Option<SpendControlLimitType>,
+    pub individual_limit: Option<SpendControlLimitSnapshot>,
+    pub group_default_limit: Option<GroupSpendControlLimitSnapshot>,
+    pub workspace_default_limit: Option<SpendControlLimitSnapshot>,
+    pub role_budget_limit: Option<SpendControlLimitSnapshot>,
+    pub group_shared_limit: Option<GroupSpendControlLimitSnapshot>,
+    pub workspace_shared_limit: Option<SpendControlLimitSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpendControlLimitType {
+    Individual,
+    GroupDefault,
+    WorkspaceDefault,
+    RoleBudget,
+    GroupShared,
+    WorkspaceShared,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpendControlLimitSnapshot {
+    pub limit: String,
+    pub used: String,
+    pub remaining: String,
+    pub used_percent: i32,
+    pub remaining_percent: i32,
+    pub reset_after_seconds: i32,
+    pub reset_at: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct GroupSpendControlLimitSnapshot {
+    pub group_id: String,
+    pub group_name: String,
+    pub details: SpendControlLimitSnapshot,
 }
 
 // Includes prompts, tools and space to call compact.

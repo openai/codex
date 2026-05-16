@@ -12,9 +12,13 @@ use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::GroupSpendControlLimitSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::SpendControlLimitSnapshot;
+use codex_protocol::protocol::SpendControlLimitType;
+use codex_protocol::protocol::SpendControlSnapshot;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -457,6 +461,7 @@ impl Client {
             /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
+            payload.spend_control.flatten().map(|details| *details),
             plan_type,
             rate_limit_reached_type,
         )];
@@ -467,6 +472,7 @@ impl Client {
                     Some(details.limit_name),
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     /*credits*/ None,
+                    /*spend_control*/ None,
                     plan_type,
                     /*rate_limit_reached_type*/ None,
                 )
@@ -480,6 +486,7 @@ impl Client {
         limit_name: Option<String>,
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
+        spend_control: Option<crate::types::SpendControlStatusDetails>,
         plan_type: Option<AccountPlanType>,
         rate_limit_reached_type: Option<RateLimitReachedType>,
     ) -> RateLimitSnapshot {
@@ -496,6 +503,7 @@ impl Client {
             primary,
             secondary,
             credits: Self::map_credits(credits),
+            spend_control: Self::map_spend_control(spend_control),
             plan_type,
             rate_limit_reached_type,
         }
@@ -562,6 +570,87 @@ impl Client {
             unlimited: details.unlimited,
             balance: details.balance.flatten(),
         })
+    }
+
+    fn map_spend_control(
+        spend_control: Option<crate::types::SpendControlStatusDetails>,
+    ) -> Option<SpendControlSnapshot> {
+        let details = spend_control?;
+
+        Some(SpendControlSnapshot {
+            reached: details.reached,
+            reached_limit_type: details
+                .reached_limit_type
+                .flatten()
+                .map(Self::map_spend_control_limit_type),
+            individual_limit: details
+                .individual_limit
+                .flatten()
+                .map(|limit| Self::map_spend_control_limit(*limit)),
+            group_default_limit: details
+                .group_default_limit
+                .flatten()
+                .map(|limit| Self::map_group_spend_control_limit(*limit)),
+            workspace_default_limit: details
+                .workspace_default_limit
+                .flatten()
+                .map(|limit| Self::map_spend_control_limit(*limit)),
+            role_budget_limit: details
+                .role_budget_limit
+                .flatten()
+                .map(|limit| Self::map_spend_control_limit(*limit)),
+            group_shared_limit: details
+                .group_shared_limit
+                .flatten()
+                .map(|limit| Self::map_group_spend_control_limit(*limit)),
+            workspace_shared_limit: details
+                .workspace_shared_limit
+                .flatten()
+                .map(|limit| Self::map_spend_control_limit(*limit)),
+        })
+    }
+
+    fn map_group_spend_control_limit(
+        limit: crate::types::GroupSpendControlLimitDetails,
+    ) -> GroupSpendControlLimitSnapshot {
+        GroupSpendControlLimitSnapshot {
+            group_id: limit.group_id,
+            group_name: limit.group_name,
+            details: Self::map_spend_control_limit(*limit.details),
+        }
+    }
+
+    fn map_spend_control_limit(
+        limit: crate::types::SpendControlLimitDetails,
+    ) -> SpendControlLimitSnapshot {
+        SpendControlLimitSnapshot {
+            limit: limit.limit,
+            used: limit.used,
+            remaining: limit.remaining,
+            used_percent: limit.used_percent,
+            remaining_percent: limit.remaining_percent,
+            reset_after_seconds: limit.reset_after_seconds,
+            reset_at: limit.reset_at,
+        }
+    }
+
+    fn map_spend_control_limit_type(
+        limit_type: crate::types::SpendControlLimitType,
+    ) -> SpendControlLimitType {
+        match limit_type {
+            crate::types::SpendControlLimitType::Individual => SpendControlLimitType::Individual,
+            crate::types::SpendControlLimitType::GroupDefault => {
+                SpendControlLimitType::GroupDefault
+            }
+            crate::types::SpendControlLimitType::WorkspaceDefault => {
+                SpendControlLimitType::WorkspaceDefault
+            }
+            crate::types::SpendControlLimitType::RoleBudget => SpendControlLimitType::RoleBudget,
+            crate::types::SpendControlLimitType::GroupShared => SpendControlLimitType::GroupShared,
+            crate::types::SpendControlLimitType::WorkspaceShared => {
+                SpendControlLimitType::WorkspaceShared
+            }
+        }
     }
 
     fn map_plan_type(plan_type: crate::types::PlanType) -> AccountPlanType {
@@ -658,6 +747,7 @@ mod tests {
                 balance: Some(Some("9.99".to_string())),
                 ..Default::default()
             }))),
+            spend_control: None,
             rate_limit_reached_type: Some(Some(BackendRateLimitReachedType {
                 kind: RateLimitReachedKind::WorkspaceMemberCreditsDepleted,
             })),
@@ -712,6 +802,7 @@ mod tests {
                 rate_limit: None,
             }])),
             credits: None,
+            spend_control: None,
             rate_limit_reached_type: None,
         };
 
@@ -722,6 +813,59 @@ mod tests {
         assert_eq!(snapshots[0].primary, None);
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn usage_payload_maps_spend_controls_v2_details() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Enterprise,
+            rate_limit: None,
+            additional_rate_limits: None,
+            credits: None,
+            spend_control: Some(Some(Box::new(crate::types::SpendControlStatusDetails {
+                reached: true,
+                reached_limit_type: Some(Some(crate::types::SpendControlLimitType::GroupShared)),
+                individual_limit: None,
+                group_default_limit: None,
+                workspace_default_limit: None,
+                role_budget_limit: None,
+                group_shared_limit: Some(Some(Box::new(
+                    crate::types::GroupSpendControlLimitDetails {
+                        group_id: "group-1".to_string(),
+                        group_name: "Engineering".to_string(),
+                        details: Box::new(crate::types::SpendControlLimitDetails {
+                            limit: "100".to_string(),
+                            used: "82".to_string(),
+                            remaining: "18".to_string(),
+                            used_percent: 82,
+                            remaining_percent: 18,
+                            reset_after_seconds: 60,
+                            reset_at: 120,
+                        }),
+                    },
+                ))),
+                workspace_shared_limit: None,
+            }))),
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        let spend_control = snapshots[0]
+            .spend_control
+            .as_ref()
+            .expect("spend control should be mapped");
+        assert!(spend_control.reached);
+        assert_eq!(
+            spend_control.reached_limit_type,
+            Some(SpendControlLimitType::GroupShared)
+        );
+        let group_shared_limit = spend_control
+            .group_shared_limit
+            .as_ref()
+            .expect("group shared limit should be mapped");
+        assert_eq!(group_shared_limit.group_id, "group-1");
+        assert_eq!(group_shared_limit.group_name, "Engineering");
+        assert_eq!(group_shared_limit.details.remaining_percent, 18);
     }
 
     #[test]
@@ -737,6 +881,7 @@ mod tests {
                 }),
                 secondary: None,
                 credits: None,
+                spend_control: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
@@ -750,6 +895,7 @@ mod tests {
                 }),
                 secondary: None,
                 credits: None,
+                spend_control: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
@@ -795,6 +941,7 @@ mod tests {
                 rate_limit: None,
                 credits: None,
                 additional_rate_limits: None,
+                spend_control: None,
                 rate_limit_reached_type: Some(Some(BackendRateLimitReachedType { kind })),
             };
 
@@ -810,6 +957,7 @@ mod tests {
             rate_limit: None,
             credits: None,
             additional_rate_limits: None,
+            spend_control: None,
             rate_limit_reached_type: None,
         };
 

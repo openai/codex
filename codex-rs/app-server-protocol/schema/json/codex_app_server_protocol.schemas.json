@@ -9226,6 +9226,25 @@
         },
         "type": "object"
       },
+      "GroupSpendControlLimitSnapshot": {
+        "properties": {
+          "details": {
+            "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "groupName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "details",
+          "groupId",
+          "groupName"
+        ],
+        "type": "object"
+      },
       "GuardianApprovalReview": {
         "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
         "properties": {
@@ -13028,6 +13047,16 @@
                 "type": "null"
               }
             ]
+          },
+          "spendControl": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -14970,6 +14999,137 @@
           "desc"
         ],
         "type": "string"
+      },
+      "SpendControlLimitSnapshot": {
+        "properties": {
+          "limit": {
+            "type": "string"
+          },
+          "remaining": {
+            "type": "string"
+          },
+          "remainingPercent": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "resetAfterSeconds": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "resetAt": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "used": {
+            "type": "string"
+          },
+          "usedPercent": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "remaining",
+          "remainingPercent",
+          "resetAfterSeconds",
+          "resetAt",
+          "used",
+          "usedPercent"
+        ],
+        "type": "object"
+      },
+      "SpendControlLimitType": {
+        "enum": [
+          "individual",
+          "group_default",
+          "workspace_default",
+          "role_budget",
+          "group_shared",
+          "workspace_shared"
+        ],
+        "type": "string"
+      },
+      "SpendControlSnapshot": {
+        "properties": {
+          "groupDefaultLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GroupSpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "groupSharedLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GroupSpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "individualLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reached": {
+            "type": "boolean"
+          },
+          "reachedLimitType": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roleBudgetLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspaceDefaultLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspaceSharedLimit": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "reached"
+        ],
+        "type": "object"
       },
       "SubAgentSource": {
         "oneOf": [

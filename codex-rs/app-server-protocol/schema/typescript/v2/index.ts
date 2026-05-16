@@ -138,6 +138,7 @@ export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsRespons
 export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GitInfo } from "./GitInfo";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
+export type { GroupSpendControlLimitSnapshot } from "./GroupSpendControlLimitSnapshot";
 export type { GuardianApprovalReview } from "./GuardianApprovalReview";
 export type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewAction";
 export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatus";
@@ -344,6 +345,9 @@ export type { SkillsListEntry } from "./SkillsListEntry";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
+export type { SpendControlLimitSnapshot } from "./SpendControlLimitSnapshot";
+export type { SpendControlLimitType } from "./SpendControlLimitType";
+export type { SpendControlSnapshot } from "./SpendControlSnapshot";
 export type { SubagentMigration } from "./SubagentMigration";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";
