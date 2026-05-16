@@ -38,7 +38,9 @@ impl ToolExecutor<ToolInvocation> for Handler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_spawn_agent(invocation).await.map(boxed_tool_output)
+        Box::pin(handle_spawn_agent(invocation))
+            .await
+            .map(boxed_tool_output)
     }
 }
 
@@ -109,6 +111,7 @@ async fn handle_spawn_agent(
 
     let spawn_source = thread_spawn_source(
         session.conversation_id,
+        Some(turn.sub_id.clone()),
         &turn.session_source,
         child_depth,
         role_name,

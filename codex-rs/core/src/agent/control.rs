@@ -211,6 +211,7 @@ impl AgentControl {
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id,
                 depth,
                 agent_path,
                 agent_role,
@@ -220,6 +221,7 @@ impl AgentControl {
                     &mut reservation,
                     &config,
                     parent_thread_id,
+                    parent_turn_id,
                     depth,
                     agent_path,
                     agent_role,
@@ -300,6 +302,7 @@ impl AgentControl {
                 client_metadata,
                 new_thread.thread_id,
                 /*parent_thread_id*/ None,
+                /*parent_turn_id*/ None,
                 thread_config,
                 subagent_source.clone(),
             );
@@ -494,6 +497,7 @@ impl AgentControl {
                     let child_session_source =
                         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                             parent_thread_id,
+                            parent_turn_id: None,
                             depth: child_depth,
                             agent_path: None,
                             agent_nickname: None,
@@ -542,6 +546,7 @@ impl AgentControl {
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id,
                 depth,
                 agent_path,
                 agent_role: _,
@@ -560,6 +565,7 @@ impl AgentControl {
                     &mut reservation,
                     &config,
                     parent_thread_id,
+                    parent_turn_id,
                     depth,
                     agent_path,
                     resumed_agent_role,
@@ -1021,6 +1027,7 @@ impl AgentControl {
         reservation: &mut crate::agent::registry::SpawnReservation,
         config: &crate::config::Config,
         parent_thread_id: ThreadId,
+        parent_turn_id: Option<String>,
         depth: i32,
         agent_path: Option<AgentPath>,
         agent_role: Option<String>,
@@ -1040,6 +1047,7 @@ impl AgentControl {
         )?);
         let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
+            parent_turn_id,
             depth,
             agent_path: agent_path.clone(),
             agent_nickname: agent_nickname.clone(),

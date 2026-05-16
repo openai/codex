@@ -113,6 +113,7 @@ async fn handle_spawn_agent(
         input_items,
         Some(thread_spawn_source(
             session.conversation_id,
+            Some(turn.sub_id.clone()),
             &turn.session_source,
             child_depth,
             role_name,

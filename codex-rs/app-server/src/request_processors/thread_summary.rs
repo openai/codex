@@ -151,6 +151,7 @@ pub(super) fn with_thread_spawn_agent_metadata(
         codex_protocol::protocol::SessionSource::SubAgent(
             codex_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id,
                 depth,
                 agent_path,
                 agent_nickname: existing_agent_nickname,
@@ -159,6 +160,7 @@ pub(super) fn with_thread_spawn_agent_metadata(
         ) => codex_protocol::protocol::SessionSource::SubAgent(
             codex_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id,
                 depth,
                 agent_path,
                 agent_nickname: agent_nickname.or(existing_agent_nickname),

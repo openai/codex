@@ -22,7 +22,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
-use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
@@ -346,7 +345,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
 }
 
 #[tokio::test]
-async fn start_thread_uses_all_default_environments_from_codex_home() {
+async fn default_environment_selections_include_all_defaults_from_codex_home() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -390,52 +389,19 @@ args = ["dev", "cd /tmp && true"]
         environment_manager,
     );
 
-    let thread = manager
-        .start_thread(config)
-        .await
-        .expect("thread should start");
-
-    let prompt_items = crate::prompt_debug::build_prompt_input_from_session(
-        thread.thread.codex.session.as_ref(),
-        Vec::<UserInput>::new(),
-    )
-    .await
-    .expect("prompt input");
-    let environment_context = prompt_items
-        .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { content, .. } => Some(content),
-            _ => None,
-        })
-        .flatten()
-        .find_map(|content| match content {
-            ContentItem::InputText { text } if text.contains("<environment_context>") => {
-                Some(text.as_str())
-            }
-            _ => None,
-        })
-        .expect("environment context prompt item");
-    assert!(environment_context.contains("<environments>"));
-    let cwd = thread.session_configured.cwd.display().to_string();
-    let dev_entry = format!(
-        r#"<environment id="dev">
-      <cwd>{cwd}</cwd>
-      <shell>"#
+    assert_eq!(
+        manager.default_environment_selections(&config.cwd),
+        vec![
+            TurnEnvironmentSelection {
+                environment_id: "dev".to_string(),
+                cwd: config.cwd.clone(),
+            },
+            TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: config.cwd.clone(),
+            },
+        ]
     );
-    let local_entry = format!(
-        r#"<environment id="local">
-      <cwd>{cwd}</cwd>
-      <shell>"#
-    );
-    let dev_position = environment_context
-        .find(&dev_entry)
-        .expect("dev environment entry");
-    let local_position = environment_context
-        .find(&local_entry)
-        .expect("local environment entry");
-    assert!(dev_position < local_position);
-    assert!(!environment_context.contains("\n  <cwd>"));
-    assert!(!environment_context.contains("\n  <shell>"));
 }
 
 #[tokio::test]

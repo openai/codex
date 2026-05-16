@@ -2573,6 +2573,8 @@ pub enum SubAgentSource {
     Compact,
     ThreadSpawn {
         parent_thread_id: ThreadId,
+        #[serde(default)]
+        parent_turn_id: Option<String>,
         depth: i32,
         #[serde(default)]
         agent_path: Option<AgentPath>,
@@ -3977,6 +3979,37 @@ mod tests {
         assert_eq!(
             SessionSource::from_startup_arg("app-server").unwrap(),
             SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn thread_spawn_session_source_deserializes_without_parent_turn_id() {
+        let parent_thread_id =
+            ThreadId::from_string("11111111-1111-1111-1111-111111111111").expect("valid thread id");
+
+        let source: SessionSource = serde_json::from_value(serde_json::json!({
+            "subagent": {
+                "thread_spawn": {
+                    "parent_thread_id": parent_thread_id.to_string(),
+                    "depth": 1,
+                    "agent_path": null,
+                    "agent_nickname": null,
+                    "agent_role": null
+                }
+            }
+        }))
+        .expect("thread spawn source should deserialize without parent_turn_id");
+
+        assert_eq!(
+            source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                parent_turn_id: None,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })
         );
     }
 

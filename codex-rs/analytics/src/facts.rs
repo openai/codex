@@ -201,6 +201,7 @@ pub struct AppInvocation {
 pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
     pub parent_thread_id: Option<String>,
+    pub parent_turn_id: Option<String>,
     pub product_client_id: String,
     pub client_name: String,
     pub client_version: String,

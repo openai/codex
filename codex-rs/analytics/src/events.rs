@@ -155,6 +155,7 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
+    pub(crate) parent_turn_id: Option<String>,
     pub(crate) created_at: u64,
 }
 
@@ -1040,6 +1041,9 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
+        parent_turn_id: input
+            .parent_turn_id
+            .or_else(|| subagent_parent_turn_id(&input.subagent_source)),
         created_at: input.created_at,
     };
     ThreadInitializedEvent {
@@ -1063,6 +1067,13 @@ pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Opt
         SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         } => Some(parent_thread_id.to_string()),
+        _ => None,
+    }
+}
+
+pub(crate) fn subagent_parent_turn_id(subagent_source: &SubAgentSource) -> Option<String> {
+    match subagent_source {
+        SubAgentSource::ThreadSpawn { parent_turn_id, .. } => parent_turn_id.clone(),
         _ => None,
     }
 }

@@ -260,6 +260,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .expect("approval policy should be set");
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
     turn.config = Arc::new(config);
+    let parent_turn_id = turn.sub_id.clone();
 
     let invocation = invocation(
         Arc::new(session),
@@ -292,6 +293,14 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .await;
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.model_provider_id, "ollama");
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_turn_id: actual_parent_turn_id,
+        ..
+    }) = snapshot.session_source
+    else {
+        panic!("spawned agent should have a thread-spawn source");
+    };
+    assert_eq!(actual_parent_turn_id, Some(parent_turn_id));
 }
 
 #[tokio::test]
@@ -1012,6 +1021,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    let parent_turn_id = turn.sub_id.clone();
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -1053,6 +1063,14 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
     );
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_turn_id: actual_parent_turn_id,
+        ..
+    }) = child_snapshot.session_source
+    else {
+        panic!("spawned agent should have a thread-spawn source");
+    };
+    assert_eq!(actual_parent_turn_id, Some(parent_turn_id));
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
             && matches!(
@@ -1243,6 +1261,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
             .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
@@ -1256,6 +1275,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
     session.conversation_id = child_thread_id;
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root.thread_id,
+        parent_turn_id: None,
         depth: 1,
         agent_path: Some(child_path.clone()),
         agent_nickname: None,
@@ -1319,6 +1339,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
             .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
@@ -1332,6 +1353,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
     session.conversation_id = child_thread_id;
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root.thread_id,
+        parent_turn_id: None,
         depth: 1,
         agent_path: Some(child_path),
         agent_nickname: None,
@@ -1492,6 +1514,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
             .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(researcher_path.clone()),
                 agent_nickname: None,
@@ -1513,6 +1536,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
             .into(),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: Some(worker_path.clone()),
                 agent_nickname: None,
@@ -1525,6 +1549,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
 
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root.thread_id,
+        parent_turn_id: None,
         depth: 1,
         agent_path: Some(researcher_path),
         agent_nickname: None,
@@ -2182,6 +2207,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
     let max_depth = turn.config.agent_max_depth;
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: session.conversation_id,
+        parent_turn_id: None,
         depth: max_depth,
         agent_path: None,
         agent_nickname: None,
@@ -2222,6 +2248,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
     turn.config = Arc::new(config);
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: session.conversation_id,
+        parent_turn_id: None,
         depth: DEFAULT_AGENT_MAX_DEPTH,
         agent_path: None,
         agent_nickname: None,
@@ -2277,6 +2304,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     let parent_path = AgentPath::try_from("/root/parent").expect("agent path");
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root.thread_id,
+        parent_turn_id: None,
         depth: 1,
         agent_path: Some(parent_path),
         agent_nickname: None,
@@ -2650,6 +2678,7 @@ async fn resume_agent_rejects_when_depth_limit_exceeded() {
     let max_depth = turn.config.agent_max_depth;
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: session.conversation_id,
+        parent_turn_id: None,
         depth: max_depth,
         agent_path: None,
         agent_nickname: None,

@@ -16,6 +16,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
     let (session, mut turn) = make_session_and_context().await;
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
+        parent_turn_id: None,
         depth: 1,
         agent_path: None,
         agent_nickname: None,

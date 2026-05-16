@@ -947,6 +947,7 @@ mod thread_processor_behavior_tests {
             timestamp: timestamp.clone(),
             source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1085,6 +1086,7 @@ mod thread_processor_behavior_tests {
         let source =
             serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,

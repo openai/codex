@@ -47,6 +47,7 @@ fn session_depth_defaults_to_zero_for_root_sources() {
 fn thread_spawn_depth_increments_and_enforces_limit() {
     let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
+        parent_turn_id: None,
         depth: 1,
         agent_path: None,
         agent_nickname: None,

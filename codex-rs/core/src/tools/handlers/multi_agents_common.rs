@@ -137,6 +137,7 @@ pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionC
 
 pub(crate) fn thread_spawn_source(
     parent_thread_id: ThreadId,
+    parent_turn_id: Option<String>,
     parent_session_source: &SessionSource,
     depth: i32,
     agent_role: Option<&str>,
@@ -154,6 +155,7 @@ pub(crate) fn thread_spawn_source(
         .transpose()?;
     Ok(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
+        parent_turn_id,
         depth,
         agent_path,
         agent_nickname: None,

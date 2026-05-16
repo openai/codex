@@ -853,6 +853,7 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
         /*git_info*/ None,
         CoreSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
+            parent_turn_id: None,
             depth: 1,
             agent_path: None,
             agent_nickname: None,
@@ -918,6 +919,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
         /*git_info*/ None,
         CoreSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
+            parent_turn_id: None,
             depth: 1,
             agent_path: None,
             agent_nickname: None,

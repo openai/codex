@@ -8,6 +8,7 @@ use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
 use crate::facts::InvocationType;
+use crate::facts::SubAgentThreadStartedInput;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
@@ -28,13 +29,23 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest {
     TrackEventRequest::AcceptedLineFingerprints(Box::new(
@@ -82,6 +93,53 @@ fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFac
         plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
     (AnalyticsEventsClient { queue: Some(queue) }, receiver)
+}
+
+struct CapturedHttpRequest {
+    request_line: String,
+    body: Vec<u8>,
+}
+
+fn http_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("content-length: ")
+                .or_else(|| line.strip_prefix("Content-Length: "))
+        })
+        .and_then(|value| value.parse().ok())
+        .expect("request should include content-length")
+}
+
+async fn capture_one_http_request(listener: TcpListener) -> CapturedHttpRequest {
+    let (mut stream, _) = listener.accept().await.expect("accept request");
+    let mut buffer = Vec::new();
+    let mut chunk = [0; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut chunk).await.expect("read request");
+        assert!(bytes_read > 0, "connection closed before request completed");
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+
+        if let Some(header_end) = http_header_end(&buffer) {
+            let headers = std::str::from_utf8(&buffer[..header_end]).expect("headers are utf8");
+            let body_len = content_length(headers);
+            let body_start = header_end + 4;
+            if buffer.len() >= body_start + body_len {
+                let request_line = headers.lines().next().expect("request line").to_string();
+                let body = buffer[body_start..body_start + body_len].to_vec();
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .expect("write response");
+                return CapturedHttpRequest { request_line, body };
+            }
+        }
+    }
 }
 
 fn sample_turn_start_request() -> ClientRequest {
@@ -260,6 +318,70 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn track_subagent_thread_started_sends_parent_turn_id_to_backend() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind capture server");
+    let base_url = format!(
+        "http://{}/backend-api",
+        listener.local_addr().expect("local address")
+    );
+    let (request_tx, request_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let request = capture_one_http_request(listener).await;
+        let _ = request_tx.send(request);
+    });
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let client = AnalyticsEventsClient::new(auth_manager, base_url, Some(true));
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+
+    client.track_subagent_thread_started(SubAgentThreadStartedInput {
+        thread_id: "thread-spawn".to_string(),
+        parent_thread_id: None,
+        parent_turn_id: None,
+        product_client_id: "codex-tui".to_string(),
+        client_name: "codex-tui".to_string(),
+        client_version: "1.0.0".to_string(),
+        model: "gpt-5".to_string(),
+        ephemeral: false,
+        subagent_source: SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            parent_turn_id: Some("turn-parent-123".to_string()),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        },
+        created_at: 123,
+    });
+
+    let captured = timeout(Duration::from_secs(5), request_rx)
+        .await
+        .expect("analytics request should be sent")
+        .expect("capture task should return request");
+    assert!(
+        captured
+            .request_line
+            .starts_with("POST /backend-api/codex/analytics-events/events ")
+    );
+    let payload: Value =
+        serde_json::from_slice(&captured.body).expect("analytics request body should be json");
+    let event = &payload["events"][0];
+
+    assert_eq!(event["event_type"], "codex_thread_initialized");
+    assert_eq!(event["event_params"]["subagent_source"], "thread_spawn");
+    assert_eq!(
+        event["event_params"]["parent_thread_id"],
+        "11111111-1111-1111-1111-111111111111"
+    );
+    assert_eq!(event["event_params"]["parent_turn_id"], "turn-parent-123");
 }
 
 #[test]

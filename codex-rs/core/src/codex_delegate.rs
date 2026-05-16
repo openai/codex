@@ -110,6 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         client_metadata,
         codex.session.conversation_id,
         Some(parent_session.conversation_id),
+        /*parent_turn_id*/ None,
         thread_config,
         subagent_source,
     );

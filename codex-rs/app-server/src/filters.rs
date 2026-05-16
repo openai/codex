@@ -132,6 +132,7 @@ mod tests {
         let review = CoreSessionSource::SubAgent(CoreSubAgentSource::Review);
         let spawn = CoreSessionSource::SubAgent(CoreSubAgentSource::ThreadSpawn {
             parent_thread_id,
+            parent_turn_id: None,
             depth: 1,
             agent_path: None,
             agent_nickname: None,

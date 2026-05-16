@@ -4684,6 +4684,7 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
     let thread_id = ThreadId::new();
     let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
+        parent_turn_id: None,
         depth: 1,
         agent_path: None,
         agent_nickname: None,
@@ -6809,6 +6810,7 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
         make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
     let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
+        parent_turn_id: None,
         depth: 1,
         agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path should parse")),
         agent_nickname: Some("worker".to_string()),

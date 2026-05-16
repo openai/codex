@@ -688,6 +688,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             text_input("child task"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -782,6 +783,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
             text_input("child task"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -892,6 +894,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             text_input("child task"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1181,6 +1184,7 @@ async fn spawn_child_completion_notifies_parent_history() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1217,6 +1221,7 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             text_input("hello worker"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(worker_path.clone()),
                 agent_nickname: None,
@@ -1233,6 +1238,7 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             text_input("hello tester"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: worker_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: Some(tester_path.clone()),
                 agent_nickname: None,
@@ -1331,6 +1337,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         tester_thread_id,
         Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: worker_thread_id,
+            parent_turn_id: None,
             depth: 2,
             agent_path: Some(tester_path.clone()),
             agent_nickname: None,
@@ -1417,6 +1424,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
         child_thread_id,
         Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
+            parent_turn_id: None,
             depth: 1,
             agent_path: None,
             agent_nickname: None,
@@ -1460,6 +1468,7 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1512,6 +1521,7 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1570,6 +1580,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(agent_path.clone()),
                 agent_nickname: None,
@@ -1639,6 +1650,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
             child_thread_id,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(agent_path.clone()),
                 agent_nickname: None,
@@ -1658,6 +1670,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .await;
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
+        parent_turn_id: None,
         depth: resumed_depth,
         agent_path: resumed_agent_path,
         agent_nickname: resumed_nickname,
@@ -1743,6 +1756,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
             text_input("hello worker"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(worker_path.clone()),
                 agent_nickname: None,
@@ -1758,6 +1772,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
             text_input("hello worker child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: worker_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: Some(
                     worker_path
@@ -1777,6 +1792,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
             text_input("hello anonymous child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: worker_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -1792,6 +1808,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
             text_input("hello anonymous grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: no_path_child_thread_id,
+                parent_turn_id: None,
                 depth: 3,
                 agent_path: None,
                 agent_nickname: None,
@@ -1807,6 +1824,7 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
             text_input("hello reviewer"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: Some(reviewer_path),
                 agent_nickname: None,
@@ -1867,6 +1885,7 @@ async fn shutdown_agent_tree_closes_live_descendants() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1882,6 +1901,7 @@ async fn shutdown_agent_tree_closes_live_descendants() {
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -1952,6 +1972,7 @@ async fn shutdown_agent_tree_closes_descendants_when_started_at_child() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -1967,6 +1988,7 @@ async fn shutdown_agent_tree_closes_descendants_when_started_at_child() {
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -2043,6 +2065,7 @@ async fn resume_agent_from_rollout_does_not_reopen_closed_descendants() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2058,6 +2081,7 @@ async fn resume_agent_from_rollout_does_not_reopen_closed_descendants() {
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -2138,6 +2162,7 @@ async fn resume_closed_child_reopens_open_descendants() {
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2153,6 +2178,7 @@ async fn resume_closed_child_reopens_open_descendants() {
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -2193,6 +2219,7 @@ async fn resume_closed_child_reopens_open_descendants() {
             child_thread_id,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2235,6 +2262,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2250,6 +2278,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -2326,6 +2355,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2341,6 +2371,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,
@@ -2379,6 +2410,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
     stale_metadata.source =
         serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: ThreadId::new(),
+            parent_turn_id: None,
             depth: 99,
             agent_path: None,
             agent_nickname: None,
@@ -2429,6 +2461,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
         .await;
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
+        parent_turn_id: None,
         depth: resumed_depth,
         ..
     }) = resumed_grandchild_snapshot.session_source
@@ -2457,6 +2490,7 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
+                parent_turn_id: None,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
@@ -2472,6 +2506,7 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
             text_input("hello grandchild"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
+                parent_turn_id: None,
                 depth: 2,
                 agent_path: None,
                 agent_nickname: None,

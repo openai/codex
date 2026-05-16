@@ -180,6 +180,7 @@ async fn try_resume_closed_agent(
         receiver_thread_id,
         thread_spawn_source(
             session.conversation_id,
+            /*parent_turn_id*/ None,
             &turn.session_source,
             child_depth,
             /*agent_role*/ None,

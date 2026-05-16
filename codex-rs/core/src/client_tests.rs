@@ -274,6 +274,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let parent_thread_id = ThreadId::new();
     let client = test_model_client(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
+        parent_turn_id: None,
         depth: 2,
         agent_path: None,
         agent_nickname: None,

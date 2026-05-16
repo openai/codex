@@ -3402,6 +3402,7 @@ pub(crate) fn emit_subagent_session_started(
     client_metadata: AppServerClientMetadata,
     thread_id: ThreadId,
     parent_thread_id: Option<ThreadId>,
+    parent_turn_id: Option<String>,
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
 ) {
@@ -3420,6 +3421,7 @@ pub(crate) fn emit_subagent_session_started(
     analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
         thread_id: thread_id.to_string(),
         parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
+        parent_turn_id,
         product_client_id: client_name.clone(),
         client_name,
         client_version,

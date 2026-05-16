@@ -81,7 +81,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         .arg("-s")
-        .arg("danger-full-access")
+        .arg("workspace-write")
         .arg("foo")
         .assert()
         .success();
@@ -132,7 +132,7 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         .arg("-s")
-        .arg("danger-full-access")
+        .arg("workspace-write")
         .arg("foo")
         .assert()
         .success();

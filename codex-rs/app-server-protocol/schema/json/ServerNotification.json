@@ -2900,6 +2900,13 @@
                 },
                 "parent_thread_id": {
                   "$ref": "#/definitions/ThreadId"
+                },
+                "parent_turn_id": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
