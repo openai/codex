@@ -766,7 +766,7 @@ impl TestCodex {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
-                environments: environments,
+                environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 turn_context: codex_protocol::protocol::TurnContextOverrides {
@@ -774,9 +774,9 @@ impl TestCodex {
                     approval_policy: Some(approval_policy),
                     approvals_reviewer: None,
                     sandbox_policy: Some(sandbox_policy),
-                    permission_profile: permission_profile,
+                    permission_profile,
                     summary: None,
-                    service_tier: service_tier,
+                    service_tier,
                     personality: None,
                     collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                         mode: codex_protocol::config_types::ModeKind::Default,
