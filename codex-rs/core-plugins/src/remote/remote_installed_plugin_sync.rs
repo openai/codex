@@ -65,7 +65,6 @@ pub enum RemoteInstalledPluginBundleSyncError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RemoteInstalledPluginBundleSyncKey {
     plugin_cache_root: PathBuf,
-    scopes: Vec<RemotePluginScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -79,35 +78,25 @@ pub struct RemotePluginCacheMutationGuard {
     key: RemotePluginCacheMutationKey,
 }
 
-pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
+pub fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
-    scopes: Vec<RemotePluginScope>,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
-    if scopes.is_empty() {
-        return;
-    }
     let Some(auth) = auth else {
         return;
     };
     let key = RemoteInstalledPluginBundleSyncKey {
         plugin_cache_root: remote_plugin_cache_root(&codex_home),
-        scopes: scopes.clone(),
     };
     if !mark_remote_installed_plugin_bundle_sync_in_flight(key.clone()) {
         return;
     }
 
     tokio::spawn(async move {
-        let result = sync_remote_installed_plugin_bundles_once_for_scopes(
-            codex_home,
-            &config,
-            Some(&auth),
-            &scopes,
-        )
-        .await;
+        let result =
+            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
         match result {
             Ok(outcome) => {
                 if outcome.changed_local_cache()
@@ -138,55 +127,50 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
-    sync_remote_installed_plugin_bundles_once_for_scopes(
-        codex_home,
-        config,
-        auth,
-        &[RemotePluginScope::Global, RemotePluginScope::Workspace],
-    )
-    .await
-}
-
-async fn sync_remote_installed_plugin_bundles_once_for_scopes(
-    codex_home: PathBuf,
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    scopes: &[RemotePluginScope],
-) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
-    if scopes.is_empty() {
-        return Ok(RemoteInstalledPluginBundleSyncOutcome::default());
-    }
     let auth = ensure_chatgpt_auth(auth)?;
-    let mut installed_plugins_by_scope = Vec::new();
-    for scope in scopes {
+    let global = async {
+        let scope = RemotePluginScope::Global;
         let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, *scope, /*include_download_urls*/ true,
+            config, auth, scope, /*include_download_urls*/ true,
         )
         .await?;
-        installed_plugins_by_scope.push((*scope, installed_plugins));
-    }
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+    let workspace = async {
+        let scope = RemotePluginScope::Workspace;
+        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
+            config, auth, scope, /*include_download_urls*/ true,
+        )
+        .await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
 
+    let (global, workspace) = tokio::try_join!(global, workspace)?;
     let store = PluginStore::try_new(codex_home.clone())?;
-    let mut installed_plugin_names_by_marketplace = BTreeMap::<String, BTreeSet<String>>::new();
-    if scopes.contains(&RemotePluginScope::Global) {
-        installed_plugin_names_by_marketplace
-            .insert(REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new());
-    }
-    if scopes.contains(&RemotePluginScope::Workspace) {
-        for marketplace_name in [
-            REMOTE_WORKSPACE_MARKETPLACE_NAME,
-            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
-            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
-            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
-        ] {
-            installed_plugin_names_by_marketplace
-                .insert(marketplace_name.to_string(), BTreeSet::new());
-        }
-    }
+    let mut installed_plugin_names_by_marketplace =
+        BTreeMap::<String, BTreeSet<String>>::from_iter([
+            (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
+            (
+                REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+            (
+                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+            (
+                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+            (
+                REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+        ]);
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in installed_plugins_by_scope {
+    for (_scope, installed_plugins) in [global, workspace] {
         for installed_plugin in installed_plugins {
             let plugin = installed_plugin.plugin;
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
@@ -321,11 +305,21 @@ fn remove_stale_remote_plugin_caches(
     installed_plugin_names_by_marketplace: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<Vec<String>, String> {
     let mut removed_cache_plugin_ids = Vec::new();
-    for (marketplace_name, installed_plugin_names) in installed_plugin_names_by_marketplace {
+    for marketplace_name in [
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+    ] {
         let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
         if !marketplace_root.exists() {
             continue;
         }
+        let installed_plugin_names = installed_plugin_names_by_marketplace
+            .get(marketplace_name)
+            .cloned()
+            .unwrap_or_default();
         for entry in fs::read_dir(&marketplace_root).map_err(|err| {
             format!(
                 "failed to read remote plugin cache directory {}: {err}",
@@ -436,7 +430,6 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let key = RemoteInstalledPluginBundleSyncKey {
             plugin_cache_root: remote_plugin_cache_root(codex_home.path()),
-            scopes: vec![RemotePluginScope::Global, RemotePluginScope::Workspace],
         };
 
         assert!(mark_remote_installed_plugin_bundle_sync_in_flight(

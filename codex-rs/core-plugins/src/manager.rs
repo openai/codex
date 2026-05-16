@@ -429,7 +429,6 @@ pub struct PluginsManager {
 struct CachedPluginLoadOutcome {
     config_version: String,
     plugin_hooks_enabled: bool,
-    remote_installed_plugin_scopes: Vec<RemotePluginScope>,
     outcome: PluginLoadOutcome,
 }
 
@@ -501,21 +500,17 @@ impl PluginsManager {
         }
 
         let plugin_hooks_enabled = config.plugin_hooks_enabled;
-        let remote_installed_plugin_scopes = config.remote_installed_plugin_scopes();
         let config_version = version_for_toml(&config.config_layer_stack.effective_config());
         if !force_reload
-            && let Some(outcome) = self.cached_enabled_outcome(
-                &config_version,
-                plugin_hooks_enabled,
-                &remote_installed_plugin_scopes,
-            )
+            && let Some(outcome) =
+                self.cached_enabled_outcome(&config_version, plugin_hooks_enabled)
         {
             return outcome;
         }
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(&remote_installed_plugin_scopes),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -529,7 +524,6 @@ impl PluginsManager {
         *cache = Some(CachedPluginLoadOutcome {
             config_version,
             plugin_hooks_enabled,
-            remote_installed_plugin_scopes,
             outcome: outcome.clone(),
         });
         outcome
@@ -564,7 +558,7 @@ impl PluginsManager {
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(&config.remote_installed_plugin_scopes()),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -587,7 +581,6 @@ impl PluginsManager {
         &self,
         config_version: &str,
         plugin_hooks_enabled: bool,
-        remote_installed_plugin_scopes: &[RemotePluginScope],
     ) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
             Ok(cache) => cache
@@ -595,7 +588,6 @@ impl PluginsManager {
                 .filter(|cached| {
                     cached.config_version == config_version
                         && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                        && cached.remote_installed_plugin_scopes == remote_installed_plugin_scopes
                 })
                 .map(|cached| cached.outcome.clone()),
             Err(err) => err
@@ -604,16 +596,12 @@ impl PluginsManager {
                 .filter(|cached| {
                     cached.config_version == config_version
                         && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                        && cached.remote_installed_plugin_scopes == remote_installed_plugin_scopes
                 })
                 .map(|cached| cached.outcome.clone()),
         }
     }
 
-    fn remote_installed_plugin_configs(
-        &self,
-        scopes: &[RemotePluginScope],
-    ) -> HashMap<String, PluginConfig> {
+    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -622,16 +610,7 @@ impl PluginsManager {
             return HashMap::new();
         };
 
-        let plugins = cache
-            .plugins
-            .iter()
-            .filter(|plugin| {
-                remote_installed_scope_allows_marketplace(scopes, &plugin.marketplace_name)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-
-        remote_installed_plugins_to_config(&plugins, &self.store)
+        remote_installed_plugins_to_config(&cache.plugins, &self.store)
     }
 
     pub fn build_remote_installed_plugin_marketplaces_from_cache(
@@ -792,29 +771,23 @@ impl PluginsManager {
         );
     }
 
-    pub fn maybe_start_remote_installed_plugin_bundle_sync(
+    fn maybe_start_remote_installed_plugin_bundle_sync(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
-        scopes: Vec<RemotePluginScope>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
-            return;
-        }
-        if scopes.is_empty() {
             return;
         }
 
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
         let auth_for_refresh = auth.clone();
-        let scopes_for_refresh = scopes.clone();
         let on_local_cache_changed = Arc::new(move || {
-            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
+            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
                 &config_for_refresh,
                 auth_for_refresh.clone(),
-                scopes_for_refresh.clone(),
                 on_effective_plugins_changed.clone(),
             );
         });
@@ -823,7 +796,6 @@ impl PluginsManager {
             self.codex_home.clone(),
             remote_plugin_service_config(config),
             auth,
-            scopes,
             Some(on_local_cache_changed),
         );
     }
@@ -844,7 +816,6 @@ impl PluginsManager {
         self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
-            config.remote_installed_plugin_scopes(),
             on_effective_plugins_changed,
         );
     }
@@ -1637,7 +1608,6 @@ impl PluginsManager {
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
                     auth,
-                    config_for_remote_sync.remote_installed_plugin_scopes(),
                     on_effective_plugins_changed,
                 );
             });
