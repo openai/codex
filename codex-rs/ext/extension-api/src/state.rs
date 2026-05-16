@@ -8,15 +8,24 @@ use std::sync::PoisonError;
 type ErasedData = Arc<dyn Any + Send + Sync>;
 
 /// Typed extension-owned data attached to one host object.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ExtensionData {
+    level_id: String,
     entries: Mutex<HashMap<TypeId, ErasedData>>,
 }
 
 impl ExtensionData {
-    /// Creates an empty attachment map.
-    pub fn new() -> Self {
-        Self::default()
+    /// Creates an empty attachment map for one host-owned scope.
+    pub fn new(level_id: impl Into<String>) -> Self {
+        Self {
+            level_id: level_id.into(),
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns the host identity for the scope this data is attached to.
+    pub fn level_id(&self) -> &str {
+        &self.level_id
     }
 
     /// Returns the attached value of type `T`, if one exists.

@@ -43,7 +43,7 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -162,6 +162,12 @@ pub(crate) enum AppEvent {
     AppendMessageHistoryEntry {
         thread_id: ThreadId,
         text: String,
+    },
+
+    /// Persist a branch discovered from an App git-action directive into thread metadata.
+    SyncThreadGitBranch {
+        thread_id: ThreadId,
+        branch: String,
     },
 
     /// Fetch a persistent cross-session message history entry by offset.
@@ -310,6 +316,38 @@ pub(crate) enum AppEvent {
     /// Open the provided URL in the user's browser.
     OpenUrlInBrowser {
         url: String,
+    },
+
+    /// Persist a pet selection and reload the ambient pet.
+    PetSelected {
+        pet_id: String,
+    },
+
+    /// Persist terminal pets as disabled and remove the ambient pet.
+    PetDisabled,
+
+    /// Start loading the side preview for the pet picker.
+    PetPreviewRequested {
+        pet_id: String,
+    },
+
+    /// Result of loading the side preview for the pet picker.
+    PetPreviewLoaded {
+        request_id: u64,
+        result: Result<crate::pets::AmbientPet, String>,
+    },
+
+    /// Result of loading the selected ambient pet before config persistence.
+    PetSelectionLoaded {
+        request_id: u64,
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    },
+
+    /// Result of restoring the configured ambient pet during startup.
+    ConfiguredPetLoaded {
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
     },
 
     /// Refresh app connector state and mention bindings.
@@ -570,9 +608,6 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
-    /// Update the active collaboration mask in the running app and widget.
-    UpdateCollaborationMode(CollaborationModeMask),
-
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
@@ -707,8 +742,8 @@ pub(crate) enum AppEvent {
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
-    /// Update the current permission profile in the running app and widget.
-    UpdatePermissionProfile(PermissionProfile),
+    /// Update the current built-in active permission profile in the running app and widget.
+    UpdateActivePermissionProfile(ActivePermissionProfile),
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),

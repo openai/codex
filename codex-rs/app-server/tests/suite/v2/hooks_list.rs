@@ -53,6 +53,7 @@ fn command_hook_hash(
             matcher: matcher.map(ToOwned::to_owned),
             hooks: vec![codex_config::HookHandlerConfig::Command {
                 command: command.to_string(),
+                command_windows: None,
                 timeout_sec: Some(timeout_sec),
                 r#async: false,
                 status_message: status_message.map(ToOwned::to_owned),
@@ -102,6 +103,29 @@ hooks = true
 [plugins."demo@test"]
 enabled = true
 "#,
+    )?;
+    Ok(())
+}
+
+fn write_project_hook_config(dot_codex_folder: &std::path::Path, command: &str) -> Result<()> {
+    std::fs::create_dir_all(dot_codex_folder)?;
+    std::fs::write(
+        dot_codex_folder.join("config.toml"),
+        format!(
+            r#"[features]
+hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "{command}"
+timeout = 5
+"#
+        ),
     )?;
     Ok(())
 }
@@ -364,6 +388,88 @@ timeout = 5
             },
         ]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hooks_list_uses_root_repo_hooks_for_linked_worktrees() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let repo_root = workspace.path().join("repo");
+    let worktree_root = workspace.path().join("worktree");
+    let worktree_git_dir = repo_root.join(".git/worktrees/feature-x");
+
+    std::fs::create_dir_all(&worktree_git_dir)?;
+    std::fs::create_dir_all(&worktree_root)?;
+    std::fs::write(
+        worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )?;
+    write_project_hook_config(&repo_root.join(".codex"), "echo root hook")?;
+    write_project_hook_config(&worktree_root.join(".codex"), "echo worktree hook")?;
+    set_project_trust_level(codex_home.path(), &repo_root, TrustLevel::Trusted)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![repo_root.clone(), worktree_root.clone()],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    let repo_hook = data[0].hooks[0].clone();
+    let worktree_hook = data[1].hooks[0].clone();
+    let repo_config_path =
+        AbsolutePathBuf::from_absolute_path(repo_root.join(".codex/config.toml"))?;
+
+    assert_eq!(repo_hook.command.as_deref(), Some("echo root hook"));
+    assert_eq!(worktree_hook.command.as_deref(), Some("echo root hook"));
+    assert_eq!(repo_hook.key, worktree_hook.key);
+    assert_eq!(repo_hook.source_path, repo_config_path);
+    assert_eq!(worktree_hook.source_path, repo_config_path);
+
+    let write_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "hooks.state".to_string(),
+                value: serde_json::json!({
+                    repo_hook.key.clone(): {
+                        "trusted_hash": repo_hook.current_hash.clone()
+                    }
+                }),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    let _: codex_app_server_protocol::ConfigWriteResponse = to_response(response)?;
+
+    let list_id = mcp
+        .send_hooks_list_request(HooksListParams {
+            cwds: vec![worktree_root],
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let HooksListResponse { data } = to_response(response)?;
+    assert_eq!(data[0].hooks[0].trust_status, HookTrustStatus::Trusted);
+
     Ok(())
 }
 

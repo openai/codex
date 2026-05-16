@@ -332,6 +332,7 @@ fn insert_mcp_server(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         },
@@ -479,7 +480,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -602,7 +603,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     let expected_cwd = expected_cwd
@@ -655,7 +656,7 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     let expected_cwd = expected_cwd
@@ -774,7 +775,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     wait_for_mcp_server(&fixture, server_name).await?;
@@ -872,7 +873,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -989,7 +990,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -1070,7 +1071,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     wait_for_mcp_server(&fixture, server_name).await?;
 
@@ -1202,7 +1203,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     wait_for_mcp_server(&fixture, server_name).await?;
 
@@ -1337,7 +1338,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1439,7 +1440,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -1557,7 +1558,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1649,7 +1650,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1832,7 +1833,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     // Phase 4: submit the user turn that should trigger the MCP tool call.
     fixture
@@ -2018,7 +2019,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     // Phase 5: wait for MCP startup before the turn is submitted, which keeps
     // failures tied to server startup/discovery.

@@ -30,7 +30,7 @@ Repository = "https://github.com/openai/codex"
 Issues = "https://github.com/openai/codex/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.11"]
+dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.15.8"]
 
 [tool.hatch.build]
 exclude = [
@@ -60,6 +60,29 @@ include = [
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+required-version = ">=0.15.8"
+line-length = 100
+extend-exclude = [
+  "notebooks/**",
+  "src/openai_codex/generated/**",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4"]
+ignore = ["E501"]
+preview = true
+extend-safe-fixes = ["ALL"]
+unfixable = ["F841"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/**/*.py" = ["E402"]
+"tests/test_real_app_server_integration.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
 
 [tool.uv]
 exclude-newer = "7 days"

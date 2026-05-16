@@ -32,10 +32,11 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 
 #[derive(Default)]
 pub struct RequestPluginInstallHandler {
@@ -50,9 +51,8 @@ impl RequestPluginInstallHandler {
     }
 }
 
-impl ToolHandler for RequestPluginInstallHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     }
@@ -65,15 +65,14 @@ impl ToolHandler for RequestPluginInstallHandler {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "plugin install discovery reads through the session-owned manager guard"
     )]
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -193,9 +192,14 @@ impl ToolHandler for RequestPluginInstallHandler {
             ))
         })?;
 
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            content,
+            Some(true),
+        )))
     }
 }
+
+impl CoreToolRuntime for RequestPluginInstallHandler {}
 
 async fn maybe_persist_disabled_install_request(
     session: &crate::session::session::Session,

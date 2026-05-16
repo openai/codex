@@ -44,8 +44,6 @@ pub enum ConfigEdit {
     SetNoticeFastDefaultOptOut(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
-    /// Toggle the Windows onboarding acknowledgement flag.
-    SetWindowsWslSetupAcknowledged(bool),
     /// Toggle the model migration prompt acknowledgement flag.
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Toggle the home external config migration prompt acknowledgement flag.
@@ -88,6 +86,14 @@ enum SkillConfigSelector {
 pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
+        value: value(name.to_string()),
+    }
+}
+
+/// Produces a config edit that sets [tui].pet = "<name>".
+pub fn tui_pet_edit(name: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "pet".to_string()],
         value: value(name.to_string()),
     }
 }
@@ -332,6 +338,15 @@ mod document_helpers {
             && !scopes.is_empty()
         {
             entry["scopes"] = array_from_iter(scopes.iter().cloned());
+        }
+        if let Some(oauth) = &config.oauth
+            && let Some(client_id) = &oauth.client_id
+            && !client_id.is_empty()
+        {
+            let mut oauth_table = TomlTable::new();
+            oauth_table.set_implicit(false);
+            oauth_table["client_id"] = value(client_id.clone());
+            entry["oauth"] = TomlItem::Table(oauth_table);
         }
         if let Some(resource) = &config.oauth_resource
             && !resource.is_empty()
@@ -627,11 +642,6 @@ impl ConfigDocument {
                 Scope::Global,
                 &[NOTICE_TABLE_KEY, "model_migrations", from.as_str()],
                 value(to.clone()),
-            )),
-            ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
-                Scope::Global,
-                &["windows_wsl_setup_acknowledged"],
-                value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::AddToolSuggestDisabledTool(disabled_tool) => {
@@ -1030,12 +1040,20 @@ pub fn apply_blocking(
     profile: Option<&str>,
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    apply_blocking_to_resolved_file(&config_path, profile, edits)
+}
+
+fn apply_blocking_to_resolved_file(
+    resolved_config_file: &Path,
+    legacy_profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<()> {
     if edits.is_empty() {
         return Ok(());
     }
 
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let write_paths = resolve_symlink_write_paths(&config_path)?;
+    let write_paths = resolve_symlink_write_paths(resolved_config_file)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -1051,7 +1069,7 @@ pub fn apply_blocking(
         serialized.parse::<DocumentMut>()?
     };
 
-    let profile = profile.map(ToOwned::to_owned).or_else(|| {
+    let profile = legacy_profile.map(ToOwned::to_owned).or_else(|| {
         doc.get("profile")
             .and_then(|item| item.as_str())
             .map(ToOwned::to_owned)
@@ -1070,7 +1088,7 @@ pub fn apply_blocking(
 
     write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
         format!(
-            "failed to persist config.toml at {}",
+            "failed to persist config at {}",
             write_paths.write_path.display()
         )
     })?;
@@ -1079,30 +1097,50 @@ pub fn apply_blocking(
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.
+///
+/// `profile` selects a legacy `[profiles.<name>]` section inside
+/// `$CODEX_HOME/config.toml`; profile-v2 callers should resolve their target
+/// file before constructing a [ConfigEditsBuilder].
 pub async fn apply(
     codex_home: &Path,
     profile: Option<&str>,
     edits: Vec<ConfigEdit>,
 ) -> anyhow::Result<()> {
     let codex_home = codex_home.to_path_buf();
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     let profile = profile.map(ToOwned::to_owned);
-    task::spawn_blocking(move || apply_blocking(&codex_home, profile.as_deref(), &edits))
-        .await
-        .context("config persistence task panicked")?
+    task::spawn_blocking(move || {
+        apply_blocking_to_resolved_file(&config_path, profile.as_deref(), &edits)
+    })
+    .await
+    .context("config persistence task panicked")?
 }
 
 /// Fluent builder to batch config edits and apply them atomically.
 #[derive(Default)]
 pub struct ConfigEditsBuilder {
-    codex_home: PathBuf,
+    config_path: PathBuf,
     profile: Option<String>,
     edits: Vec<ConfigEdit>,
 }
 
 impl ConfigEditsBuilder {
     pub fn new(codex_home: &Path) -> Self {
+        Self::for_config_path(&codex_home.join(CONFIG_TOML_FILE))
+    }
+
+    pub fn for_config(config: &crate::config::Config) -> Self {
+        let config_path = config
+            .config_layer_stack
+            .get_user_config_file()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+            .unwrap_or_else(|| config.codex_home.join(CONFIG_TOML_FILE).to_path_buf());
+        Self::for_config_path(&config_path)
+    }
+
+    pub fn for_config_path(config_path: &Path) -> Self {
         Self {
-            codex_home: codex_home.to_path_buf(),
+            config_path: config_path.to_path_buf(),
             profile: None,
             edits: Vec::new(),
         }
@@ -1192,12 +1230,6 @@ impl ConfigEditsBuilder {
             from: from.to_string(),
             to: to.to_string(),
         });
-        self
-    }
-
-    pub fn set_windows_wsl_setup_acknowledged(mut self, acknowledged: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged));
         self
     }
 
@@ -1361,13 +1393,13 @@ impl ConfigEditsBuilder {
 
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
-        apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
+        apply_blocking_to_resolved_file(&self.config_path, self.profile.as_deref(), &self.edits)
     }
 
     /// Apply edits asynchronously via a blocking offload.
     pub async fn apply(self) -> anyhow::Result<()> {
         task::spawn_blocking(move || {
-            apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
+            apply_blocking_to_resolved_file(&self.config_path, self.profile.as_deref(), &self.edits)
         })
         .await
         .context("config persistence task panicked")?

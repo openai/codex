@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package codex.exec_server.relay.v1;
+
+message RelayMessageFrame {
+  uint32 version = 1;
+  string stream_id = 2;
+  uint32 ack = 3;
+  uint32 ack_bits = 4;
+
+  oneof body {
+    RelayData data = 5;
+    RelayAck ack_frame = 6;
+    RelayResume resume = 7;
+    RelayReset reset = 8;
+    RelayHeartbeat heartbeat = 9;
+  }
+}
+
+message RelayData {
+  uint32 seq = 1;
+  uint32 segment_index = 2;
+  uint32 segment_count = 3;
+  bytes payload = 4;
+}
+
+message RelayAck {}
+
+message RelayResume {
+  uint32 next_seq = 1;
+}
+
+message RelayReset {
+  string reason = 1;
+}
+
+message RelayHeartbeat {}

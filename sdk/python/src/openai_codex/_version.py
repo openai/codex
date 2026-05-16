@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import re
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as distribution_version
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 
 DISTRIBUTION_NAME = "openai-codex"

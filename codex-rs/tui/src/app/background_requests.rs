@@ -4,6 +4,7 @@
 //! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
+use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
@@ -358,8 +359,9 @@ impl App {
         });
     }
 
-    pub(super) fn refresh_plugin_mentions(&mut self) {
+    pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
         let config = self.config.clone();
+        let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         if !config.features.enabled(Feature::Plugins) {
             app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
@@ -367,15 +369,16 @@ impl App {
         }
 
         tokio::spawn(async move {
-            let plugins_input = config.plugins_config_input();
-            let plugins = PluginsManager::new(config.codex_home.to_path_buf())
-                .plugins_for_config(&plugins_input)
-                .await
-                .capability_summaries()
-                .to_vec();
-            app_event_tx.send(AppEvent::PluginMentionsLoaded {
-                plugins: Some(plugins),
-            });
+            match fetch_plugin_mentions(request_handle, config).await {
+                Ok(plugins) => {
+                    app_event_tx.send(AppEvent::PluginMentionsLoaded {
+                        plugins: Some(plugins),
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "plugin/list failed while refreshing plugin mention candidates");
+                }
+            }
         });
     }
 
@@ -635,18 +638,9 @@ pub(super) async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
-    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
-    let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
-    let mut response = request_handle
-        .request_typed(ClientRequest::PluginList {
-            request_id,
-            params: PluginListParams {
-                cwds: Some(vec![cwd]),
-                marketplace_kinds: None,
-            },
-        })
+    let mut response = request_plugin_list(request_handle, cwd)
         .await
-        .wrap_err("plugin/list failed in TUI")?;
+        .wrap_err("plugin/list failed while loading the plugins menu")?;
     hide_cli_only_plugin_marketplaces(&mut response);
     Ok(response)
 }
@@ -657,6 +651,24 @@ pub(super) fn hide_cli_only_plugin_marketplaces(response: &mut PluginListRespons
     response
         .marketplaces
         .retain(|marketplace| !CLI_HIDDEN_PLUGIN_MARKETPLACES.contains(&marketplace.name.as_str()));
+}
+
+pub(super) async fn request_plugin_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<PluginListResponse> {
+    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
+    let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginList {
+            request_id,
+            params: PluginListParams {
+                cwds: Some(vec![cwd]),
+                marketplace_kinds: None,
+            },
+        })
+        .await
+        .wrap_err("plugin/list failed in TUI")
 }
 
 pub(super) async fn fetch_plugin_detail(

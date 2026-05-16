@@ -27,9 +27,8 @@ impl Handler {
     }
 }
 
-impl ToolHandler for Handler {
-    type Output = WaitAgentResult;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("wait_agent")
     }
@@ -38,15 +37,10 @@ impl ToolHandler for Handler {
         Some(create_wait_agent_tool_v1(self.options))
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -204,7 +198,13 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        Ok(result)
+        Ok(boxed_tool_output(result))
+    }
+}
+
+impl CoreToolRuntime for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

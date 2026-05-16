@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from app_server_harness import AppServerHarness
-from openai_codex import AsyncCodex, Codex
 from app_server_helpers import request_kind
+
+from openai_codex import AsyncCodex, Codex
 
 
 def _thread_message_summary(read_response) -> list[tuple[str, str]]:
@@ -58,9 +59,7 @@ def test_thread_list_filters_archived_threads(tmp_path) -> None:
 
     expected_ids = {active_thread.id, archived_thread.id}
     assert {
-        "active_ids": sorted(
-            thread.id for thread in active_list.data if thread.id in expected_ids
-        ),
+        "active_ids": sorted(thread.id for thread in active_list.data if thread.id in expected_ids),
         "archived_ids": sorted(
             thread.id for thread in archived_list.data if thread.id in expected_ids
         ),

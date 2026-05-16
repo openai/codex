@@ -12,6 +12,7 @@ from openai_codex.models import Notification, UnknownNotification
 
 def test_async_client_allows_concurrent_transport_calls() -> None:
     """Async wrappers should offload sync calls so concurrent awaits can overlap."""
+
     async def scenario() -> int:
         """Run two blocking sync calls and report peak overlap."""
         client = AsyncAppServerClient()
@@ -36,6 +37,7 @@ def test_async_client_allows_concurrent_transport_calls() -> None:
 
 def test_async_client_turn_notification_methods_delegate_to_sync_client() -> None:
     """Async turn routing methods should preserve sync-client registration semantics."""
+
     async def scenario() -> tuple[list[tuple[str, str]], Notification, str]:
         """Record the sync-client calls made by async turn notification wrappers."""
         client = AsyncAppServerClient()

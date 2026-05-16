@@ -121,6 +121,10 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     format!("http://{addr}/backend-api/")
 }
 
+fn test_server_name() -> String {
+    gethostname().to_string_lossy().trim().to_string()
+}
+
 async fn expect_remote_control_status(
     status_rx: &mut watch::Receiver<RemoteControlStatusChangedNotification>,
     expected_status: Option<RemoteControlConnectionStatus>,
@@ -134,6 +138,7 @@ async fn expect_remote_control_status(
     if let Some(expected_status) = expected_status {
         assert_eq!(status.status, expected_status);
     }
+    assert_eq!(status.server_name, test_server_name());
     assert_eq!(status.installation_id, TEST_INSTALLATION_ID);
     assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
@@ -630,6 +635,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         status_rx.borrow().clone(),
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         }
@@ -639,7 +645,10 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         .await
         .expect_err("remote control should not connect without sqlite state db");
 
-    remote_handle.set_enabled(/*enabled*/ true);
+    assert_eq!(
+        remote_handle.enable().expect_err("enable should fail"),
+        super::RemoteControlUnavailable
+    );
     timeout(Duration::from_millis(100), listener.accept())
         .await
         .expect_err("remote control should remain disabled without sqlite state db");
@@ -655,7 +664,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
 }
 
 #[tokio::test]
-async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
+async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -695,17 +704,27 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connected,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: Some("env_test".to_string()),
         },
     )
     .await;
 
-    remote_handle.set_enabled(/*enabled*/ false);
+    assert_eq!(
+        remote_handle.disable(),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: None,
+        }
+    );
     expect_remote_control_status_snapshot(
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         },
@@ -718,13 +737,22 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
         .await
         .expect_err("disabled remote control should not reconnect");
 
-    remote_handle.set_enabled(/*enabled*/ true);
+    assert_eq!(
+        remote_handle.enable().expect("enable should succeed"),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Connecting,
+            server_name: test_server_name(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: None,
+        }
+    );
     expect_remote_control_status_snapshot(
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
-            environment_id: Some("env_test".to_string()),
+            environment_id: None,
         },
     )
     .await;

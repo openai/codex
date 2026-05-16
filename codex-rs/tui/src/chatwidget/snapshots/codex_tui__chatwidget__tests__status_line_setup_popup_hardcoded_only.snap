@@ -17,4 +17,4 @@ expression: status_line_popup_snapshot(&mut chat)
   [ ] current-dir           Current working directory
 
   my-project · feat/awesome-feature · thread title
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

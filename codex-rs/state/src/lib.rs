@@ -55,6 +55,7 @@ pub use runtime::ThreadGoalAccountingOutcome;
 pub use runtime::ThreadGoalUpdate;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
+pub use runtime::sqlite_integrity_check;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
 pub use telemetry::DbTelemetry;

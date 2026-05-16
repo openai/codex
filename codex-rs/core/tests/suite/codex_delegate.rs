@@ -153,7 +153,6 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
             .permissions
             .set_permission_profile(PermissionProfile::read_only())
             .expect("set permission profile");
-        config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await.expect("build test codex");
 

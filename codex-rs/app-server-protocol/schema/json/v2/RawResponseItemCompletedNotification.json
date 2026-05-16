@@ -145,8 +145,6 @@
     },
     "ImageDetail": {
       "enum": [
-        "auto",
-        "low",
         "high",
         "original"
       ],
@@ -730,6 +728,22 @@
             "type"
           ],
           "title": "CompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "compaction_trigger"
+              ],
+              "title": "CompactionTriggerResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompactionTriggerResponseItem",
           "type": "object"
         },
         {

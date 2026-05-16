@@ -222,6 +222,7 @@ pub struct PluginReadOutcome {
 pub struct PluginDetail {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
     pub description: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
@@ -260,6 +261,7 @@ pub struct ConfiguredMarketplace {
 pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -492,7 +494,7 @@ impl PluginsManager {
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -540,7 +542,7 @@ impl PluginsManager {
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -583,14 +585,7 @@ impl PluginsManager {
         }
     }
 
-    fn remote_installed_plugin_configs(
-        &self,
-        config: &PluginsConfigInput,
-    ) -> HashMap<String, PluginConfig> {
-        if !config.remote_plugin_enabled {
-            return HashMap::new();
-        }
-
+    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -665,7 +660,7 @@ impl PluginsManager {
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -685,7 +680,7 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -1199,6 +1194,7 @@ impl PluginsManager {
                         let installed = installed_plugins.contains(&plugin_key);
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
+                        let mut local_version = plugin.local_version;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Ok(plugin_id) =
@@ -1206,6 +1202,7 @@ impl PluginsManager {
                             && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
+                            local_version = manifest.version.clone();
                             let marketplace_category = interface
                                 .as_ref()
                                 .and_then(|interface| interface.category.clone());
@@ -1223,6 +1220,7 @@ impl PluginsManager {
                             installed,
                             enabled,
                             name: plugin.name,
+                            local_version,
                             source: plugin.source,
                             policy: plugin.policy,
                             keywords: plugin.keywords,
@@ -1273,6 +1271,10 @@ impl PluginsManager {
                 ConfiguredMarketplacePlugin {
                     id: plugin_key.clone(),
                     name: plugin.plugin_id.plugin_name,
+                    local_version: plugin
+                        .manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.version.clone()),
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1319,6 +1321,7 @@ impl PluginsManager {
             return Ok(PluginDetail {
                 id: plugin_key,
                 name: plugin.name,
+                local_version: None,
                 description: Some(description),
                 source: plugin.source,
                 policy: plugin.policy,
@@ -1411,6 +1414,7 @@ impl PluginsManager {
         Ok(PluginDetail {
             id: plugin.id,
             name: plugin.name,
+            local_version: manifest.version.clone(),
             description,
             source: plugin.source,
             policy: plugin.policy,
@@ -1493,25 +1497,23 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            if config.remote_plugin_enabled {
-                let config = config.clone();
-                let manager = Arc::clone(self);
-                let auth_manager = auth_manager.clone();
-                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
-                tokio::spawn(async move {
-                    let auth = auth_manager.auth().await;
-                    manager.maybe_start_remote_installed_plugins_cache_refresh(
-                        &config,
-                        auth.clone(),
-                        on_effective_plugins_changed.clone(),
-                    );
-                    manager.maybe_start_remote_installed_plugin_bundle_sync(
-                        &config,
-                        auth,
-                        on_effective_plugins_changed,
-                    );
-                });
-            }
+            let config_for_remote_sync = config.clone();
+            let manager = Arc::clone(self);
+            let auth_manager_for_remote_sync = auth_manager.clone();
+            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+            tokio::spawn(async move {
+                let auth = auth_manager_for_remote_sync.auth().await;
+                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                    &config_for_remote_sync,
+                    auth.clone(),
+                    on_effective_plugins_changed.clone(),
+                );
+                manager.maybe_start_remote_installed_plugin_bundle_sync(
+                    &config_for_remote_sync,
+                    auth,
+                    on_effective_plugins_changed,
+                );
+            });
 
             let config = config.clone();
             let manager = Arc::clone(self);
@@ -1995,10 +1997,10 @@ pub(crate) fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
     // Plugin entries remain persisted user config only.
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn configured_plugins_from_user_config_value(

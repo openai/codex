@@ -1,7 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
-use crate::config::MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS;
+use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = MAX_MULTI_AGENT_V2_WAIT_TIMEOUT_MS;
+pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
@@ -268,7 +268,9 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
         })?;
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    config.cwd = turn.cwd.clone();
+    #[allow(deprecated)]
+    let turn_cwd = turn.cwd.clone();
+    config.cwd = turn_cwd;
     config
         .permissions
         .set_permission_profile(turn.permission_profile())
@@ -334,6 +336,51 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     Ok(())
+}
+
+pub(crate) async fn apply_spawn_agent_service_tier(
+    session: &Session,
+    config: &mut Config,
+    parent_service_tier: Option<&str>,
+    requested_service_tier: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
+        return Ok(());
+    };
+    let model = config.model.clone().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model for service tier validation".to_string(),
+        )
+    })?;
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(model.as_str(), &config.to_models_manager_config())
+        .await;
+
+    if model_info.supports_service_tier(candidate_service_tier) {
+        config.service_tier = Some(candidate_service_tier.to_string());
+        return Ok(());
+    }
+
+    if requested_service_tier.is_none() {
+        config.service_tier = None;
+        return Ok(());
+    }
+
+    let supported_service_tiers = if model_info.service_tiers.is_empty() {
+        "none".to_string()
+    } else {
+        model_info
+            .service_tiers
+            .iter()
+            .map(|tier| tier.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Err(FunctionCallError::RespondToModel(format!(
+        "Service tier `{candidate_service_tier}` is not supported for model `{model}`. Supported service tiers: {supported_service_tiers}"
+    )))
 }
 
 fn find_spawn_agent_model_name(

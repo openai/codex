@@ -197,15 +197,9 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
-        raise RuntimeSetupError(
-            f"Release {release_tag} returned malformed assets metadata."
-        )
+        raise RuntimeSetupError(f"Release {release_tag} returned malformed assets metadata.")
     asset = next(
-        (
-            item
-            for item in assets
-            if isinstance(item, dict) and item.get("name") == asset_name
-        ),
+        (item for item in assets if isinstance(item, dict) and item.get("name") == asset_name),
         None,
     )
     if asset is None:
@@ -279,9 +273,7 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         with zipfile.ZipFile(archive_path) as zip_file:
             zip_file.extractall(extract_dir)
     else:
-        raise RuntimeSetupError(
-            f"Unsupported release archive format: {archive_path.name}"
-        )
+        raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
 
     binary_name = runtime_binary_name()
     archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
@@ -290,9 +282,7 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         for path in extract_dir.rglob("*")
         if path.is_file()
         and (
-            path.name == binary_name
-            or path.name == archive_stem
-            or path.name.startswith("codex-")
+            path.name == binary_name or path.name == archive_stem or path.name.startswith("codex-")
         )
     ]
     if not candidates:

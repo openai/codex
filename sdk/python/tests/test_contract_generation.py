@@ -31,10 +31,7 @@ def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | N
 
 def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
     """Capture all checked-in generated artifacts before and after regeneration."""
-    return {
-        str(rel_path): _snapshot_target(root, rel_path)
-        for rel_path in GENERATED_TARGETS
-    }
+    return {str(rel_path): _snapshot_target(root, rel_path) for rel_path in GENERATED_TARGETS}
 
 
 def test_generated_files_are_up_to_date():

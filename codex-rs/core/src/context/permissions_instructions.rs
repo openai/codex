@@ -8,7 +8,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_template::Template;
 use std::path::Path;
@@ -82,27 +81,6 @@ impl PermissionsInstructions {
                 request_permissions_tool_enabled,
             },
             writable_roots,
-        )
-    }
-
-    /// Builds permissions instructions from a legacy sandbox policy.
-    pub fn from_policy(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
-        cwd: &Path,
-        exec_permission_approvals_enabled: bool,
-        request_permissions_tool_enabled: bool,
-    ) -> Self {
-        Self::from_permission_profile(
-            &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy),
-            approval_policy,
-            approvals_reviewer,
-            exec_policy,
-            cwd,
-            exec_permission_approvals_enabled,
-            request_permissions_tool_enabled,
         )
     }
 
@@ -251,10 +229,11 @@ fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
 }
 
 fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<String> {
-    let roots = writable_roots?;
+    let mut roots = writable_roots?;
     if roots.is_empty() {
         return None;
     }
+    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
 
     let roots_list: Vec<String> = roots
         .iter()

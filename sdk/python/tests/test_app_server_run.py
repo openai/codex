@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from app_server_harness import (
     AppServerHarness,
     ev_assistant_message,
@@ -13,12 +12,13 @@ from app_server_harness import (
     ev_response_created,
     sse,
 )
-from openai_codex import AsyncCodex, Codex
-from openai_codex.generated.v2_all import MessagePhase
 from app_server_helpers import (
     agent_message_texts_from_items,
     assistant_message_with_phase,
 )
+
+from openai_codex import AsyncCodex, Codex
+from openai_codex.generated.v2_all import MessagePhase
 
 
 def test_sync_thread_run_uses_mock_responses(
@@ -250,9 +250,7 @@ def test_async_run_result_uses_last_unknown_phase_message(tmp_path) -> None:
             )
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
-                result = await (await codex.thread_start()).run(
-                    "case: async last unknown phase"
-                )
+                result = await (await codex.thread_start()).run("case: async last unknown phase")
 
         assert {
             "final_response": result.final_response,
@@ -288,9 +286,7 @@ def test_async_run_result_does_not_promote_commentary_only_to_final(
             )
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
-                result = await (await codex.thread_start()).run(
-                    "case: async commentary only"
-                )
+                result = await (await codex.thread_start()).run("case: async commentary only")
 
         assert {
             "final_response": result.final_response,

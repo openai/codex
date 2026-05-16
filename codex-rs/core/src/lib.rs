@@ -35,7 +35,6 @@ mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
-mod flags;
 #[cfg(test)]
 mod git_info_tests;
 mod goals;
@@ -145,7 +144,6 @@ mod tools;
 pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;
-mod unavailable_tool;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::Cursor;
 pub use rollout::EventPersistenceMode;

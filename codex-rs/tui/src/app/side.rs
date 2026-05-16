@@ -20,7 +20,7 @@ const SIDE_NO_STARTED_CONVERSATION_MESSAGE: &str = concat!(
     "Send a message first, then try /side again."
 );
 const SIDE_ALREADY_OPEN_MESSAGE: &str =
-    "A side conversation is already open. Press Esc to return before starting another.";
+    "A side conversation is already open. Press Ctrl+C to return before starting another.";
 const SIDE_BOUNDARY_PROMPT: &str = r#"Side conversation boundary.
 
 Everything before this boundary is inherited history from the parent thread. It is reference context only. It is not your current task.
@@ -247,7 +247,7 @@ impl App {
         if let Some(parent_status) = parent_status {
             label_parts.push(parent_status.label(parent_is_main).to_string());
         }
-        label_parts.push("Esc to return".to_string());
+        label_parts.push("Ctrl+C to return".to_string());
         self.chat_widget
             .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
     }

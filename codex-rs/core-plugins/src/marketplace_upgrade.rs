@@ -108,10 +108,10 @@ fn marketplace_install_root(codex_home: &Path) -> PathBuf {
 fn configured_git_marketplaces(
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<ConfiguredGitMarketplace> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+    let Some(marketplaces_value) = user_config.get("marketplaces") else {
         return Vec::new();
     };
     let marketplaces = match marketplaces_value
