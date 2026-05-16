@@ -404,6 +404,8 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
         return Err("keyPath must not be empty".to_string());
     }
 
+    // Let TOML's own dotted-key parser handle quoted segments like
+    // `profiles."team.prod".model` instead of reimplementing that grammar.
     const PREFIX: &str = "__codex_key_path__";
     let parsed: TomlValue = toml::from_str(&format!("{PREFIX}.{path} = true"))
         .map_err(|err| format!("invalid keyPath: {err}"))?;
@@ -412,6 +414,8 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
         .ok_or_else(|| "invalid keyPath".to_string())?;
     let mut segments = Vec::new();
 
+    // The synthetic assignment above produces a single-child table chain
+    // rooted at PREFIX and ending at the sentinel boolean value.
     while let TomlValue::Table(table) = current
         && let Some((segment, value)) = table.iter().next()
         && table.len() == 1
