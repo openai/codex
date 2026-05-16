@@ -1,5 +1,4 @@
 use super::*;
-use codex_execpolicy::Decision;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -36,7 +35,6 @@ fn builds_permissions_with_network_access_override() {
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: false,
         },
@@ -73,7 +71,6 @@ fn builds_permissions_from_profile() {
         &permission_profile,
         AskForApproval::UnlessTrusted,
         ApprovalsReviewer::User,
-        &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -118,7 +115,6 @@ fn builds_permissions_from_profile_with_denied_reads() {
         &permission_profile,
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
-        &Policy::empty(),
         &cwd,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -131,28 +127,16 @@ fn builds_permissions_from_profile_with_denied_reads() {
 }
 
 #[test]
-fn includes_request_rule_instructions_for_on_request() {
-    let mut exec_policy = Policy::empty();
-    exec_policy
-        .add_prefix_rule(&["git".to_string(), "pull".to_string()], Decision::Allow)
-        .expect("add rule");
-    let instructions = PermissionsInstructions::from_permissions_with_network(
-        SandboxMode::WorkspaceWrite,
-        NetworkAccess::Enabled,
-        PermissionsPromptConfig {
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &exec_policy,
-            exec_permission_approvals_enabled: false,
-            request_permissions_tool_enabled: false,
-        },
-        /*writable_roots*/ None,
+fn on_request_approval_text_matches_prompt() {
+    assert_eq!(
+        approval_text(
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
+            /*exec_permission_approvals_enabled*/ false,
+            /*request_permissions_tool_enabled*/ false,
+        ),
+        APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
     );
-
-    let text = instructions.body();
-    assert!(text.contains("prefix_rule"));
-    assert!(text.contains("Approved command prefixes"));
-    assert!(text.contains(r#"["git", "pull"]"#));
 }
 
 #[test]
@@ -163,7 +147,6 @@ fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enable
         PermissionsPromptConfig {
             approval_policy: AskForApproval::UnlessTrusted,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: true,
         },
@@ -183,7 +166,6 @@ fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() 
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnFailure,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: true,
         },
@@ -203,7 +185,6 @@ fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: true,
             request_permissions_tool_enabled: false,
         },
@@ -223,7 +204,6 @@ fn includes_request_permissions_tool_instructions_for_on_request_when_tool_is_en
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: false,
             request_permissions_tool_enabled: true,
         },
@@ -243,7 +223,6 @@ fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_b
         PermissionsPromptConfig {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
             exec_permission_approvals_enabled: true,
             request_permissions_tool_enabled: true,
         },
@@ -260,7 +239,6 @@ fn auto_review_approvals_append_auto_review_specific_guidance() {
     let text = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -275,7 +253,6 @@ fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_nev
     let text = approval_text(
         AskForApproval::Never,
         ApprovalsReviewer::AutoReview,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -327,7 +304,6 @@ fn granular_policy_lists_prompted_and_rejected_categories_separately() {
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -364,7 +340,6 @@ fn granular_policy_includes_command_permission_instructions_when_sandbox_approva
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -396,7 +371,6 @@ fn granular_policy_omits_shell_permission_instructions_when_inline_requests_are_
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -428,7 +402,6 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
     );
@@ -443,7 +416,6 @@ fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_s
             mcp_elicitations: true,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ true,
     );
@@ -461,7 +433,6 @@ fn granular_policy_lists_request_permissions_category_without_tool_section_when_
             mcp_elicitations: false,
         }),
         ApprovalsReviewer::User,
-        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ true,
         /*request_permissions_tool_enabled*/ false,
     );

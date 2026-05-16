@@ -1,9 +1,7 @@
 use codex_context_fragments::ContextualUserFragment;
-use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -46,10 +44,9 @@ static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
 });
 
-struct PermissionsPromptConfig<'a> {
+struct PermissionsPromptConfig {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    exec_policy: &'a Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 }
@@ -66,7 +63,6 @@ impl PermissionsInstructions {
         permission_profile: &PermissionProfile,
         approval_policy: AskForApproval,
         approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
         cwd: &Path,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
@@ -81,7 +77,6 @@ impl PermissionsInstructions {
             PermissionsPromptConfig {
                 approval_policy,
                 approvals_reviewer,
-                exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
             },
@@ -98,7 +93,7 @@ impl PermissionsInstructions {
     fn from_permissions_with_network(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
-        config: PermissionsPromptConfig<'_>,
+        config: PermissionsPromptConfig,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
         Self::from_permissions_with_network_and_denied_reads(
@@ -113,7 +108,7 @@ impl PermissionsInstructions {
     fn from_permissions_with_network_and_denied_reads(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
-        config: PermissionsPromptConfig<'_>,
+        config: PermissionsPromptConfig,
         writable_roots: Option<Vec<WritableRoot>>,
         denied_reads: Option<String>,
     ) -> Self {
@@ -124,7 +119,6 @@ impl PermissionsInstructions {
             &approval_text(
                 config.approval_policy,
                 config.approvals_reviewer,
-                config.exec_policy,
                 config.exec_permission_approvals_enabled,
                 config.request_permissions_tool_enabled,
             ),
@@ -194,7 +188,6 @@ fn append_section(text: &mut String, section: &str) {
 fn approval_text(
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
@@ -215,11 +208,6 @@ fn approval_text(
         if request_permissions_tool_enabled {
             sections.push(request_permissions_tool_prompt_section().to_string());
         }
-        if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-            sections.push(format!(
-                "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-            ));
-        }
         sections.join("\n\n")
     };
     let text = match approval_policy {
@@ -231,7 +219,6 @@ fn approval_text(
         AskForApproval::OnRequest => on_request_instructions(),
         AskForApproval::Granular(granular_config) => granular_instructions(
             granular_config,
-            exec_policy,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
         ),
@@ -298,11 +285,6 @@ fn denied_reads_text(file_system_policy: &FileSystemSandboxPolicy, cwd: &Path) -
     ))
 }
 
-fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {
-    format_allow_prefixes(exec_policy.get_allowed_prefixes())
-        .filter(|prefixes| !prefixes.is_empty())
-}
-
 fn granular_prompt_intro_text() -> &'static str {
     "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user."
 }
@@ -313,7 +295,6 @@ fn request_permissions_tool_prompt_section() -> &'static str {
 
 fn granular_instructions(
     granular_config: GranularApprovalConfig,
-    exec_policy: &Policy,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
@@ -372,12 +353,6 @@ fn granular_instructions(
 
     if request_permissions_tool_prompts_allowed {
         sections.push(request_permissions_tool_prompt_section().to_string());
-    }
-
-    if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-        sections.push(format!(
-            "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-        ));
     }
 
     sections.join("\n\n")

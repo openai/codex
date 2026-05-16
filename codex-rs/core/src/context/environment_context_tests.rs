@@ -345,6 +345,37 @@ fn serialize_environment_context_with_subagents() {
 }
 
 #[test]
+fn serialize_environment_context_with_approved_command_prefixes() {
+    let context = EnvironmentContext::new(
+        vec![EnvironmentContextEnvironment {
+            id: "local".to_string(),
+            cwd: test_path_buf("/repo").abs(),
+            shell: fake_shell_name(),
+        }],
+        Some("2026-02-26".to_string()),
+        Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
+        /*subagents*/ None,
+    )
+    .with_approved_command_prefixes(Some("- [\"git\", \"pull\"]".to_string()));
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <approved_command_prefixes>
+    - ["git", "pull"]
+  </approved_command_prefixes>
+</environment_context>"#,
+        test_path_buf("/repo").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
 fn serialize_environment_context_with_multiple_selected_environments() {
     let local_cwd = test_path_buf("/repo/local");
     let remote_cwd = test_path_buf("/repo/remote");

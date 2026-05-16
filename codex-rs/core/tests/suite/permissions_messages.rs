@@ -4,12 +4,14 @@ use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::PermissionsInstructions;
-use codex_core::load_exec_policy;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ResponsesRequest;
@@ -22,7 +24,9 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::collections::HashSet;
+use std::fs;
 use tempfile::TempDir;
 
 fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
@@ -30,6 +34,14 @@ fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
         .message_input_texts("developer")
         .into_iter()
         .filter(|text| text.contains("<permissions instructions>"))
+        .collect()
+}
+
+fn environment_context_texts(request: &ResponsesRequest) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.contains("<environment_context>"))
         .collect()
 }
 
@@ -64,6 +76,164 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(permissions_texts(&req.single_request()).len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_command_prefixes_are_sent_in_initial_environment_context_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        let rules_dir = config.codex_home.join("rules");
+        fs::create_dir_all(&rules_dir).expect("create rules dir");
+        fs::write(
+            rules_dir.join("default.rules"),
+            r#"prefix_rule(pattern=["git", "pull"], decision="allow")"#,
+        )
+        .expect("write policy");
+    });
+    let test = builder.build(&server).await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let first_environment_contexts = environment_context_texts(&req1.single_request());
+    assert_eq!(first_environment_contexts.len(), 1);
+    assert!(
+        first_environment_contexts[0].contains("<approved_command_prefixes>"),
+        "expected approved prefixes in environment context: {first_environment_contexts:?}"
+    );
+    assert!(first_environment_contexts[0].contains(r#"["git", "pull"]"#));
+
+    let first_permissions = permissions_texts(&req1.single_request());
+    assert_eq!(first_permissions.len(), 1);
+    assert!(
+        !first_permissions[0].contains("Approved command prefixes"),
+        "did not expect approved prefixes in permissions message: {first_permissions:?}"
+    );
+
+    let second_environment_contexts = environment_context_texts(&req2.single_request());
+    assert_eq!(second_environment_contexts, first_environment_contexts);
+
+    let rollout_text = fs::read_to_string(rollout_path)?;
+    for line in rollout_text.lines() {
+        let item: Value = serde_json::from_str(line)?;
+        if item.get("type").and_then(Value::as_str) == Some("turn_context") {
+            let text = item.to_string();
+            assert!(
+                !text.contains("approved_command_prefixes"),
+                "turn_context rollout item should not include approved prefixes: {text}"
+            );
+            assert!(
+                !text.contains(r#"["git","pull"]"#),
+                "turn_context rollout item should not include approved prefix list: {text}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_command_prefixes_render_with_multiple_environments() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        let rules_dir = config.codex_home.join("rules");
+        fs::create_dir_all(&rules_dir).expect("create rules dir");
+        fs::write(
+            rules_dir.join("default.rules"),
+            r#"prefix_rule(pattern=["cargo", "test"], decision="allow")"#,
+        )
+        .expect("write policy");
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let local_cwd = AbsolutePathBuf::from_absolute_path(test.cwd.path().to_path_buf())
+        .expect("test cwd is absolute");
+    let remote_cwd = AbsolutePathBuf::from_absolute_path(test.cwd.path().join("remote"))
+        .expect("remote cwd is absolute");
+
+    test.submit_turn_with_environments(
+        "hello multiple environments",
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: local_cwd.clone(),
+            },
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd.clone(),
+            },
+        ]),
+    )
+    .await?;
+
+    let environment_contexts = environment_context_texts(&req.single_request());
+    assert_eq!(environment_contexts.len(), 1);
+    let environment_context = &environment_contexts[0];
+    assert!(environment_context.contains("<environments>"));
+    assert!(environment_context.contains(&format!(r#"<environment id="{LOCAL_ENVIRONMENT_ID}">"#)));
+    assert!(environment_context.contains(&format!("<cwd>{}</cwd>", local_cwd.to_string_lossy())));
+    assert!(
+        environment_context.contains(&format!(r#"<environment id="{REMOTE_ENVIRONMENT_ID}">"#))
+    );
+    assert!(environment_context.contains(&format!("<cwd>{}</cwd>", remote_cwd.to_string_lossy())));
+    assert!(environment_context.contains("<approved_command_prefixes>"));
+    assert!(environment_context.contains(r#"["cargo", "test"]"#));
+    assert!(
+        !environment_context.contains("\n  <cwd>"),
+        "multiple environment context should not render a legacy top-level cwd: {environment_context}"
+    );
 
     Ok(())
 }
@@ -558,13 +728,11 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
 
     let permissions = permissions_texts(&req.single_request());
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
-    let exec_policy = load_exec_policy(&test.config.config_layer_stack).await?;
     let permission_profile = test.config.permissions.effective_permission_profile();
     let expected = PermissionsInstructions::from_permission_profile(
         &permission_profile,
         AskForApproval::OnRequest,
         test.config.approvals_reviewer,
-        &exec_policy,
         test.config.cwd.as_path(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,

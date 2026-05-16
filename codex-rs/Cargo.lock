@@ -3582,7 +3582,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-context-fragments",
- "codex-execpolicy",
  "codex-git-utils",
  "codex-protocol",
  "codex-utils-absolute-path",
