@@ -26,7 +26,11 @@ The CLI entrypoint supports:
 
 Remote mode registers the local exec-server with the executor registry,
 then reconnects to the service-provided rendezvous websocket as the executor.
-It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.
+It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
+remote registration needs authentication. Containerized callers that receive an
+Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
+`--use-agent-identity-auth`; Codex then registers an Agent task and sends the
+derived AgentAssertion headers on the registry request.
 
 Wire framing:
 
@@ -376,7 +380,9 @@ The crate exports:
 
 Callers must pass `ExecServerRuntimePaths` to `run_main()`. The top-level
 `codex exec-server` command builds these paths from the `codex` arg0 dispatch
-state.
+state. `RemoteExecutorConfig::new(...)` also takes the auth provider that
+remote registration should use; the CLI builds that provider from Codex auth
+state before starting remote mode.
 
 ## Example session
 

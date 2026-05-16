@@ -1,6 +1,6 @@
-use std::env;
 use std::time::Duration;
 
+use codex_api::SharedAuthProvider;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
@@ -14,15 +14,12 @@ use crate::ExecServerRuntimePaths;
 use crate::relay::run_multiplexed_executor;
 use crate::server::ConnectionProcessor;
 
-pub const CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR: &str =
-    "CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN";
-
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 
 #[derive(Clone)]
 struct ExecutorRegistryClient {
     base_url: String,
-    bearer_token: String,
+    auth_provider: SharedAuthProvider,
     http: reqwest::Client,
 }
 
@@ -30,17 +27,17 @@ impl std::fmt::Debug for ExecutorRegistryClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecutorRegistryClient")
             .field("base_url", &self.base_url)
-            .field("bearer_token", &"<redacted>")
+            .field("auth_provider", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
 
 impl ExecutorRegistryClient {
-    fn new(base_url: String, bearer_token: String) -> Result<Self, ExecServerError> {
+    fn new(base_url: String, auth_provider: SharedAuthProvider) -> Result<Self, ExecServerError> {
         let base_url = normalize_base_url(base_url)?;
         Ok(Self {
             base_url,
-            bearer_token,
+            auth_provider,
             http: reqwest::Client::new(),
         })
     }
@@ -55,7 +52,7 @@ impl ExecutorRegistryClient {
                 &self.base_url,
                 &format!("/cloud/executor/{executor_id}/register"),
             ))
-            .bearer_auth(&self.bearer_token)
+            .headers(self.auth_provider.to_auth_headers())
             .send()
             .await?;
         self.parse_json_response(response).await
@@ -89,12 +86,12 @@ struct ExecutorRegistryExecutorRegistrationResponse {
 }
 
 /// Configuration for registering an exec-server for remote use.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct RemoteExecutorConfig {
     pub base_url: String,
     pub executor_id: String,
     pub name: String,
-    bearer_token: String,
+    auth_provider: SharedAuthProvider,
 }
 
 impl std::fmt::Debug for RemoteExecutorConfig {
@@ -103,28 +100,23 @@ impl std::fmt::Debug for RemoteExecutorConfig {
             .field("base_url", &self.base_url)
             .field("executor_id", &self.executor_id)
             .field("name", &self.name)
-            .field("bearer_token", &"<redacted>")
+            .field("auth_provider", &"<redacted>")
             .finish()
     }
 }
 
 impl RemoteExecutorConfig {
-    pub fn new(base_url: String, executor_id: String) -> Result<Self, ExecServerError> {
-        Self::with_bearer_token(base_url, executor_id, read_remote_bearer_token_from_env()?)
-    }
-
-    pub fn with_bearer_token(
+    pub fn new(
         base_url: String,
         executor_id: String,
-        bearer_token: String,
+        auth_provider: SharedAuthProvider,
     ) -> Result<Self, ExecServerError> {
         let executor_id = normalize_executor_id(executor_id)?;
-        let bearer_token = normalize_bearer_token(bearer_token)?;
         Ok(Self {
             base_url,
             executor_id,
             name: "codex-exec-server".to_string(),
-            bearer_token,
+            auth_provider,
         })
     }
 }
@@ -136,7 +128,8 @@ pub async fn run_remote_executor(
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
     ensure_rustls_crypto_provider();
-    let client = ExecutorRegistryClient::new(config.base_url.clone(), config.bearer_token.clone())?;
+    let client =
+        ExecutorRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
     let mut backoff = Duration::from_secs(1);
 
@@ -160,32 +153,6 @@ pub async fn run_remote_executor(
         sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }
-}
-
-fn read_remote_bearer_token_from_env() -> Result<String, ExecServerError> {
-    read_remote_bearer_token_from_env_with(|name| env::var(name))
-}
-
-fn read_remote_bearer_token_from_env_with<F>(get_var: F) -> Result<String, ExecServerError>
-where
-    F: FnOnce(&str) -> Result<String, env::VarError>,
-{
-    let bearer_token = get_var(CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR).map_err(|_| {
-        ExecServerError::ExecutorRegistryAuth(format!(
-            "executor registry bearer token environment variable `{CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR}` is not set"
-        ))
-    })?;
-    normalize_bearer_token(bearer_token)
-}
-
-fn normalize_bearer_token(bearer_token: String) -> Result<String, ExecServerError> {
-    let bearer_token = bearer_token.trim().to_string();
-    if bearer_token.is_empty() {
-        return Err(ExecServerError::ExecutorRegistryAuth(format!(
-            "executor registry bearer token environment variable `{CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN_ENV_VAR}` is empty"
-        )));
-    }
-    Ok(bearer_token)
 }
 
 fn normalize_executor_id(executor_id: String) -> Result<String, ExecServerError> {
@@ -274,6 +241,11 @@ fn preview_error_body(body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use codex_api::AuthProvider;
+    use http::HeaderMap;
+    use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -284,25 +256,46 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug)]
+    struct StaticRegistryAuthProvider;
+
+    impl AuthProvider for StaticRegistryAuthProvider {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            let _ = headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer registry-token"),
+            );
+            let _ = headers.insert(
+                "ChatGPT-Account-ID",
+                HeaderValue::from_static("workspace-123"),
+            );
+        }
+    }
+
+    fn static_registry_auth_provider() -> SharedAuthProvider {
+        Arc::new(StaticRegistryAuthProvider)
+    }
+
     #[tokio::test]
-    async fn register_executor_posts_with_bearer_token_header() {
+    async fn register_executor_posts_with_auth_provider_headers() {
         let server = MockServer::start().await;
-        let config = RemoteExecutorConfig::with_bearer_token(
+        let config = RemoteExecutorConfig::new(
             server.uri(),
             "exec-requested".to_string(),
-            "registry-token".to_string(),
+            static_registry_auth_provider(),
         )
         .expect("config");
         Mock::given(method("POST"))
             .and(path("/cloud/executor/exec-requested/register"))
             .and(header("authorization", "Bearer registry-token"))
+            .and(header("chatgpt-account-id", "workspace-123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "executor_id": "exec-1",
                 "url": "wss://rendezvous.test/executor/exec-1?role=executor&sig=abc"
             })))
             .mount(&server)
             .await;
-        let client = ExecutorRegistryClient::new(server.uri(), "registry-token".to_string())
+        let client = ExecutorRegistryClient::new(server.uri(), static_registry_auth_provider())
             .expect("client");
 
         let response = client
@@ -320,17 +313,17 @@ mod tests {
     }
 
     #[test]
-    fn debug_output_redacts_bearer_token() {
-        let config = RemoteExecutorConfig::with_bearer_token(
+    fn debug_output_redacts_auth_provider() {
+        let config = RemoteExecutorConfig::new(
             "https://registry.example".to_string(),
             "exec-1".to_string(),
-            "secret-token".to_string(),
+            static_registry_auth_provider(),
         )
         .expect("config");
 
         let debug = format!("{config:?}");
 
         assert!(debug.contains("<redacted>"));
-        assert!(!debug.contains("secret-token"));
+        assert!(!debug.contains("workspace-123"));
     }
 }
