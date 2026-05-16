@@ -47,7 +47,25 @@ impl TurnContextOverrideRequest {
     }
 }
 
-const TURN_STARTED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+fn op_turn_context_overrides(overrides: CodexThreadTurnContextOverrides) -> TurnContextOverrides {
+    TurnContextOverrides {
+        cwd: overrides.cwd,
+        approval_policy: overrides.approval_policy,
+        approvals_reviewer: overrides.approvals_reviewer,
+        sandbox_policy: overrides.sandbox_policy,
+        permission_profile: overrides.permission_profile,
+        active_permission_profile: overrides.active_permission_profile,
+        windows_sandbox_level: overrides.windows_sandbox_level,
+        model: overrides.model,
+        effort: overrides.effort,
+        summary: overrides.summary,
+        service_tier: overrides.service_tier,
+        collaboration_mode: overrides.collaboration_mode,
+        personality: overrides.personality,
+    }
+}
+
+const TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
@@ -538,19 +556,7 @@ impl TurnRequestProcessor {
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
-                cwd: overrides.cwd,
-                approval_policy: overrides.approval_policy,
-                approvals_reviewer: overrides.approvals_reviewer,
-                sandbox_policy: overrides.sandbox_policy,
-                permission_profile: overrides.permission_profile,
-                active_permission_profile: overrides.active_permission_profile,
-                windows_sandbox_level: overrides.windows_sandbox_level,
-                model: overrides.model,
-                effort: overrides.effort,
-                summary: overrides.summary,
-                service_tier: overrides.service_tier,
-                collaboration_mode: overrides.collaboration_mode,
-                personality: overrides.personality,
+                turn_context: op_turn_context_overrides(overrides),
             }
         } else {
             Op::UserInput {
@@ -560,46 +566,69 @@ impl TurnRequestProcessor {
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
             }
         };
-        let turn_id = self
-            .submit_core_op(&request_id, thread.as_ref(), turn_op)
-            .await
-            .map_err(|err| {
-                let error = internal_error(format!("failed to start turn: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
-
-        if has_turn_context_overrides {
-            // The queued UserInputWithTurnContext owns the sticky context
-            // mutation. Wait for core to start processing that turn before
-            // reporting the effective state, otherwise a later direct update
-            // can appear to win and then be overwritten by this turn.
+        let turn_id = Uuid::now_v7().to_string();
+        let turn_context_applied = if has_turn_context_overrides {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-            let turn_started = {
+            Some({
                 let mut thread_state = thread_state.lock().await;
-                thread_state.turn_started_receiver(&turn_id)
-            };
-            if let Some(turn_started) = turn_started {
-                // Bound how long the RPC waits for the core turn-start acknowledgement.
-                tokio::time::timeout(TURN_STARTED_ACK_TIMEOUT, turn_started)
-                    .await
-                    .map_err(|_| {
-                        internal_error(
-                            "timed out waiting for turn context overrides to apply".to_string(),
-                        )
-                    })?
-                    .map_err(|_| {
-                        internal_error("turn context override waiter was cancelled".to_string())
-                    })?;
+                thread_state.track_pending_turn_context(turn_id.clone())
+            })
+        } else {
+            None
+        };
+        if let Err(err) = thread
+            .submit_with_id(Submission {
+                id: turn_id.clone(),
+                op: turn_op,
+                trace: self.request_trace_context(&request_id).await,
+            })
+            .await
+        {
+            if has_turn_context_overrides {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let mut thread_state = thread_state.lock().await;
+                thread_state.cancel_pending_turn_context(&turn_id);
             }
-            let after_turn_context =
-                thread_turn_context_from_snapshot(&thread.config_snapshot().await);
-            self.maybe_emit_turn_context_updated(
-                &params.thread_id,
-                &before_turn_context,
-                after_turn_context,
-            )
-            .await;
+            let error = internal_error(format!("failed to start turn: {err}"));
+            self.track_error_response(&request_id, &error, /*error_type*/ None);
+            return Err(error);
+        }
+
+        if let Some(turn_context_applied) = turn_context_applied {
+            let processor = self.clone();
+            let api_thread_id = params.thread_id.clone();
+            let tracked_turn_id = turn_id.clone();
+            tokio::spawn(async move {
+                match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
+                    .await
+                {
+                    Ok(Ok(Ok(payload))) => {
+                        let after_turn_context = thread_turn_context_from_applied_event(&payload);
+                        processor
+                            .maybe_emit_turn_context_updated(
+                                &api_thread_id,
+                                &before_turn_context,
+                                after_turn_context,
+                            )
+                            .await;
+                    }
+                    Ok(Ok(Err(err))) => {
+                        tracing::warn!(
+                            "failed to apply turn context overrides for turn {tracked_turn_id}: {err}"
+                        );
+                    }
+                    Ok(Err(_)) => {
+                        tracing::warn!(
+                            "turn context override acknowledgement was cancelled for turn {tracked_turn_id}"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "timed out waiting for turn context overrides to apply for turn {tracked_turn_id}"
+                        );
+                    }
+                }
+            });
         }
 
         if turn_has_input {
@@ -636,12 +665,12 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadTurnContextUpdateParams,
     ) -> Result<ThreadTurnContextUpdateResponse, JSONRPCErrorError> {
-        let (_, thread) = self
-            .load_thread(&params.thread_id)
-            .await
-            .inspect_err(|error| {
-                self.track_error_response(request_id, error, /*error_type*/ None);
-            })?;
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(request_id, error, /*error_type*/ None);
+                })?;
         let before_snapshot = thread.config_snapshot().await;
         let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
         let resolved_overrides = self
@@ -663,17 +692,53 @@ impl TurnRequestProcessor {
             )
             .await?;
 
-        let after_snapshot = if let Some(overrides) = resolved_overrides {
-            // There is no queued turn to order against here, so applying
-            // directly gives the caller a synchronized response snapshot.
+        let after_turn_context = if let Some(overrides) = resolved_overrides {
             thread
-                .update_turn_context_overrides(overrides)
+                .preview_turn_context_overrides(overrides.clone())
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?
+                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+            let update_id = Uuid::now_v7().to_string();
+            let turn_context_applied = {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let mut thread_state = thread_state.lock().await;
+                thread_state.track_pending_turn_context(update_id.clone())
+            };
+            if let Err(err) = thread
+                .submit_with_id(Submission {
+                    id: update_id.clone(),
+                    op: Op::TurnContext {
+                        turn_context: op_turn_context_overrides(overrides),
+                    },
+                    trace: self.request_trace_context(request_id).await,
+                })
+                .await
+            {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let mut thread_state = thread_state.lock().await;
+                thread_state.cancel_pending_turn_context(&update_id);
+                return Err(internal_error(format!(
+                    "failed to update turn context: {err}"
+                )));
+            }
+            match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
+                .await
+            {
+                Ok(Ok(Ok(payload))) => thread_turn_context_from_applied_event(&payload),
+                Ok(Ok(Err(err))) => return Err(invalid_request(err)),
+                Ok(Err(_)) => {
+                    return Err(internal_error(
+                        "turn context override waiter was cancelled".to_string(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(internal_error(
+                        "timed out waiting for turn context overrides to apply".to_string(),
+                    ));
+                }
+            }
         } else {
-            before_snapshot
+            before_turn_context.clone()
         };
-        let after_turn_context = thread_turn_context_from_snapshot(&after_snapshot);
         self.maybe_emit_turn_context_updated(
             &params.thread_id,
             &before_turn_context,
@@ -1300,6 +1365,32 @@ fn thread_turn_context_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> 
         summary: config_snapshot.reasoning_summary,
         personality: config_snapshot.personality,
         collaboration_mode: config_snapshot.collaboration_mode.clone(),
+    }
+}
+
+fn thread_turn_context_from_applied_event(
+    event: &codex_protocol::protocol::TurnContextAppliedEvent,
+) -> ThreadTurnContext {
+    let turn_context = &event.turn_context;
+    ThreadTurnContext {
+        model: turn_context.model.clone(),
+        model_provider: turn_context.model_provider_id.clone(),
+        service_tier: turn_context.service_tier.clone(),
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy.into(),
+        approvals_reviewer: turn_context.approvals_reviewer.into(),
+        sandbox_policy: thread_response_sandbox_policy(
+            &turn_context.permission_profile,
+            turn_context.cwd.as_path(),
+        ),
+        permission_profile: turn_context.permission_profile.clone().into(),
+        active_permission_profile: thread_response_active_permission_profile(
+            turn_context.active_permission_profile.clone(),
+        ),
+        effort: turn_context.reasoning_effort,
+        summary: turn_context.reasoning_summary,
+        personality: turn_context.personality,
+        collaboration_mode: turn_context.collaboration_mode.clone(),
     }
 }
 

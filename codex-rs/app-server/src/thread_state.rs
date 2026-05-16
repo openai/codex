@@ -11,6 +11,7 @@ use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnContextAppliedEvent;
 use codex_rollout::state_db::StateDbHandle;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -24,6 +25,7 @@ use tokio::sync::watch;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
+type TurnContextAck = Result<TurnContextAppliedEvent, String>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
@@ -78,7 +80,7 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
-    pending_turn_started_waiters: HashMap<String, Vec<oneshot::Sender<()>>>,
+    pending_turn_context_waiters: HashMap<String, Vec<oneshot::Sender<TurnContextAck>>>,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -113,7 +115,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
-        self.pending_turn_started_waiters.clear();
+        self.pending_turn_context_waiters.clear();
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
@@ -133,21 +135,20 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
-    pub(crate) fn turn_started_receiver(&mut self, turn_id: &str) -> Option<oneshot::Receiver<()>> {
-        if self
-            .active_turn_snapshot()
-            .is_some_and(|turn| turn.id == turn_id)
-            || self.last_terminal_turn_id.as_deref() == Some(turn_id)
-        {
-            return None;
-        }
-
+    pub(crate) fn track_pending_turn_context(
+        &mut self,
+        submission_id: String,
+    ) -> oneshot::Receiver<TurnContextAck> {
         let (tx, rx) = oneshot::channel();
-        self.pending_turn_started_waiters
-            .entry(turn_id.to_string())
+        self.pending_turn_context_waiters
+            .entry(submission_id)
             .or_default()
             .push(tx);
-        Some(rx)
+        rx
+    }
+
+    pub(crate) fn cancel_pending_turn_context(&mut self, submission_id: &str) {
+        self.pending_turn_context_waiters.remove(submission_id);
     }
 
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
@@ -155,22 +156,24 @@ impl ThreadState {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
-        if let EventMsg::TurnStarted(payload) = event {
-            self.notify_turn_started(&payload.turn_id);
+        if let EventMsg::TurnContextApplied(payload) = event {
+            self.notify_turn_context_applied(event_turn_id, Ok(payload.clone()));
+        }
+        if let EventMsg::Error(error) = event {
+            self.notify_turn_context_applied(event_turn_id, Err(error.message.clone()));
         }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
-            self.notify_turn_started(event_turn_id);
         }
     }
 
-    fn notify_turn_started(&mut self, turn_id: &str) {
-        if let Some(waiters) = self.pending_turn_started_waiters.remove(turn_id) {
+    fn notify_turn_context_applied(&mut self, submission_id: &str, result: TurnContextAck) {
+        if let Some(waiters) = self.pending_turn_context_waiters.remove(submission_id) {
             for waiter in waiters {
-                let _ = waiter.send(());
+                let _ = waiter.send(result.clone());
             }
         }
     }
