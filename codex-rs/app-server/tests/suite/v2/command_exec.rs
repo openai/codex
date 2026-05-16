@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::CommandExecOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecOutputStream;
 use codex_app_server_protocol::CommandExecParams;
@@ -13,19 +14,13 @@ use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::CommandExecTerminalSize;
 use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecWriteParams;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::PermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -224,7 +219,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(root_read_only_permission_profile()),
+            permission_profile: Some(ActivePermissionProfile::read_only()),
         })
         .await?;
 
@@ -244,6 +239,105 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn command_exec_permission_profile_starts_selected_network_proxy() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_networked_permission_profile_config(
+        codex_home.path(),
+        /*default_permissions*/ None,
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(ActivePermissionProfile::new("networked")),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "1".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_networked_permission_profile_config(codex_home.path(), Some("networked"))?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(ActivePermissionProfile::read_only()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "unset".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
@@ -252,22 +346,16 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
     let command_dir = codex_home.path().join("command-cwd");
     std::fs::create_dir(&command_dir)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_command_exec_config(
+        codex_home.path(),
+        r#"
+[permissions.command-cwd.filesystem]
+":root" = "read"
+":workspace_roots" = "write"
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let mut permission_profile = root_read_only_permission_profile();
-    let PermissionProfile::Managed { file_system, .. } = &mut permission_profile else {
-        panic!("root read-only helper should use managed permissions");
-    };
-    let PermissionProfileFileSystemPermissions::Restricted { entries, .. } = file_system else {
-        panic!("root read-only helper should use restricted filesystem permissions");
-    };
-    entries.push(FileSystemSandboxEntry {
-        path: FileSystemPath::Special {
-            value: FileSystemSpecialPath::ProjectRoots { subpath: None },
-        },
-        access: FileSystemAccessMode::Write,
-    });
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
@@ -288,7 +376,7 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(permission_profile),
+            permission_profile: Some(ActivePermissionProfile::new("command-cwd")),
         })
         .await?;
 
@@ -335,7 +423,7 @@ async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result
             env: None,
             size: None,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-            permission_profile: Some(root_read_only_permission_profile()),
+            permission_profile: Some(ActivePermissionProfile::read_only()),
         })
         .await?;
 
@@ -1061,19 +1149,41 @@ fn decode_delta_notification(
     serde_json::from_value(params).context("deserialize command/exec/outputDelta notification")
 }
 
-fn root_read_only_permission_profile() -> PermissionProfile {
-    PermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                access: FileSystemAccessMode::Read,
-            }],
-            glob_scan_max_depth: None,
-        },
-    }
+fn insert_networked_permission_profile_config(
+    codex_home: &Path,
+    default_permissions: Option<&str>,
+) -> Result<()> {
+    let default_permissions = default_permissions
+        .map(|default_permissions| format!("default_permissions = \"{default_permissions}\"\n\n"))
+        .unwrap_or_default();
+    let inserted_config = format!(
+        r#"{default_permissions}[features]
+network_proxy = true
+
+[permissions.networked.filesystem]
+":root" = "read"
+
+[permissions.networked.network]
+enabled = true
+proxy_url = "http://127.0.0.1:0"
+enable_socks5 = false
+
+"#
+    );
+    insert_command_exec_config(codex_home, &inserted_config)?;
+    Ok(())
+}
+
+fn insert_command_exec_config(codex_home: &Path, inserted_config: &str) -> Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let marker = "\n[model_providers.mock_provider]\n";
+    let (prefix, suffix) = config
+        .split_once(marker)
+        .context("test config should include mock provider table")?;
+    let config = format!("{prefix}\n{inserted_config}{marker}{suffix}");
+    std::fs::write(config_path, config)?;
+    Ok(())
 }
 
 async fn read_initialize_response(

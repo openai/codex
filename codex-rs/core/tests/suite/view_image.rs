@@ -201,6 +201,7 @@ async fn assert_user_turn_local_image_resizes_to(
             &test,
             vec![UserInput::LocalImage {
                 path: abs_path.clone(),
+                detail: None,
             }],
             session_model,
         ))
@@ -814,7 +815,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
         .expect("output text present");
     assert_eq!(
         output_text,
-        "view_image.detail only supports `original`; omit `detail` for default resized behavior, got `low`"
+        "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `low`"
     );
 
     assert!(
@@ -1487,6 +1488,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             &test,
             vec![UserInput::LocalImage {
                 path: abs_path.clone(),
+                detail: None,
             }],
             session_model,
         ))

@@ -19,7 +19,8 @@ impl App {
             .chat_widget
             .config_ref()
             .permissions
-            .permission_profile();
+            .permission_profile()
+            .clone();
         let active_permission_profile = self
             .chat_widget
             .config_ref()
@@ -71,6 +72,7 @@ impl App {
                 permission_profile: permission_profile.clone(),
                 active_permission_profile: active_permission_profile.clone(),
                 cwd: thread.cwd.clone(),
+                runtime_workspace_roots: self.config.workspace_roots.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 message_history: None,
@@ -80,7 +82,7 @@ impl App {
         session.thread_id = thread_id;
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
-        session.cwd = thread.cwd.clone();
+        session.set_cwd_retargeting_implicit_runtime_workspace_root(thread.cwd.clone());
         session.permission_profile = permission_profile;
         session.active_permission_profile = active_permission_profile;
         session.instruction_source_paths = Vec::new();
@@ -101,6 +103,7 @@ impl App {
             .config_ref()
             .permissions
             .permission_profile()
+            .clone()
     }
 
     fn current_active_permission_profile(&self) -> Option<ActivePermissionProfile> {
@@ -117,18 +120,19 @@ mod tests {
     use crate::app::side::SideThreadState;
     use crate::app::test_support::make_test_app;
     use crate::app::thread_events::ThreadEventChannel;
+    use crate::legacy_core::config::PermissionProfileSnapshot;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::AskForApproval;
-    use codex_app_server_protocol::FileSystemAccessMode;
-    use codex_app_server_protocol::FileSystemPath;
-    use codex_app_server_protocol::FileSystemSandboxEntry;
-    use codex_app_server_protocol::FileSystemSpecialPath;
-    use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-    use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-    use codex_app_server_protocol::PermissionProfileNetworkPermissions;
     use codex_config::types::ApprovalsReviewer;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+    use codex_protocol::models::ManagedFileSystemPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -146,6 +150,7 @@ mod tests {
             permission_profile: PermissionProfile::read_only(),
             active_permission_profile: None,
             cwd: cwd.abs(),
+            runtime_workspace_roots: vec![cwd.abs()],
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             message_history: None,
@@ -193,9 +198,14 @@ mod tests {
             codex_config::Constrained::allow_any(AskForApproval::OnRequest.to_core());
         app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         let expected_permission_profile = PermissionProfile::workspace_write();
+        let expected_active_permission_profile =
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
-            .set_permission_profile(expected_permission_profile.clone())
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                expected_permission_profile.clone(),
+                expected_active_permission_profile.clone(),
+            ))
             .expect("set widget permission profile");
         app.config
             .permissions
@@ -209,6 +219,7 @@ mod tests {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             permission_profile: expected_permission_profile,
+            active_permission_profile: Some(expected_active_permission_profile),
             ..main_session
         };
         assert_eq!(
@@ -244,9 +255,9 @@ mod tests {
         let mut app = make_test_app().await;
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000403").expect("valid thread");
-        let profile: PermissionProfile = AppServerPermissionProfile::Managed {
-            network: PermissionProfileNetworkPermissions { enabled: false },
-            file_system: PermissionProfileFileSystemPermissions::Restricted {
+        let profile: PermissionProfile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -263,8 +274,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
-        }
-        .into();
+        };
         let session = ThreadSessionState {
             permission_profile: profile.clone(),
             ..test_thread_session(thread_id, test_path_buf("/tmp/main"))
@@ -350,11 +360,12 @@ mod tests {
             .chat_widget
             .config_ref()
             .permissions
-            .permission_profile();
+            .permission_profile()
+            .clone();
         assert_eq!(session.permission_profile, expected_permission_profile);
         assert_ne!(
             session.permission_profile,
-            app.config.permissions.permission_profile(),
+            app.config.permissions.permission_profile().clone(),
             "thread/read fallback must use the active widget permissions rather than stale app \
              config defaults"
         );

@@ -1,11 +1,11 @@
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -43,8 +43,6 @@ where
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain(WAIT_TOOL_NAME)
     }
@@ -53,7 +51,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
         Some(create_wait_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -99,6 +100,7 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
                 }
                 handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
                     .await
+                    .map(boxed_tool_output)
                     .map_err(FunctionCallError::RespondToModel)
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
@@ -108,4 +110,4 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     }
 }
 
-impl ToolHandler for CodeModeWaitHandler {}
+impl CoreToolRuntime for CodeModeWaitHandler {}

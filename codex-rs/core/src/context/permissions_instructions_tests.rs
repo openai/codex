@@ -54,29 +54,6 @@ fn builds_permissions_with_network_access_override() {
 }
 
 #[test]
-fn builds_permissions_from_policy() {
-    let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-
-    let instructions = PermissionsInstructions::from_policy(
-        &policy,
-        AskForApproval::UnlessTrusted,
-        ApprovalsReviewer::User,
-        &Policy::empty(),
-        &PathBuf::from("/tmp"),
-        /*exec_permission_approvals_enabled*/ false,
-        /*request_permissions_tool_enabled*/ false,
-    );
-    let text = instructions.body();
-    assert!(text.contains("Network access is enabled."));
-    assert!(text.contains("`approval_policy` is `unless-trusted`"));
-}
-
-#[test]
 fn builds_permissions_from_profile() {
     let cwd = PathBuf::from("/tmp");
     let writable_root =

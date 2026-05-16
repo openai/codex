@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
@@ -23,7 +23,7 @@ mod list;
 mod read;
 mod search;
 
-pub(crate) fn memory_tools<B>(backend: B) -> Vec<Arc<dyn ExtensionToolExecutor>>
+pub(crate) fn memory_tools<B>(backend: B) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>
 where
     B: MemoriesBackend,
 {

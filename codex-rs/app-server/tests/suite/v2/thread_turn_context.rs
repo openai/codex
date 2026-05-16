@@ -178,10 +178,7 @@ async fn thread_turn_context_update_rejects_sandbox_policy_with_permissions() ->
         .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
             thread_id: thread.id,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-            permissions: Some(PermissionProfileSelectionParams::Profile {
-                id: ":read-only".to_string(),
-                modifications: None,
-            }),
+            permissions: Some(PermissionProfileSelectionParams::new(":read-only")),
             ..Default::default()
         })
         .await?;

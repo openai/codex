@@ -106,7 +106,7 @@ async fn slash_commands_without_side_flag_are_rejected_for_side_threads() {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
             assert!(
                 rendered.contains(
-                    "'/review' is unavailable in side conversations. Press Esc to return to the main thread first."
+                    "'/review' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."
                 ),
                 "expected side conversation slash command error, got {rendered:?}"
             );
@@ -132,7 +132,7 @@ async fn slash_side_is_rejected_for_side_threads() {
             let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
             assert!(
                 rendered.contains(
-                    "'/side' is unavailable in side conversations. Press Esc to return to the main thread first."
+                    "'/side' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."
                 ),
                 "expected side conversation slash command error, got {rendered:?}"
             );
@@ -276,7 +276,7 @@ async fn side_context_label_preserves_status_line_snapshot() {
     chat.refresh_status_line();
     chat.set_side_conversation_active(/*active*/ true);
     chat.set_side_conversation_context_label(Some(
-        "Side from main thread · Esc to return".to_string(),
+        "Side from main thread · Ctrl+C to return".to_string(),
     ));
 
     let width = 80;
@@ -297,7 +297,7 @@ async fn side_context_label_shows_parent_status_snapshot() {
     chat.show_welcome_banner = false;
     chat.set_side_conversation_active(/*active*/ true);
     chat.set_side_conversation_context_label(Some(
-        "Side from main thread · main needs input · Esc to return".to_string(),
+        "Side from main thread · main needs input · Ctrl+C to return".to_string(),
     ));
 
     let width = 80;

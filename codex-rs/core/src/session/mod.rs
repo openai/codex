@@ -173,6 +173,8 @@ use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
+use crate::config::PermissionProfileSnapshot;
+use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
@@ -617,10 +619,10 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
-            permission_profile: config.permissions.permission_profile.clone(),
-            active_permission_profile: config.permissions.active_permission_profile(),
+            permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             environments: environment_selections.to_selections(),
@@ -816,6 +818,12 @@ fn get_service_tier(
     account_plan_type
         .is_some_and(is_enterprise_default_service_tier_plan)
         .then_some(ServiceTier::Fast.request_value().to_string())
+}
+
+fn session_permission_profile_state_from_config(
+    config: &Config,
+) -> CodexResult<PermissionProfileState> {
+    Ok(config.permissions.permission_profile_state().clone())
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {
@@ -2278,6 +2286,9 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
         });
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -2682,14 +2693,6 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
-        }
-        // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-        {
-            developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if turn_context.config.include_collaboration_mode_instructions
@@ -3430,8 +3433,6 @@ pub(crate) fn emit_subagent_session_started(
         created_at,
     });
 }
-
-use codex_memories_read::build_memory_tool_developer_instructions;
 
 /// Builds the hook engine for one config snapshot, including any enabled plugin hooks.
 async fn build_hooks_for_config(

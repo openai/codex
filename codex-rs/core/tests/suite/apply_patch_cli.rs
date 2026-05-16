@@ -59,9 +59,7 @@ pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
 async fn apply_patch_harness_with(
     configure: impl FnOnce(TestCodexBuilder) -> TestCodexBuilder,
 ) -> Result<TestCodexHarness> {
-    let builder = configure(test_codex()).with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
+    let builder = configure(test_codex());
     // Box harness construction so apply_patch_cli tests do not inline the
     // full test-thread startup path into each test future.
     Box::pin(TestCodexHarness::with_remote_env_builder(builder)).await
@@ -989,15 +987,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| {
-        builder.with_config(|config| {
-            config
-                .features
-                .enable(Feature::ApplyPatchFreeform)
-                .expect("test config should allow feature update");
-        })
-    })
-    .await?;
+    let harness = apply_patch_harness().await?;
 
     // Compose a patch that would create a file, then fail verification on an update.
     let call_id = "apply-partial-no-side-effects";

@@ -103,7 +103,6 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfileModificationParams;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
@@ -361,6 +360,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+#[cfg(test)]
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;

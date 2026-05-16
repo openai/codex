@@ -38,6 +38,7 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
+use codex_utils_cli::resume_command;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
+mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -58,6 +60,7 @@ use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use doctor::DoctorCommand;
+use state_db_recovery as local_state_db;
 
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
@@ -628,9 +631,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(token_usage.to_string());
     }
 
-    if let Some(resume_cmd) =
-        codex_core::util::resume_command(/*thread_name*/ None, conversation_id)
-    {
+    if let Some(resume_cmd) = resume_command(/*thread_name*/ None, conversation_id) {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -1645,7 +1646,7 @@ async fn run_debug_prompt_input_command(
         .images
         .into_iter()
         .chain(cmd.images)
-        .map(|path| UserInput::LocalImage { path })
+        .map(|path| UserInput::LocalImage { path, detail: None })
         .collect::<Vec<_>>();
     if let Some(prompt) = cmd.prompt.or(interactive.prompt) {
         input.push(UserInput::Text {
@@ -1981,13 +1982,47 @@ async fn run_interactive_tui(
         };
         *slot = Some(auth_token);
     }
-    codex_tui::run_main(
-        interactive,
-        arg0_paths,
-        codex_config::LoaderOverrides::default(),
-        remote_endpoint,
-    )
-    .await
+    let start_tui = || {
+        codex_tui::run_main(
+            interactive.clone(),
+            arg0_paths.clone(),
+            codex_config::LoaderOverrides::default(),
+            remote_endpoint.clone(),
+        )
+    };
+    let mut attempted_repair = false;
+    loop {
+        let err = match start_tui().await {
+            Ok(exit_info) => return Ok(exit_info),
+            Err(err) => err,
+        };
+        let Some(startup_error) = local_state_db::startup_error(&err) else {
+            return Err(err);
+        };
+        if local_state_db::is_locked(startup_error.detail()) {
+            local_state_db::print_locked_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if attempted_repair {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if !local_state_db::confirm_repair(startup_error)? {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+
+        match local_state_db::repair_files(startup_error).await {
+            Ok(backups) => local_state_db::print_repair_backups(&backups),
+            Err(repair_err) => {
+                local_state_db::print_diagnostic_guidance(startup_error);
+                return Ok(AppExitInfo::fatal(format!(
+                    "failed to repair Codex local data automatically: {repair_err}"
+                )));
+            }
+        }
+        attempted_repair = true;
+    }
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {

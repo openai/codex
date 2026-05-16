@@ -295,6 +295,38 @@ def test_real_thread_run_convenience_smoke(runtime_env: PreparedRuntimeEnv) -> N
     assert isinstance(data["has_usage"], bool)
 
 
+def test_real_quickstart_style_flow_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from openai_codex import Codex
+
+            with Codex() as codex:
+                thread = codex.thread_start()
+                result = thread.run("Say hello in one sentence.")
+                print(json.dumps({
+                    "thread_id": thread.id,
+                    "final_response": result.final_response,
+                    "items_count": len(result.items),
+                }))
+            """
+        ),
+    )
+
+    assert {
+        "thread_id_is_text": isinstance(data["thread_id"], str) and bool(data["thread_id"].strip()),
+        "final_response_is_text": isinstance(data["final_response"], str)
+        and bool(data["final_response"].strip()),
+        "items_count_is_int": isinstance(data["items_count"], int),
+    } == {
+        "thread_id_is_text": True,
+        "final_response_is_text": True,
+        "items_count_is_int": True,
+    }
+
+
 def test_real_async_thread_turn_usage_and_ids_smoke(
     runtime_env: PreparedRuntimeEnv,
 ) -> None:

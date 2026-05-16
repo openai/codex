@@ -1658,7 +1658,6 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2880,7 +2879,6 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2959,7 +2957,6 @@ async fn pre_tool_use_rewrites_apply_patch_before_execution() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3025,7 +3022,6 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3627,7 +3623,6 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3715,7 +3710,6 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;

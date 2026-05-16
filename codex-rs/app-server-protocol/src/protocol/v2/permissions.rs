@@ -5,24 +5,22 @@ use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalPro
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
 use codex_protocol::models::ActivePermissionProfile as CoreActivePermissionProfile;
-use codex_protocol::models::ActivePermissionProfileModification as CoreActivePermissionProfileModification;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
-use codex_protocol::permissions::NetworkSandboxPolicy as CoreNetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use ts_rs::TS;
@@ -135,13 +133,6 @@ pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PermissionProfileNetworkPermissions {
-    pub enabled: bool,
-}
-
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
     fn from(value: CoreNetworkPermissions) -> Self {
         Self {
@@ -154,24 +145,6 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     fn from(value: AdditionalNetworkPermissions) -> Self {
         Self {
             enabled: value.enabled,
-        }
-    }
-}
-
-impl From<CoreNetworkSandboxPolicy> for PermissionProfileNetworkPermissions {
-    fn from(value: CoreNetworkSandboxPolicy) -> Self {
-        Self {
-            enabled: value.is_enabled(),
-        }
-    }
-}
-
-impl From<PermissionProfileNetworkPermissions> for CoreNetworkSandboxPolicy {
-    fn from(value: PermissionProfileNetworkPermissions) -> Self {
-        if value.enabled {
-            Self::Enabled
-        } else {
-            Self::Restricted
         }
     }
 }
@@ -317,116 +290,6 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfileFileSystemPermissions {
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Restricted {
-        entries: Vec<FileSystemSandboxEntry>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        glob_scan_max_depth: Option<NonZeroUsize>,
-    },
-    Unrestricted,
-}
-
-impl From<CoreManagedFileSystemPermissions> for PermissionProfileFileSystemPermissions {
-    fn from(value: CoreManagedFileSystemPermissions) -> Self {
-        match value {
-            CoreManagedFileSystemPermissions::Restricted {
-                entries,
-                glob_scan_max_depth,
-            } => Self::Restricted {
-                entries: entries
-                    .into_iter()
-                    .map(FileSystemSandboxEntry::from)
-                    .collect(),
-                glob_scan_max_depth,
-            },
-            CoreManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
-        }
-    }
-}
-
-impl From<PermissionProfileFileSystemPermissions> for CoreManagedFileSystemPermissions {
-    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
-        match value {
-            PermissionProfileFileSystemPermissions::Restricted {
-                entries,
-                glob_scan_max_depth,
-            } => Self::Restricted {
-                entries: entries
-                    .into_iter()
-                    .map(CoreFileSystemSandboxEntry::from)
-                    .collect(),
-                glob_scan_max_depth,
-            },
-            PermissionProfileFileSystemPermissions::Unrestricted => Self::Unrestricted,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfile {
-    /// Codex owns sandbox construction for this profile.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Managed {
-        network: PermissionProfileNetworkPermissions,
-        file_system: PermissionProfileFileSystemPermissions,
-    },
-    /// Do not apply an outer sandbox.
-    Disabled,
-    /// Filesystem isolation is enforced by an external caller.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    External {
-        network: PermissionProfileNetworkPermissions,
-    },
-}
-
-impl From<CorePermissionProfile> for PermissionProfile {
-    fn from(value: CorePermissionProfile) -> Self {
-        match value {
-            CorePermissionProfile::Managed {
-                file_system,
-                network,
-            } => Self::Managed {
-                network: network.into(),
-                file_system: file_system.into(),
-            },
-            CorePermissionProfile::Disabled => Self::Disabled,
-            CorePermissionProfile::External { network } => Self::External {
-                network: network.into(),
-            },
-        }
-    }
-}
-
-impl From<PermissionProfile> for CorePermissionProfile {
-    fn from(value: PermissionProfile) -> Self {
-        match value {
-            PermissionProfile::Managed {
-                file_system,
-                network,
-            } => Self::Managed {
-                file_system: file_system.into(),
-                network: network.into(),
-            },
-            PermissionProfile::Disabled => Self::Disabled,
-            PermissionProfile::External { network } => Self::External {
-                network: network.into(),
-            },
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ActivePermissionProfile {
@@ -437,40 +300,18 @@ pub struct ActivePermissionProfile {
     /// inheritance. This is currently always `null`.
     #[serde(default)]
     pub extends: Option<String>,
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default)]
-    pub modifications: Vec<ActivePermissionProfileModification>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
-}
-
-impl From<CoreActivePermissionProfileModification> for ActivePermissionProfileModification {
-    fn from(value: CoreActivePermissionProfileModification) -> Self {
-        match value {
-            CoreActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                Self::AdditionalWritableRoot { path }
-            }
+impl ActivePermissionProfile {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extends: None,
         }
     }
-}
 
-impl From<ActivePermissionProfileModification> for CoreActivePermissionProfileModification {
-    fn from(value: ActivePermissionProfileModification) -> Self {
-        match value {
-            ActivePermissionProfileModification::AdditionalWritableRoot { path } => {
-                Self::AdditionalWritableRoot { path }
-            }
-        }
+    pub fn read_only() -> Self {
+        CoreActivePermissionProfile::read_only().into()
     }
 }
 
@@ -479,11 +320,6 @@ impl From<CoreActivePermissionProfile> for ActivePermissionProfile {
         Self {
             id: value.id,
             extends: value.extends,
-            modifications: value
-                .modifications
-                .into_iter()
-                .map(ActivePermissionProfileModification::from)
-                .collect(),
         }
     }
 }
@@ -493,40 +329,104 @@ impl From<ActivePermissionProfile> for CoreActivePermissionProfile {
         Self {
             id: value.id,
             extends: value.extends,
-            modifications: value
-                .modifications
-                .into_iter()
-                .map(CoreActivePermissionProfileModification::from)
-                .collect(),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfileSelectionParams {
-    /// Select a named built-in or user-defined profile and optionally apply
-    /// bounded modifications that Codex knows how to validate.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Profile {
-        id: String,
-        #[ts(optional = nullable)]
-        modifications: Option<Vec<PermissionProfileModificationParams>>,
-    },
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionProfileSelectionParams {
+    id: String,
+    legacy_additional_writable_roots: Vec<AbsolutePathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum PermissionProfileModificationParams {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
+impl PermissionProfileSelectionParams {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            legacy_additional_writable_roots: Vec::new(),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn into_id(self) -> String {
+        self.id
+    }
+
+    pub fn legacy_additional_writable_roots(&self) -> &[AbsolutePathBuf] {
+        &self.legacy_additional_writable_roots
+    }
+}
+
+impl From<String> for PermissionProfileSelectionParams {
+    fn from(id: String) -> Self {
+        Self::new(id)
+    }
+}
+
+impl Serialize for PermissionProfileSelectionParams {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.id)
+    }
+}
+
+impl<'de> Deserialize<'de> for PermissionProfileSelectionParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Id(String),
+            LegacyProfile {
+                #[serde(rename = "type")]
+                _type: LegacyPermissionProfileSelectionType,
+                id: String,
+                #[serde(default)]
+                modifications: Option<Vec<LegacyPermissionProfileModificationParams>>,
+            },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum LegacyPermissionProfileSelectionType {
+            Profile,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "camelCase")]
+        enum LegacyPermissionProfileModificationParams {
+            #[serde(rename_all = "camelCase")]
+            AdditionalWritableRoot { path: AbsolutePathBuf },
+        }
+
+        match Wire::deserialize(deserializer)? {
+            Wire::Id(id) => Ok(Self::new(id)),
+            Wire::LegacyProfile {
+                id, modifications, ..
+            } => {
+                let legacy_additional_writable_roots = modifications
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|modification| match modification {
+                        LegacyPermissionProfileModificationParams::AdditionalWritableRoot {
+                            path,
+                        } => path,
+                    })
+                    .collect();
+                Ok(Self {
+                    id,
+                    legacy_additional_writable_roots,
+                })
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
