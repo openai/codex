@@ -267,6 +267,9 @@ pub struct McpToolCallItemResult {
     // easy to export.
     pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, rename = "_meta")]
+    pub meta: Option<JsonValue>,
 }
 
 /// Error details reported by a failed MCP tool invocation.

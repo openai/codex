@@ -541,6 +541,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                         result: Some(McpToolCallItemResult {
                             content: Vec::new(),
                             structured_content: None,
+                            meta: None,
                         }),
                         error: None,
                         status: McpToolCallStatus::Completed,
@@ -601,7 +602,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
 }
 
 #[test]
-fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
+fn mcp_tool_call_defaults_arguments_and_preserves_structured_content_and_meta() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let started =
@@ -636,7 +637,11 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                         "text": "done",
                     })],
                     structured_content: Some(json!({ "status": "ok" })),
-                    meta: None,
+                    meta: Some(json!({
+                        "raw_messages": [
+                            { "ref_id": "abc123" }
+                        ],
+                    })),
                 })),
                 error: None,
                 duration_ms: Some(10),
@@ -682,6 +687,11 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                                 "text": "done",
                             })],
                             structured_content: Some(json!({ "status": "ok" })),
+                            meta: Some(json!({
+                                "raw_messages": [
+                                    { "ref_id": "abc123" }
+                                ],
+                            })),
                         }),
                         error: None,
                         status: McpToolCallStatus::Completed,

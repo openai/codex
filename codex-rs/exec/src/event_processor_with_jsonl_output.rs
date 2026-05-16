@@ -224,6 +224,7 @@ impl EventProcessorWithJsonOutput {
                     result: result.map(|result| McpToolCallItemResult {
                         content: result.content,
                         structured_content: result.structured_content,
+                        meta: result.meta,
                     }),
                     error: error.map(|error| McpToolCallItemError {
                         message: error.message,
