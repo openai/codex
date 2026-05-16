@@ -292,8 +292,7 @@ impl SessionConfiguration {
                 updates.profile_workspace_roots.clone().unwrap_or_default(),
                 Some(&current_file_system_sandbox_policy),
             )?;
-            if let Some(active_permission_profile) =
-                next_configuration.active_permission_profile()
+            if let Some(active_permission_profile) = next_configuration.active_permission_profile()
             {
                 let mut config = (*next_configuration.original_config_do_not_use).clone();
                 let permission_profile = next_configuration.permission_profile();
