@@ -626,7 +626,7 @@ client_request_definitions! {
     },
     PluginInstalled => "plugin/installed" {
         params: v2::PluginInstalledParams,
-        serialization: global_shared_read("config"),
+        serialization: None,
         response: v2::PluginInstalledResponse,
     },
     PluginRead => "plugin/read" {
@@ -1724,10 +1724,7 @@ mod tests {
                 install_suggestion_plugin_names: None,
             },
         };
-        assert_eq!(
-            plugin_installed.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
-        );
+        assert_eq!(plugin_installed.serialization_scope(), None);
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),
