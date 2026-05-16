@@ -15,6 +15,9 @@ class ApprovalMode(str, Enum):
 
     deny_all = "deny_all"
     auto_review = "auto_review"
+    dangerously_bypass_approvals_and_sandbox = (
+        "dangerously_bypass_approvals_and_sandbox"
+    )
 
 
 def _approval_mode_settings(
@@ -32,6 +35,8 @@ def _approval_mode_settings(
                 ApprovalsReviewer.auto_review,
             )
         case ApprovalMode.deny_all:
+            return AskForApproval(root=AskForApprovalValue.never), None
+        case ApprovalMode.dangerously_bypass_approvals_and_sandbox:
             return AskForApproval(root=AskForApprovalValue.never), None
         case _:
             return _assert_never_approval_mode(approval_mode)

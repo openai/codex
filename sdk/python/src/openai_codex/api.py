@@ -30,6 +30,7 @@ from ._run import (
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    DangerFullAccessSandboxPolicy,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -58,6 +59,36 @@ from .generated.v2_all import (
     TurnSteerResponse,
 )
 from .models import InitializeResponse, JsonObject, Notification
+
+
+def _thread_sandbox_for_approval_mode(
+    approval_mode: ApprovalMode | None,
+    sandbox: SandboxMode | None,
+) -> SandboxMode | None:
+    """Apply approval-mode sandbox presets for thread operations."""
+    if approval_mode is not ApprovalMode.dangerously_bypass_approvals_and_sandbox:
+        return sandbox
+    if sandbox is not None:
+        raise ValueError(
+            "dangerous bypass approval_mode cannot be combined with sandbox"
+        )
+    return SandboxMode.danger_full_access
+
+
+def _turn_sandbox_policy_for_approval_mode(
+    approval_mode: ApprovalMode | None,
+    sandbox_policy: SandboxPolicy | None,
+) -> SandboxPolicy | None:
+    """Apply approval-mode sandbox presets for turn operations."""
+    if approval_mode is not ApprovalMode.dangerously_bypass_approvals_and_sandbox:
+        return sandbox_policy
+    if sandbox_policy is not None:
+        raise ValueError(
+            "dangerous bypass approval_mode cannot be combined with sandbox_policy"
+        )
+    return SandboxPolicy(
+        root=DangerFullAccessSandboxPolicy(type="dangerFullAccess")
+    )
 
 
 class Codex:
@@ -105,6 +136,7 @@ class Codex:
         thread_source: ThreadSource | None = None,
     ) -> Thread:
         approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadStartParams(
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -168,7 +200,10 @@ class Codex:
         sandbox: SandboxMode | None = None,
         service_tier: str | None = None,
     ) -> Thread:
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -202,7 +237,10 @@ class Codex:
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
     ) -> Thread:
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -307,6 +345,7 @@ class AsyncCodex:
     ) -> AsyncThread:
         await self._ensure_initialized()
         approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadStartParams(
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -372,7 +411,10 @@ class AsyncCodex:
         service_tier: str | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -407,7 +449,10 @@ class AsyncCodex:
         thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -495,7 +540,13 @@ class Thread:
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
         wire_input = _to_wire_input(input)
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox_policy = _turn_sandbox_policy_for_approval_mode(
+            approval_mode,
+            sandbox_policy,
+        )
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
@@ -579,7 +630,13 @@ class AsyncThread:
     ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
         wire_input = _to_wire_input(input)
-        approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
+        sandbox_policy = _turn_sandbox_policy_for_approval_mode(
+            approval_mode,
+            sandbox_policy,
+        )
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,

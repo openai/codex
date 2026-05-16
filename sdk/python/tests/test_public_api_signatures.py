@@ -129,6 +129,10 @@ def test_root_exports_approval_mode() -> None:
     assert [(mode.name, mode.value) for mode in ApprovalMode] == [
         ("deny_all", "deny_all"),
         ("auto_review", "auto_review"),
+        (
+            "dangerously_bypass_approvals_and_sandbox",
+            "dangerously_bypass_approvals_and_sandbox",
+        ),
     ]
 
 

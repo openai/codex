@@ -3,7 +3,7 @@
 Public surface of `openai_codex` for app-server v2.
 
 This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
-Thread and turn starts expose `approval_mode`. `ApprovalMode.auto_review` is the default; use `ApprovalMode.deny_all` to deny escalated permissions.
+Thread and turn starts expose `approval_mode`. `ApprovalMode.auto_review` is the default; use `ApprovalMode.deny_all` to deny escalated permissions. `ApprovalMode.dangerously_bypass_approvals_and_sandbox` disables approvals and requests full sandbox bypass. That explicit bypass mode cannot be combined with `sandbox` on thread APIs or `sandbox_policy` on turn APIs.
 
 ## Package Entry
 

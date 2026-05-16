@@ -98,6 +98,11 @@ def response_approval_policy(response: Any) -> str:
     return response.model_dump(by_alias=True, mode="json")["approvalPolicy"]
 
 
+def response_sandbox_type(response: Any) -> str:
+    """Return serialized sandbox policy type from a generated thread response."""
+    return response.model_dump(by_alias=True, mode="json")["sandbox"]["type"]
+
+
 def agent_message_texts(events: list[Notification]) -> list[str]:
     """Extract completed agent-message text from SDK notifications."""
     texts: list[str] = []

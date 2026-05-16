@@ -867,7 +867,26 @@ def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]
     ]
 
 
-def _model_arg_lines(fields: list[PublicFieldSpec], *, indent: str = "            ") -> list[str]:
+def _approval_mode_thread_sandbox_line(*, indent: str = "        ") -> str:
+    """Return the approval-mode sandbox preset for thread operations."""
+    return f"{indent}sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)"
+
+
+def _approval_mode_turn_sandbox_policy_lines(
+    *, indent: str = "        "
+) -> list[str]:
+    """Return the approval-mode sandbox preset for turn operations."""
+    return [
+        f"{indent}sandbox_policy = _turn_sandbox_policy_for_approval_mode(",
+        f"{indent}    approval_mode,",
+        f"{indent}    sandbox_policy,",
+        f"{indent})",
+    ]
+
+
+def _model_arg_lines(
+    fields: list[PublicFieldSpec], *, indent: str = "            "
+) -> list[str]:
     return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
 
 
@@ -896,6 +915,7 @@ def _render_codex_block(
         *_kw_signature_lines(thread_start_fields),
         "    ) -> Thread:",
         _approval_mode_assignment_line("_approval_mode_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadStartParams(",
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
@@ -921,6 +941,7 @@ def _render_codex_block(
         *_kw_signature_lines(resume_fields),
         "    ) -> Thread:",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -937,6 +958,7 @@ def _render_codex_block(
         *_kw_signature_lines(fork_fields),
         "    ) -> Thread:",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -970,6 +992,7 @@ def _render_async_codex_block(
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadStartParams(",
         *_approval_mode_model_arg_lines(),
         *_model_arg_lines(thread_start_fields),
@@ -997,6 +1020,7 @@ def _render_async_codex_block(
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -1014,6 +1038,7 @@ def _render_async_codex_block(
         "    ) -> AsyncThread:",
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        _approval_mode_thread_sandbox_line(),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
         *_approval_mode_model_arg_lines(),
@@ -1047,6 +1072,7 @@ def _render_thread_block(
         "    ) -> TurnHandle:",
         "        wire_input = _to_wire_input(input)",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        *_approval_mode_turn_sandbox_policy_lines(),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",
@@ -1073,6 +1099,7 @@ def _render_async_thread_block(
         "        await self._codex._ensure_initialized()",
         "        wire_input = _to_wire_input(input)",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
+        *_approval_mode_turn_sandbox_policy_lines(),
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
         "            input=wire_input,",

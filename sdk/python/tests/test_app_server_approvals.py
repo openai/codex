@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shlex
 
-from app_server_harness import AppServerHarness
-from app_server_helpers import response_approval_policy
+import pytest
+
+from app_server_harness import (
+    AppServerHarness,
+    ev_completed,
+    ev_function_call,
+    ev_response_created,
+    sse,
+)
+from app_server_helpers import response_approval_policy, response_sandbox_type
 
 from openai_codex import ApprovalMode, AsyncCodex, Codex
-from openai_codex.generated.v2_all import AskForApprovalValue, ThreadResumeParams
+from openai_codex.generated.v2_all import (
+    AskForApprovalValue,
+    DangerFullAccessSandboxPolicy,
+    ReadOnlySandboxPolicy,
+    SandboxMode,
+    SandboxPolicy,
+    ThreadResumeParams,
+)
+
+DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE = DangerFullAccessSandboxPolicy(
+    type="dangerFullAccess"
+).type
 
 
 def test_thread_resume_inherits_deny_all_approval_mode(tmp_path) -> None:
@@ -83,6 +104,263 @@ def test_thread_fork_can_override_approval_mode(tmp_path) -> None:
     } == {
         "final_response": "source seeded",
         "forked_policy": AskForApprovalValue.on_request.value,
+    }
+
+
+def test_dangerous_bypass_thread_lifecycle_persists_thread_settings(
+    tmp_path,
+) -> None:
+    """Thread lifecycle operations should preserve the explicit bypass preset."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message(
+            "bypass seeded",
+            response_id="bypass-thread",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            source = codex.thread_start(
+                approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+            )
+            result = source.run("seed the bypass thread")
+            started_state = codex._client.thread_resume(  # noqa: SLF001
+                source.id,
+                ThreadResumeParams(thread_id=source.id),
+            )
+            resumed = codex.thread_resume(source.id)
+            resumed_state = codex._client.thread_resume(  # noqa: SLF001
+                resumed.id,
+                ThreadResumeParams(thread_id=resumed.id),
+            )
+            forked = codex.thread_fork(source.id)
+            forked_state = codex._client.thread_resume(  # noqa: SLF001
+                forked.id,
+                ThreadResumeParams(thread_id=forked.id),
+            )
+
+    assert {
+        "final_response": result.final_response,
+        "forked_is_distinct": forked.id != source.id,
+        "started": (
+            response_approval_policy(started_state),
+            response_sandbox_type(started_state),
+        ),
+        "resumed": (
+            response_approval_policy(resumed_state),
+            response_sandbox_type(resumed_state),
+        ),
+        "forked": (
+            response_approval_policy(forked_state),
+            response_sandbox_type(forked_state),
+        ),
+    } == {
+        "final_response": "bypass seeded",
+        "forked_is_distinct": True,
+        "started": (
+            AskForApprovalValue.never.value,
+            DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE,
+        ),
+        "resumed": (
+            AskForApprovalValue.never.value,
+            DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE,
+        ),
+        "forked": (
+            AskForApprovalValue.never.value,
+            DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE,
+        ),
+    }
+
+
+def test_turn_dangerous_bypass_persists_thread_settings(tmp_path) -> None:
+    """Turn-level bypass should persist approvals disabled and sandbox bypassed."""
+    with AppServerHarness(tmp_path) as harness:
+        harness.responses.enqueue_assistant_message(
+            "turn bypass",
+            response_id="bypass-turn",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start(approval_mode=ApprovalMode.auto_review)
+            result = thread.run(
+                "bypass this turn",
+                approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+            )
+            after_turn = codex._client.thread_resume(  # noqa: SLF001
+                thread.id,
+                ThreadResumeParams(thread_id=thread.id),
+            )
+
+    assert {
+        "final_response": result.final_response,
+        "thread_settings": (
+            response_approval_policy(after_turn),
+            response_sandbox_type(after_turn),
+        ),
+    } == {
+        "final_response": "turn bypass",
+        "thread_settings": (
+            AskForApprovalValue.never.value,
+            DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE,
+        ),
+    }
+
+
+def test_async_turn_dangerous_bypass_persists_thread_settings(tmp_path) -> None:
+    """Async turn-level bypass should persist the same app-server settings."""
+
+    async def scenario() -> None:
+        with AppServerHarness(tmp_path) as harness:
+            harness.responses.enqueue_assistant_message(
+                "async turn bypass",
+                response_id="async-bypass-turn",
+            )
+
+            async with AsyncCodex(config=harness.app_server_config()) as codex:
+                thread = await codex.thread_start(
+                    approval_mode=ApprovalMode.auto_review
+                )
+                result = await thread.run(
+                    "bypass this async turn",
+                    approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+                )
+                after_turn = await codex._client.thread_resume(  # noqa: SLF001
+                    thread.id,
+                    ThreadResumeParams(thread_id=thread.id),
+                )
+
+        assert {
+            "final_response": result.final_response,
+            "thread_settings": (
+                response_approval_policy(after_turn),
+                response_sandbox_type(after_turn),
+            ),
+        } == {
+            "final_response": "async turn bypass",
+            "thread_settings": (
+                AskForApprovalValue.never.value,
+                DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE,
+            ),
+        }
+
+    asyncio.run(scenario())
+
+
+def test_outside_workspace_write_rejected_for_deny_all_and_allowed_for_bypass(
+    tmp_path,
+) -> None:
+    """Dangerous bypass should be the mode that permits outside-workspace writes."""
+    rejected_path = tmp_path / "deny-all-outside-write.txt"
+    allowed_path = tmp_path / "dangerous-outside-write.txt"
+
+    with AppServerHarness(tmp_path) as harness:
+        rejected_args = json.dumps(
+            {
+                "command": (
+                    f"printf %s rejected > {shlex.quote(str(rejected_path))}"
+                ),
+                "login": False,
+                "timeout_ms": 1_000,
+            }
+        )
+        dangerous_args = json.dumps(
+            {
+                "command": (
+                    f"printf %s dangerous > {shlex.quote(str(allowed_path))}"
+                ),
+                "login": False,
+                "timeout_ms": 1_000,
+            }
+        )
+        harness.responses.enqueue_sse(
+            sse(
+                [
+                    ev_response_created("deny-all-write"),
+                    ev_function_call(
+                        "deny-all-outside-write",
+                        "shell_command",
+                        rejected_args,
+                    ),
+                    ev_completed("deny-all-write"),
+                ]
+            )
+        )
+        harness.responses.enqueue_assistant_message(
+            "deny-all shell completed",
+            response_id="deny-all-final",
+        )
+        harness.responses.enqueue_sse(
+            sse(
+                [
+                    ev_response_created("dangerous-write"),
+                    ev_function_call(
+                        "dangerous-outside-write",
+                        "shell_command",
+                        dangerous_args,
+                    ),
+                    ev_completed("dangerous-write"),
+                ]
+            )
+        )
+        harness.responses.enqueue_assistant_message(
+            "dangerous shell completed",
+            response_id="dangerous-final",
+        )
+
+        with Codex(config=harness.app_server_config()) as codex:
+            denied_thread = codex.thread_start(approval_mode=ApprovalMode.deny_all)
+            denied_result = denied_thread.run("write outside the workspace")
+
+            bypass_thread = codex.thread_start(
+                approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+            )
+            bypass_result = bypass_thread.run("write outside the workspace")
+
+    assert {
+        "denied_final_response": denied_result.final_response,
+        "denied_path_exists": rejected_path.exists(),
+        "bypass_final_response": bypass_result.final_response,
+        "bypass_file_contents": allowed_path.read_text(),
+    } == {
+        "denied_final_response": "deny-all shell completed",
+        "denied_path_exists": False,
+        "bypass_final_response": "dangerous shell completed",
+        "bypass_file_contents": "dangerous",
+    }
+
+
+def test_dangerous_bypass_rejects_explicit_sandbox_conflicts_before_state_changes(
+    tmp_path,
+) -> None:
+    """Conflicting bypass presets should fail before mutating app-server state."""
+    with AppServerHarness(tmp_path) as harness:
+        with Codex(config=harness.app_server_config()) as codex:
+            with pytest.raises(ValueError, match="combined with sandbox"):
+                codex.thread_start(
+                    approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+                    sandbox=SandboxMode.read_only,
+                )
+
+            threads_after_invalid_start = codex.thread_list(archived=False)
+            thread = codex.thread_start()
+
+            with pytest.raises(ValueError, match="combined with sandbox_policy"):
+                thread.run(
+                    "this should never reach app-server",
+                    approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+                    sandbox_policy=SandboxPolicy(
+                        root=ReadOnlySandboxPolicy(type="readOnly")
+                    ),
+                )
+
+            thread_state = thread.read(include_turns=True)
+
+    assert {
+        "threads_after_invalid_start": [
+            existing.id for existing in threads_after_invalid_start.data
+        ],
+        "turns_after_invalid_run": thread_state.thread.turns,
+    } == {
+        "threads_after_invalid_start": [],
+        "turns_after_invalid_run": [],
     }
 
 

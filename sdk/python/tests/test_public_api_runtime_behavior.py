@@ -149,12 +149,18 @@ def test_approval_modes_serialize_to_expected_start_params() -> None:
             "approvalPolicy": "on-request",
             "approvalsReviewer": "auto_review",
         },
+        "dangerously_bypass_approvals_and_sandbox": {
+            "approvalPolicy": "never",
+        },
     }
 
 
 def test_unknown_approval_mode_is_rejected() -> None:
     """Invalid approval modes should fail before params are constructed."""
-    with pytest.raises(ValueError, match="deny_all, auto_review"):
+    with pytest.raises(
+        ValueError,
+        match="deny_all, auto_review, dangerously_bypass_approvals_and_sandbox",
+    ):
         public_api_module._approval_mode_settings("allow_all")  # type: ignore[arg-type]
 
 
