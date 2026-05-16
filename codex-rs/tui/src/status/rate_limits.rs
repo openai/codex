@@ -192,7 +192,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(false).to_string())
+                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ false).to_string())
             })
             .map(|label| capitalize_first(&label));
         let secondary_label = snapshot
@@ -202,7 +202,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 window
                     .window_minutes
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(true).to_string())
+                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ true).to_string())
             })
             .map(|label| capitalize_first(&label));
         let window_count =
@@ -221,16 +221,16 @@ pub(crate) fn compose_rate_limit_data_many(
                 format!(
                     "{} {} limit",
                     limit_bucket_label,
-                    primary_label
-                        .clone()
-                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(false)))
+                    primary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ false)
+                    ))
                 )
             } else {
                 format!(
                     "{} limit",
-                    primary_label
-                        .clone()
-                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(false)))
+                    primary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ false)
+                    ))
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -247,16 +247,16 @@ pub(crate) fn compose_rate_limit_data_many(
                 format!(
                     "{} {} limit",
                     limit_bucket_label,
-                    secondary_label
-                        .clone()
-                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(true)))
+                    secondary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ true)
+                    ))
                 )
             } else {
                 format!(
                     "{} limit",
-                    secondary_label
-                        .clone()
-                        .unwrap_or_else(|| capitalize_first(fallback_limit_label(true)))
+                    secondary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ true)
+                    ))
                 )
             };
             rows.push(StatusRateLimitRow {

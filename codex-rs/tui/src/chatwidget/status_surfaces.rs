@@ -611,7 +611,7 @@ impl ChatWidget {
                 let label = window
                     .and_then(|window| window.window_minutes)
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(false).to_string());
+                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ false).to_string());
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::WeeklyLimit => {
@@ -622,7 +622,7 @@ impl ChatWidget {
                 let label = window
                     .and_then(|window| window.window_minutes)
                     .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(true).to_string());
+                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ true).to_string());
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
