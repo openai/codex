@@ -1451,7 +1451,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
 async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
+    write_remote_plugin_catalog_config(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
