@@ -103,19 +103,8 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
@@ -237,19 +226,8 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
@@ -327,19 +305,8 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     initial
         .codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
@@ -434,19 +401,8 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     initial
         .codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
