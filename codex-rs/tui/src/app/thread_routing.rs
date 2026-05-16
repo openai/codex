@@ -689,7 +689,7 @@ impl App {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                permission_profile,
+                active_permission_profile,
                 windows_sandbox_level: _,
                 model,
                 effort,
@@ -698,23 +698,13 @@ impl App {
                 collaboration_mode,
                 personality,
             } => {
-                let config = self.chat_widget.config_ref();
-                let current_cwd = config.cwd.to_path_buf();
-                let active_permission_profile =
-                    permission_profile.as_ref().and_then(|permission_profile| {
-                        (config.permissions.permission_profile() == permission_profile.clone())
-                            .then(|| config.permissions.active_permission_profile())
-                            .flatten()
-                    });
                 app_server
                     .thread_turn_context_update(
                         thread_id,
                         cwd.clone(),
                         *approval_policy,
                         *approvals_reviewer,
-                        permission_profile.clone(),
-                        active_permission_profile,
-                        current_cwd.as_path(),
+                        active_permission_profile.clone(),
                         model.clone(),
                         *effort,
                         *summary,

@@ -5387,21 +5387,12 @@ fn override_turn_context_updates_app_server_next_turn_state() {
         .expect("override should update app-server turn context");
         assert_eq!(handled, true);
 
-        let current_cwd = app.chat_widget.config_ref().cwd.to_path_buf();
         let response = app_server
             .thread_turn_context_update(
-                thread_id,
-                /*cwd*/ None,
-                /*approval_policy*/ None,
-                /*approvals_reviewer*/ None,
-                /*permission_profile*/ None,
-                /*active_permission_profile*/ None,
-                current_cwd.as_path(),
-                /*model*/ None,
-                /*effort*/ None,
-                /*summary*/ None,
-                /*service_tier*/ None,
-                /*collaboration_mode*/ None,
+                thread_id, /*cwd*/ None, /*approval_policy*/ None,
+                /*approvals_reviewer*/ None, /*active_permission_profile*/ None,
+                /*model*/ None, /*effort*/ None, /*summary*/ None,
+                /*service_tier*/ None, /*collaboration_mode*/ None,
                 /*personality*/ None,
             )
             .await

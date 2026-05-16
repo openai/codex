@@ -55,7 +55,7 @@ async fn turn_context_updated_notification_refreshes_active_ui_state_without_his
     );
     assert_eq!(
         chat.config_ref().permissions.permission_profile(),
-        permission_profile
+        &permission_profile
     );
     assert_eq!(
         chat.config_ref().model_reasoning_summary,

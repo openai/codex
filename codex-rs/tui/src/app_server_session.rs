@@ -121,7 +121,6 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -613,9 +612,7 @@ impl AppServerSession {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<codex_protocol::config_types::ApprovalsReviewer>,
-        permission_profile: Option<PermissionProfile>,
         active_permission_profile: Option<ActivePermissionProfile>,
-        current_cwd: &Path,
         model: Option<String>,
         effort: Option<Option<codex_protocol::openai_models::ReasoningEffort>>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
@@ -624,18 +621,7 @@ impl AppServerSession {
         personality: Option<codex_protocol::config_types::Personality>,
     ) -> Result<ThreadTurnContextUpdateResponse> {
         let request_id = self.next_request_id();
-        let (sandbox_policy, permissions) = permission_profile
-            .as_ref()
-            .map(|permission_profile| {
-                let permission_cwd = cwd.as_deref().unwrap_or(current_cwd);
-                turn_permissions_overrides(
-                    permission_profile,
-                    active_permission_profile,
-                    permission_cwd,
-                    self.thread_params_mode(),
-                )
-            })
-            .unwrap_or((None, None));
+        let permissions = active_permission_profile.map(permissions_selection_from_active_profile);
         self.client
             .request_typed(ClientRequest::ThreadTurnContextUpdate {
                 request_id,
@@ -644,7 +630,7 @@ impl AppServerSession {
                     cwd,
                     approval_policy,
                     approvals_reviewer: approvals_reviewer.map(Into::into),
-                    sandbox_policy,
+                    sandbox_policy: None,
                     permissions,
                     model,
                     service_tier,

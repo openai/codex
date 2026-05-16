@@ -268,18 +268,26 @@ impl ChatWidget {
         let active_permission_profile = turn_context
             .active_permission_profile
             .map(codex_protocol::models::ActivePermissionProfile::from);
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            permission_profile,
+            active_permission_profile,
+        );
         if let Err(err) = self
             .config
             .permissions
-            .set_permission_profile_with_active_profile(
-                permission_profile.clone(),
-                active_permission_profile.clone(),
-            )
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone())
         {
             tracing::warn!(%err, "failed to sync permissions from turn context update");
-            self.config.permissions.permission_profile =
-                Constrained::allow_only(permission_profile);
-            self.config.permissions.active_permission_profile = active_permission_profile;
+            if let Err(replace_err) = self
+                .config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            {
+                tracing::warn!(
+                    %replace_err,
+                    "failed to replace permissions from turn context update"
+                );
+            }
         }
         self.config.approvals_reviewer = turn_context.approvals_reviewer.to_core();
         self.current_collaboration_mode = turn_context.collaboration_mode;
