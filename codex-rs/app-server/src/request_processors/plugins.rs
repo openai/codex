@@ -696,6 +696,12 @@ impl PluginRequestProcessor {
 
         let plugins_input = config.plugins_config_input();
         let remote_installed_plugin_scopes = remote_installed_plugin_scopes(&config);
+        plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
+            &plugins_input,
+            auth.clone(),
+            remote_installed_plugin_scopes.clone(),
+            Some(self.effective_plugins_changed_callback()),
+        );
 
         let (mut data, marketplace_load_errors) = self
             .load_local_installed_and_suggested_plugins(
