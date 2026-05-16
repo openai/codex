@@ -61,7 +61,7 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
 
 #[test]
 fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         codex_app_server_protocol::ItemCompletedNotification {
