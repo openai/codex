@@ -18,9 +18,9 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use serde_json::json;
 
-use crate::event_processor::handle_last_message;
 pub use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use crate::event_processor::handle_last_message;
 use crate::exec_events::AgentMessageItem;
 use crate::exec_events::CollabAgentState;
 use crate::exec_events::CollabAgentStatus;
