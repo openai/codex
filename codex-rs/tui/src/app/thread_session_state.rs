@@ -120,6 +120,7 @@ mod tests {
     use crate::app::side::SideThreadState;
     use crate::app::test_support::make_test_app;
     use crate::app::thread_events::ThreadEventChannel;
+    use crate::legacy_core::config::PermissionProfileSnapshot;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::AskForApproval;
@@ -201,10 +202,10 @@ mod tests {
             ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         app.chat_widget.handle_thread_session(main_session.clone());
         app.chat_widget
-            .set_permission_profile_from_session_snapshot(
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
                 expected_permission_profile.clone(),
-                Some(expected_active_permission_profile.clone()),
-            )
+                expected_active_permission_profile.clone(),
+            ))
             .expect("set widget permission profile");
         app.config
             .permissions

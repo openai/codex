@@ -128,10 +128,10 @@ impl App {
 
         if let Err(err) = config
             .permissions
-            .set_permission_profile_from_session_snapshot(
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
                 permission_profile.clone(),
-                Some(active_permission_profile),
-            )
+                active_permission_profile,
+            ))
         {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
@@ -328,8 +328,10 @@ impl App {
             && let Err(err) = self
                 .chat_widget
                 .set_permission_profile_from_session_snapshot(
-                    permission_profile.clone(),
-                    active_permission_profile_override.clone(),
+                    PermissionProfileSnapshot::from_session_snapshot(
+                        permission_profile.clone(),
+                        active_permission_profile_override.clone(),
+                    ),
                 )
         {
             tracing::error!(
