@@ -69,9 +69,7 @@ def _thread_sandbox_for_approval_mode(
     if approval_mode is not ApprovalMode.dangerously_bypass_approvals_and_sandbox:
         return sandbox
     if sandbox is not None:
-        raise ValueError(
-            "dangerous bypass approval_mode cannot be combined with sandbox"
-        )
+        raise ValueError("dangerous bypass approval_mode cannot be combined with sandbox")
     return SandboxMode.danger_full_access
 
 
@@ -83,12 +81,8 @@ def _turn_sandbox_policy_for_approval_mode(
     if approval_mode is not ApprovalMode.dangerously_bypass_approvals_and_sandbox:
         return sandbox_policy
     if sandbox_policy is not None:
-        raise ValueError(
-            "dangerous bypass approval_mode cannot be combined with sandbox_policy"
-        )
-    return SandboxPolicy(
-        root=DangerFullAccessSandboxPolicy(type="dangerFullAccess")
-    )
+        raise ValueError("dangerous bypass approval_mode cannot be combined with sandbox_policy")
+    return SandboxPolicy(root=DangerFullAccessSandboxPolicy(type="dangerFullAccess"))
 
 
 class Codex:

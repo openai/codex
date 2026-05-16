@@ -872,9 +872,7 @@ def _approval_mode_thread_sandbox_line(*, indent: str = "        ") -> str:
     return f"{indent}sandbox = _thread_sandbox_for_approval_mode(approval_mode, sandbox)"
 
 
-def _approval_mode_turn_sandbox_policy_lines(
-    *, indent: str = "        "
-) -> list[str]:
+def _approval_mode_turn_sandbox_policy_lines(*, indent: str = "        ") -> list[str]:
     """Return the approval-mode sandbox preset for turn operations."""
     return [
         f"{indent}sandbox_policy = _turn_sandbox_policy_for_approval_mode(",

@@ -25,9 +25,7 @@ from openai_codex.generated.v2_all import (
     ThreadResumeParams,
 )
 
-DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE = DangerFullAccessSandboxPolicy(
-    type="dangerFullAccess"
-).type
+DANGER_FULL_ACCESS_SANDBOX_POLICY_TYPE = DangerFullAccessSandboxPolicy(type="dangerFullAccess").type
 
 
 def test_thread_resume_inherits_deny_all_approval_mode(tmp_path) -> None:
@@ -215,9 +213,7 @@ def test_async_turn_dangerous_bypass_persists_thread_settings(tmp_path) -> None:
             )
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
-                thread = await codex.thread_start(
-                    approval_mode=ApprovalMode.auto_review
-                )
+                thread = await codex.thread_start(approval_mode=ApprovalMode.auto_review)
                 result = await thread.run(
                     "bypass this async turn",
                     approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
@@ -346,9 +342,7 @@ def test_dangerous_bypass_rejects_explicit_sandbox_conflicts_before_state_change
                 thread.run(
                     "this should never reach app-server",
                     approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
-                    sandbox_policy=SandboxPolicy(
-                        root=ReadOnlySandboxPolicy(type="readOnly")
-                    ),
+                    sandbox_policy=SandboxPolicy(root=ReadOnlySandboxPolicy(type="readOnly")),
                 )
 
             thread_state = thread.read(include_turns=True)
