@@ -164,62 +164,6 @@ pub(super) async fn user_input_or_turn_inner(
                 None,
             )
         }
-        Op::UserInputWithTurnContext {
-            cwd,
-            workspace_roots,
-            profile_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd,
-                    workspace_roots,
-                    profile_workspace_roots,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                responsesapi_client_metadata,
-            )
-        }
         Op::UserInput {
             items,
             environments,
@@ -876,9 +820,7 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
