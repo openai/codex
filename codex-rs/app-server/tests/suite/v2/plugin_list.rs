@@ -1887,6 +1887,67 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
             )
         ]
     );
+    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
+    assert_no_remote_installed_scope_request(&server, "GLOBAL").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_installed_skips_remote_when_remote_flags_are_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+plugin_sharing = false
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstalledResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginInstalledResponse {
+            marketplaces: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+        }
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 0,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1894,9 +1955,18 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
 async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_remote_plugin_catalog_config(
-        codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+remote_plugin = true
+plugin_sharing = false
+"#,
+            server.uri()
+        ),
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -1916,8 +1986,6 @@ async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
     let global_installed_body =
         remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
@@ -1954,12 +2022,8 @@ async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
         .path()
         .join("plugins/cache/chatgpt-global/linear/1.2.3/.codex-plugin/plugin.json");
     wait_for_path_exists(&installed_path).await?;
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 6,
-    )
-    .await?;
+    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
+    assert_no_remote_installed_scope_request(&server, "WORKSPACE").await?;
     Ok(())
 }
 
@@ -2240,12 +2304,8 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         share_context.discoverability,
         Some(PluginShareDiscoverability::Unlisted)
     );
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 5,
-    )
-    .await?;
+    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
+    assert_no_remote_installed_scope_request(&server, "GLOBAL").await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
@@ -2740,6 +2800,47 @@ async fn wait_for_remote_plugin_request_count(
         }
     })
     .await??;
+    Ok(())
+}
+
+async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &str) -> Result<()> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                bail!("wiremock did not record requests");
+            };
+            if requests.iter().any(|request| {
+                request.method == "GET"
+                    && request.url.path().ends_with("/ps/plugins/installed")
+                    && request
+                        .url
+                        .query_pairs()
+                        .any(|(name, value)| name == "scope" && value == scope)
+            }) {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+async fn assert_no_remote_installed_scope_request(server: &MockServer, scope: &str) -> Result<()> {
+    let Some(requests) = server.received_requests().await else {
+        bail!("wiremock did not record requests");
+    };
+    assert!(
+        !requests.iter().any(|request| {
+            request.method == "GET"
+                && request.url.path().ends_with("/ps/plugins/installed")
+                && request
+                    .url
+                    .query_pairs()
+                    .any(|(name, value)| name == "scope" && value == scope)
+        }),
+        "expected no /ps/plugins/installed requests for scope {scope}"
+    );
     Ok(())
 }
 

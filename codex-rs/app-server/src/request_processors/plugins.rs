@@ -700,7 +700,7 @@ impl PluginRequestProcessor {
             .await?;
 
         data.extend(
-            self.load_remote_installed_plugins(plugins_manager, &config, auth.as_ref())
+            self.load_remote_installed_plugins(plugins_manager, &plugins_input, auth.as_ref())
                 .await,
         );
 
@@ -781,20 +781,17 @@ impl PluginRequestProcessor {
     async fn load_remote_installed_plugins(
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
-        config: &Config,
+        plugins_input: &codex_core_plugins::PluginsConfigInput,
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache()
+            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(plugins_input)
         {
             Ok(remote_marketplaces)
         } else {
-            let remote_plugin_service_config = RemotePluginServiceConfig {
-                chatgpt_base_url: config.chatgpt_base_url.clone(),
-            };
             plugins_manager
                 .build_and_cache_remote_installed_plugin_marketplaces(
-                    &remote_plugin_service_config,
+                    plugins_input,
                     auth,
                     Some(self.effective_plugins_changed_callback()),
                 )

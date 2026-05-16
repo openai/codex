@@ -400,9 +400,17 @@ remote_plugin = true
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
 
-#[test]
-fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() {
+#[tokio::test]
+async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() {
     let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+"#,
+    );
+    let config = load_plugins_config_input(codex_home.path(), codex_home.path()).await;
 
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
     manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
@@ -436,7 +444,7 @@ fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() 
     }]);
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache()
+        .build_remote_installed_plugin_marketplaces_from_cache(&config)
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "chatgpt-global");
