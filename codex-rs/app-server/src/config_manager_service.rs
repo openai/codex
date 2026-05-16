@@ -404,31 +404,46 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
         return Err("keyPath must not be empty".to_string());
     }
 
-    // Let TOML's own dotted-key parser handle quoted segments like
-    // `profiles."team.prod".model` instead of reimplementing that grammar.
-    const PREFIX: &str = "__codex_key_path__";
-    let parsed: TomlValue = toml::from_str(&format!("{PREFIX}.{path} = true"))
-        .map_err(|err| format!("invalid keyPath: {err}"))?;
-    let mut current = parsed
-        .get(PREFIX)
-        .ok_or_else(|| "invalid keyPath".to_string())?;
     let mut segments = Vec::new();
+    let mut segment = String::new();
+    let mut chars = path.chars();
+    let mut quoted = false;
 
-    // The synthetic assignment above produces a single-child table chain
-    // rooted at PREFIX and ending at the sentinel boolean value.
-    while let TomlValue::Table(table) = current
-        && let Some((segment, value)) = table.iter().next()
-        && table.len() == 1
-    {
-        segments.push(segment.clone());
-        current = value;
+    // Split on dots unless they appear inside a quoted segment. Bare segments
+    // intentionally stay permissive so existing paths like `sample@catalog`
+    // remain valid.
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if segment.is_empty() && !quoted => quoted = true,
+            '"' if quoted => quoted = false,
+            '\\' if quoted => {
+                // Quoted segments may escape punctuation that would otherwise
+                // participate in parsing, such as `.` or `"`.
+                let Some(escaped) = chars.next() else {
+                    return Err("unterminated escape in keyPath".to_string());
+                };
+                segment.push(escaped);
+            }
+            '.' if !quoted => {
+                if segment.is_empty() {
+                    return Err("keyPath segments must not be empty".to_string());
+                }
+                segments.push(std::mem::take(&mut segment));
+            }
+            '"' => return Err("invalid quoted keyPath segment".to_string()),
+            _ => segment.push(ch),
+        }
     }
 
-    if matches!(current, TomlValue::Boolean(true)) && !segments.is_empty() {
-        Ok(segments)
-    } else {
-        Err("invalid keyPath".to_string())
+    if quoted {
+        return Err("unterminated quoted keyPath segment".to_string());
     }
+    if segment.is_empty() {
+        return Err("keyPath segments must not be empty".to_string());
+    }
+
+    segments.push(segment);
+    Ok(segments)
 }
 
 #[derive(Debug)]

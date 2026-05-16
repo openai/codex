@@ -916,11 +916,18 @@ model = "should-stay-put"
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
             file_path: Some(codex_home.join("config.toml").display().to_string()),
-            edits: vec![ConfigEdit {
-                key_path: "profiles.\"team.prod\".model".to_string(),
-                value: json!("gpt-5.5"),
-                merge_strategy: MergeStrategy::Replace,
-            }],
+            edits: vec![
+                ConfigEdit {
+                    key_path: "profiles.\"team.prod\".model".to_string(),
+                    value: json!("gpt-5.5"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "items.sample@catalog.enabled".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
             expected_version: None,
             reload_user_config: false,
         })
@@ -942,6 +949,10 @@ model = "should-stay-put"
     assert_eq!(
         config["profiles"]["team"]["prod"]["model"].as_str(),
         Some("should-stay-put")
+    );
+    assert_eq!(
+        config["items"]["sample@catalog"]["enabled"].as_bool(),
+        Some(true)
     );
 
     Ok(())
