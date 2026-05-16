@@ -532,6 +532,7 @@ impl TurnRequestProcessor {
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
+                turn_context: Default::default(),
             }
         };
         let turn_id = self

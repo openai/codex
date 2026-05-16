@@ -1096,6 +1096,7 @@ impl Session {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                turn_context: Default::default(),
             },
             /*mirror_user_text_to_realtime*/ None,
         )

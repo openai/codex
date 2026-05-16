@@ -48,6 +48,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         })
         .await
         .unwrap();
