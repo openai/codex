@@ -14,6 +14,7 @@ pub(crate) struct EnvironmentContext {
     pub(crate) timezone: Option<String>,
     pub(crate) network: Option<NetworkContext>,
     pub(crate) subagents: Option<String>,
+    pub(crate) approved_command_prefixes: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +131,7 @@ impl EnvironmentContext {
             timezone,
             network,
             subagents,
+            approved_command_prefixes: None,
         }
     }
 
@@ -146,6 +148,7 @@ impl EnvironmentContext {
             timezone,
             network,
             subagents,
+            approved_command_prefixes: None,
         }
     }
 
@@ -158,6 +161,7 @@ impl EnvironmentContext {
             && self.timezone == other.timezone
             && self.network == other.network
             && self.subagents == other.subagents
+            && self.approved_command_prefixes == other.approved_command_prefixes
     }
 
     pub(crate) fn diff_from_turn_context_item(
@@ -229,6 +233,11 @@ impl EnvironmentContext {
         if !subagents.is_empty() {
             self.subagents = Some(subagents);
         }
+        self
+    }
+
+    pub(crate) fn with_approved_command_prefixes(mut self, prefixes: Option<String>) -> Self {
+        self.approved_command_prefixes = prefixes.filter(|prefixes| !prefixes.is_empty());
         self
     }
 
@@ -317,6 +326,11 @@ impl ContextualUserFragment for EnvironmentContext {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
             lines.push("  </subagents>".to_string());
+        }
+        if let Some(prefixes) = &self.approved_command_prefixes {
+            lines.push("  <approved_command_prefixes>".to_string());
+            lines.extend(prefixes.lines().map(|line| format!("    {line}")));
+            lines.push("  </approved_command_prefixes>".to_string());
         }
         format!("\n{}\n", lines.join("\n"))
     }

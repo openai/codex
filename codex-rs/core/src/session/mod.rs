@@ -1565,13 +1565,11 @@ impl Session {
             state.previous_turn_settings()
         };
         let shell = self.user_shell();
-        let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
             shell.as_ref(),
-            exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
         )
     }
@@ -2667,7 +2665,6 @@ impl Session {
                     &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
-                    self.services.exec_policy.current().as_ref(),
                     #[allow(deprecated)]
                     &turn_context.cwd,
                     turn_context
@@ -2807,9 +2804,12 @@ impl Session {
                 .agent_control
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
+            let approved_command_prefixes =
+                format_allow_prefixes(self.services.exec_policy.current().get_allowed_prefixes());
             contextual_user_sections.push(
                 crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
+                    .with_approved_command_prefixes(approved_command_prefixes)
                     .render(),
             );
         }
