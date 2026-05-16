@@ -14,6 +14,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -179,6 +180,9 @@ async fn approved_command_prefixes_are_sent_in_initial_environment_context_only(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approved_command_prefixes_render_with_multiple_environments() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
 
     let server = start_mock_server().await;
     let req = mount_sse_once(
@@ -198,8 +202,8 @@ async fn approved_command_prefixes_render_with_multiple_environments() -> Result
         .expect("write policy");
     });
     let test = builder.build_with_remote_and_local_env(&server).await?;
-    let local_cwd = AbsolutePathBuf::from_absolute_path(test.cwd.path().to_path_buf())
-        .expect("test cwd is absolute");
+    let local_cwd =
+        AbsolutePathBuf::from_absolute_path(test.cwd.path()).expect("test cwd is absolute");
     let remote_cwd = AbsolutePathBuf::from_absolute_path(test.cwd.path().join("remote"))
         .expect("remote cwd is absolute");
 
