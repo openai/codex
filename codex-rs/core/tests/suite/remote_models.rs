@@ -595,19 +595,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
@@ -847,19 +836,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some(model.to_string()),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 

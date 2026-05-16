@@ -26,19 +26,9 @@ async fn turn_context_update_does_not_persist_when_config_exists() {
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await
         .expect("submit override");
@@ -66,19 +56,9 @@ async fn turn_context_update_does_not_create_config_file() {
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await
         .expect("submit override");
