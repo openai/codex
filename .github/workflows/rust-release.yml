@@ -1242,6 +1242,70 @@ jobs:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-argument-comment-lint-config.json
 
+      - name: Add release completion manifest
+        if: ${{ env.SIGN_MACOS == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
+          release_commit_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          assets_json_path="${RUNNER_TEMP}/release-assets.json"
+          marker_path="${RUNNER_TEMP}/release-complete.json"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --slurp |
+            jq 'add' >"${assets_json_path}"
+          jq \
+            --arg tag "${GITHUB_REF_NAME}" \
+            --arg sha "${release_commit_sha}" \
+            --arg workflow_run_id "${GITHUB_RUN_ID}" \
+            '
+            def artifact:
+              {
+                name,
+                sha256: (.digest | select(startswith("sha256:")) | ltrimstr("sha256:"))
+              };
+            def uploaded_artifacts:
+              .[]
+              | select(.state == "uploaded" and .name != "release-complete.json");
+            def platform_artifacts($platform):
+              [uploaded_artifacts | select(.name | contains($platform)) | artifact];
+            def platform_names:
+              [
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin",
+                "aarch64-unknown-linux-musl",
+                "x86_64-unknown-linux-musl",
+                "aarch64-pc-windows-msvc",
+                "x86_64-pc-windows-msvc"
+              ];
+            def is_platform_artifact:
+              .name as $name
+              | any(platform_names[]; . as $platform | $name | contains($platform));
+            {
+              schema_version: 1,
+              tag: $tag,
+              sha: $sha,
+              workflow_run_id: $workflow_run_id,
+              artifacts_by_platform: {
+                "aarch64-apple-darwin": platform_artifacts("aarch64-apple-darwin"),
+                "x86_64-apple-darwin": platform_artifacts("x86_64-apple-darwin"),
+                "aarch64-unknown-linux-musl": platform_artifacts("aarch64-unknown-linux-musl"),
+                "x86_64-unknown-linux-musl": platform_artifacts("x86_64-unknown-linux-musl"),
+                "aarch64-pc-windows-msvc": platform_artifacts("aarch64-pc-windows-msvc"),
+                "x86_64-pc-windows-msvc": platform_artifacts("x86_64-pc-windows-msvc")
+              },
+              global_artifacts: [uploaded_artifacts | select(is_platform_artifact | not) | artifact]
+            }
+            ' \
+            "${assets_json_path}" >"${marker_path}"
+
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${marker_path}#release-complete.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.
         # The deploy is used to update the developers.openai.com website with the new config schema json file.
