@@ -123,6 +123,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextOverrides;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -5202,6 +5203,13 @@ fn op_kind_for_input_and_context_ops() {
         }
         .kind(),
         "user_input"
+    );
+    assert_eq!(
+        Op::TurnContext {
+            turn_context: TurnContextOverrides::default(),
+        }
+        .kind(),
+        "turn_context"
     );
 }
 

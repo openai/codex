@@ -338,19 +338,8 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            ..Default::default()
         })
         .await?;
 
@@ -423,19 +412,8 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
+            ..Default::default()
         })
         .await?;
 
@@ -521,19 +499,8 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
+            ..Default::default()
         })
         .await?;
 
@@ -771,19 +738,8 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            ..Default::default()
         })
         .await?;
 

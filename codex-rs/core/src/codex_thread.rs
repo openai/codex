@@ -63,7 +63,9 @@ pub struct ThreadConfigSnapshot {
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
     pub thread_source: Option<ThreadSource>,
 }
@@ -255,11 +257,40 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
+    /// Preview persistent turn context overrides without committing them.
+    pub async fn preview_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.preview_settings(&updates).await
+    }
+
     pub async fn validate_turn_context_overrides(
         &self,
         overrides: CodexThreadTurnContextOverrides,
     ) -> ConstraintResult<()> {
+        self.preview_turn_context_overrides(overrides).await?;
+        Ok(())
+    }
+
+    /// Apply persistent turn context overrides directly and return the effective state.
+    ///
+    /// This bypasses the submission queue; callers that need ordering relative
+    /// to turns should submit `Op::TurnContext`.
+    pub async fn update_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.update_settings(updates).await?;
+        Ok(self.config_snapshot().await)
+    }
+
+    async fn turn_context_settings_update(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadTurnContextOverrides {
             cwd,
             workspace_roots,
@@ -287,7 +318,7 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
             workspace_roots,
             profile_workspace_roots,
@@ -302,8 +333,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.

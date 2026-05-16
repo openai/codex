@@ -444,19 +444,12 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .expect("workspace profile should have legacy projection");
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
             sandbox_policy: Some(sandbox_policy),
             permission_profile: Some(permission_profile),
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
@@ -532,19 +525,11 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
-            summary: None,
-            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
+            ..Default::default()
         })
         .await?;
 

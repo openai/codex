@@ -2776,18 +2776,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
             codex
                 .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
                     cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
-                    approval_policy: None,
-                    approvals_reviewer: None,
-                    sandbox_policy: None,
-                    permission_profile: None,
-                    active_permission_profile: None,
-                    windows_sandbox_level: None,
-                    model: None,
-                    effort: None,
-                    summary: None,
-                    service_tier: None,
-                    collaboration_mode: None,
-                    personality: None,
+                    ..Default::default()
                 })
                 .await?;
         }
@@ -2894,19 +2883,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
 
     codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
             model: Some(next_model.to_string()),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
     codex

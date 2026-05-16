@@ -396,7 +396,8 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
-/// Persistent turn-context overrides that can be applied before user input.
+/// Persistent turn-context overrides that can be applied before user input or
+/// on their own.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct TurnContextOverrides {
     /// Updated `cwd` for sandbox/tool calls.
@@ -515,6 +516,16 @@ pub enum Op {
 
         /// Persistent turn-context overrides to apply before the input.
         #[serde(default, flatten)]
+        turn_context: TurnContextOverrides,
+    },
+
+    /// Apply persistent turn-context overrides without starting a turn.
+    ///
+    /// This uses the same submission queue as turn starts so app-server can
+    /// preserve caller order between both kinds of mutation.
+    TurnContext {
+        /// Persistent turn-context overrides to apply.
+        #[serde(flatten)]
         turn_context: TurnContextOverrides,
     },
 
@@ -711,6 +722,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::TurnContext { .. } => "turn_context",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -1161,6 +1173,10 @@ pub enum EventMsg {
     /// v1 wire format uses `task_started`; accept `turn_started` for v2 interop.
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
+
+    /// Persistent turn-context overrides from the correlated submission have
+    /// been applied to the session configuration.
+    TurnContextApplied(TurnContextAppliedEvent),
 
     /// Agent has completed all actions.
     /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
@@ -1840,6 +1856,33 @@ pub struct TurnStartedEvent {
     pub model_context_window: Option<i64>,
     #[serde(default)]
     pub collaboration_mode_kind: ModeKind,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnContextAppliedEvent {
+    pub turn_context: TurnContextSnapshot,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct TurnContextSnapshot {
+    pub model: String,
+    pub model_provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub permission_profile: PermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub cwd: AbsolutePathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummaryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
