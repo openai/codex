@@ -531,6 +531,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
+        spend_control: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -551,6 +552,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -590,6 +592,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: None,
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Plus),
         rate_limit_reached_type: None,
     }));
@@ -609,6 +612,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(234),
         }),
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
         rate_limit_reached_type: None,
     }));
@@ -628,6 +632,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
             resets_at: Some(567),
         }),
         credits: None,
+        spend_control: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -652,6 +657,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             unlimited: false,
             balance: Some("5.00".to_string()),
         }),
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
         rate_limit_reached_type: None,
     }));
@@ -666,6 +672,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: Some(PlanType::Pro),
         rate_limit_reached_type: None,
     }));
@@ -719,6 +726,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         }),
         secondary: None,
         credits: None,
+        spend_control: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));

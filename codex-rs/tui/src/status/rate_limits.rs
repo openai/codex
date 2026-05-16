@@ -14,8 +14,12 @@ use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_app_server_protocol::GroupSpendControlLimitSnapshot;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
+use codex_app_server_protocol::SpendControlLimitSnapshot;
+use codex_app_server_protocol::SpendControlLimitType;
+use codex_app_server_protocol::SpendControlSnapshot;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -98,6 +102,8 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub secondary: Option<RateLimitWindowDisplay>,
     /// Optional credits metadata when available.
     pub credits: Option<CreditsSnapshotDisplay>,
+    /// Optional spend-control metadata when available.
+    pub spend_control: Option<SpendControlSnapshotDisplay>,
 }
 
 /// Display-ready credits state extracted from protocol snapshots.
@@ -109,6 +115,28 @@ pub(crate) struct CreditsSnapshotDisplay {
     pub unlimited: bool,
     /// Raw balance text as provided by the backend.
     pub balance: Option<String>,
+}
+
+/// Display-ready spend-control state extracted from protocol snapshots.
+#[derive(Debug, Clone)]
+pub(crate) struct SpendControlSnapshotDisplay {
+    /// Whether the backend says a spend control blocked the current request path.
+    pub reached: bool,
+    /// The concrete control type that was reached, when one is known.
+    pub reached_limit_type: Option<SpendControlLimitType>,
+    /// The most relevant active limit to summarize for `/status`.
+    pub active_limit: Option<SpendControlLimitDisplay>,
+}
+
+/// Display-ready view of one configured spend-control limit.
+#[derive(Debug, Clone)]
+pub(crate) struct SpendControlLimitDisplay {
+    /// Friendly control label for status output.
+    pub label: String,
+    /// Percent remaining according to the backend snapshot.
+    pub remaining_percent: f64,
+    /// Human-readable local reset time.
+    pub resets_at: Option<String>,
 }
 
 /// Converts a protocol snapshot into UI-friendly display data.
@@ -140,6 +168,9 @@ pub(crate) fn rate_limit_snapshot_display_for_limit(
             .as_ref()
             .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
         credits: snapshot.credits.as_ref().map(CreditsSnapshotDisplay::from),
+        spend_control: snapshot.spend_control.as_ref().map(|spend_control| {
+            SpendControlSnapshotDisplay::from_snapshot(spend_control, captured_at)
+        }),
     }
 }
 
@@ -149,6 +180,16 @@ impl From<&CoreCreditsSnapshot> for CreditsSnapshotDisplay {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance.clone(),
+        }
+    }
+}
+
+impl SpendControlSnapshotDisplay {
+    fn from_snapshot(snapshot: &SpendControlSnapshot, captured_at: DateTime<Local>) -> Self {
+        Self {
+            reached: snapshot.reached,
+            reached_limit_type: snapshot.reached_limit_type,
+            active_limit: active_spend_control_limit(snapshot, captured_at),
         }
     }
 }
@@ -268,6 +309,9 @@ pub(crate) fn compose_rate_limit_data_many(
         {
             rows.push(row);
         }
+        if let Some(spend_control) = snapshot.spend_control.as_ref() {
+            rows.extend(spend_control_status_rows(spend_control));
+        }
     }
 
     if rows.is_empty() {
@@ -276,6 +320,107 @@ pub(crate) fn compose_rate_limit_data_many(
         StatusRateLimitData::Stale(rows)
     } else {
         StatusRateLimitData::Available(rows)
+    }
+}
+
+fn spend_control_status_rows(
+    spend_control: &SpendControlSnapshotDisplay,
+) -> Vec<StatusRateLimitRow> {
+    let mut rows = Vec::new();
+    if let Some(active_limit) = spend_control.active_limit.as_ref() {
+        rows.push(StatusRateLimitRow {
+            label: active_limit.label.clone(),
+            value: StatusRateLimitValue::Window {
+                percent_used: (100.0 - active_limit.remaining_percent).clamp(0.0, 100.0),
+                resets_at: active_limit.resets_at.clone(),
+            },
+        });
+    }
+    if spend_control.reached
+        && let Some(reached_limit_type) = spend_control.reached_limit_type
+    {
+        rows.push(StatusRateLimitRow {
+            label: "Spend control reached".to_string(),
+            value: StatusRateLimitValue::Text(spend_control_limit_type_label(reached_limit_type)),
+        });
+    }
+    rows
+}
+
+fn active_spend_control_limit(
+    snapshot: &SpendControlSnapshot,
+    captured_at: DateTime<Local>,
+) -> Option<SpendControlLimitDisplay> {
+    snapshot
+        .individual_limit
+        .as_ref()
+        .map(|limit| spend_control_limit_display("Individual spend control", limit, captured_at))
+        .or_else(|| {
+            snapshot.group_default_limit.as_ref().map(|limit| {
+                group_spend_control_limit_display("Group default spend control", limit, captured_at)
+            })
+        })
+        .or_else(|| {
+            snapshot.workspace_default_limit.as_ref().map(|limit| {
+                spend_control_limit_display("Workspace default spend control", limit, captured_at)
+            })
+        })
+        .or_else(|| {
+            snapshot
+                .role_budget_limit
+                .as_ref()
+                .map(|limit| spend_control_limit_display("Role budget", limit, captured_at))
+        })
+        .or_else(|| {
+            snapshot.group_shared_limit.as_ref().map(|limit| {
+                group_spend_control_limit_display("Group shared spend pool", limit, captured_at)
+            })
+        })
+        .or_else(|| {
+            snapshot.workspace_shared_limit.as_ref().map(|limit| {
+                spend_control_limit_display("Workspace shared spend pool", limit, captured_at)
+            })
+        })
+}
+
+fn spend_control_limit_display(
+    label: &str,
+    limit: &SpendControlLimitSnapshot,
+    captured_at: DateTime<Local>,
+) -> SpendControlLimitDisplay {
+    SpendControlLimitDisplay {
+        label: label.to_string(),
+        remaining_percent: f64::from(limit.remaining_percent),
+        resets_at: format_spend_control_reset(limit.reset_at, captured_at),
+    }
+}
+
+fn group_spend_control_limit_display(
+    label: &str,
+    limit: &GroupSpendControlLimitSnapshot,
+    captured_at: DateTime<Local>,
+) -> SpendControlLimitDisplay {
+    SpendControlLimitDisplay {
+        label: format!("{label}: {}", limit.group_name),
+        remaining_percent: f64::from(limit.details.remaining_percent),
+        resets_at: format_spend_control_reset(limit.details.reset_at, captured_at),
+    }
+}
+
+fn format_spend_control_reset(reset_at: i32, captured_at: DateTime<Local>) -> Option<String> {
+    DateTime::<Utc>::from_timestamp(i64::from(reset_at), 0)
+        .map(|dt| dt.with_timezone(&Local))
+        .map(|dt| format_reset_timestamp(dt, captured_at))
+}
+
+fn spend_control_limit_type_label(limit_type: SpendControlLimitType) -> String {
+    match limit_type {
+        SpendControlLimitType::Individual => "Individual spend control".to_string(),
+        SpendControlLimitType::GroupDefault => "Group default spend control".to_string(),
+        SpendControlLimitType::WorkspaceDefault => "Workspace default spend control".to_string(),
+        SpendControlLimitType::RoleBudget => "Role budget".to_string(),
+        SpendControlLimitType::GroupShared => "Group shared spend pool".to_string(),
+        SpendControlLimitType::WorkspaceShared => "Workspace shared spend pool".to_string(),
     }
 }
 
@@ -349,9 +494,12 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
+    use super::SpendControlLimitDisplay;
+    use super::SpendControlSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
     use chrono::Local;
+    use codex_app_server_protocol::SpendControlLimitType;
     use pretty_assertions::assert_eq;
 
     fn window(used_percent: f64) -> RateLimitWindowDisplay {
@@ -375,6 +523,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("25".to_string()),
             }),
+            spend_control: None,
         };
         let other = RateLimitSnapshotDisplay {
             limit_name: "codex-other".to_string(),
@@ -386,6 +535,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("99".to_string()),
             }),
+            spend_control: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[codex, other], now) {
@@ -423,6 +573,7 @@ mod tests {
                 window_minutes: None,
             }),
             credits: None,
+            spend_control: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[other], now) {
@@ -436,6 +587,41 @@ mod tests {
                 "codex-other limit".to_string(),
                 "1h limit".to_string(),
                 "Weekly limit".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn spend_control_rows_show_active_limit_and_reached_type() {
+        let now = Local::now();
+        let codex = RateLimitSnapshotDisplay {
+            limit_name: "codex".to_string(),
+            captured_at: now,
+            primary: None,
+            secondary: None,
+            credits: None,
+            spend_control: Some(SpendControlSnapshotDisplay {
+                reached: true,
+                reached_limit_type: Some(SpendControlLimitType::GroupShared),
+                active_limit: Some(SpendControlLimitDisplay {
+                    label: "Group shared spend pool: Engineering".to_string(),
+                    remaining_percent: 18.0,
+                    resets_at: Some("soon".to_string()),
+                }),
+            }),
+        };
+
+        let rows = match compose_rate_limit_data_many(&[codex], now) {
+            StatusRateLimitData::Available(rows) => rows,
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let labels: Vec<String> = rows.iter().map(|row| row.label.clone()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Group shared spend pool: Engineering".to_string(),
+                "Spend control reached".to_string(),
             ]
         );
     }
