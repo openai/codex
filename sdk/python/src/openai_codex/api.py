@@ -59,6 +59,7 @@ from .generated.v2_all import (
 )
 from .models import InitializeResponse, JsonObject, Notification
 
+
 class Codex:
     """Minimal typed SDK surface for app-server v2."""
 

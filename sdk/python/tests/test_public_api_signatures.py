@@ -9,7 +9,6 @@ import tomllib
 
 import openai_codex
 import openai_codex.types as public_types
-from openai_codex._initialize_metadata import validate_initialize_metadata
 from openai_codex import (
     ApprovalMode,
     AppServerConfig,
@@ -19,6 +18,7 @@ from openai_codex import (
     RunResult,
     Thread,
 )
+from openai_codex._initialize_metadata import validate_initialize_metadata
 from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
