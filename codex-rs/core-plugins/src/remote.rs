@@ -332,75 +332,12 @@ impl RemotePluginScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct RemoteInstalledPluginScopes {
-    global: bool,
-    workspace: bool,
-}
-
-impl RemoteInstalledPluginScopes {
-    pub(crate) fn all() -> Self {
-        Self {
-            global: true,
-            workspace: true,
-        }
-    }
-
-    pub(crate) fn from_features(remote_plugin_enabled: bool, plugin_sharing_enabled: bool) -> Self {
-        Self {
-            global: remote_plugin_enabled,
-            workspace: plugin_sharing_enabled,
-        }
-    }
-
-    pub(crate) fn is_empty(self) -> bool {
-        !self.global && !self.workspace
-    }
-
-    pub(crate) fn union(self, other: Self) -> Self {
-        Self {
-            global: self.global || other.global,
-            workspace: self.workspace || other.workspace,
-        }
-    }
-
-    pub(crate) fn iter(self) -> impl Iterator<Item = RemotePluginScope> {
-        [
-            (self.global, RemotePluginScope::Global),
-            (self.workspace, RemotePluginScope::Workspace),
-        ]
-        .into_iter()
-        .filter_map(|(enabled, scope)| enabled.then_some(scope))
-    }
-
-    pub(crate) fn allows_marketplace_name(self, marketplace_name: &str) -> bool {
-        match RemotePluginScope::from_marketplace_name(marketplace_name) {
-            Some(RemotePluginScope::Global) => self.global,
-            Some(RemotePluginScope::Workspace) => self.workspace,
-            None => false,
-        }
-    }
-
-    pub(crate) fn marketplace_names(self) -> impl Iterator<Item = &'static str> {
-        [
-            (self.global, REMOTE_GLOBAL_MARKETPLACE_NAME),
-            (self.workspace, REMOTE_WORKSPACE_MARKETPLACE_NAME),
-            (
-                self.workspace,
-                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
-            ),
-            (
-                self.workspace,
-                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
-            ),
-            (
-                self.workspace,
-                REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(enabled, marketplace_name)| enabled.then_some(marketplace_name))
-    }
+pub(crate) fn remote_installed_scope_allows_marketplace(
+    scopes: &[RemotePluginScope],
+    marketplace_name: &str,
+) -> bool {
+    RemotePluginScope::from_marketplace_name(marketplace_name)
+        .is_some_and(|scope| scopes.contains(&scope))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -717,7 +654,7 @@ fn build_remote_marketplace(
 pub(crate) async fn fetch_remote_installed_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    scopes: RemoteInstalledPluginScopes,
+    scopes: &[RemotePluginScope],
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
     fetch_remote_installed_plugins_for_scopes(config, auth, scopes).await
 }
@@ -725,15 +662,15 @@ pub(crate) async fn fetch_remote_installed_plugins(
 pub(crate) async fn fetch_remote_installed_plugins_for_scopes(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    scopes: RemoteInstalledPluginScopes,
+    scopes: &[RemotePluginScope],
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
     if scopes.is_empty() {
         return Ok(Vec::new());
     }
     let auth = ensure_chatgpt_auth(auth)?;
     let mut installed_plugins = Vec::new();
-    for scope in scopes.iter() {
-        installed_plugins.extend(fetch_installed_plugins_for_scope(config, auth, scope).await?);
+    for scope in scopes {
+        installed_plugins.extend(fetch_installed_plugins_for_scope(config, auth, *scope).await?);
     }
     let mut installed_plugins = installed_plugins
         .into_iter()

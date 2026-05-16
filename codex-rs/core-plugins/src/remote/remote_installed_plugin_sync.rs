@@ -1,5 +1,10 @@
-use super::RemoteInstalledPluginScopes;
+use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
+use super::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
+use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use super::RemotePluginCatalogError;
+use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins_for_scope_with_download_url;
@@ -21,17 +26,6 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tracing::info;
 use tracing::warn;
-
-#[cfg(test)]
-use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
-#[cfg(test)]
-use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
-#[cfg(test)]
-use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
-#[cfg(test)]
-use super::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
-#[cfg(test)]
-use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 
 static REMOTE_INSTALLED_PLUGIN_BUNDLE_SYNC_IN_FLIGHT: OnceLock<
     Mutex<HashSet<RemoteInstalledPluginBundleSyncKey>>,
@@ -71,7 +65,7 @@ pub enum RemoteInstalledPluginBundleSyncError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RemoteInstalledPluginBundleSyncKey {
     plugin_cache_root: PathBuf,
-    scopes: RemoteInstalledPluginScopes,
+    scopes: Vec<RemotePluginScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,7 +83,7 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
-    scopes: RemoteInstalledPluginScopes,
+    scopes: Vec<RemotePluginScope>,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
     if scopes.is_empty() {
@@ -100,7 +94,7 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     };
     let key = RemoteInstalledPluginBundleSyncKey {
         plugin_cache_root: remote_plugin_cache_root(&codex_home),
-        scopes,
+        scopes: scopes.clone(),
     };
     if !mark_remote_installed_plugin_bundle_sync_in_flight(key.clone()) {
         return;
@@ -111,7 +105,7 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
             codex_home,
             &config,
             Some(&auth),
-            scopes,
+            &scopes,
         )
         .await;
         match result {
@@ -148,7 +142,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         codex_home,
         config,
         auth,
-        RemoteInstalledPluginScopes::all(),
+        &[RemotePluginScope::Global, RemotePluginScope::Workspace],
     )
     .await
 }
@@ -157,27 +151,38 @@ async fn sync_remote_installed_plugin_bundles_once_for_scopes(
     codex_home: PathBuf,
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    scopes: RemoteInstalledPluginScopes,
+    scopes: &[RemotePluginScope],
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     if scopes.is_empty() {
         return Ok(RemoteInstalledPluginBundleSyncOutcome::default());
     }
     let auth = ensure_chatgpt_auth(auth)?;
     let mut installed_plugins_by_scope = Vec::new();
-    for scope in scopes.iter() {
+    for scope in scopes {
         let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
+            config, auth, *scope, /*include_download_urls*/ true,
         )
         .await?;
-        installed_plugins_by_scope.push((scope, installed_plugins));
+        installed_plugins_by_scope.push((*scope, installed_plugins));
     }
 
     let store = PluginStore::try_new(codex_home.clone())?;
-    let mut installed_plugin_names_by_marketplace = BTreeMap::<String, BTreeSet<String>>::from_iter(
-        scopes
-            .marketplace_names()
-            .map(|marketplace_name| (marketplace_name.to_string(), BTreeSet::new())),
-    );
+    let mut installed_plugin_names_by_marketplace = BTreeMap::<String, BTreeSet<String>>::new();
+    if scopes.contains(&RemotePluginScope::Global) {
+        installed_plugin_names_by_marketplace
+            .insert(REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new());
+    }
+    if scopes.contains(&RemotePluginScope::Workspace) {
+        for marketplace_name in [
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+        ] {
+            installed_plugin_names_by_marketplace
+                .insert(marketplace_name.to_string(), BTreeSet::new());
+        }
+    }
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
@@ -431,7 +436,7 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let key = RemoteInstalledPluginBundleSyncKey {
             plugin_cache_root: remote_plugin_cache_root(codex_home.path()),
-            scopes: RemoteInstalledPluginScopes::all(),
+            scopes: vec![RemotePluginScope::Global, RemotePluginScope::Workspace],
         };
 
         assert!(mark_remote_installed_plugin_bundle_sync_in_flight(
