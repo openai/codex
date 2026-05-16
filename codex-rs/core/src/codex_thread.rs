@@ -274,7 +274,10 @@ impl CodexThread {
         Ok(())
     }
 
-    /// Apply persistent turn context overrides and return the effective state.
+    /// Apply persistent turn context overrides directly and return the effective state.
+    ///
+    /// This bypasses the submission queue; callers that need ordering relative
+    /// to turns should submit `Op::TurnContext`.
     pub async fn update_turn_context_overrides(
         &self,
         overrides: CodexThreadTurnContextOverrides,
