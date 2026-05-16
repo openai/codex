@@ -1249,7 +1249,6 @@ impl Config {
             self.config_layer_stack.clone(),
             self.features.enabled(Feature::Plugins),
             self.features.enabled(Feature::RemotePlugin),
-            self.features.enabled(Feature::PluginSharing),
             self.features.enabled(Feature::PluginHooks),
             self.chatgpt_base_url.clone(),
         )

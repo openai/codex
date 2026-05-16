@@ -90,7 +90,6 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
-    pub plugin_sharing_enabled: bool,
     pub plugin_hooks_enabled: bool,
     pub chatgpt_base_url: String,
 }
@@ -100,7 +99,6 @@ impl PluginsConfigInput {
         config_layer_stack: ConfigLayerStack,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
-        plugin_sharing_enabled: bool,
         plugin_hooks_enabled: bool,
         chatgpt_base_url: String,
     ) -> Self {
@@ -108,7 +106,6 @@ impl PluginsConfigInput {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
-            plugin_sharing_enabled,
             plugin_hooks_enabled,
             chatgpt_base_url,
         }
@@ -118,9 +115,6 @@ impl PluginsConfigInput {
         let mut scopes = Vec::new();
         if self.remote_plugin_enabled {
             scopes.push(RemotePluginScope::Global);
-        }
-        if self.plugin_sharing_enabled {
-            scopes.push(RemotePluginScope::Workspace);
         }
         scopes
     }
@@ -642,9 +636,8 @@ impl PluginsManager {
 
     pub fn build_remote_installed_plugin_marketplaces_from_cache(
         &self,
-        config: &PluginsConfigInput,
+        scopes: &[RemotePluginScope],
     ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
-        let scopes = config.remote_installed_plugin_scopes();
         if scopes.is_empty() {
             return None;
         }
@@ -660,7 +653,7 @@ impl PluginsManager {
             .plugins
             .iter()
             .filter(|plugin| {
-                remote_installed_scope_allows_marketplace(&scopes, &plugin.marketplace_name)
+                remote_installed_scope_allows_marketplace(scopes, &plugin.marketplace_name)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -671,20 +664,20 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
+        scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        let scopes = config.remote_installed_plugin_scopes();
         if scopes.is_empty() {
             return Ok(Vec::new());
         }
         let plugins = crate::remote::fetch_remote_installed_plugins_for_scopes(
             &remote_plugin_service_config(config),
             auth,
-            &scopes,
+            scopes,
         )
         .await?;
         let marketplaces = crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins);
-        let changed = self.write_remote_installed_plugins_cache(plugins, scopes);
+        let changed = self.write_remote_installed_plugins_cache(plugins, scopes.to_vec());
         if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
             on_effective_plugins_changed();
         }
@@ -732,9 +725,11 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
+        let scopes = config.remote_installed_plugin_scopes();
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
+            scopes,
             RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
             on_effective_plugins_changed,
         );
@@ -746,9 +741,26 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
+        let scopes = config.remote_installed_plugin_scopes();
+        self.maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
+            config,
+            auth,
+            scopes,
+            on_effective_plugins_changed,
+        );
+    }
+
+    fn maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
+        self: &Arc<Self>,
+        config: &PluginsConfigInput,
+        auth: Option<CodexAuth>,
+        scopes: Vec<RemotePluginScope>,
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
+            scopes,
             RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
             on_effective_plugins_changed,
         );
@@ -758,13 +770,13 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
+        scopes: Vec<RemotePluginScope>,
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
             return;
         }
-        let scopes = config.remote_installed_plugin_scopes();
         if scopes.is_empty() {
             return;
         }
@@ -784,12 +796,12 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
+        scopes: Vec<RemotePluginScope>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
             return;
         }
-        let scopes = config.remote_installed_plugin_scopes();
         if scopes.is_empty() {
             return;
         }
@@ -797,10 +809,12 @@ impl PluginsManager {
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
         let auth_for_refresh = auth.clone();
+        let scopes_for_refresh = scopes.clone();
         let on_local_cache_changed = Arc::new(move || {
-            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
                 &config_for_refresh,
                 auth_for_refresh.clone(),
+                scopes_for_refresh.clone(),
                 on_effective_plugins_changed.clone(),
             );
         });
@@ -830,6 +844,7 @@ impl PluginsManager {
         self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
+            config.remote_installed_plugin_scopes(),
             on_effective_plugins_changed,
         );
     }
@@ -1622,6 +1637,7 @@ impl PluginsManager {
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
                     auth,
+                    config_for_remote_sync.remote_installed_plugin_scopes(),
                     on_effective_plugins_changed,
                 );
             });

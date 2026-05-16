@@ -449,7 +449,9 @@ remote_plugin = true
     );
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache(&config)
+        .build_remote_installed_plugin_marketplaces_from_cache(
+            &config.remote_installed_plugin_scopes(),
+        )
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "chatgpt-global");
