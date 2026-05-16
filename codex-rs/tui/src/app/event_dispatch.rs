@@ -1086,45 +1086,17 @@ impl App {
                     }
                     let profile = self.active_profile.as_deref();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let windows_sandbox_key = if let Some(profile) = profile {
-                        format!("profiles.{profile}.windows.sandbox")
-                    } else {
-                        "windows.sandbox".to_string()
-                    };
-                    let legacy_feature_key = |feature: &str| {
-                        if let Some(profile) = profile {
-                            format!("profiles.{profile}.features.{feature}")
-                        } else {
-                            format!("features.{feature}")
-                        }
-                    };
-                    let edits = vec![
-                        crate::config_rpc::replace_config_value(
-                            windows_sandbox_key,
-                            serde_json::json!(if elevated_enabled {
-                                "elevated"
-                            } else {
-                                "unelevated"
-                            }),
-                        ),
-                        crate::config_rpc::clear_config_value(legacy_feature_key(
-                            "experimental_windows_sandbox",
-                        )),
-                        crate::config_rpc::clear_config_value(legacy_feature_key(
-                            "elevated_windows_sandbox",
-                        )),
-                        crate::config_rpc::clear_config_value(legacy_feature_key(
-                            "enable_experimental_windows_sandbox",
-                        )),
-                    ];
-                    match crate::config_rpc::write_config_batch(
+                    let edits = crate::config_update::build_windows_sandbox_mode_edits(
+                        profile,
+                        elevated_enabled,
+                    );
+                    match crate::config_update::write_config_batch(
                         app_server.request_handle(),
                         edits,
-                        /*reload_user_config*/ true,
                     )
                     .await
                     {
-                        Ok(_) => {
+                        Ok(()) => {
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
                                 self.config
