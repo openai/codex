@@ -149,6 +149,8 @@ pub(super) use codex_protocol::config_types::CollaborationMode;
 pub(super) use codex_protocol::config_types::ModeKind;
 pub(super) use codex_protocol::config_types::Personality;
 pub(super) use codex_protocol::config_types::ServiceTier;
+pub(super) use codex_protocol::models::ActivePermissionProfile;
+pub(super) use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 pub(super) use codex_protocol::models::FileSystemPermissions;
 pub(super) use codex_protocol::models::MessagePhase;
 pub(super) use codex_protocol::models::NetworkPermissions;

@@ -7,7 +7,7 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn open_theme_picker(&mut self) {
-        let codex_home = crate::legacy_core::config::find_codex_home().ok();
+        let codex_home = codex_utils_home_dir::find_codex_home().ok();
         let terminal_width = self
             .last_rendered_width
             .get()
@@ -53,7 +53,7 @@ impl ChatWidget {
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
-                        /*permission_profile*/ None,
+                        /*active_permission_profile*/ None,
                         /*windows_sandbox_level*/ None,
                         /*model*/ None,
                         /*effort*/ None,

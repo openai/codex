@@ -4,12 +4,13 @@ use std::sync::Arc;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_tools::ToolCall;
+use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
 
 mod prompt;
 mod thread_lifecycle;
-mod tools;
 mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
@@ -17,8 +18,6 @@ pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
-pub use tools::ExtensionToolExecutor;
-pub use tools::ExtensionToolOutput;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
@@ -106,7 +105,7 @@ pub trait ToolContributor: Send + Sync {
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn ExtensionToolExecutor>>;
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
 }
 
 /// Future returned by one claimed approval-review contribution.

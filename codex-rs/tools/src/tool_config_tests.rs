@@ -4,7 +4,6 @@ use codex_features::Features;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -156,7 +155,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
 }
 
 #[test]
-fn fallback_apply_patch_models_use_freeform_tool_by_default() {
+fn fallback_apply_patch_models_do_not_use_freeform_tool_by_default() {
     let model_info = model_info();
     let features = Features::with_defaults();
 
@@ -172,10 +171,7 @@ fn fallback_apply_patch_models_use_freeform_tool_by_default() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    assert_eq!(
-        tools_config.apply_patch_tool_type,
-        Some(ApplyPatchToolType::Freeform)
-    );
+    assert_eq!(tools_config.apply_patch_tool_type, None);
 }
 
 #[test]

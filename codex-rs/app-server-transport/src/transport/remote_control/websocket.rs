@@ -15,6 +15,7 @@ use super::protocol::ClientId;
 use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
 use super::protocol::StreamId;
+use super::remote_control_status_with_connection_status;
 use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
@@ -216,6 +217,7 @@ impl WebsocketState {
 pub(crate) struct RemoteControlWebsocket {
     remote_control_url: String,
     installation_id: String,
+    server_name: String,
     remote_control_target: Option<RemoteControlTarget>,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
@@ -235,6 +237,7 @@ pub(crate) struct RemoteControlWebsocketConfig {
     pub(crate) remote_control_url: String,
     pub(crate) installation_id: String,
     pub(crate) remote_control_target: Option<RemoteControlTarget>,
+    pub(crate) server_name: String,
 }
 
 enum ConnectOutcome {
@@ -260,15 +263,8 @@ impl RemoteControlStatusPublisher {
 
     fn publish_status(&self, connection_status: RemoteControlConnectionStatus) {
         self.tx.send_if_modified(|status| {
-            let next_status = RemoteControlStatusChangedNotification {
-                status: connection_status,
-                installation_id: status.installation_id.clone(),
-                environment_id: if connection_status == RemoteControlConnectionStatus::Disabled {
-                    None
-                } else {
-                    status.environment_id.clone()
-                },
-            };
+            let next_status =
+                remote_control_status_with_connection_status(status, connection_status);
             if *status == next_status {
                 return false;
             }
@@ -285,6 +281,7 @@ impl RemoteControlStatusPublisher {
             }
             let next_status = RemoteControlStatusChangedNotification {
                 status: status.status,
+                server_name: status.server_name.clone(),
                 installation_id: status.installation_id.clone(),
                 environment_id,
             };
@@ -301,6 +298,7 @@ impl RemoteControlStatusPublisher {
 #[derive(Clone, Copy)]
 pub(super) struct RemoteControlConnectOptions<'a> {
     installation_id: &'a str,
+    server_name: &'a str,
     subscribe_cursor: Option<&'a str>,
     app_server_client_name: Option<&'a str>,
 }
@@ -327,6 +325,7 @@ impl RemoteControlWebsocket {
         Self {
             remote_control_url: config.remote_control_url,
             installation_id: config.installation_id,
+            server_name: config.server_name,
             remote_control_target: config.remote_control_target,
             state_db,
             auth_manager,
@@ -454,6 +453,7 @@ impl RemoteControlWebsocket {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
             let connect_options = RemoteControlConnectOptions {
                 installation_id: &self.installation_id,
+                server_name: &self.server_name,
                 subscribe_cursor: subscribe_cursor.as_deref(),
                 app_server_client_name,
             };
@@ -1076,7 +1076,10 @@ pub(super) async fn connect_remote_control_websocket(
         if let Some(loaded_enrollment) = loaded_enrollment.as_ref() {
             status_publisher.publish_environment_id(Some(loaded_enrollment.environment_id.clone()));
         }
-        *enrollment = loaded_enrollment;
+        *enrollment = loaded_enrollment.map(|mut enrollment| {
+            enrollment.server_name = connect_options.server_name.to_string();
+            enrollment
+        });
     }
 
     if enrollment.is_none() {
@@ -1088,6 +1091,7 @@ pub(super) async fn connect_remote_control_websocket(
             remote_control_target,
             &auth,
             connect_options.installation_id,
+            connect_options.server_name,
         )
         .await
         {
@@ -1279,6 +1283,7 @@ mod tests {
     ) {
         let (status_tx, status_rx) = watch::channel(RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            server_name: "test-server".to_string(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         });
@@ -1386,6 +1391,7 @@ mod tests {
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1403,6 +1409,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_test".to_string()),
             }
@@ -1464,6 +1471,7 @@ mod tests {
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1477,6 +1485,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_test".to_string()),
             }
@@ -1546,6 +1555,7 @@ mod tests {
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1599,6 +1609,7 @@ mod tests {
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1647,6 +1658,7 @@ mod tests {
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1665,6 +1677,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }
@@ -1694,6 +1707,7 @@ mod tests {
                         remote_control_url,
                         installation_id: TEST_INSTALLATION_ID.to_string(),
                         remote_control_target: Some(remote_control_target),
+                        server_name: "test-server".to_string(),
                     },
                     /*state_db*/ None,
                     remote_control_auth_manager(),
@@ -1738,6 +1752,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_first".to_string()),
             }
@@ -1759,6 +1774,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connected,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_first".to_string()),
             }
@@ -1773,6 +1789,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connected,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }
@@ -1788,6 +1805,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Disabled,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }

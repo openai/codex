@@ -40,6 +40,7 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
+const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -375,6 +376,8 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Keep internal Git helper commands independent of configured hook directories.
+        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
         .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .current_dir(cwd)

@@ -7,7 +7,6 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::find_codex_home;
 use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -15,6 +14,7 @@ use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
+pub use crate::startup_error::LocalStateDbStartupError;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -56,6 +56,7 @@ use codex_rollout::state_db;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_home_dir::find_codex_home;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
@@ -167,6 +168,7 @@ mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_error;
 mod startup_hooks_review;
 mod status;
 mod status_indicator_widget;
@@ -310,6 +312,21 @@ async fn start_embedded_app_server(
 pub(crate) enum AppServerTarget {
     Embedded,
     Remote { endpoint: RemoteAppServerEndpoint },
+}
+
+async fn init_state_db_for_app_server_target(
+    config: &Config,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<Option<StateDbHandle>> {
+    match app_server_target {
+        AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
+            std::io::Error::other(LocalStateDbStartupError::new(
+                codex_state::state_db_path(config.sqlite_home.as_path()),
+                err.to_string(),
+            ))
+        }),
+        AppServerTarget::Remote { .. } => Ok(state_db::get_state_db(config).await),
+    }
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -509,7 +526,7 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    let state_db = state_db::init(config).await;
+    let state_db = init_state_db_for_app_server_target(config, &AppServerTarget::Embedded).await?;
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
@@ -989,10 +1006,7 @@ pub async fn run_main(
         otel.as_ref(),
         otel_originator.as_str(),
     );
-    let state_db = match &app_server_target {
-        AppServerTarget::Embedded => state_db::init(&config).await,
-        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
-    };
+    let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
 
     let effective_toml = config.config_layer_stack.effective_config();
     match effective_toml.try_into() {
@@ -1047,7 +1061,7 @@ pub async fn run_main(
 
     if let Some(warning) = add_dir_warning_message(
         &cli.add_dir,
-        &config.permissions.permission_profile(),
+        &config.permissions.effective_permission_profile(),
         config.cwd.as_path(),
     ) {
         #[allow(clippy::print_stderr)]
@@ -1073,7 +1087,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = crate::legacy_core::config::log_dir(&config)?;
+    let log_dir = config.log_dir.clone();
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -1823,7 +1837,8 @@ mod tests {
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
-        let state_db = state_db::init(&config).await;
+        let state_db =
+            init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await?;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
@@ -2413,6 +2428,37 @@ mod tests {
             err.to_string()
                 .contains("failed to start embedded app server"),
             "error should preserve the embedded app server startup context"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embedded_state_db_failure_is_typed_for_cli_recovery() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let occupied_sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::write(&occupied_sqlite_home, "occupied")?;
+        config.sqlite_home = occupied_sqlite_home.clone();
+
+        let err =
+            match init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await {
+                Ok(_) => panic!("embedded startup should surface state db init failures"),
+                Err(err) => err,
+            };
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(
+            startup_error.state_db_path(),
+            codex_state::state_db_path(occupied_sqlite_home.as_path()).as_path()
+        );
+        assert!(
+            startup_error
+                .detail()
+                .contains("failed to initialize state runtime"),
+            "startup error should preserve the underlying state db failure"
         );
         Ok(())
     }

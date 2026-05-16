@@ -19,6 +19,7 @@ pub(crate) struct TurnRequestProcessor {
 
 struct TurnContextOverrideRequest {
     cwd: Option<PathBuf>,
+    runtime_workspace_roots: Option<Vec<PathBuf>>,
     approval_policy: Option<AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
@@ -34,6 +35,7 @@ struct TurnContextOverrideRequest {
 impl TurnContextOverrideRequest {
     fn has_any_overrides(&self) -> bool {
         self.cwd.is_some()
+            || self.runtime_workspace_roots.is_some()
             || self.approval_policy.is_some()
             || self.approvals_reviewer.is_some()
             || self.sandbox_policy.is_some()
@@ -50,6 +52,8 @@ impl TurnContextOverrideRequest {
 fn op_turn_context_overrides(overrides: CodexThreadTurnContextOverrides) -> TurnContextOverrides {
     TurnContextOverrides {
         cwd: overrides.cwd,
+        workspace_roots: overrides.workspace_roots,
+        profile_workspace_roots: overrides.profile_workspace_roots,
         approval_policy: overrides.approval_policy,
         approvals_reviewer: overrides.approvals_reviewer,
         sandbox_policy: overrides.sandbox_policy,
@@ -66,6 +70,20 @@ fn op_turn_context_overrides(overrides: CodexThreadTurnContextOverrides) -> Turn
 }
 
 const TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn resolve_runtime_workspace_roots(
+    workspace_roots: Vec<PathBuf>,
+    base_cwd: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut resolved_roots = Vec::new();
+    for path in workspace_roots {
+        let root = AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path());
+        if !resolved_roots.iter().any(|existing| existing == &root) {
+            resolved_roots.push(root);
+        }
+    }
+    resolved_roots
+}
 
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
@@ -393,15 +411,40 @@ impl TurnRequestProcessor {
         }
 
         let cwd = request.cwd;
+        let runtime_workspace_roots =
+            request
+                .runtime_workspace_roots
+                .clone()
+                .map(|workspace_roots| {
+                    let base_cwd = cwd
+                        .as_ref()
+                        .map(|cwd| {
+                            AbsolutePathBuf::resolve_path_against_base(
+                                cwd,
+                                base_snapshot.cwd.as_path(),
+                            )
+                        })
+                        .unwrap_or_else(|| base_snapshot.cwd.clone());
+                    resolve_runtime_workspace_roots(workspace_roots, &base_cwd)
+                });
         let approval_policy = request.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = request
             .approvals_reviewer
             .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = request.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile) =
+        let (permission_profile, active_permission_profile, profile_workspace_roots) =
             if let Some(permissions) = request.permissions {
                 let mut overrides = ConfigOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: Some(request.runtime_workspace_roots.clone().unwrap_or_else(
+                        || {
+                            base_snapshot
+                                .workspace_roots
+                                .iter()
+                                .map(AbsolutePathBuf::to_path_buf)
+                                .collect()
+                        },
+                    )),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
@@ -430,11 +473,12 @@ impl TurnRequestProcessor {
                     )));
                 }
                 (
-                    Some(config.permissions.permission_profile()),
+                    Some(config.permissions.permission_profile().clone()),
                     config.permissions.active_permission_profile(),
+                    Some(config.permissions.profile_workspace_roots().to_vec()),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             };
 
         // None means the caller sent no context fields at all. Some means at
@@ -442,6 +486,8 @@ impl TurnRequestProcessor {
         // matches the current thread context.
         Ok(Some(CodexThreadTurnContextOverrides {
             cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -526,6 +572,7 @@ impl TurnRequestProcessor {
                 &before_snapshot,
                 TurnContextOverrideRequest {
                     cwd: params.cwd,
+                    runtime_workspace_roots: params.runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,
@@ -678,6 +725,7 @@ impl TurnRequestProcessor {
                 &before_snapshot,
                 TurnContextOverrideRequest {
                     cwd: params.cwd,
+                    runtime_workspace_roots: None,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,

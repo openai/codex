@@ -109,6 +109,8 @@ pub struct McpConfig {
     pub chatgpt_base_url: String,
     /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
+    /// Optional product SKU forwarded to the host-owned apps MCP server.
+    pub apps_mcp_product_sku: Option<String>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -427,12 +429,15 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str, apps_mcp_path_override: Optio
 
 fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
     let url = codex_apps_mcp_url(config);
+    let http_headers = config.apps_mcp_product_sku.as_ref().map(|product_sku| {
+        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.clone())])
+    });
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers: None,
+            http_headers,
             env_http_headers: None,
         },
         experimental_environment: None,

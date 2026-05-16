@@ -344,21 +344,6 @@ pub struct ActivePermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,
-
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modifications: Vec<ActivePermissionProfileModification>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "snake_case")]
-    #[ts(rename_all = "snake_case")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
 }
 
 impl ActivePermissionProfile {
@@ -366,16 +351,11 @@ impl ActivePermissionProfile {
         Self {
             id: id.into(),
             extends: None,
-            modifications: Vec::new(),
         }
     }
 
-    pub fn with_modifications(
-        mut self,
-        modifications: Vec<ActivePermissionProfileModification>,
-    ) -> Self {
-        self.modifications = modifications;
-        self
+    pub fn read_only() -> Self {
+        Self::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY)
     }
 }
 
@@ -441,6 +421,28 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+        }
+    }
+
+    pub fn materialize_project_roots_with_workspace_roots(
+        self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => {
+                let file_system = file_system
+                    .to_sandbox_policy()
+                    .materialize_project_roots_with_workspace_roots(workspace_roots);
+                Self::Managed {
+                    file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+                    network,
+                }
+            }
+            Self::Disabled => Self::Disabled,
+            Self::External { network } => Self::External { network },
         }
     }
 
@@ -723,8 +725,6 @@ pub enum ContentItem {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
-    Auto,
-    Low,
     High,
     Original,
 }
@@ -889,7 +889,10 @@ pub enum ResponseItem {
         result: String,
     },
     #[serde(alias = "compaction_summary")]
-    Compaction { encrypted_content: String },
+    Compaction {
+        encrypted_content: String,
+    },
+    CompactionTrigger,
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1063,8 +1066,13 @@ pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     file_bytes: Vec<u8>,
     label_number: Option<usize>,
-    mode: PromptImageMode,
+    detail: ImageDetail,
 ) -> Vec<ContentItem> {
+    let mode = match detail {
+        ImageDetail::Original => PromptImageMode::Original,
+        ImageDetail::High => PromptImageMode::ResizeToFit,
+    };
+
     match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
@@ -1075,7 +1083,7 @@ pub fn local_image_content_items_with_label_number(
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: Some(detail),
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1220,29 +1228,31 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => {
+                    UserInput::Image { image_url, detail } => {
                         image_index += 1;
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         vec![
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
                             },
                             ContentItem::InputImage {
                                 image_url,
-                                detail: Some(DEFAULT_IMAGE_DETAIL),
+                                detail: Some(detail),
                             },
                             ContentItem::InputText {
                                 text: image_close_tag_text(),
                             },
                         ]
                     }
-                    UserInput::LocalImage { path } => {
+                    UserInput::LocalImage { path, detail } => {
                         image_index += 1;
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,
                                 file_bytes,
                                 Some(image_index),
-                                PromptImageMode::ResizeToFit,
+                                detail,
                             ),
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
@@ -1586,8 +1596,6 @@ fn convert_mcp_content_to_items(
                         .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
                         .and_then(serde_json::Value::as_str)
                         .and_then(|detail| match detail {
-                            "auto" => Some(ImageDetail::Auto),
-                            "low" => Some(ImageDetail::Low),
                             "high" => Some(ImageDetail::High),
                             "original" => Some(ImageDetail::Original),
                             _ => None,
@@ -1631,6 +1639,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    // A tiny valid PNG (1x1) so image conversion tests don't depend on cross-crate
+    // file paths, which break under Bazel sandboxing.
+    const TINY_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
 
     #[test]
     fn response_input_message_conversion_preserves_phase() {
@@ -2409,17 +2425,25 @@ mod tests {
     }
 
     #[test]
-    fn serializes_context_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::ContextCompaction {
-            encrypted_content: None,
-        };
+    fn serializes_compaction_trigger_without_payload() -> Result<()> {
+        let item = ResponseItem::CompactionTrigger;
 
         assert_eq!(
             serde_json::to_value(item)?,
             serde_json::json!({
-                "type": "context_compaction",
+                "type": "compaction_trigger",
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_compaction_trigger_without_payload() -> Result<()> {
+        let json = r#"{"type":"compaction_trigger"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(item, ResponseItem::CompactionTrigger);
         Ok(())
     }
 
@@ -2536,6 +2560,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
             image_url: image_url.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2553,6 +2578,31 @@ mod tests {
                     },
                 ];
                 assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn image_user_input_preserves_requested_detail() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: image_url.clone(),
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content.get(1),
+                    Some(&ContentItem::InputImage {
+                        image_url,
+                        detail: Some(ImageDetail::Original),
+                    })
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }
@@ -2728,20 +2778,17 @@ mod tests {
         let image_url = "data:image/png;base64,abc".to_string();
         let dir = tempdir()?;
         let local_path = dir.path().join("local.png");
-        // A tiny valid PNG (1x1) so this test doesn't depend on cross-crate file paths, which
-        // break under Bazel sandboxing.
-        const TINY_PNG_BYTES: &[u8] = &[
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
-            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-        ];
         std::fs::write(&local_path, TINY_PNG_BYTES)?;
 
         let item = ResponseInputItem::from(vec![
             UserInput::Image {
                 image_url: image_url.clone(),
+                detail: None,
             },
-            UserInput::LocalImage { path: local_path },
+            UserInput::LocalImage {
+                path: local_path,
+                detail: None,
+            },
         ]);
 
         match item {
@@ -2789,12 +2836,40 @@ mod tests {
     }
 
     #[test]
+    fn local_image_user_input_preserves_requested_detail() -> Result<()> {
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: local_path,
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert!(matches!(
+                    content.get(1),
+                    Some(ContentItem::InputImage {
+                        detail: Some(ImageDetail::Original),
+                        ..
+                    })
+                ));
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn local_image_read_error_adds_placeholder() -> Result<()> {
         let dir = tempdir()?;
         let missing_path = dir.path().join("missing-image.png");
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: missing_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2829,6 +2904,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: json_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2866,6 +2942,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: svg_path.clone(),
+            detail: None,
         }]);
 
         match item {
