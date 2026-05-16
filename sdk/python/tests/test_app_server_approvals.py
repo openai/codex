@@ -5,7 +5,6 @@ import json
 import shlex
 
 import pytest
-
 from app_server_harness import (
     AppServerHarness,
     ev_completed,
