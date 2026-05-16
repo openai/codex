@@ -396,10 +396,9 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        // MultiAgentV2 root/subagent usage hints are injected as standalone developer
-        // messages at thread start. When forking history, drop hints from the parent
-        // so the child gets a fresh hint that matches its own session source/config.
-        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+        // Standalone developer items that the child reinjects at startup should not
+        // survive the inherited forked history, or they appear twice in the child prompt.
+        let mut forked_developer_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
                 parent_thread
                     .codex
@@ -417,11 +416,16 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
+        if let Some(developer_instructions) = config.developer_instructions.as_deref()
+            && !developer_instructions.is_empty()
+        {
+            forked_developer_texts_to_filter.push(developer_instructions.to_string());
+        }
         forked_rollout_items.retain(|item| {
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
                 && role == "developer"
                 && let [ContentItem::InputText { text }] = content.as_slice()
-                && multi_agent_v2_usage_hint_texts_to_filter
+                && forked_developer_texts_to_filter
                     .iter()
                     .any(|usage_hint_text| usage_hint_text == text)
             {
