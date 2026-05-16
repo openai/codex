@@ -524,6 +524,8 @@ fn rate_limit_duration_labels_preserve_non_standard_windows() {
     assert_eq!(get_limits_duration(2 * 24 * 60), "2-day");
     assert_eq!(get_limits_duration(2 * 7 * 24 * 60), "2-week");
     assert_eq!(get_limits_duration(30 * 24 * 60), "monthly");
+    assert_eq!(get_limits_duration(365 * 24 * 60), "annual");
+    assert_eq!(get_limits_duration(2 * 365 * 24 * 60), "2-year");
 }
 
 #[tokio::test]

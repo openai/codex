@@ -80,6 +80,7 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
     const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
     const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
+    const MINUTES_PER_YEAR: i64 = 365 * MINUTES_PER_DAY;
     const ROUNDING_BIAS_MINUTES: i64 = 3;
 
     let windows_minutes = windows_minutes.max(0);
@@ -93,6 +94,14 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
             "monthly".to_string()
         } else {
             format!("{months}-month")
+        }
+    } else if let Some(years) =
+        approximate_window_count(windows_minutes, MINUTES_PER_YEAR, MINUTES_PER_DAY)
+    {
+        if years == 1 {
+            "annual".to_string()
+        } else {
+            format!("{years}-year")
         }
     } else if let Some(weeks) =
         approximate_window_count(windows_minutes, MINUTES_PER_WEEK, ROUNDING_BIAS_MINUTES)
