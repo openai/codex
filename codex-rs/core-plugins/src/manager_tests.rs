@@ -7,7 +7,6 @@ use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -351,20 +350,17 @@ plugins = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(
-        vec![RemoteInstalledPlugin {
-            marketplace_name: "chatgpt-global".to_string(),
-            id: "plugins~Plugin_linear".to_string(),
-            name: "linear".to_string(),
-            enabled: true,
-            install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-            auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
-            availability: codex_app_server_protocol::PluginAvailability::Available,
-            interface: None,
-            keywords: Vec::new(),
-        }],
-        vec![RemotePluginScope::Global],
-    );
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        interface: None,
+        keywords: Vec::new(),
+    }]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
@@ -383,20 +379,17 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(
-        vec![RemoteInstalledPlugin {
-            marketplace_name: "chatgpt-global".to_string(),
-            id: "plugins~Plugin_linear".to_string(),
-            name: "linear".to_string(),
-            enabled: true,
-            install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
-            auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
-            availability: codex_app_server_protocol::PluginAvailability::Available,
-            interface: None,
-            keywords: Vec::new(),
-        }],
-        config.remote_installed_plugin_scopes(),
-    );
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        interface: None,
+        keywords: Vec::new(),
+    }]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
@@ -415,38 +408,35 @@ remote_plugin = true
     let config = load_plugins_config_input(codex_home.path(), codex_home.path()).await;
 
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(
-        vec![RemoteInstalledPlugin {
-            marketplace_name: "chatgpt-global".to_string(),
-            id: "plugins~Plugin_linear".to_string(),
-            name: "linear".to_string(),
-            enabled: true,
-            install_policy: codex_app_server_protocol::PluginInstallPolicy::InstalledByDefault,
-            auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnInstall,
-            availability: codex_app_server_protocol::PluginAvailability::Available,
-            interface: Some(codex_app_server_protocol::PluginInterface {
-                display_name: Some("Linear".to_string()),
-                short_description: Some("Track remote work".to_string()),
-                long_description: None,
-                developer_name: None,
-                category: None,
-                capabilities: Vec::new(),
-                website_url: None,
-                privacy_policy_url: None,
-                terms_of_service_url: None,
-                default_prompt: None,
-                brand_color: Some("#111111".to_string()),
-                composer_icon: None,
-                composer_icon_url: None,
-                logo: None,
-                logo_url: None,
-                screenshots: Vec::new(),
-                screenshot_urls: Vec::new(),
-            }),
-            keywords: vec!["issues".to_string()],
-        }],
-        config.remote_installed_plugin_scopes(),
-    );
+    manager.write_remote_installed_plugins_cache(vec![RemoteInstalledPlugin {
+        marketplace_name: "chatgpt-global".to_string(),
+        id: "plugins~Plugin_linear".to_string(),
+        name: "linear".to_string(),
+        enabled: true,
+        install_policy: codex_app_server_protocol::PluginInstallPolicy::InstalledByDefault,
+        auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnInstall,
+        availability: codex_app_server_protocol::PluginAvailability::Available,
+        interface: Some(codex_app_server_protocol::PluginInterface {
+            display_name: Some("Linear".to_string()),
+            short_description: Some("Track remote work".to_string()),
+            long_description: None,
+            developer_name: None,
+            category: None,
+            capabilities: Vec::new(),
+            website_url: None,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            default_prompt: None,
+            brand_color: Some("#111111".to_string()),
+            composer_icon: None,
+            composer_icon_url: None,
+            logo: None,
+            logo_url: None,
+            screenshots: Vec::new(),
+            screenshot_urls: Vec::new(),
+        }),
+        keywords: vec!["issues".to_string()],
+    }]);
 
     let marketplaces = manager
         .build_remote_installed_plugin_marketplaces_from_cache(
