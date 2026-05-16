@@ -43,6 +43,9 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnContextAppliedEvent;
+use codex_protocol::protocol::TurnContextOverrides;
+use codex_protocol::protocol::TurnContextSnapshot;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -93,13 +96,95 @@ pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     .await;
 }
 
+pub async fn update_turn_context(sess: &Arc<Session>, sub_id: String, op: Op) {
+    let Op::TurnContext {
+        turn_context:
+            TurnContextOverrides {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            },
+    } = op
+    else {
+        unreachable!();
+    };
+    let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+        Some(collaboration_mode)
+    } else {
+        let state = sess.state.lock().await;
+        Some(
+            state
+                .session_configuration
+                .collaboration_mode
+                .with_updates(model, effort, /*developer_instructions*/ None),
+        )
+    };
+    let msg = match sess
+        .update_settings(SessionSettingsUpdate {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level,
+            collaboration_mode,
+            reasoning_summary: summary,
+            service_tier,
+            personality,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(()) => turn_context_applied_event(sess).await,
+        Err(err) => EventMsg::Error(ErrorEvent {
+            message: format!("invalid turn context override: {err}"),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        }),
+    };
+    sess.send_event_raw(Event { id: sub_id, msg }).await;
+}
+
+async fn turn_context_applied_event(sess: &Session) -> EventMsg {
+    let snapshot = {
+        let state = sess.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
+    };
+    EventMsg::TurnContextApplied(TurnContextAppliedEvent {
+        turn_context: TurnContextSnapshot {
+            model: snapshot.model,
+            model_provider_id: snapshot.model_provider_id,
+            service_tier: snapshot.service_tier,
+            approval_policy: snapshot.approval_policy,
+            approvals_reviewer: snapshot.approvals_reviewer,
+            permission_profile: snapshot.permission_profile,
+            active_permission_profile: snapshot.active_permission_profile,
+            cwd: snapshot.cwd,
+            reasoning_effort: snapshot.reasoning_effort,
+            reasoning_summary: snapshot.reasoning_summary,
+            personality: snapshot.personality,
+            collaboration_mode: snapshot.collaboration_mode,
+        },
+    })
+}
+
 pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata) = match op {
+    let (items, updates, responsesapi_client_metadata, emit_turn_context_applied) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -146,26 +231,30 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_version: None,
                 },
                 None,
+                false,
             )
         }
         Op::UserInputWithTurnContext {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
             final_output_json_schema,
             items,
             responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
             environments,
+            turn_context:
+                TurnContextOverrides {
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    permission_profile,
+                    active_permission_profile,
+                    windows_sandbox_level,
+                    model,
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode,
+                    personality,
+                },
         } => {
             let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                 Some(collab_mode)
@@ -198,6 +287,7 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_version: None,
                 },
                 responsesapi_client_metadata,
+                true,
             )
         }
         Op::UserInput {
@@ -213,6 +303,7 @@ pub(super) async fn user_input_or_turn_inner(
                 ..Default::default()
             },
             responsesapi_client_metadata,
+            false,
         ),
         _ => unreachable!(),
     };
@@ -221,6 +312,13 @@ pub(super) async fn user_input_or_turn_inner(
         // new_turn_with_sub_id already emits the error event.
         return;
     };
+    if emit_turn_context_applied {
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: turn_context_applied_event(sess).await,
+        })
+        .await;
+    }
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
     let accepted_items = match sess
@@ -766,6 +864,10 @@ pub(super) async fn submission_loop(
                 | Op::UserInputWithTurnContext { .. }
                 | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
+                    false
+                }
+                Op::TurnContext { .. } => {
+                    update_turn_context(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
