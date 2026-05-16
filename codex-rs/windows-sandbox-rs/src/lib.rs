@@ -292,6 +292,7 @@ mod windows_impl {
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
+    use super::spawn_prep::SpawnPrepOptions;
     use super::spawn_prep::allow_null_device_for_workspace_write;
     use super::spawn_prep::apply_legacy_session_acl_rules;
     use super::spawn_prep::legacy_session_capability_roots;
@@ -405,8 +406,10 @@ mod windows_impl {
             cwd,
             &mut env_map,
             &command,
-            /*inherit_path*/ false,
-            /*add_git_safe_directory*/ false,
+            SpawnPrepOptions {
+                inherit_path: false,
+                add_git_safe_directory: false,
+            },
         )?;
         let policy = common.policy;
         let current_dir = common.current_dir;

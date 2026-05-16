@@ -57,6 +57,12 @@ pub(crate) struct ElevatedSpawnContext {
     pub(crate) cap_sids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpawnPrepOptions {
+    pub(crate) inherit_path: bool,
+    pub(crate) add_git_safe_directory: bool,
+}
+
 pub(crate) struct LegacySessionSecurity {
     pub(crate) h_token: HANDLE,
     pub(crate) readonly_sid: Option<LocalSid>,
@@ -83,8 +89,7 @@ fn prepare_spawn_context_common(
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
     command: &[String],
-    inherit_path: bool,
-    add_git_safe_directory: bool,
+    options: SpawnPrepOptions,
 ) -> Result<SpawnContext> {
     let policy = parse_policy(policy_json_or_preset)?;
     if matches!(
@@ -96,10 +101,10 @@ fn prepare_spawn_context_common(
 
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
-    if inherit_path {
+    if options.inherit_path {
         inherit_path_env(env_map);
     }
-    if add_git_safe_directory {
+    if options.add_git_safe_directory {
         inject_git_safe_directory(env_map, cwd);
     }
 
@@ -130,8 +135,7 @@ pub(crate) fn prepare_legacy_spawn_context(
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
     command: &[String],
-    inherit_path: bool,
-    add_git_safe_directory: bool,
+    options: SpawnPrepOptions,
 ) -> Result<SpawnContext> {
     let common = prepare_spawn_context_common(
         policy_json_or_preset,
@@ -140,8 +144,7 @@ pub(crate) fn prepare_legacy_spawn_context(
         cwd,
         env_map,
         command,
-        inherit_path,
-        add_git_safe_directory,
+        options,
     )?;
     if common.permissions.should_apply_network_block() {
         apply_no_network_to_env(env_map)?;
@@ -419,8 +422,10 @@ pub(crate) fn prepare_elevated_spawn_context(
         cwd,
         env_map,
         command,
-        /*inherit_path*/ true,
-        /*add_git_safe_directory*/ true,
+        SpawnPrepOptions {
+            inherit_path: true,
+            add_git_safe_directory: true,
+        },
     )?;
 
     let AllowDenyPaths { allow, deny } =
@@ -548,8 +553,10 @@ mod tests {
             cwd.path(),
             &mut env_map,
             &["cmd.exe".to_string()],
-            /*inherit_path*/ true,
-            /*add_git_safe_directory*/ false,
+            SpawnPrepOptions {
+                inherit_path: true,
+                add_git_safe_directory: false,
+            },
         )
         .expect("legacy env prep");
 
@@ -576,8 +583,10 @@ mod tests {
             cwd.path(),
             &mut env_map,
             &["cmd.exe".to_string()],
-            /*inherit_path*/ true,
-            /*add_git_safe_directory*/ true,
+            SpawnPrepOptions {
+                inherit_path: true,
+                add_git_safe_directory: true,
+            },
         )
         .expect("preserve existing env prep");
         assert_eq!(context.policy, SandboxPolicy::new_workspace_write_policy());
