@@ -205,6 +205,20 @@ pub async fn ensure_remote_control_ready() -> Result<RemoteControlReadyOutput> {
         .await
 }
 
+pub async fn enable_remote_control_on_socket(
+    socket_path: &Path,
+    connect_timeout: Duration,
+    connect_retry_delay: Duration,
+) -> Result<RemoteControlReadyStatus> {
+    ensure_supported_platform()?;
+    remote_control_client::enable_remote_control_with_connect_retry(
+        socket_path,
+        connect_timeout,
+        connect_retry_delay,
+    )
+    .await
+}
+
 pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControlOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.set_remote_control(mode).await

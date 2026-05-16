@@ -6,22 +6,13 @@ use clap::Args;
 use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
 use codex_app_server::AppServerWebsocketAuthSettings;
-use codex_app_server_client::AppServerEvent;
-use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
-use codex_app_server_client::RemoteAppServerClient;
-use codex_app_server_client::RemoteAppServerConnectArgs;
-use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_daemon::LifecycleCommand as AppServerLifecycleCommand;
 use codex_app_server_daemon::LifecycleOutput as AppServerLifecycleOutput;
 use codex_app_server_daemon::LifecycleStatus as AppServerLifecycleStatus;
 use codex_app_server_daemon::RemoteControlReadyOutput as AppServerRemoteControlReadyOutput;
 use codex_app_server_daemon::RemoteControlReadyStatus as AppServerRemoteControlReadyStatus;
 use codex_app_server_daemon::RemoteControlStartOutput as AppServerRemoteControlStartOutput;
-use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
-use codex_app_server_protocol::RemoteControlEnableResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
@@ -30,16 +21,11 @@ use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
-use tokio::time::sleep;
 use tokio::time::timeout;
 
 const FOREGROUND_SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FOREGROUND_SOCKET_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(50);
 const FOREGROUND_APP_SERVER_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
-const REMOTE_CONTROL_ENABLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
-const REMOTE_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
-const REMOTE_CONTROL_CLIENT_NAME: &str = "codex-remote-control";
 
 #[derive(Debug, Args)]
 pub(crate) struct RemoteControlCommand {
@@ -273,111 +259,12 @@ async fn abort_foreground_app_server(app_server_task: JoinHandle<std::io::Result
 async fn wait_for_foreground_remote_control_ready(
     socket_path: AbsolutePathBuf,
 ) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
-    let mut client = connect_foreground_client(socket_path).await?;
-    enable_remote_control_and_wait(&mut client).await
-}
-
-async fn connect_foreground_client(
-    socket_path: AbsolutePathBuf,
-) -> anyhow::Result<RemoteAppServerClient> {
-    let socket_path_display = socket_path.as_path().display().to_string();
-    let connect_args = RemoteAppServerConnectArgs {
-        endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
-        client_name: REMOTE_CONTROL_CLIENT_NAME.to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
-        experimental_api: true,
-        opt_out_notification_methods: Vec::new(),
-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    };
-    let deadline = Instant::now() + FOREGROUND_SOCKET_CONNECT_TIMEOUT;
-    loop {
-        match RemoteAppServerClient::connect(connect_args.clone()).await {
-            Ok(client) => return Ok(client),
-            Err(_) if Instant::now() < deadline => {
-                sleep(FOREGROUND_SOCKET_CONNECT_RETRY_DELAY).await;
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("app server did not become ready on {socket_path_display}")
-                });
-            }
-        }
-    }
-}
-
-async fn enable_remote_control_and_wait(
-    client: &mut RemoteAppServerClient,
-) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
-    let enable_response: RemoteControlEnableResponse = timeout(
-        REMOTE_CONTROL_ENABLE_RESPONSE_TIMEOUT,
-        client.request_typed(ClientRequest::RemoteControlEnable {
-            request_id: RequestId::String("remote-control-enable".to_string()),
-            params: None,
-        }),
+    codex_app_server_daemon::enable_remote_control_on_socket(
+        socket_path.as_path(),
+        FOREGROUND_SOCKET_CONNECT_TIMEOUT,
+        FOREGROUND_SOCKET_CONNECT_RETRY_DELAY,
     )
     .await
-    .context("timed out waiting for remoteControl/enable response")?
-    .context("failed to enable remote control")?;
-    wait_for_remote_control_ready(
-        client,
-        AppServerRemoteControlReadyStatus::from(enable_response),
-        REMOTE_CONTROL_READY_TIMEOUT,
-    )
-    .await
-}
-
-async fn wait_for_remote_control_ready(
-    client: &mut RemoteAppServerClient,
-    mut summary: AppServerRemoteControlReadyStatus,
-    ready_timeout: Duration,
-) -> anyhow::Result<AppServerRemoteControlReadyStatus> {
-    if summary.status != RemoteControlConnectionStatus::Connecting {
-        return Ok(summary);
-    }
-
-    let deadline = Instant::now() + ready_timeout;
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            summary.timed_out = true;
-            return Ok(summary);
-        }
-
-        match timeout(deadline.duration_since(now), client.next_event()).await {
-            Ok(Some(event)) => {
-                if apply_remote_control_event(&mut summary, event)
-                    && summary.status != RemoteControlConnectionStatus::Connecting
-                {
-                    return Ok(summary);
-                }
-            }
-            Ok(None) => {
-                anyhow::bail!("app-server disconnected before remote control became ready");
-            }
-            Err(_) => {
-                summary.timed_out = true;
-                return Ok(summary);
-            }
-        }
-    }
-}
-
-fn apply_remote_control_event(
-    summary: &mut AppServerRemoteControlReadyStatus,
-    event: AppServerEvent,
-) -> bool {
-    match event {
-        AppServerEvent::ServerNotification(ServerNotification::RemoteControlStatusChanged(
-            notification,
-        )) => {
-            *summary = AppServerRemoteControlReadyStatus::from(notification);
-            true
-        }
-        AppServerEvent::Lagged { skipped: _ }
-        | AppServerEvent::ServerNotification(_)
-        | AppServerEvent::ServerRequest(_)
-        | AppServerEvent::Disconnected { message: _ } => false,
-    }
 }
 
 fn print_remote_control_start_output(
@@ -582,7 +469,6 @@ fn remote_control_stop_human_message(output: &AppServerLifecycleOutput) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use codex_app_server_protocol::RemoteControlStatusChangedNotification;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -597,17 +483,6 @@ mod tests {
             server_name: "owen-mbp".to_string(),
             environment_id: Some("env_test".to_string()),
             timed_out: status == RemoteControlConnectionStatus::Connecting,
-        }
-    }
-
-    fn status_notification(
-        status: RemoteControlConnectionStatus,
-    ) -> RemoteControlStatusChangedNotification {
-        RemoteControlStatusChangedNotification {
-            status,
-            server_name: "owen-mbp".to_string(),
-            installation_id: "install_test".to_string(),
-            environment_id: Some("env_test".to_string()),
         }
     }
 
@@ -751,24 +626,6 @@ mod tests {
             .expect_err("errored daemon status should fail")
             .to_string(),
             "Remote control is enabled on owen-mbp but the connection is errored."
-        );
-    }
-
-    #[test]
-    fn remote_control_status_notification_updates_connecting_summary() {
-        let mut summary = remote_control_status(RemoteControlConnectionStatus::Connecting);
-
-        let changed = apply_remote_control_event(
-            &mut summary,
-            AppServerEvent::ServerNotification(ServerNotification::RemoteControlStatusChanged(
-                status_notification(RemoteControlConnectionStatus::Connected),
-            )),
-        );
-
-        assert!(changed);
-        assert_eq!(
-            summary,
-            remote_control_status(RemoteControlConnectionStatus::Connected)
         );
     }
 

@@ -13,6 +13,8 @@ use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::RequestId;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 
@@ -23,21 +25,33 @@ const REMOTE_CONTROL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_CONTROL_ENABLE_REQUEST_ID: RequestId = RequestId::Integer(2);
 
 pub(crate) async fn enable_remote_control(socket_path: &Path) -> Result<RemoteControlReadyStatus> {
-    enable_remote_control_with_timeout(socket_path, REMOTE_CONTROL_READY_TIMEOUT).await
+    let mut websocket = client::connect(socket_path).await?;
+    enable_remote_control_with_timeout(&mut websocket, REMOTE_CONTROL_READY_TIMEOUT).await
 }
 
-async fn enable_remote_control_with_timeout(
+pub(crate) async fn enable_remote_control_with_connect_retry(
     socket_path: &Path,
-    ready_timeout: Duration,
+    connect_timeout: Duration,
+    connect_retry_delay: Duration,
 ) -> Result<RemoteControlReadyStatus> {
-    let mut websocket = client::connect(socket_path).await?;
+    let mut websocket =
+        connect_with_retry(socket_path, connect_timeout, connect_retry_delay).await?;
+    enable_remote_control_with_timeout(&mut websocket, REMOTE_CONTROL_READY_TIMEOUT).await
+}
 
-    client::initialize(&mut websocket, /*experimental_api*/ true).await?;
+async fn enable_remote_control_with_timeout<S>(
+    websocket: &mut WebSocketStream<S>,
+    ready_timeout: Duration,
+) -> Result<RemoteControlReadyStatus>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    client::initialize(websocket, /*experimental_api*/ true).await?;
     let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
         method: "initialized".to_string(),
         params: None,
     });
-    client::send_message(&mut websocket, &initialized)
+    client::send_message(websocket, &initialized)
         .await
         .context("failed to send initialized notification")?;
 
@@ -47,16 +61,40 @@ async fn enable_remote_control_with_timeout(
         params: None,
         trace: None,
     });
-    client::send_message(&mut websocket, &enable)
+    client::send_message(websocket, &enable)
         .await
         .context("failed to send remoteControl/enable request")?;
 
-    let mut latest = read_enable_response(&mut websocket).await?;
+    let mut latest = read_enable_response(websocket).await?;
     if latest.status == RemoteControlConnectionStatus::Connecting {
-        latest = wait_for_remote_control_status(&mut websocket, latest, ready_timeout).await?;
+        latest = wait_for_remote_control_status(websocket, latest, ready_timeout).await?;
     }
     websocket.close(None).await.ok();
     Ok(latest)
+}
+
+async fn connect_with_retry(
+    socket_path: &Path,
+    connect_timeout: Duration,
+    connect_retry_delay: Duration,
+) -> Result<WebSocketStream<codex_uds::UnixStream>> {
+    let deadline = Instant::now() + connect_timeout;
+    loop {
+        match client::connect(socket_path).await {
+            Ok(websocket) => return Ok(websocket),
+            Err(_) if Instant::now() < deadline => {
+                sleep(connect_retry_delay).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "app server did not become ready on {}",
+                        socket_path.display()
+                    )
+                });
+            }
+        }
+    }
 }
 
 async fn read_enable_response<S>(
@@ -314,7 +352,8 @@ mod tests {
         let ready_timeout = scenario.ready_timeout;
         let server_task = tokio::spawn(serve_enable_remote_control_scenario(listener, scenario));
 
-        let status = enable_remote_control_with_timeout(&socket_path, ready_timeout).await?;
+        let mut websocket = client::connect(&socket_path).await?;
+        let status = enable_remote_control_with_timeout(&mut websocket, ready_timeout).await?;
         server_task.await??;
         Ok(status)
     }
