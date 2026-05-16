@@ -2,7 +2,7 @@
 
 This is the fastest path from install to a multi-turn thread using the public SDK surface.
 
-The SDK is experimental. Treat the API, bundled runtime strategy, and packaging details as unstable until the first public release.
+The SDK is experimental, so the public API and runtime requirements may keep evolving before the first public release.
 
 ## 1) Install
 

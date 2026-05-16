@@ -470,7 +470,6 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
-    "codex-memories-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

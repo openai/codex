@@ -39,6 +39,61 @@ def test_thread_set_name_and_read(tmp_path) -> None:
     }
 
 
+def test_sync_and_async_initialization_round_trip_metadata(tmp_path) -> None:
+    """Public clients should initialize and start threads through app-server."""
+
+    async def async_scenario(harness: AppServerHarness) -> dict[str, object]:
+        async with AsyncCodex(config=harness.app_server_config()) as codex:
+            thread = await codex.thread_start()
+            server = codex.metadata.serverInfo
+            return {
+                "thread_id": thread.id,
+                "user_agent": codex.metadata.userAgent,
+                "server_name": None if server is None else server.name,
+                "server_version": None if server is None else server.version,
+            }
+
+    with AppServerHarness(tmp_path) as harness:
+        with Codex(config=harness.app_server_config()) as codex:
+            thread = codex.thread_start()
+            server = codex.metadata.serverInfo
+            sync_summary = {
+                "thread_id": thread.id,
+                "user_agent": codex.metadata.userAgent,
+                "server_name": None if server is None else server.name,
+                "server_version": None if server is None else server.version,
+            }
+        async_summary = asyncio.run(async_scenario(harness))
+
+    assert {
+        "sync": {
+            "thread_id_present": bool(sync_summary["thread_id"]),
+            "user_agent_present": bool(sync_summary["user_agent"]),
+            "server_name_present": bool(sync_summary["server_name"]),
+            "server_version_present": bool(sync_summary["server_version"]),
+        },
+        "async": {
+            "thread_id_present": bool(async_summary["thread_id"]),
+            "user_agent_present": bool(async_summary["user_agent"]),
+            "server_name_present": bool(async_summary["server_name"]),
+            "server_version_present": bool(async_summary["server_version"]),
+        },
+    } == {
+        "sync": {
+            "thread_id_present": True,
+            "user_agent_present": True,
+            "server_name_present": True,
+            "server_version_present": True,
+        },
+        "async": {
+            "thread_id_present": True,
+            "user_agent_present": True,
+            "server_name_present": True,
+            "server_version_present": True,
+        },
+    }
+
+
 def test_thread_list_filters_archived_threads(tmp_path) -> None:
     """Thread listing should reflect archive state through app-server."""
     with AppServerHarness(tmp_path) as harness:

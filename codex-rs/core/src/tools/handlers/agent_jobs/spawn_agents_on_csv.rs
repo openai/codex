@@ -2,9 +2,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::agent_jobs_spec::create_spawn_agents_on_csv_tool;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -15,8 +16,6 @@ pub struct SpawnAgentsOnCsvHandler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("spawn_agents_on_csv")
     }
@@ -25,7 +24,10 @@ impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
         Some(create_spawn_agents_on_csv_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -42,11 +44,13 @@ impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
             }
         };
 
-        handle(session, turn, arguments).await
+        handle(session, turn, arguments)
+            .await
+            .map(boxed_tool_output)
     }
 }
 
-impl ToolHandler for SpawnAgentsOnCsvHandler {
+impl CoreToolRuntime for SpawnAgentsOnCsvHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

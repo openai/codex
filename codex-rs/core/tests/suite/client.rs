@@ -52,6 +52,7 @@ use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
@@ -3016,22 +3017,15 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let server = MockServer::start().await;
 
     // Build a small SSE stream with deltas and a final assistant message.
-    // We emit the same body for all 3 turns; ids vary but are unused by assertions.
-    let sse_raw = r##"[
-        {"type":"response.output_item.added", "item":{
-            "type":"message", "role":"assistant",
-            "content":[{"type":"output_text","text":""}]
-        }},
-        {"type":"response.output_text.delta", "delta":"Hey "},
-        {"type":"response.output_text.delta", "delta":"there"},
-        {"type":"response.output_text.delta", "delta":"!\n"},
-        {"type":"response.output_item.done", "item":{
-            "type":"message", "role":"assistant",
-            "content":[{"type":"output_text","text":"Hey there!\n"}]
-        }},
-        {"type":"response.completed", "response": {"id": "__ID__"}}
-    ]"##;
-    let sse1 = core_test_support::load_sse_fixture_with_id_from_str(sse_raw, "resp1");
+    // We emit the same body for all 3 turns.
+    let sse1 = sse(vec![
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta("Hey "),
+        ev_output_text_delta("there"),
+        ev_output_text_delta("!\n"),
+        ev_assistant_message("msg-1", "Hey there!\n"),
+        ev_completed("resp1"),
+    ]);
 
     let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
 

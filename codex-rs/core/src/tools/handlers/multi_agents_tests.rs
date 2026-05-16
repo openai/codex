@@ -317,7 +317,8 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_context should reject agent_type overrides");
+        .err()
+        .expect("fork_context should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -351,7 +352,8 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
             })),
         ))
         .await
-        .expect_err("forked spawn should reject child model overrides");
+        .err()
+        .expect("forked spawn should reject child model overrides");
 
     assert_eq!(
         err,
@@ -395,7 +397,8 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_turns=all should reject agent_type overrides");
+        .err()
+        .expect("fork_turns=all should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -435,7 +438,8 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
             })),
         ))
         .await
-        .expect_err("default full fork should reject child model overrides");
+        .err()
+        .expect("default full fork should reject child model overrides");
 
     assert_eq!(
         err,
@@ -505,7 +509,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("unknown service tier should be rejected");
+            .err()
+            .expect("unknown service tier should be rejected");
 
         assert_eq!(
             err,
@@ -530,7 +535,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("tier unsupported by the final child model should be rejected");
+            .err()
+            .expect("tier unsupported by the final child model should be rejected");
 
         assert_eq!(
             err,
@@ -1116,7 +1122,8 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
             })),
         ))
         .await
-        .expect_err("legacy fork_context should be rejected");
+        .err()
+        .expect("legacy fork_context should be rejected");
 
     assert_eq!(
         err,
@@ -1155,7 +1162,8 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             })),
         ))
         .await
-        .expect_err("invalid fork_turns should be rejected");
+        .err()
+        .expect("invalid fork_turns should be rejected");
 
     assert_eq!(
         err,
@@ -1194,7 +1202,8 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
             })),
         ))
         .await
-        .expect_err("zero turn count should be rejected");
+        .err()
+        .expect("zero turn count should be rejected");
 
     assert_eq!(
         err,
@@ -2111,7 +2120,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
-        turn.config.permissions.permission_profile(),
+        turn.config.permissions.effective_permission_profile(),
         "test requires a runtime profile override that differs from base config"
     );
 
@@ -3630,7 +3639,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": "/root"})),
         ))
         .await
-        .expect_err("close_agent should reject the root path");
+        .err()
+        .expect("close_agent should reject the root path");
     assert_eq!(
         root_path_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3644,7 +3654,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": root.thread_id.to_string()})),
         ))
         .await
-        .expect_err("close_agent should reject the root thread id");
+        .err()
+        .expect("close_agent should reject the root thread id");
     assert_eq!(
         root_id_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3900,7 +3911,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 #[tokio::test]
 async fn build_agent_spawn_config_uses_turn_context_values() {
     fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<PermissionProfile>,
+        permissions: &crate::config::Permissions,
         base: SandboxPolicy,
         cwd: &std::path::Path,
     ) -> SandboxPolicy {
@@ -3915,16 +3926,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
                 if *candidate == base {
                     return false;
                 }
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(candidate, cwd);
-                let network_sandbox_policy = NetworkSandboxPolicy::from(candidate);
-                let permission_profile =
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(candidate),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    );
-                constraint.can_set(&permission_profile).is_ok()
+                permissions
+                    .can_set_legacy_sandbox_policy(candidate, cwd)
+                    .is_ok()
             })
             .unwrap_or(base)
     }
@@ -3948,7 +3952,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.permission_profile,
+        &turn.config.permissions,
         turn.config.legacy_sandbox_policy(),
         turn_cwd.as_path(),
     );

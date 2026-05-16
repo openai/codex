@@ -7,7 +7,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_models_manager::bundled_models_response;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -21,6 +20,15 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_CREATE_EVENT_TOOL as CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_LIST_EVENTS_TOOL as CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::configure_search_capable_apps;
+use core_test_support::apps_test_server::configure_search_capable_model;
+use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
+use core_test_support::apps_test_server::search_capable_apps_builder as configured_builder;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -34,7 +42,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
-use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -48,11 +55,6 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
-const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
-const SEARCH_CALENDAR_LIST_TOOL: &str = "_list_events";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -111,44 +113,12 @@ fn tool_search_output_has_namespace_child(
     namespace_child_tool(&output, namespace, tool_name).is_some()
 }
 
-fn configure_search_capable_model(config: &mut Config) {
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let model = model_catalog
-        .models
-        .iter_mut()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 exists in bundled models.json");
-    config.model = Some("gpt-5.4".to_string());
-    model.supports_search_tool = true;
-    config.model_catalog = Some(model_catalog);
-}
-
-fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
-    config
-        .features
-        .enable(Feature::Apps)
-        .expect("test config should allow feature update");
-    config.chatgpt_base_url = apps_base_url.to_string();
-    configure_search_capable_model(config);
-}
-
 fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
     configure_search_capable_apps(config, apps_base_url);
     config
         .features
         .disable(Feature::ToolSearch)
         .expect("test config should allow feature update");
-}
-
-fn configure_apps(config: &mut Config, apps_base_url: &str) {
-    configure_search_capable_apps(config, apps_base_url);
-}
-
-fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
-    test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| configure_apps(config, apps_base_url.as_str()))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -321,7 +291,9 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(move |config| configure_apps(config, apps_server.chatgpt_base_url.as_str()));
+        .with_config(move |config| {
+            configure_search_capable_apps(config, apps_server.chatgpt_base_url.as_str())
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -585,18 +557,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert_eq!(requests.len(), 3);
     let first_request_body = requests[0].body_json();
 
-    let apps_tool_call = server
-        .received_requests()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|request| {
-            let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/apps"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call"))
-            .then_some(body)
-        })
-        .expect("apps tools/call request should be recorded");
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, "calendar-call-1").await;
 
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),

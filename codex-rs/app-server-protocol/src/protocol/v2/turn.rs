@@ -7,6 +7,7 @@ use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
@@ -64,6 +65,12 @@ pub struct TurnStartParams {
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Replace the thread's runtime workspace roots for this turn and
+    /// subsequent turns. Relative paths are resolved against the effective
+    /// cwd for the turn.
+    #[experimental("turn/start.runtimeWorkspaceRoots")]
+    #[ts(optional = nullable)]
+    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     /// Override the approval policy for this turn and subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -75,11 +82,11 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Select a named permissions profile for this turn and subsequent turns.
-    /// Cannot be combined with `sandboxPolicy`. Use bounded `modifications`
-    /// for supported turn adjustments instead of replacing the full
-    /// permissions profile.
+    /// Select a named permissions profile id for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
     #[experimental("turn/start.permissions")]
+    #[schemars(with = "Option<String>")]
+    #[ts(type = "string | null")]
     #[ts(optional = nullable)]
     pub permissions: Option<PermissionProfileSelectionParams>,
     /// Override the model for this turn and subsequent turns.
@@ -243,9 +250,15 @@ pub enum UserInput {
         text_elements: Vec<TextElement>,
     },
     Image {
+        #[serde(default)]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
         url: String,
     },
     LocalImage {
+        #[serde(default)]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
         path: PathBuf,
     },
     Skill {
@@ -268,8 +281,11 @@ impl UserInput {
                 text,
                 text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
-            UserInput::Image { url } => CoreUserInput::Image { image_url: url },
-            UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
+            UserInput::Image { url, detail } => CoreUserInput::Image {
+                image_url: url,
+                detail,
+            },
+            UserInput::LocalImage { path, detail } => CoreUserInput::LocalImage { path, detail },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
             UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
@@ -286,8 +302,11 @@ impl From<CoreUserInput> for UserInput {
                 text,
                 text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
-            CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
-            CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            CoreUserInput::Image { image_url, detail } => UserInput::Image {
+                url: image_url,
+                detail,
+            },
+            CoreUserInput::LocalImage { path, detail } => UserInput::LocalImage { path, detail },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
             CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),

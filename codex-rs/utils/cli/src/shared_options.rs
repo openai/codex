@@ -5,7 +5,7 @@ use clap::Args;
 use codex_protocol::config_types::ProfileV2Name;
 use std::path::PathBuf;
 
-#[derive(Args, Debug, Default)]
+#[derive(Args, Clone, Debug, Default)]
 pub struct SharedCliOptions {
     /// Optional image(s) to attach to the initial prompt.
     #[arg(
