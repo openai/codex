@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from app_server_harness import AppServerHarness
+from app_server_helpers import agent_message_texts, streaming_response
+
 from openai_codex import Codex, TextInput
 from openai_codex.generated.v2_all import TurnStatus
-from app_server_helpers import agent_message_texts, streaming_response
 
 
 def test_turn_steer_adds_follow_up_input(tmp_path) -> None:
@@ -30,9 +31,7 @@ def test_turn_steer_adds_follow_up_input(tmp_path) -> None:
         "steered_turn_id": steer.turn_id,
         "turn_id": turn.id,
         "agent_messages": agent_message_texts(events),
-        "last_user_texts": [
-            request.message_input_texts("user")[-1] for request in requests
-        ],
+        "last_user_texts": [request.message_input_texts("user")[-1] for request in requests],
     } == {
         "steered_turn_id": turn.id,
         "turn_id": turn.id,

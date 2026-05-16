@@ -11,6 +11,8 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::skip_if_sandbox;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -335,6 +337,90 @@ async fn test_get_has_changes_with_untracked_change_returns_true() {
 
     fs::write(repo_path.join("new_file.txt"), "untracked").expect("write untracked file");
     assert_eq!(get_has_changes(&repo_path).await, Some(true));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_get_has_changes_ignores_repo_fsmonitor_config() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let helper_path = repo_path.join("fsmonitor-helper.sh");
+    let marker_path = repo_path.join("fsmonitor-ran");
+
+    fs::write(
+        &helper_path,
+        format!(
+            "#!/bin/sh\nprintf ran > \"{}\"\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write fsmonitor helper");
+    let mut permissions = fs::metadata(&helper_path)
+        .expect("read fsmonitor helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper_path, permissions).expect("mark fsmonitor helper executable");
+
+    Command::new("git")
+        .args([
+            "config",
+            "core.fsmonitor",
+            helper_path.to_string_lossy().as_ref(),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure fsmonitor helper");
+
+    assert_eq!(get_has_changes(&repo_path).await, Some(true));
+    assert!(
+        !marker_path.exists(),
+        "metadata collection should not invoke repository fsmonitor helpers"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_get_has_changes_ignores_configured_hooks_path() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let hooks_dir = repo_path.join(".git/hooks-path-test");
+    let hook_path = hooks_dir.join("post-index-change");
+    let marker_path = repo_path.join("hook-ran");
+
+    fs::create_dir_all(&hooks_dir).expect("create hook dir");
+    fs::write(
+        &hook_path,
+        format!(
+            "#!/bin/sh\nprintf ran > \"{}\"\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write post-index-change hook");
+    let mut permissions = fs::metadata(&hook_path)
+        .expect("read hook metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hook_path, permissions).expect("mark hook executable");
+
+    Command::new("git")
+        .args([
+            "config",
+            "core.hooksPath",
+            hooks_dir.to_string_lossy().as_ref(),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure hooks path");
+
+    fs::write(repo_path.join("test.txt"), "test content").expect("refresh tracked file");
+
+    assert_eq!(get_has_changes(&repo_path).await, Some(false));
+    assert!(
+        !marker_path.exists(),
+        "metadata collection should not invoke configured hook directories"
+    );
 }
 
 #[tokio::test]

@@ -41,13 +41,13 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
-use codex_core_api::ShellEnvironmentPolicy;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
 use codex_core_api::ToolSuggestConfig;
 use codex_core_api::TuiKeymap;
 use codex_core_api::TuiNotificationSettings;
+use codex_core_api::TuiPetAnchor;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
@@ -162,6 +162,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     let mut config = Config {
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
+        bypass_hook_trust: false,
         model,
         service_tier: None,
         review_model: None,
@@ -170,16 +171,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_provider_id,
         model_provider,
         personality: None,
-        permissions: Permissions {
-            approval_policy: Constrained::allow_any(AskForApproval::Never),
-            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: None,
-            network: None,
-            allow_login_shell: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            windows_sandbox_mode: None,
-            windows_sandbox_private_desktop: true,
-        },
+        permissions: Permissions::from_approval_and_profile(
+            Constrained::allow_any(AskForApproval::Never),
+            Constrained::allow_any(PermissionProfile::read_only()),
+        )?,
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
@@ -190,10 +185,10 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         guardian_policy_config: None,
         include_permissions_instructions: false,
         include_apps_instructions: false,
+        include_collaboration_mode_instructions: false,
         include_skill_instructions: false,
         include_environment_context: false,
         compact_prompt: None,
-        commit_attribution: None,
         notify: None,
         tui_notifications: TuiNotificationSettings::default(),
         animations: true,
@@ -205,11 +200,15 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_terminal_title: None,
         tui_theme: None,
         tui_raw_output_mode: false,
+        tui_pet: None,
+        tui_pet_anchor: TuiPetAnchor::Composer,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
         tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_vim_mode_default: false,
-        cwd,
+        cwd: cwd.clone(),
+        workspace_roots: vec![cwd],
+        workspace_roots_explicit: false,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         mcp_servers: Constrained::allow_any(HashMap::new()),
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::File,
@@ -247,6 +246,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_verbosity: None,
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
@@ -258,7 +258,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         experimental_thread_store: ThreadStoreConfig::Local,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
-        include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Disabled),
         web_search_config: None,
         use_experimental_unified_exec_tool: false,
@@ -269,7 +268,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         suppress_unstable_features_warning: false,
         active_profile: None,
         active_project: ProjectConfig { trust_level: None },
-        windows_wsl_setup_acknowledged: false,
         notices: Notice::default(),
         check_for_update_on_startup: false,
         disable_paste_burst: false,

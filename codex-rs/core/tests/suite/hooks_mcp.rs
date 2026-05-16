@@ -74,6 +74,50 @@ print(json.dumps({{
     Ok(())
 }
 
+fn write_updating_pre_tool_use_hook(home: &Path, updated_message: &str) -> Result<()> {
+    let script_path = home.join("pre_tool_use_hook.py");
+    let log_path = home.join("pre_tool_use_hook_log.jsonl");
+    let updated_message_json =
+        serde_json::to_string(updated_message).context("serialize updated MCP message")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": {{ "message": {updated_message_json} }}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+        updated_message_json = updated_message_json,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": RMCP_HOOK_MATCHER,
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "rewriting MCP pre tool input",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write updating pre tool use hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_post_tool_use_hook(home: &Path, additional_context: &str) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
     let log_path = home.join("post_tool_use_hook_log.jsonl");
@@ -149,6 +193,7 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         },
@@ -245,6 +290,76 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution() -> Result<()> {
         Path::new(transcript_path).exists(),
         "pre tool use hook transcript_path should be materialized on disk",
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_tool_use_rewrites_mcp_tool_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-rmcp-echo-rewrite";
+    let rewritten_message = "rewritten mcp hook input";
+    let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
+    let call_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(call_id, RMCP_NAMESPACE, "echo", &arguments),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "mcp pre hook rewrote it"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_updating_pre_tool_use_hook(home, rewritten_message) {
+                panic!("failed to write MCP updating pre tool use hook fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            enable_hooks_and_rmcp_server(config, rmcp_test_server_bin, AppToolApproval::Approve);
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("call the rmcp echo tool with the MCP pre hook rewrite")
+        .await?;
+
+    let final_request = final_mock.single_request();
+    let output_item = final_request.function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("MCP tool output string");
+    assert!(
+        output.contains(&format!("ECHOING: {rewritten_message}")),
+        "MCP tool should execute the rewritten input",
+    );
+    assert!(
+        !output.contains(RMCP_ECHO_MESSAGE),
+        "MCP tool should not execute the original input",
+    );
+
+    let hook_inputs = read_hook_inputs(test.codex_home_path(), "pre_tool_use_hook_log.jsonl")?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["tool_input"],
+        json!({ "message": RMCP_ECHO_MESSAGE }),
+    );
+
+    call_mock.single_request();
 
     Ok(())
 }

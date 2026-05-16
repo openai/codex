@@ -111,9 +111,7 @@ def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
 
 def test_invalid_notification_payload_falls_back_to_unknown() -> None:
     client = AppServerClient()
-    event = client._coerce_notification(
-        "thread/tokenUsage/updated", {"threadId": "missing"}
-    )
+    event = client._coerce_notification("thread/tokenUsage/updated", {"threadId": "missing"})
 
     assert event.method == "thread/tokenUsage/updated"
     assert isinstance(event.payload, UnknownNotification)

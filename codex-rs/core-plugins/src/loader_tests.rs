@@ -1,7 +1,69 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
+
+fn user_config_path(temp_dir: &TempDir, file_name: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(temp_dir.path().join(file_name))
+        .expect("test user config path should be absolute")
+}
+
+fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
+    ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: path,
+            profile: None,
+        },
+        toml::from_str(config).expect("user config toml"),
+    )
+}
+
+#[test]
+fn configured_plugins_from_stack_merges_user_layers() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let stack = ConfigLayerStack::new(
+        vec![
+            user_layer(
+                user_config_path(&temp_dir, "config.toml"),
+                "[plugins.base]\nenabled = true\n",
+            ),
+            user_layer(
+                user_config_path(&temp_dir, "work.config.toml"),
+                "[plugins.profile]\nenabled = false\n",
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let plugins = configured_plugins_from_stack(&stack);
+
+    assert_eq!(
+        plugins,
+        HashMap::from([
+            (
+                "base".to_string(),
+                PluginConfig {
+                    enabled: true,
+                    mcp_servers: HashMap::new(),
+                },
+            ),
+            (
+                "profile".to_string(),
+                PluginConfig {
+                    enabled: false,
+                    mcp_servers: HashMap::new(),
+                },
+            ),
+        ])
+    );
+}
 
 #[test]
 fn plugin_mcp_file_supports_mcp_servers_object_format() {

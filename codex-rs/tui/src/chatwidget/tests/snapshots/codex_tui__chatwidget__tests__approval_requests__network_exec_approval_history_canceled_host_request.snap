@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/approval_requests.rs
+expression: lines_to_single_string(&decision)
+---
+✗ You canceled the request for codex network access to
+  socks5-tcp://example.com:1080

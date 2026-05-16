@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,13 +16,15 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub read_roots_override: Option<&'a [PathBuf]>,
     pub read_roots_include_platform_defaults: bool,
     pub write_roots_override: Option<&'a [PathBuf]>,
-    pub deny_write_paths_override: &'a [PathBuf],
+    pub deny_read_paths_override: &'a [AbsolutePathBuf],
+    pub deny_write_paths_override: &'a [AbsolutePathBuf],
 }
 
 mod windows_impl {
     use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
     use crate::cap::load_or_create_cap_sids;
+    use crate::cap::workspace_write_cap_sid_for_root;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
@@ -39,8 +42,10 @@ mod windows_impl {
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
     use crate::sandbox_utils::inject_git_safe_directory;
-    use crate::token::convert_string_sid_to_sid;
+    use crate::setup::effective_write_roots_for_setup;
+    use crate::token::LocalSid;
     use anyhow::Result;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::path::Path;
 
     pub use crate::windows_impl::CaptureResult;
@@ -63,8 +68,17 @@ mod windows_impl {
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
+            deny_read_paths_override,
             deny_write_paths_override,
         } = request;
+        let deny_read_paths_override = deny_read_paths_override
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
+        let deny_write_paths_override = deny_write_paths_override
+            .iter()
+            .map(AbsolutePathBuf::to_path_buf)
+            .collect::<Vec<_>>();
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
@@ -85,7 +99,8 @@ mod windows_impl {
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
-            deny_write_paths_override,
+            &deny_read_paths_override,
+            &deny_write_paths_override,
             proxy_enforced,
         )?;
         // Build capability SID for ACL grants.
@@ -96,22 +111,28 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (psid_to_use, cap_sids) = match &policy {
+        let (sid_for_null, cap_sids) = match &policy {
             SandboxPolicy::ReadOnly { .. } => {
-                #[allow(clippy::unwrap_used)]
-                let psid = unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() };
-                (psid, vec![caps.readonly])
+                let sid = LocalSid::from_string(&caps.readonly)?;
+                (sid, vec![caps.readonly])
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                #[allow(clippy::unwrap_used)]
-                let psid = unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() };
-                (
-                    psid,
-                    vec![
-                        caps.workspace,
-                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                    ],
-                )
+                let write_roots = effective_write_roots_for_setup(
+                    &policy,
+                    sandbox_policy_cwd,
+                    cwd,
+                    &env_map,
+                    codex_home,
+                    write_roots_override,
+                );
+                let cap_sids = write_roots
+                    .iter()
+                    .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
+                    .collect::<Result<Vec<_>>>()?;
+                if cap_sids.is_empty() {
+                    anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
+                }
+                (LocalSid::from_string(&cap_sids[0])?, cap_sids)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
@@ -119,7 +140,7 @@ mod windows_impl {
         };
 
         unsafe {
-            allow_null_device(psid_to_use);
+            allow_null_device(sid_for_null.as_ptr());
         }
 
         (|| -> Result<CaptureResult> {

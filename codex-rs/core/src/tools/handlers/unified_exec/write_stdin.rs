@@ -1,11 +1,11 @@
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::ToolExecutor;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -31,9 +31,8 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
-impl ToolHandler for WriteStdinHandler {
-    type Output = ExecCommandToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
     }
@@ -42,27 +41,10 @@ impl ToolHandler for WriteStdinHandler {
         Some(create_write_stdin_tool())
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
-    fn post_tool_use_payload(
+    async fn handle(
         &self,
-        invocation: &ToolInvocation,
-        result: &Self::Output,
-    ) -> Option<PostToolUsePayload> {
-        post_unified_exec_tool_use_payload(invocation, result)
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -105,6 +87,20 @@ impl ToolHandler for WriteStdinHandler {
             .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
             .await;
 
-        Ok(response)
+        Ok(boxed_tool_output(response))
+    }
+}
+
+impl CoreToolRuntime for WriteStdinHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &dyn crate::tools::context::ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        post_unified_exec_tool_use_payload(invocation, result)
     }
 }

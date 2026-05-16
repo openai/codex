@@ -26,6 +26,7 @@ use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
@@ -303,6 +304,54 @@ elif mode == "exit_2":
     });
 
     fs::write(&script_path, script).context("write pre tool use hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_updating_pre_tool_use_hook(
+    home: &Path,
+    matcher: &str,
+    updated_input: &Value,
+) -> Result<()> {
+    let script_path = home.join("pre_tool_use_hook.py");
+    let log_path = home.join("pre_tool_use_hook_log.jsonl");
+    let updated_input_json =
+        serde_json::to_string(updated_input).context("serialize updated pre tool input")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": {updated_input_json}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+        updated_input_json = updated_input_json,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": matcher,
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "rewriting pre tool input",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write updating pre tool use hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -1016,6 +1065,67 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
 }
 
 #[tokio::test]
+async fn pre_tool_use_hook_spills_large_additional_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-shell-command-large-context";
+    let command = "printf pre-tool-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "pre hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let additional_context = "remember the pre tool reef ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let additional_context = additional_context.clone();
+            move |home| {
+                if let Err(error) =
+                    write_pre_tool_use_hook(home, Some("^Bash$"), "context", &additional_context)
+                {
+                    panic!("failed to write pre tool use hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with large pre hook context")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let developer_messages = requests[1].message_input_texts("developer");
+    let developer_message = developer_messages
+        .iter()
+        .find(|message| spilled_hook_output_path(message).is_some())
+        .context("spilled developer hook message")?;
+    assert!(developer_message.contains("tokens truncated"));
+    let path = spilled_hook_output_path(developer_message).context("spill path")?;
+    assert_eq!(fs::read_to_string(path)?, additional_context);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn stop_hook_spills_large_continuation_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1548,7 +1658,6 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2081,6 +2190,222 @@ async fn blocked_pre_tool_use_records_additional_context_for_shell_command() -> 
         !marker.exists(),
         "blocked command should not create marker file"
     );
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum BashRewriteSurface {
+    ExecCommand,
+    ShellCommand,
+}
+
+impl BashRewriteSurface {
+    fn slug(self) -> &'static str {
+        match self {
+            BashRewriteSurface::ExecCommand => "exec-command",
+            BashRewriteSurface::ShellCommand => "shell-command",
+        }
+    }
+
+    fn tool_call(self, call_id: &str, command_text: &str) -> Result<Value> {
+        match self {
+            BashRewriteSurface::ExecCommand => Ok(ev_function_call(
+                call_id,
+                "exec_command",
+                &serde_json::to_string(&serde_json::json!({ "cmd": command_text }))?,
+            )),
+            BashRewriteSurface::ShellCommand => Ok(ev_function_call(
+                call_id,
+                "shell_command",
+                &serde_json::to_string(&serde_json::json!({ "command": command_text }))?,
+            )),
+        }
+    }
+
+    fn original_command(self, marker: &Path) -> String {
+        match self {
+            BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
+                format!("printf original > {}", marker.display())
+            }
+        }
+    }
+
+    fn rewritten_command(self, marker: &Path) -> String {
+        match self {
+            BashRewriteSurface::ExecCommand | BashRewriteSurface::ShellCommand => {
+                format!("printf rewritten > {}", marker.display())
+            }
+        }
+    }
+
+    fn configure(self, config: &mut Config) {
+        trust_discovered_hooks(config);
+        if matches!(self, BashRewriteSurface::ExecCommand) {
+            config.use_experimental_unified_exec_tool = true;
+            if let Err(error) = config.features.enable(Feature::UnifiedExec) {
+                panic!("test config should allow feature update: {error}");
+            }
+        }
+    }
+}
+
+async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let slug = surface.slug();
+    let call_id = format!("pretooluse-{slug}-rewrite");
+    let original_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-original-marker"));
+    let rewritten_marker = std::env::temp_dir().join(format!("pretooluse-{slug}-rewritten-marker"));
+    let original_command = surface.original_command(&original_marker);
+    let rewritten_command = surface.rewritten_command(&rewritten_marker);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                surface.tool_call(&call_id, &original_command)?,
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "hook rewrote it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let updated_input = serde_json::json!({ "command": rewritten_command });
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input) {
+                panic!("failed to write updating pre tool use hook fixture: {error}");
+            }
+        })
+        .with_config(move |config| surface.configure(config));
+    let test = builder.build(&server).await?;
+
+    if original_marker.exists() {
+        fs::remove_file(&original_marker).context("remove stale original pre tool marker")?;
+    }
+    if rewritten_marker.exists() {
+        fs::remove_file(&rewritten_marker).context("remove stale rewritten pre tool marker")?;
+    }
+
+    test.submit_turn_with_permission_profile(
+        &format!("run the rewritten {slug} command"),
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    requests[1].function_call_output(&call_id);
+    assert!(
+        !original_marker.exists(),
+        "original {slug} command should not execute after rewrite"
+    );
+    assert_eq!(
+        fs::read_to_string(&rewritten_marker).context("read rewritten pre tool marker")?,
+        "rewritten"
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_rewrites_shell_command_before_execution() -> Result<()> {
+    assert_pre_tool_use_rewrites_bash_surface(BashRewriteSurface::ShellCommand).await
+}
+
+#[tokio::test]
+async fn pre_tool_use_rewrites_exec_command_before_execution() -> Result<()> {
+    assert_pre_tool_use_rewrites_bash_surface(BashRewriteSurface::ExecCommand).await
+}
+
+#[tokio::test]
+async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-code-mode-rewrite";
+    let original_marker = std::env::temp_dir().join("pretooluse-code-mode-original-marker");
+    let rewritten_marker = std::env::temp_dir().join("pretooluse-code-mode-rewritten-marker");
+    let original_command = format!("printf original > {}", original_marker.display());
+    let rewritten_command = format!("printf rewritten > {}", rewritten_marker.display());
+    let original_command_json =
+        serde_json::to_string(&original_command).context("serialize original command")?;
+    let code = format!(
+        r#"
+const output = await tools.exec_command({{ cmd: {original_command_json} }});
+text(output.output);
+"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_custom_tool_call(call_id, "exec", &code),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "hook rewrote the nested command"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let updated_input = serde_json::json!({ "command": rewritten_command });
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input) {
+                panic!("failed to write updating pre tool use hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    if original_marker.exists() {
+        fs::remove_file(&original_marker).context("remove stale original pre tool marker")?;
+    }
+    if rewritten_marker.exists() {
+        fs::remove_file(&rewritten_marker).context("remove stale rewritten pre tool marker")?;
+    }
+
+    test.submit_turn_with_permission_profile(
+        "run the rewritten shell command from code mode",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    requests[1].custom_tool_call_output(call_id);
+    assert!(
+        !original_marker.exists(),
+        "original nested shell command should not execute after rewrite"
+    );
+    assert_eq!(
+        fs::read_to_string(&rewritten_marker)
+            .context("read rewritten code mode pre tool marker")?,
+        "rewritten"
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], original_command);
 
     Ok(())
 }
@@ -2429,95 +2754,6 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
 }
 
 #[tokio::test]
-async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "pretooluse-local-shell";
-    let marker = std::env::temp_dir().join("pretooluse-local-shell-marker");
-    let command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        format!("printf blocked > {}", marker.display()),
-    ];
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_local_shell_call(
-                    call_id,
-                    "completed",
-                    command.iter().map(String::as_str).collect(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "local shell blocked"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_pre_tool_use_hook(home, Some("^Bash$"), "json_deny", "blocked local shell")
-            {
-                panic!("failed to write pre tool use hook test fixture: {error}");
-            }
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover local shell marker")?;
-    }
-
-    test.submit_turn("run the blocked local shell command")
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("local shell output string");
-    assert!(
-        output.contains("Command blocked by PreToolUse hook: blocked local shell"),
-        "blocked local shell output should surface the hook reason",
-    );
-    assert!(
-        output.contains(&format!(
-            "Command: {}",
-            codex_shell_command::parse_command::shlex_join(&command)
-        )),
-        "blocked local shell output should surface the blocked command",
-    );
-    assert!(
-        !marker.exists(),
-        "blocked local shell command should not execute"
-    );
-
-    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
-    );
-    assert!(
-        hook_inputs[0]["turn_id"]
-            .as_str()
-            .is_some_and(|turn_id| !turn_id.is_empty())
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2643,7 +2879,6 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2671,6 +2906,79 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
     assert_eq!(hook_inputs[0]["tool_name"], "apply_patch");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], patch);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_rewrites_apply_patch_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-apply-patch-rewrite";
+    let original_file = "pre_tool_use_apply_patch_original.txt";
+    let rewritten_file = "pre_tool_use_apply_patch_rewritten.txt";
+    let original_patch = format!(
+        r#"*** Begin Patch
+*** Add File: {original_file}
++original
+*** End Patch"#
+    );
+    let rewritten_patch = format!(
+        r#"*** Begin Patch
+*** Add File: {rewritten_file}
++rewritten
+*** End Patch"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_apply_patch_custom_tool_call(call_id, &original_patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "apply_patch rewritten"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let updated_input = serde_json::json!({ "command": rewritten_patch });
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) =
+                write_updating_pre_tool_use_hook(home, "^apply_patch$", &updated_input)
+            {
+                panic!("failed to write updating pre tool use hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("apply the rewritten patch").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    requests[1].custom_tool_call_output(call_id);
+    assert!(
+        !test.workspace_path(original_file).exists(),
+        "original patch should not create its target file"
+    );
+    assert_eq!(
+        fs::read_to_string(test.workspace_path(rewritten_file))
+            .context("read rewritten apply_patch file")?,
+        "rewritten\n"
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], original_patch);
 
     Ok(())
 }
@@ -2714,7 +3022,6 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3034,75 +3341,6 @@ async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_re
 }
 
 #[tokio::test]
-async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "posttooluse-local-shell";
-    let command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "printf local-post-tool-output".to_string(),
-    ];
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_local_shell_call(
-                    call_id,
-                    "completed",
-                    command.iter().map(String::as_str).collect(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "local shell post hook context observed"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let post_context = "Remember the local shell post-tool note.";
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_post_tool_use_hook(home, Some("^Bash$"), "context", post_context)
-            {
-                panic!("failed to write post tool use hook test fixture: {error}");
-            }
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-
-    test.submit_turn("run the local shell command with post hook")
-        .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&post_context.to_string()),
-        "follow-up request should include local shell post tool use additional context",
-    );
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
-    );
-    assert_eq!(
-        hook_inputs[0]["tool_response"],
-        Value::String("local-post-tool-output".to_string()),
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedback() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -3385,7 +3623,6 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3473,7 +3710,6 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;

@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
@@ -26,9 +26,8 @@ use super::serialize_function_output;
 
 pub struct ListMcpResourceTemplatesHandler;
 
-impl ToolHandler for ListMcpResourceTemplatesHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ListMcpResourceTemplatesHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_mcp_resource_templates")
     }
@@ -41,15 +40,14 @@ impl ToolHandler for ListMcpResourceTemplatesHandler {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "MCP resource template listing reads through the session-owned manager guard"
     )]
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -134,7 +132,7 @@ impl ToolHandler for ListMcpResourceTemplatesHandler {
                         Ok(call_tool_result_from_content(&content, output.success)),
                     )
                     .await;
-                    Ok(output)
+                    Ok(boxed_tool_output(output))
                 }
                 Err(err) => {
                     let duration = start.elapsed();
@@ -168,3 +166,5 @@ impl ToolHandler for ListMcpResourceTemplatesHandler {
         }
     }
 }
+
+impl CoreToolRuntime for ListMcpResourceTemplatesHandler {}

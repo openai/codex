@@ -51,6 +51,10 @@ pub enum ConfigLayerSource {
         /// This is the path to the user's config.toml file, though it is not
         /// guaranteed to exist.
         file: AbsolutePathBuf,
+
+        /// Name of the selected profile-v2 config layered on top of the base
+        /// user config, when this layer represents one.
+        profile: Option<String>,
     },
 
     /// Path to a .codex/ folder within a project. There could be multiple of
@@ -84,7 +88,13 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
-            ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::User { profile, .. } => {
+                if profile.is_some() {
+                    21
+                } else {
+                    20
+                }
+            }
             ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
@@ -120,7 +130,6 @@ pub struct SandboxWorkspaceWrite {
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
-    pub view_image: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -216,6 +225,24 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+/// Backward-compatible API shape for ChatGPT workspace login restrictions.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -233,7 +260,7 @@ pub struct Config {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
@@ -252,6 +279,7 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -357,6 +385,7 @@ pub struct ConfigRequirements {
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
+    pub allow_managed_hooks_only: Option<bool>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
@@ -413,6 +442,9 @@ pub enum ConfiguredHookHandler {
     #[ts(rename = "command")]
     Command {
         command: String,
+        #[serde(rename = "commandWindows")]
+        #[ts(rename = "commandWindows")]
+        command_windows: Option<String>,
         #[serde(rename = "timeoutSec")]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,

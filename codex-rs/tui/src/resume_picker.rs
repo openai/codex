@@ -9,6 +9,10 @@ mod transcript;
 use crate::app_server_session::AppServerSession;
 use crate::color::blend;
 use crate::color::is_light;
+use crate::git_action_directives::parse_assistant_markdown;
+use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::ListKeymap;
 use crate::keymap::PagerKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
@@ -281,6 +285,7 @@ struct SessionPickerRunOptions {
     initial_density: SessionListDensity,
     view_persistence: Option<SessionPickerViewPersistence>,
     pager_keymap: PagerKeymap,
+    list_keymap: ListKeymap,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -353,7 +358,7 @@ async fn run_resume_picker_with_launch_context(
     );
     let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
     let provider_filter = picker_provider_filter(config, is_remote);
-    let pager_keymap = picker_pager_keymap(config)?;
+    let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
@@ -366,7 +371,8 @@ async fn run_resume_picker_with_launch_context(
             codex_home: config.codex_home.to_path_buf(),
             active_profile: config.active_profile.clone(),
         }),
-        pager_keymap,
+        pager_keymap: runtime_keymap.pager,
+        list_keymap: runtime_keymap.list,
     };
     run_session_picker_with_loader(
         tui,
@@ -398,7 +404,7 @@ pub async fn run_fork_picker_with_app_server(
     );
     let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
     let provider_filter = picker_provider_filter(config, is_remote);
-    let pager_keymap = picker_pager_keymap(config)?;
+    let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
         filter_cwd: cwd_filter,
@@ -411,7 +417,8 @@ pub async fn run_fork_picker_with_app_server(
             codex_home: config.codex_home.to_path_buf(),
             active_profile: config.active_profile.clone(),
         }),
-        pager_keymap,
+        pager_keymap: runtime_keymap.pager,
+        list_keymap: runtime_keymap.list,
     };
     run_session_picker_with_loader(
         tui,
@@ -446,6 +453,7 @@ async fn run_session_picker_with_loader(
     state.density = options.initial_density;
     state.view_persistence = options.view_persistence;
     state.pager_keymap = options.pager_keymap;
+    state.list_keymap = options.list_keymap;
     state.launch_context = options.launch_context;
     state.start_initial_load();
     state.request_frame();
@@ -515,9 +523,8 @@ fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
     }
 }
 
-fn picker_pager_keymap(config: &Config) -> Result<PagerKeymap> {
+fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
     RuntimeKeymap::from_config(&config.tui_keymap)
-        .map(|keymap| keymap.pager)
         .map_err(|err| color_eyre::eyre::eyre!("invalid keymap configuration: {err}"))
 }
 
@@ -655,6 +662,7 @@ struct PickerState {
     transcript_loading_frame_shown: bool,
     overlay: Option<Overlay>,
     pager_keymap: PagerKeymap,
+    list_keymap: ListKeymap,
 }
 
 struct PaginationState {
@@ -780,7 +788,7 @@ async fn load_transcript_preview(
             }),
             ThreadItem::AgentMessage { text, .. } => Some(TranscriptPreviewLine {
                 speaker: TranscriptPreviewSpeaker::Assistant,
-                text: text.clone(),
+                text: parse_assistant_markdown(text).visible_markdown,
             }),
             _ => None,
         })
@@ -927,6 +935,7 @@ impl PickerState {
             transcript_loading_frame_shown: false,
             overlay: None,
             pager_keymap: RuntimeKeymap::defaults().pager,
+            list_keymap: RuntimeKeymap::defaults().list,
         }
     }
 
@@ -1027,24 +1036,26 @@ impl PickerState {
         if self.is_transcript_loading() {
             return Ok(self.handle_transcript_loading_key(key));
         }
-        if !matches!(key.code, KeyCode::PageDown) {
+        if !self.list_keymap.page_down.is_pressed(key) {
             self.pending_page_down_target = None;
         }
+        // The session picker is always searchable, so plain text belongs to
+        // the query first. Modified list bindings still route through the
+        // runtime keymap below.
+        let allow_plain_char_navigation = !is_plain_text_key_event(key);
         match key {
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
-                if self.query.is_empty() {
-                    return Ok(Some(SessionSelection::StartFresh));
-                }
-                self.clear_query_preserving_selection();
-            }
             KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(SessionSelection::Exit));
+            }
+            _ if self.list_keymap.cancel.is_pressed(key) => {
+                if self.query.is_empty() {
+                    return Ok(Some(SessionSelection::StartFresh));
+                }
+                self.clear_query_preserving_selection();
             }
             KeyEvent {
                 code: KeyCode::Char('t'),
@@ -1088,10 +1099,7 @@ impl PickerState {
             } /* ^O */ => {
                 self.toggle_density().await;
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                ..
-            } => {
+            _ if self.list_keymap.accept.is_pressed(key) => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
@@ -1118,39 +1126,14 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyEvent {
-                code: KeyCode::Up, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^P */ => {
+            _ if allow_plain_char_navigation && self.list_keymap.move_up.is_pressed(key) => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.ensure_selected_visible();
                 }
                 self.request_frame();
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^N */ => {
+            _ if allow_plain_char_navigation && self.list_keymap.move_down.is_pressed(key) => {
                 if self.selected + 1 < self.filtered_rows.len() {
                     self.selected += 1;
                     self.ensure_selected_visible();
@@ -1158,10 +1141,7 @@ impl PickerState {
                 self.maybe_load_more_for_scroll();
                 self.request_frame();
             }
-            KeyEvent {
-                code: KeyCode::PageUp,
-                ..
-            } => {
+            _ if allow_plain_char_navigation && self.list_keymap.page_up.is_pressed(key) => {
                 let step = self.view_rows.unwrap_or(10).max(1);
                 if self.selected > 0 {
                     self.selected = self.selected.saturating_sub(step);
@@ -1169,19 +1149,14 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyEvent {
-                code: KeyCode::Home,
-                ..
-            } => {
+            _ if allow_plain_char_navigation && self.list_keymap.jump_top.is_pressed(key) => {
                 if !self.filtered_rows.is_empty() {
                     self.selected = 0;
                     self.ensure_selected_visible();
                     self.request_frame();
                 }
             }
-            KeyEvent {
-                code: KeyCode::End, ..
-            } => {
+            _ if allow_plain_char_navigation && self.list_keymap.jump_bottom.is_pressed(key) => {
                 if !self.filtered_rows.is_empty() {
                     self.selected = self.filtered_rows.len().saturating_sub(1);
                     self.ensure_selected_visible();
@@ -1189,10 +1164,7 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyEvent {
-                code: KeyCode::PageDown,
-                ..
-            } => {
+            _ if allow_plain_char_navigation && self.list_keymap.page_down.is_pressed(key) => {
                 if !self.filtered_rows.is_empty() {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let target = self.selected.saturating_add(step);
@@ -1221,14 +1193,10 @@ impl PickerState {
                 self.focus_previous_toolbar_control();
                 self.request_frame();
             }
-            KeyEvent {
-                code: KeyCode::Left,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Right,
-                ..
-            } => {
+            _ if allow_plain_char_navigation
+                && (self.list_keymap.move_left.is_pressed(key)
+                    || self.list_keymap.move_right.is_pressed(key)) =>
+            {
                 self.change_focused_toolbar_value();
                 self.request_frame();
             }
@@ -5381,7 +5349,7 @@ session_picker_view = "dense"
             .await
             .unwrap();
         state
-            .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL))
             .await
             .unwrap();
 
@@ -5551,6 +5519,89 @@ session_picker_view = "dense"
             .await
             .unwrap();
         assert_eq!(state.selected, 0);
+    }
+
+    #[tokio::test]
+    async fn page_and_jump_navigation_use_list_keymap() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.list_keymap.page_down = vec![crate::key_hint::ctrl(KeyCode::Char('d'))];
+        state.list_keymap.page_up = vec![crate::key_hint::ctrl(KeyCode::Char('u'))];
+        state.list_keymap.jump_bottom = vec![crate::key_hint::ctrl(KeyCode::Char('y'))];
+        state.list_keymap.jump_top = vec![crate::key_hint::ctrl(KeyCode::Char('a'))];
+
+        let mut items = Vec::new();
+        for idx in 0..20 {
+            let ts = format!("2025-01-{:02}T00:00:00Z", idx + 1);
+            let preview = format!("item-{idx}");
+            let path = format!("/tmp/item-{idx}.jsonl");
+            items.push(make_row(&path, &ts, &preview));
+        }
+
+        state.reset_pagination();
+        state.ingest_page(page(
+            items, /*next_cursor*/ None, /*num_scanned_files*/ 20,
+            /*reached_scan_cap*/ false,
+        ));
+        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 0);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 5);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 0);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 19);
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+        assert_eq!(state.selected, 0);
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_exits_even_when_cancel_is_remapped_to_ctrl_c() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.list_keymap.cancel = vec![crate::key_hint::ctrl(KeyCode::Char('c'))];
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert!(matches!(selection, Some(SessionSelection::Exit)));
     }
 
     #[tokio::test]
@@ -5737,6 +5788,7 @@ session_picker_view = "dense"
             name: None,
             turns: vec![codex_app_server_protocol::Turn {
                 id: String::from("turn-1"),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: String::from("user-1"),
@@ -5756,7 +5808,6 @@ session_picker_view = "dense"
                         text: String::from("1. Do the thing"),
                     },
                 ],
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -5804,12 +5855,12 @@ session_picker_view = "dense"
             name: None,
             turns: vec![codex_app_server_protocol::Turn {
                 id: String::from("turn-1"),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::Reasoning {
                     id: String::from("reasoning-1"),
                     summary: Vec::new(),
                     content: vec![String::from("private raw chain of thought")],
                 }],
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -5861,12 +5912,12 @@ session_picker_view = "dense"
             name: None,
             turns: vec![codex_app_server_protocol::Turn {
                 id: String::from("turn-1"),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::Reasoning {
                     id: String::from("reasoning-1"),
                     summary: vec![String::from("public summary")],
                     content: vec![String::from("raw reasoning content")],
                 }],
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
                 started_at: None,

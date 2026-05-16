@@ -5,7 +5,12 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import assistant_text_from_turn, ensure_local_sdk_src, find_turn_by_id, runtime_config
+from _bootstrap import (
+    assistant_text_from_turn,
+    ensure_local_sdk_src,
+    find_turn_by_id,
+    runtime_config,
+)
 
 ensure_local_sdk_src()
 
@@ -33,7 +38,9 @@ PREFERRED_MODEL = "gpt-5.4"
 
 def _pick_highest_model(models):
     visible = [m for m in models if not m.hidden] or models
-    preferred = next((m for m in visible if m.model == PREFERRED_MODEL or m.id == PREFERRED_MODEL), None)
+    preferred = next(
+        (m for m in visible if m.model == PREFERRED_MODEL or m.id == PREFERRED_MODEL), None
+    )
     if preferred is not None:
         return preferred
     known_names = {m.id for m in visible} | {m.model for m in visible}

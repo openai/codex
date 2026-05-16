@@ -1127,6 +1127,7 @@ fn completed_legacy_event_history_is_not_mid_turn() {
             images: None,
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            ..Default::default()
         })),
         RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
             message: "done".to_string(),
@@ -1154,6 +1155,7 @@ fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
             images: None,
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            ..Default::default()
         })),
     ]);
 

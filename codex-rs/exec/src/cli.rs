@@ -16,6 +16,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", global = true, default_value_t = false)]
+    pub strict_config: bool,
+
     #[clap(flatten)]
     pub shared: ExecSharedCliOptions,
 
@@ -155,6 +159,7 @@ fn mark_exec_global_args(cmd: clap::Command) -> clap::Command {
         .mut_arg("dangerously_bypass_approvals_and_sandbox", |arg| {
             arg.global(true)
         })
+        .mut_arg("bypass_hook_trust", |arg| arg.global(true))
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -257,7 +262,7 @@ impl FromArgMatches for ResumeArgs {
     }
 }
 
-#[derive(Parser, Debug)]
+#[derive(Args, Debug)]
 pub struct ReviewArgs {
     /// Review staged, unstaged, and untracked changes.
     #[arg(

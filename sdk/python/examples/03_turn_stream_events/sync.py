@@ -40,7 +40,9 @@ with Codex(config=runtime_config()) as codex:
                 saw_delta = True
             continue
         if event.method == "turn/completed":
-            completed_status = getattr(event.payload.turn.status, "value", str(event.payload.turn.status))
+            completed_status = getattr(
+                event.payload.turn.status, "value", str(event.payload.turn.status)
+            )
 
     if saw_delta:
         print()

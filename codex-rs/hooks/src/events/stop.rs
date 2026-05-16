@@ -259,6 +259,7 @@ fn parse_completed(
             block_reason,
             continuation_fragments,
         },
+        completion_order: 0,
     }
 }
 

@@ -127,9 +127,7 @@ class AsyncAppServerClient:
         """List threads using the wrapped sync client."""
         return await self._call_sync(self._sync.thread_list, params)
 
-    async def thread_read(
-        self, thread_id: str, include_turns: bool = False
-    ) -> ThreadReadResponse:
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         """Read a thread using the wrapped sync client."""
         return await self._call_sync(self._sync.thread_read, thread_id, include_turns)
 
@@ -164,13 +162,9 @@ class AsyncAppServerClient:
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
         """Start a turn using the wrapped sync client."""
-        return await self._call_sync(
-            self._sync.turn_start, thread_id, input_items, params
-        )
+        return await self._call_sync(self._sync.turn_start, thread_id, input_items, params)
 
-    async def turn_interrupt(
-        self, thread_id: str, turn_id: str
-    ) -> TurnInterruptResponse:
+    async def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
         """Interrupt a turn using the wrapped sync client."""
         return await self._call_sync(self._sync.turn_interrupt, thread_id, turn_id)
 

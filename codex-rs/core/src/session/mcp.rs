@@ -154,6 +154,9 @@ impl Session {
             id,
             request,
         });
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -263,19 +266,6 @@ impl Session {
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP tool metadata reads through the session-owned manager guard"
-    )]
-    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .resolve_tool_info(tool_name)
-            .await
-    }
-
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
@@ -309,6 +299,7 @@ impl Session {
                     .environment_manager
                     .default_environment()
                     .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),
         };

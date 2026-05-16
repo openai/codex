@@ -273,7 +273,8 @@ async fn stored_thread_from_sqlite_metadata(
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
             .ok()
-            .flatten(),
+            .flatten()
+            .filter(|title| !title.trim().is_empty()),
     };
     let session_meta = read_session_meta_line(metadata.rollout_path.as_path())
         .await

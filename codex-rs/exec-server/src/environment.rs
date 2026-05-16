@@ -135,6 +135,20 @@ impl EnvironmentManager {
         }
     }
 
+    /// Builds a test-only manager that keeps the provider default while also
+    /// allowing tests to select the local environment explicitly.
+    pub async fn create_for_tests_with_local(
+        exec_server_url: Option<String>,
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
+        let mut snapshot = DefaultEnvironmentProvider::new(exec_server_url).snapshot_inner();
+        snapshot.include_local = true;
+        match Self::from_provider_snapshot(snapshot, local_runtime_paths) {
+            Ok(manager) => manager,
+            Err(err) => panic!("test provider with local should create valid environments: {err}"),
+        }
+    }
+
     /// Builds a manager from a provider-supplied startup snapshot.
     pub async fn from_provider<P>(
         provider: &P,

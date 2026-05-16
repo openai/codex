@@ -42,6 +42,15 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
+    # PowerShell's stop-parsing marker hands the remaining source text to native
+    # commands with runtime argument handling that does not match the AST shape we
+    # flatten below. Keep that form out of the argv-like lowering path entirely.
+    foreach ($token in $tokens) {
+        if ($token.Text -eq '--%') {
+            return @{ id = $RequestId; status = 'unsupported' }
+        }
+    }
+
     # Only accept AST shapes we can flatten into a list of argv-like command words.
     # Anything more dynamic than that becomes "unsupported" instead of being guessed at.
     $commands = [System.Collections.ArrayList]::new()
