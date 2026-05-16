@@ -98,7 +98,7 @@ fn credentialed_routes_add_runtime_allowlist_and_mitm_hooks() {
             base_url: "https://api.example.com/v1".to_string(),
         }],
         proxy_headers: Vec::new(),
-        proxy_url: Some("https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string()),
+        proxy_url: Some("https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string()),
     };
 
     let spec = spec
