@@ -103,6 +103,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         })
         .await
         .unwrap_or_else(|err| panic!("submit user input: {err}"));
@@ -112,24 +113,33 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await
         .unwrap_or_else(|err| panic!("submit user turn: {err}"));
@@ -285,6 +295,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         })
         .await
         .unwrap();
@@ -303,6 +314,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         })
         .await
         .unwrap();

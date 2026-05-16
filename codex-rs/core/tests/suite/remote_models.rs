@@ -154,24 +154,33 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
         .await?;
 
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: config.legacy_sandbox_policy(),
-            model: requested_model.to_string(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            permission_profile: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: None,
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: requested_model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -232,24 +241,33 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
         .await?;
 
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: config.legacy_sandbox_policy(),
-            model: requested_model.to_string(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            permission_profile: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: None,
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: requested_model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -309,24 +327,33 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
         .await?;
 
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: config.legacy_sandbox_policy(),
-            model: requested_model.to_string(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            permission_profile: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: None,
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: requested_model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -399,24 +426,33 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
         .await?;
 
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "check model slug".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: config.legacy_sandbox_policy(),
-            permission_profile: None,
-            model: requested_model.to_string(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: None,
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: None,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: requested_model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -460,28 +496,37 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
         .await?;
 
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "check namespaced model metadata".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: config.legacy_sandbox_policy(),
-            permission_profile: None,
-            model: requested_model.to_string(),
-            effort: None,
-            summary: Some(
-                config
-                    .model_reasoning_summary
-                    .unwrap_or(ReasoningSummary::Auto),
-            ),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: None,
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: None,
+                summary: Some(
+                    config
+                        .model_reasoning_summary
+                        .unwrap_or(ReasoningSummary::Auto),
+                ),
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: requested_model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -633,24 +678,33 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run call".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: REMOTE_MODEL_SLUG.to_string(),
-            effort: None,
-            summary: Some(ReasoningSummary::Auto),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: Some(ReasoningSummary::Auto),
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: REMOTE_MODEL_SLUG.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -865,24 +919,33 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello remote".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: model.to_string(),
-            effort: None,
-            summary: Some(ReasoningSummary::Auto),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
             environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: Some(ReasoningSummary::Auto),
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: model.to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
