@@ -820,6 +820,7 @@ flag = false
 async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
 {
     use base64::Engine;
+    use codex_protocol::protocol::SandboxPolicy;
 
     let Some(home) = dirs::home_dir() else {
         return Ok(());
