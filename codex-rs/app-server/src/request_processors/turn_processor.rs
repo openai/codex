@@ -503,39 +503,35 @@ impl TurnRequestProcessor {
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
         }
 
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if has_any_overrides {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                turn_context: codex_protocol::protocol::TurnContextOverrides {
-                    cwd,
-                    workspace_roots: runtime_workspace_roots,
-                    profile_workspace_roots,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level: None,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                },
+        let turn_context = if has_any_overrides {
+            codex_protocol::protocol::TurnContextOverrides {
+                cwd,
+                workspace_roots: runtime_workspace_roots,
+                profile_workspace_roots,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                windows_sandbox_level: None,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
             }
         } else {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                turn_context: Default::default(),
-            }
+            Default::default()
+        };
+
+        // Start the turn by submitting the user input. Return its submission id as turn_id.
+        let turn_op = Op::UserInput {
+            items: mapped_items,
+            environments: environment_selections,
+            final_output_json_schema: params.output_schema,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            turn_context,
         };
         let turn_id = self
             .submit_core_op(&request_id, thread.as_ref(), turn_op)
