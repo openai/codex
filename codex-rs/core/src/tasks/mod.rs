@@ -511,7 +511,6 @@ impl Session {
             && let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                     turn_context: turn_context.as_deref(),
-                    reason: reason.clone(),
                 })
                 .await
         {
@@ -558,7 +557,6 @@ impl Session {
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                 turn_context: turn_context.as_deref(),
-                reason: reason.clone(),
             })
             .await
         {

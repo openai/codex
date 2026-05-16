@@ -8239,7 +8239,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 }
 
 #[tokio::test]
-async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
+async fn interrupt_accounts_active_goal_without_pausing() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
@@ -8269,7 +8269,7 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
         .await?
         .expect("goal should remain persisted after interrupt");
     assert_eq!(
-        codex_protocol::protocol::ThreadGoalStatus::Paused,
+        codex_protocol::protocol::ThreadGoalStatus::Active,
         goal.status
     );
     assert_eq!(70, goal.tokens_used);
