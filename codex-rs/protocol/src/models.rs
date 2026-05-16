@@ -5,6 +5,7 @@ use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_string::approx_token_count;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -920,7 +921,7 @@ impl Default for BaseInstructions {
 }
 
 const MAX_RENDERED_PREFIXES: usize = 100;
-const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
+const MAX_ALLOW_PREFIX_TEXT_TOKENS: usize = 1000;
 const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
 
 pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
@@ -937,22 +938,19 @@ pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
             .then_with(|| a.cmp(b))
     });
 
-    let full_text = prefixes
-        .into_iter()
-        .take(MAX_RENDERED_PREFIXES)
-        .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // truncate to last UTF8 char
-    let mut output = full_text;
-    let byte_idx = output
-        .char_indices()
-        .nth(MAX_ALLOW_PREFIX_TEXT_BYTES)
-        .map(|(i, _)| i);
-    if let Some(byte_idx) = byte_idx {
-        truncated = true;
-        output = output[..byte_idx].to_string();
+    let mut output = String::new();
+    for prefix in prefixes.into_iter().take(MAX_RENDERED_PREFIXES) {
+        let line = format!("- {}", render_command_prefix(&prefix));
+        let candidate = if output.is_empty() {
+            line
+        } else {
+            format!("{output}\n{line}")
+        };
+        if approx_token_count(&candidate) > MAX_ALLOW_PREFIX_TEXT_TOKENS {
+            truncated = true;
+            break;
+        }
+        output = candidate;
     }
 
     if truncated {
@@ -2166,8 +2164,9 @@ mod tests {
         let output =
             format_allow_prefixes(exec_policy.get_allowed_prefixes()).expect("formatted prefixes");
         assert!(
-            output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
-            "output length exceeds expected limit: {output}",
+            approx_token_count(output.trim_end_matches(TRUNCATED_MARKER))
+                <= MAX_ALLOW_PREFIX_TEXT_TOKENS,
+            "output token count exceeds expected limit: {output}",
         );
     }
 
