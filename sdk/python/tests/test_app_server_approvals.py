@@ -124,12 +124,18 @@ def test_dangerous_bypass_thread_lifecycle_persists_thread_settings(
                 source.id,
                 ThreadResumeParams(thread_id=source.id),
             )
-            resumed = codex.thread_resume(source.id)
+            resumed = codex.thread_resume(
+                source.id,
+                approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+            )
             resumed_state = codex._client.thread_resume(  # noqa: SLF001
                 resumed.id,
                 ThreadResumeParams(thread_id=resumed.id),
             )
-            forked = codex.thread_fork(source.id)
+            forked = codex.thread_fork(
+                source.id,
+                approval_mode=ApprovalMode.dangerously_bypass_approvals_and_sandbox,
+            )
             forked_state = codex._client.thread_resume(  # noqa: SLF001
                 forked.id,
                 ThreadResumeParams(thread_id=forked.id),
@@ -345,7 +351,7 @@ def test_dangerous_bypass_rejects_explicit_sandbox_conflicts_before_state_change
                     sandbox_policy=SandboxPolicy(root=ReadOnlySandboxPolicy(type="readOnly")),
                 )
 
-            thread_state = thread.read(include_turns=True)
+            thread_state = thread.read()
 
     assert {
         "threads_after_invalid_start": [
