@@ -74,6 +74,8 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::read_codex_access_token_from_env;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
@@ -1539,40 +1541,29 @@ async fn load_exec_server_remote_auth_provider(
     config_profile: Option<String>,
     allow_agent_identity_auth: bool,
 ) -> anyhow::Result<codex_api::SharedAuthProvider> {
-    if !allow_agent_identity_auth {
-        return load_chatgpt_exec_server_remote_auth_provider(
-            root_config_overrides,
-            config_profile,
-        )
-        .await;
+    let config = load_exec_server_remote_config(root_config_overrides, config_profile).await?;
+    if allow_agent_identity_auth
+        && let Some(agent_identity_jwt) = read_codex_access_token_from_env()
+    {
+        let auth =
+            CodexAuth::from_agent_identity_jwt(&agent_identity_jwt, Some(&config.chatgpt_base_url))
+                .await?;
+        return Ok(codex_model_provider::auth_provider_from_auth(&auth));
     }
 
     let auth = load_exec_server_remote_auth(
-        root_config_overrides,
-        config_profile,
-        /*allow_agent_identity_auth*/ true,
-        "remote exec-server registration requires ChatGPT authentication or Agent Identity auth from CODEX_ACCESS_TOKEN",
+        &config,
+        if allow_agent_identity_auth {
+            "remote exec-server registration requires ChatGPT authentication or Agent Identity auth from CODEX_ACCESS_TOKEN"
+        } else {
+            "remote exec-server registration requires ChatGPT authentication; run `codex login` first"
+        },
     )
     .await?;
 
-    validate_agent_identity_enabled_exec_server_remote_auth_mode(auth.auth_mode())?;
-
-    Ok(codex_model_provider::auth_provider_from_auth(&auth))
-}
-
-async fn load_chatgpt_exec_server_remote_auth_provider(
-    root_config_overrides: &CliConfigOverrides,
-    config_profile: Option<String>,
-) -> anyhow::Result<codex_api::SharedAuthProvider> {
-    let auth = load_exec_server_remote_auth(
-        root_config_overrides,
-        config_profile,
-        /*allow_agent_identity_auth*/ false,
-        "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
-    )
-    .await?;
-
-    if !auth.is_chatgpt_auth() {
+    if allow_agent_identity_auth {
+        validate_agent_identity_enabled_exec_server_remote_auth_mode(auth.auth_mode())?;
+    } else if !auth.is_chatgpt_auth() {
         anyhow::bail!(
             "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
         );
@@ -1581,29 +1572,29 @@ async fn load_chatgpt_exec_server_remote_auth_provider(
     Ok(codex_model_provider::auth_provider_from_auth(&auth))
 }
 
-async fn load_exec_server_remote_auth(
+async fn load_exec_server_remote_config(
     root_config_overrides: &CliConfigOverrides,
     config_profile: Option<String>,
-    allow_agent_identity_auth: bool,
-    missing_auth_error: &'static str,
-) -> anyhow::Result<codex_login::CodexAuth> {
+) -> anyhow::Result<codex_core::config::Config> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = ConfigBuilder::default()
+    Ok(ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(ConfigOverrides {
             config_profile,
             ..Default::default()
         })
         .build()
-        .await?;
-    let auth_manager = AuthManager::shared_from_config_with_env(
-        &config,
-        /*enable_codex_api_key_env*/ false,
-        /*enable_codex_access_token_env*/ allow_agent_identity_auth,
-    )
-    .await;
+        .await?)
+}
+
+async fn load_exec_server_remote_auth(
+    config: &codex_core::config::Config,
+    missing_auth_error: &'static str,
+) -> anyhow::Result<codex_login::CodexAuth> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
 
     let auth = match auth_manager.auth().await {
         Some(auth) => auth,
