@@ -255,18 +255,14 @@ def test_outside_workspace_write_rejected_for_deny_all_and_allowed_for_bypass(
     with AppServerHarness(tmp_path) as harness:
         rejected_args = json.dumps(
             {
-                "command": (
-                    f"printf %s rejected > {shlex.quote(str(rejected_path))}"
-                ),
+                "command": (f"printf %s rejected > {shlex.quote(str(rejected_path))}"),
                 "login": False,
                 "timeout_ms": 1_000,
             }
         )
         dangerous_args = json.dumps(
             {
-                "command": (
-                    f"printf %s dangerous > {shlex.quote(str(allowed_path))}"
-                ),
+                "command": (f"printf %s dangerous > {shlex.quote(str(allowed_path))}"),
                 "login": False,
                 "timeout_ms": 1_000,
             }

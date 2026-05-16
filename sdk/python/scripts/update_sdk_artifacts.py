@@ -882,9 +882,7 @@ def _approval_mode_turn_sandbox_policy_lines(*, indent: str = "        ") -> lis
     ]
 
 
-def _model_arg_lines(
-    fields: list[PublicFieldSpec], *, indent: str = "            "
-) -> list[str]:
+def _model_arg_lines(fields: list[PublicFieldSpec], *, indent: str = "            ") -> list[str]:
     return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
 
 
