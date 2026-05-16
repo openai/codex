@@ -505,12 +505,12 @@ impl TurnRequestProcessor {
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = if has_any_overrides {
-            Op::UserInputWithTurnContext {
+            Op::UserInput {
                 items: mapped_items,
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
-                turn_context: TurnContextOverrides {
+                turn_context: codex_protocol::protocol::TurnContextOverrides {
                     cwd,
                     workspace_roots: runtime_workspace_roots,
                     profile_workspace_roots,
@@ -534,6 +534,7 @@ impl TurnRequestProcessor {
                 environments: environment_selections,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
+                turn_context: Default::default(),
             }
         };
         let turn_id = self

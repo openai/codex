@@ -500,10 +500,7 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
-    /// Legacy user input.
-    ///
-    /// Prefer [`Op::UserTurn`] so the caller provides full turn context
-    /// (cwd/approval/sandbox/model/etc.) for each turn.
+    /// User input, optionally with turn-context overrides applied first.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -516,26 +513,9 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
-    },
-
-    /// Similar to [`Op::UserInput`], but first applies persistent turn-context
-    /// overrides in the same queued operation. This preserves submission order
-    /// and prevents the input from starting if the overrides are rejected.
-    UserInputWithTurnContext {
-        /// User input items, see `InputItem`
-        items: Vec<UserInput>,
-        /// Optional turn-scoped environment selections.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        environments: Option<Vec<TurnEnvironmentSelection>>,
-        /// Optional JSON Schema used to constrain the final assistant message for this turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        final_output_json_schema: Option<Value>,
-        /// Optional turn-scoped Responses API `client_metadata`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        responsesapi_client_metadata: Option<HashMap<String, String>>,
 
         /// Persistent turn-context overrides to apply before the input.
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         turn_context: TurnContextOverrides,
     },
 
@@ -547,74 +527,6 @@ pub enum Op {
         /// Persistent turn-context overrides to apply.
         #[serde(flatten)]
         turn_context: TurnContextOverrides,
-    },
-
-    /// Similar to [`Op::UserInput`], but contains additional context required
-    /// for a turn of a [`crate::codex_thread::CodexThread`].
-    UserTurn {
-        /// User input items, see `InputItem`
-        items: Vec<UserInput>,
-
-        /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
-        /// such as `local_shell`.
-        cwd: PathBuf,
-
-        /// Policy to use for command approval.
-        approval_policy: AskForApproval,
-
-        /// Reviewer to use for approval requests raised during this turn.
-        ///
-        /// When omitted, the session keeps the current setting
-        approvals_reviewer: Option<ApprovalsReviewer>,
-
-        /// Policy to use for tool calls such as `local_shell`.
-        sandbox_policy: SandboxPolicy,
-
-        /// Full permissions profile to use for tool calls such as `local_shell`.
-        ///
-        /// When omitted, `sandbox_policy` is used as a legacy compatibility
-        /// projection.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        permission_profile: Option<PermissionProfile>,
-
-        /// Must be a valid model slug for the configured client session
-        /// associated with this conversation.
-        model: String,
-
-        /// Will only be honored if the model is configured to use reasoning.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<ReasoningEffortConfig>,
-
-        /// Will only be honored if the model is configured to use reasoning.
-        ///
-        /// When omitted, the session keeps the current setting (which allows core to
-        /// fall back to the selected model's default on new sessions).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        summary: Option<ReasoningSummaryConfig>,
-
-        /// Optional service tier override for this turn.
-        ///
-        /// Use `Some(Some(_))` to set a specific tier for this turn, `Some(None)` to
-        /// explicitly clear the tier for this turn, or `None` to keep the existing
-        /// session preference.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<String>>,
-
-        // The JSON schema to use for the final assistant message
-        final_output_json_schema: Option<Value>,
-
-        /// EXPERIMENTAL - set a pre-set collaboration mode.
-        /// Takes precedence over model, effort, and developer instructions if set.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        collaboration_mode: Option<CollaborationMode>,
-
-        /// Optional personality override for this turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        personality: Option<Personality>,
-
-        /// Optional turn-scoped environments.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        environments: Option<Vec<TurnEnvironmentSelection>>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -743,6 +655,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: TurnContextOverrides::default(),
         }
     }
 }
@@ -809,9 +722,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
-            Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
             Self::TurnContext { .. } => "turn_context",
-            Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -5016,6 +4927,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5035,6 +4947,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                turn_context: Default::default(),
             }
         );
 
@@ -5056,6 +4969,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
+            turn_context: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5081,6 +4995,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
+            turn_context: Default::default(),
         };
 
         let json_op = serde_json::to_value(&op)?;

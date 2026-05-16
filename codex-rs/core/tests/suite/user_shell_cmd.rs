@@ -174,24 +174,33 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
 
     fixture
         .codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: fixture.session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            turn_context: codex_protocol::protocol::TurnContextOverrides {
+                cwd: Some(cwd),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: None,
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: None,
+                service_tier: None,
+                personality: None,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: fixture.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
