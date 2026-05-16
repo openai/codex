@@ -260,6 +260,27 @@ impl CodexThread {
         &self,
         overrides: CodexThreadTurnContextOverrides,
     ) -> ConstraintResult<()> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.validate_settings(&updates).await
+    }
+
+    /// Apply persistent turn context overrides directly.
+    ///
+    /// This bypasses the submission queue; callers that need ordering relative
+    /// to turns should use the queued turn-context op.
+    pub async fn update_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.turn_context_settings_update(overrides).await;
+        self.codex.session.update_settings(updates).await?;
+        Ok(self.config_snapshot().await)
+    }
+
+    async fn turn_context_settings_update(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadTurnContextOverrides {
             cwd,
             workspace_roots,
@@ -287,7 +308,7 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
             workspace_roots,
             profile_workspace_roots,
@@ -302,8 +323,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.
