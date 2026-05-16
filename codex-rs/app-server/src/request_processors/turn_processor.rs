@@ -596,23 +596,17 @@ impl TurnRequestProcessor {
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
         }
 
+        let turn_context = resolved_overrides
+            .map(op_turn_context_overrides)
+            .unwrap_or_default();
+
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if let Some(overrides) = resolved_overrides {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                turn_context: op_turn_context_overrides(overrides),
-            }
-        } else {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                turn_context: Default::default(),
-            }
+        let turn_op = Op::UserInput {
+            items: mapped_items,
+            environments: environment_selections,
+            final_output_json_schema: params.output_schema,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            turn_context,
         };
         let turn_id = Uuid::now_v7().to_string();
         let turn_context_applied = if has_turn_context_overrides {

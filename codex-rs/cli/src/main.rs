@@ -73,6 +73,8 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::read_codex_access_token_from_env;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
@@ -489,6 +491,10 @@ struct ExecServerCommand {
     /// Human-readable executor name.
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
+
+    /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
+    #[arg(long = "use-agent-identity-auth", requires = "remote")]
+    use_agent_identity_auth: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1388,7 +1394,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(
+                cmd,
+                &arg0_paths,
+                &root_config_overrides,
+                interactive.config_profile.clone(),
+            )
+            .await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1485,6 +1497,8 @@ fn profile_v2_for_subcommand<'a>(
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1498,8 +1512,14 @@ async fn run_exec_server_command(
         let executor_id = cmd
             .executor_id
             .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let auth_provider = load_exec_server_remote_auth_provider(
+            root_config_overrides,
+            config_profile,
+            cmd.use_agent_identity_auth,
+        )
+        .await?;
         let mut remote_config =
-            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id, auth_provider)?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
@@ -1513,6 +1533,75 @@ async fn run_exec_server_command(
     codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
+}
+
+async fn load_exec_server_remote_auth_provider(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+    use_agent_identity_auth: bool,
+) -> anyhow::Result<codex_api::SharedAuthProvider> {
+    let config = load_exec_server_remote_config(root_config_overrides, config_profile).await?;
+    if use_agent_identity_auth {
+        let agent_identity_jwt = read_codex_access_token_from_env().ok_or_else(|| {
+            anyhow::anyhow!("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
+        })?;
+        let auth =
+            CodexAuth::from_agent_identity_jwt(&agent_identity_jwt, Some(&config.chatgpt_base_url))
+                .await?;
+        return Ok(codex_model_provider::auth_provider_from_auth(&auth));
+    }
+
+    let auth = load_exec_server_remote_auth(
+        &config,
+        "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
+    )
+    .await?;
+
+    if !auth.is_chatgpt_auth() {
+        anyhow::bail!(
+            "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
+        );
+    }
+
+    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+}
+
+async fn load_exec_server_remote_config(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+) -> anyhow::Result<codex_core::config::Config> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    Ok(ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(ConfigOverrides {
+            config_profile,
+            ..Default::default()
+        })
+        .build()
+        .await?)
+}
+
+async fn load_exec_server_remote_auth(
+    config: &codex_core::config::Config,
+    missing_auth_error: &'static str,
+) -> anyhow::Result<codex_login::CodexAuth> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
+
+    let auth = match auth_manager.auth().await {
+        Some(auth) => auth,
+        None => {
+            auth_manager.reload().await;
+            auth_manager
+                .auth()
+                .await
+                .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
+        }
+    };
+
+    Ok(auth)
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
