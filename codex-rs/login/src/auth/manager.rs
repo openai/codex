@@ -246,6 +246,7 @@ impl CodexAuth {
         load_auth(
             codex_home,
             /*enable_codex_api_key_env*/ false,
+            /*enable_codex_access_token_env*/ true,
             auth_credentials_store_mode,
             chatgpt_base_url,
         )
@@ -618,6 +619,7 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
     let Some(auth) = load_auth(
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
+        /*enable_codex_access_token_env*/ true,
         config.auth_credentials_store_mode,
         config.chatgpt_base_url.as_deref(),
     )
@@ -731,6 +733,7 @@ fn logout_all_stores(
 async fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
+    enable_codex_access_token_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<Option<CodexAuth>> {
@@ -761,7 +764,9 @@ async fn load_auth(
         return Ok(None);
     }
 
-    if let Some(agent_identity) = read_codex_access_token_from_env() {
+    if enable_codex_access_token_env
+        && let Some(agent_identity) = read_codex_access_token_from_env()
+    {
         return CodexAuth::from_agent_identity_jwt(&agent_identity, chatgpt_base_url)
             .await
             .map(Some);
@@ -1253,6 +1258,7 @@ pub struct AuthManager {
     codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
     enable_codex_api_key_env: bool,
+    enable_codex_access_token_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
@@ -1287,6 +1293,10 @@ impl Debug for AuthManager {
             .field("inner", &self.inner)
             .field("enable_codex_api_key_env", &self.enable_codex_api_key_env)
             .field(
+                "enable_codex_access_token_env",
+                &self.enable_codex_access_token_env,
+            )
+            .field(
                 "auth_credentials_store_mode",
                 &self.auth_credentials_store_mode,
             )
@@ -1311,9 +1321,27 @@ impl AuthManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
     ) -> Self {
+        Self::new_with_env(
+            codex_home,
+            enable_codex_api_key_env,
+            /*enable_codex_access_token_env*/ true,
+            auth_credentials_store_mode,
+            chatgpt_base_url,
+        )
+        .await
+    }
+
+    async fn new_with_env(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        enable_codex_access_token_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
+    ) -> Self {
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
+            enable_codex_access_token_env,
             auth_credentials_store_mode,
             chatgpt_base_url.as_deref(),
         )
@@ -1327,6 +1355,7 @@ impl AuthManager {
                 permanent_refresh_failure: None,
             }),
             enable_codex_api_key_env,
+            enable_codex_access_token_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url,
@@ -1346,6 +1375,7 @@ impl AuthManager {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
             enable_codex_api_key_env: false,
+            enable_codex_access_token_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
@@ -1364,6 +1394,7 @@ impl AuthManager {
             codex_home,
             inner: RwLock::new(cached),
             enable_codex_api_key_env: false,
+            enable_codex_access_token_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
@@ -1380,6 +1411,7 @@ impl AuthManager {
                 permanent_refresh_failure: None,
             }),
             enable_codex_api_key_env: false,
+            enable_codex_access_token_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
@@ -1518,6 +1550,7 @@ impl AuthManager {
         load_auth(
             &self.codex_home,
             self.enable_codex_api_key_env,
+            self.enable_codex_access_token_env,
             self.auth_credentials_store_mode,
             self.chatgpt_base_url.as_deref(),
         )
@@ -1602,14 +1635,49 @@ impl AuthManager {
         )
     }
 
+    async fn shared_with_env(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        enable_codex_access_token_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
+    ) -> Arc<Self> {
+        Arc::new(
+            Self::new_with_env(
+                codex_home,
+                enable_codex_api_key_env,
+                enable_codex_access_token_env,
+                auth_credentials_store_mode,
+                chatgpt_base_url,
+            )
+            .await,
+        )
+    }
+
     /// Convenience constructor returning an `Arc` wrapper from resolved config.
     pub async fn shared_from_config(
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        let auth_manager = Self::shared(
+        Self::shared_from_config_with_env(
+            config,
+            enable_codex_api_key_env,
+            /*enable_codex_access_token_env*/ true,
+        )
+        .await
+    }
+
+    /// Convenience constructor returning an `Arc` wrapper from resolved config,
+    /// with explicit control over environment-backed auth.
+    pub async fn shared_from_config_with_env(
+        config: &impl AuthManagerConfig,
+        enable_codex_api_key_env: bool,
+        enable_codex_access_token_env: bool,
+    ) -> Arc<Self> {
+        let auth_manager = Self::shared_with_env(
             config.codex_home(),
             enable_codex_api_key_env,
+            enable_codex_access_token_env,
             config.cli_auth_credentials_store_mode(),
             Some(config.chatgpt_base_url()),
         )

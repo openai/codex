@@ -209,6 +209,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -265,6 +266,7 @@ async fn loads_api_key_from_auth_json() {
     let auth = super::load_auth(
         dir.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -342,6 +344,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -743,6 +746,7 @@ async fn load_auth_reads_access_token_from_env() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         Some(&chatgpt_base_url),
     )
@@ -774,6 +778,7 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ true,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -782,6 +787,85 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
     .expect("env auth should be present");
 
     assert_eq!(auth.api_key(), Some("sk-env"));
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn load_auth_can_ignore_access_token_env_for_persisted_chatgpt() {
+    let codex_home = tempdir().unwrap();
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
+    let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: None,
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("persisted auth should load")
+    .expect("persisted auth should be present");
+
+    assert!(auth.is_chatgpt_auth());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn load_auth_can_ignore_api_key_env_for_agent_identity_selection() {
+    let codex_home = tempdir().unwrap();
+    let expected_record = agent_identity_record(WORKSPACE_ID_ALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&expected_record, json!(expected_record.plan_type))
+            .expect("signed agent identity");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/agent-identities/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/v1/agent/agent-runtime-id/task/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
+    let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
+
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
+        AuthCredentialsStoreMode::File,
+        Some(&chatgpt_base_url),
+    )
+    .await
+    .expect("env auth should load")
+    .expect("env auth should be present");
+
+    let CodexAuth::AgentIdentity(agent_identity) = auth else {
+        panic!("env auth should load as agent identity");
+    };
+    assert_eq!(agent_identity.record(), &expected_record);
+    assert_eq!(agent_identity.process_task_id(), "task-123");
+    server.verify().await;
 }
 
 #[tokio::test]
@@ -1182,6 +1266,7 @@ async fn plan_type_maps_known_plan() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -1210,6 +1295,7 @@ async fn plan_type_maps_self_serve_business_usage_based_plan() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -1241,6 +1327,7 @@ async fn plan_type_maps_enterprise_cbp_usage_based_plan() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -1272,6 +1359,7 @@ async fn plan_type_maps_unknown_to_unknown() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
@@ -1300,6 +1388,7 @@ async fn missing_plan_type_maps_to_unknown() {
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
+        /*enable_codex_access_token_env*/ true,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
     )
