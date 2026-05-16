@@ -316,8 +316,7 @@ def test_real_quickstart_style_flow_smoke(runtime_env: PreparedRuntimeEnv) -> No
     )
 
     assert {
-        "thread_id_is_text": isinstance(data["thread_id"], str)
-        and bool(data["thread_id"].strip()),
+        "thread_id_is_text": isinstance(data["thread_id"], str) and bool(data["thread_id"].strip()),
         "final_response_is_text": isinstance(data["final_response"], str)
         and bool(data["final_response"].strip()),
         "items_count_is_int": isinstance(data["items_count"], int),
