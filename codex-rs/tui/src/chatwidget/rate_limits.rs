@@ -77,57 +77,23 @@ impl RateLimitWarningState {
 
 pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     const MINUTES_PER_HOUR: i64 = 60;
+    const MINUTES_PER_5_HOURS: i64 = 5 * MINUTES_PER_HOUR;
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
     const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
     const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
-    const MINUTES_PER_YEAR: i64 = 365 * MINUTES_PER_DAY;
-    const ROUNDING_BIAS_MINUTES: i64 = 3;
 
     let windows_minutes = windows_minutes.max(0);
 
-    if windows_minutes == 0 {
-        PRIMARY_LIMIT_FALLBACK_LABEL.to_string()
-    } else if let Some(months) =
-        approximate_window_count(windows_minutes, MINUTES_PER_MONTH, MINUTES_PER_DAY)
-    {
-        if months == 1 {
-            "monthly".to_string()
-        } else {
-            format!("{months}-month")
-        }
-    } else if let Some(years) =
-        approximate_window_count(windows_minutes, MINUTES_PER_YEAR, MINUTES_PER_DAY)
-    {
-        if years == 1 {
-            "annual".to_string()
-        } else {
-            format!("{years}-year")
-        }
-    } else if let Some(weeks) =
-        approximate_window_count(windows_minutes, MINUTES_PER_WEEK, ROUNDING_BIAS_MINUTES)
-    {
-        if weeks == 1 {
-            "weekly".to_string()
-        } else {
-            format!("{weeks}-week")
-        }
-    } else if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
-        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
-        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
-        format!("{hours}h")
-    } else if let Some(days) =
-        approximate_window_count(windows_minutes, MINUTES_PER_DAY, ROUNDING_BIAS_MINUTES)
-    {
-        format!("{days}-day")
-    } else if windows_minutes < MINUTES_PER_WEEK {
-        let days = windows_minutes.saturating_add(MINUTES_PER_DAY - 1) / MINUTES_PER_DAY;
-        format!("{days}-day")
-    } else if windows_minutes < MINUTES_PER_MONTH {
-        let weeks = windows_minutes.saturating_add(MINUTES_PER_WEEK - 1) / MINUTES_PER_WEEK;
-        format!("{weeks}-week")
+    if is_approximate_window(windows_minutes, MINUTES_PER_5_HOURS) {
+        "5h".to_string()
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_DAY) {
+        "daily".to_string()
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_WEEK) {
+        "weekly".to_string()
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_MONTH) {
+        "monthly".to_string()
     } else {
-        let months = windows_minutes.saturating_add(MINUTES_PER_MONTH - 1) / MINUTES_PER_MONTH;
-        format!("{months}-month")
+        PRIMARY_LIMIT_FALLBACK_LABEL.to_string()
     }
 }
 
@@ -139,21 +105,10 @@ pub(crate) fn fallback_limit_label(is_secondary: bool) -> &'static str {
     }
 }
 
-fn approximate_window_count(
-    minutes: i64,
-    unit_minutes: i64,
-    tolerance_minutes: i64,
-) -> Option<i64> {
-    if minutes <= 0 || unit_minutes <= 0 {
-        return None;
-    }
-    let count = std::cmp::max(1, (minutes + unit_minutes / 2) / unit_minutes);
-    let target_minutes = count.saturating_mul(unit_minutes);
-    if (minutes - target_minutes).abs() <= tolerance_minutes {
-        Some(count)
-    } else {
-        None
-    }
+fn is_approximate_window(minutes: i64, expected_minutes: i64) -> bool {
+    let minutes = minutes as f64;
+    let expected_minutes = expected_minutes as f64;
+    minutes >= expected_minutes * 0.95 && minutes <= expected_minutes * 1.05
 }
 
 #[derive(Default)]

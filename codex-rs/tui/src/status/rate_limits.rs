@@ -439,7 +439,7 @@ mod tests {
             labels,
             vec![
                 "codex-other limit".to_string(),
-                "1h limit".to_string(),
+                "Usage limit".to_string(),
                 "Secondary usage limit".to_string(),
             ]
         );
