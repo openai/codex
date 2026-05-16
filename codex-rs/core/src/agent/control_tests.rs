@@ -614,6 +614,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Child root guidance.".to_string());
     child_config.multi_agent_v2.subagent_usage_hint_text =
         Some("Child subagent guidance.".to_string());
+    child_config.developer_instructions = Some("Parent developer instructions.".to_string());
     let new_thread = harness
         .manager
         .start_thread(parent_config.clone())
@@ -652,6 +653,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     role: "developer".to_string(),
                     content: vec![ContentItem::InputText {
                         text: "Parent subagent guidance.".to_string(),
+                    }],
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Parent developer instructions.".to_string(),
                     }],
                     phase: None,
                 },
@@ -725,6 +734,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         history.raw_items(),
         &expected_history,
         "forked child history should keep only parent user messages and assistant final answers"
+    );
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("forked child rollout path");
+    let child_rollout = std::fs::read_to_string(&child_rollout_path)
+        .expect("forked child rollout should be readable");
+    assert!(
+        !child_rollout.contains("Parent developer instructions."),
+        "forked child rollout should not retain developer instructions that will be reinjected"
     );
 
     let expected = (
