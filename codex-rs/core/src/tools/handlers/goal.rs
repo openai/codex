@@ -87,20 +87,13 @@ fn goal_response(
 }
 
 fn completion_budget_report(goal: &ThreadGoal) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(budget) = goal.token_budget {
-        parts.push(format!("tokens used: {} of {budget}", goal.tokens_used));
-    }
-    if goal.time_used_seconds > 0 {
-        parts.push(format!("time used: {} seconds", goal.time_used_seconds));
-    }
-    if parts.is_empty() {
+    if goal.token_budget.is_none() && goal.time_used_seconds <= 0 {
         None
     } else {
-        Some(format!(
-            "Goal achieved. Report final budget usage to the user: {}.",
-            parts.join("; ")
-        ))
+        Some(
+            "Goal achieved. Report final usage from this tool result's structured goal fields. If `goal.tokenBudget` is present, include token usage from `goal.tokensUsed` and `goal.tokenBudget`. If `goal.timeUsedSeconds` is greater than 0, summarize elapsed time in a concise, human-friendly form appropriate to the response language."
+                .to_string(),
+        )
     }
 }
 
@@ -131,7 +124,7 @@ mod tests {
                 goal: Some(goal),
                 remaining_tokens: Some(6_750),
                 completion_budget_report: Some(
-                    "Goal achieved. Report final budget usage to the user: tokens used: 3250 of 10000; time used: 75 seconds."
+                    "Goal achieved. Report final usage from this tool result's structured goal fields. If `goal.tokenBudget` is present, include token usage from `goal.tokensUsed` and `goal.tokenBudget`. If `goal.timeUsedSeconds` is greater than 0, summarize elapsed time in a concise, human-friendly form appropriate to the response language."
                         .to_string()
                 ),
             }
