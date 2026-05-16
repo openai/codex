@@ -42,7 +42,6 @@ use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnCompleteEvent;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
@@ -2191,7 +2190,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
     );
     assert_eq!(
         guardian_config.permissions.permission_profile(),
-        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy())
+        &PermissionProfile::read_only()
     );
 }
 
@@ -2253,9 +2252,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
             NetworkProxySpec::from_config_and_constraints(
                 live_network,
                 /*requirements*/ None,
-                &PermissionProfile::from_legacy_sandbox_policy(
-                    &SandboxPolicy::new_read_only_policy(),
-                ),
+                &PermissionProfile::read_only(),
             )
             .expect("live network proxy spec")
         )

@@ -29,7 +29,6 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -821,6 +820,7 @@ flag = false
 async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
 {
     use base64::Engine;
+    use codex_protocol::protocol::SandboxPolicy;
 
     let Some(home) = dirs::home_dir() else {
         return Ok(());
@@ -913,14 +913,7 @@ allowed_sandbox_modes = ["read-only"]
         state
             .requirements()
             .permission_profile
-            .can_set(&PermissionProfile::from_legacy_sandbox_policy(
-                &SandboxPolicy::WorkspaceWrite {
-                    writable_roots: Vec::new(),
-                    network_access: false,
-                    exclude_tmpdir_env_var: false,
-                    exclude_slash_tmp: false,
-                },
-            ))
+            .can_set(&PermissionProfile::workspace_write())
             .is_err()
     );
 
@@ -1233,11 +1226,9 @@ allowed_sandbox_modes = ["read-only"]
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
 
     assert_eq!(
-        config_requirements.permission_profile.can_set(
-            &PermissionProfile::from_legacy_sandbox_policy(
-                &SandboxPolicy::new_workspace_write_policy()
-            )
-        ),
+        config_requirements
+            .permission_profile
+            .can_set(&PermissionProfile::workspace_write()),
         Err(ConstraintError::InvalidValue {
             field_name: "sandbox_mode",
             candidate: "WorkspaceWrite".into(),
@@ -1570,9 +1561,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
         layers
             .requirements()
             .permission_profile
-            .can_set(&PermissionProfile::from_legacy_sandbox_policy(
-                &SandboxPolicy::new_workspace_write_policy()
-            ))
+            .can_set(&PermissionProfile::workspace_write())
             .is_ok()
     );
 

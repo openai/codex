@@ -9,6 +9,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
@@ -890,11 +891,16 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut sandbox_policy {
-        *network_access = true;
-    }
-    let sandbox_policy_for_config = sandbox_policy.clone();
+    let permission_profile_for_config = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    let sandbox_policy = permission_profile_for_config
+        .clone()
+        .to_legacy_sandbox_policy(home.path())
+        .expect("workspace-write profile should project to legacy policy");
     let mut builder = test_codex()
         .with_home(home)
         .with_cloud_requirements(managed_network_requirements_loader())
@@ -907,9 +913,7 @@ allow_local_binding = true
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config
                 .permissions
-                .set_permission_profile(PermissionProfile::from_legacy_sandbox_policy(
-                    &sandbox_policy_for_config,
-                ))
+                .set_permission_profile(permission_profile_for_config)
                 .expect("set permission profile");
         });
     let test = builder.build_with_remote_env(server).await?;
@@ -2734,16 +2738,11 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let read_only_policy = SandboxPolicy::new_read_only_policy();
-    let read_only_policy_for_config = read_only_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config
             .features
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
-        config
-            .set_legacy_sandbox_policy(read_only_policy_for_config)
-            .expect("set sandbox policy");
         let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
         file_system_sandbox_policy
             .entries
@@ -2800,6 +2799,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     let request_log = mount_sse_sequence(&server, responses).await;
 
     let session_model = session_configured.model.clone();
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
     codex
         .submit(Op::UserTurn {
             environments: None,
