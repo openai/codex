@@ -5,8 +5,14 @@ from pathlib import Path
 from openai_codex.client import AppServerClient, _params_dict
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
+    AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
     ApprovalsReviewer,
+    ChatgptLoginAccountParams,
+    ChatgptLoginAccountResponse,
+    GetAccountParams,
+    LoginAccountParams,
+    LoginAccountResponse,
     ThreadListParams,
     ThreadResumeResponse,
     ThreadTokenUsageUpdatedNotification,
@@ -24,6 +30,50 @@ def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
     assert "search_term" in ThreadListParams.model_fields
     dumped = _params_dict(params)
     assert dumped == {"searchTerm": "needle", "limit": 5}
+
+
+def test_account_login_start_serializes_and_registers_interactive_completion() -> None:
+    client = AppServerClient()
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def fake_request(method, params, *, response_model):  # noqa: ANN001,ANN202
+        captured.append((method, params))
+        assert response_model is LoginAccountResponse
+        return LoginAccountResponse(
+            root=ChatgptLoginAccountResponse(
+                login_id="login-1",
+                auth_url="https://example.test/auth",
+                type="chatgpt",
+            )
+        )
+
+    client.request = fake_request  # type: ignore[method-assign]
+
+    response = client.account_login_start(
+        LoginAccountParams(
+            root=ChatgptLoginAccountParams(type="chatgpt"),
+        )
+    )
+
+    assert {
+        "captured": captured,
+        "response_type": response.root.type,
+        "registered_logins": sorted(client._router._login_notifications),
+    } == {
+        "captured": [
+            (
+                "account/login/start",
+                {"type": "chatgpt"},
+            )
+        ],
+        "response_type": "chatgpt",
+        "registered_logins": ["login-1"],
+    }
+
+
+def test_account_read_serializes_refresh_flag() -> None:
+    dumped = _params_dict(GetAccountParams(refresh_token=True))
+    assert dumped == {"refreshToken": True}
 
 
 def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
@@ -339,3 +389,63 @@ def test_turn_notification_router_routes_unknown_turn_notifications() -> None:
     second = client.next_turn_notification("turn-2")
 
     assert [first.method, second.method] == ["unknown/direct", "unknown/nested"]
+
+
+def test_login_notification_router_demuxes_attempts_without_consuming_globals() -> None:
+    """Login completion waiters should not steal unrelated global notifications."""
+    client = AppServerClient()
+    client.register_login_notifications("login-1")
+
+    client._router.route_notification(
+        client._coerce_notification(
+            "account/login/completed",
+            {"loginId": "login-1", "success": False, "error": "cancelled"},
+        )
+    )
+    client._router.route_notification(
+        Notification(
+            method="unknown/global",
+            payload=UnknownNotification(params={"kind": "global"}),
+        )
+    )
+
+    login_event = client.next_login_notification("login-1")
+    global_event = client.next_notification()
+
+    assert {
+        "login": login_event,
+        "global": global_event,
+    } == {
+        "login": Notification(
+            method="account/login/completed",
+            payload=AccountLoginCompletedNotification(
+                login_id="login-1",
+                success=False,
+                error="cancelled",
+            ),
+        ),
+        "global": Notification(
+            method="unknown/global",
+            payload=UnknownNotification(params={"kind": "global"}),
+        ),
+    }
+
+
+def test_login_notification_router_buffers_completion_before_registration() -> None:
+    """Fast interactive login completions should replay once their handle waits."""
+    client = AppServerClient()
+    client._router.route_notification(
+        client._coerce_notification(
+            "account/login/completed",
+            {"loginId": "login-1", "success": True, "error": None},
+        )
+    )
+
+    client.register_login_notifications("login-1")
+    completion = client.wait_for_login_completed("login-1")
+
+    assert completion == AccountLoginCompletedNotification(
+        login_id="login-1",
+        success=True,
+        error=None,
+    )

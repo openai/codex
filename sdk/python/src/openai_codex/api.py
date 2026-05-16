@@ -30,6 +30,16 @@ from ._run import (
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    AccountLoginCompletedNotification,
+    ApiKeyLoginAccountParams,
+    CancelLoginAccountResponse,
+    ChatgptDeviceCodeLoginAccountParams,
+    ChatgptDeviceCodeLoginAccountResponse,
+    ChatgptLoginAccountParams,
+    ChatgptLoginAccountResponse,
+    GetAccountParams,
+    GetAccountResponse,
+    LoginAccountParams,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -84,6 +94,62 @@ class Codex:
 
     def close(self) -> None:
         self._client.close()
+
+    def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    def login_chatgpt(self) -> ChatgptLoginHandle:
+        """Start a browser-based ChatGPT login attempt."""
+        response = self._client.account_login_start(
+            LoginAccountParams(
+                root=ChatgptLoginAccountParams(type="chatgpt"),
+            )
+        )
+        response_root = response.root
+        if not isinstance(response_root, ChatgptLoginAccountResponse):
+            raise RuntimeError(f"unexpected ChatGPT login response: {response_root!r}")
+        return ChatgptLoginHandle(
+            self._client,
+            response_root.login_id,
+            response_root.auth_url,
+        )
+
+    def login_chatgpt_device_code(self) -> DeviceCodeLoginHandle:
+        """Start a device-code ChatGPT login attempt."""
+        response = self._client.account_login_start(
+            LoginAccountParams(
+                root=ChatgptDeviceCodeLoginAccountParams(type="chatgptDeviceCode"),
+            )
+        )
+        response_root = response.root
+        if not isinstance(response_root, ChatgptDeviceCodeLoginAccountResponse):
+            raise RuntimeError(f"unexpected device-code login response: {response_root!r}")
+        return DeviceCodeLoginHandle(
+            self._client,
+            response_root.login_id,
+            response_root.verification_url,
+            response_root.user_code,
+        )
+
+    def cancel_login(self, login_id: str) -> CancelLoginAccountResponse:
+        """Cancel one in-progress interactive login attempt."""
+        return self._client.account_login_cancel(login_id)
+
+    def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        return self._client.account_read(GetAccountParams(refresh_token=refresh_token))
+
+    def logout(self) -> None:
+        """Clear the current app-server account session."""
+        self._client.account_logout()
 
     # BEGIN GENERATED: Codex.flat_methods
     def thread_start(
@@ -286,6 +352,70 @@ class AsyncCodex:
         self._init = None
         self._initialized = False
 
+    async def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        await self._ensure_initialized()
+        await self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    async def login_chatgpt(self) -> AsyncChatgptLoginHandle:
+        """Start a browser-based ChatGPT login attempt."""
+        await self._ensure_initialized()
+        response = await self._client.account_login_start(
+            LoginAccountParams(
+                root=ChatgptLoginAccountParams(type="chatgpt"),
+            )
+        )
+        response_root = response.root
+        if not isinstance(response_root, ChatgptLoginAccountResponse):
+            raise RuntimeError(f"unexpected ChatGPT login response: {response_root!r}")
+        return AsyncChatgptLoginHandle(
+            self,
+            response_root.login_id,
+            response_root.auth_url,
+        )
+
+    async def login_chatgpt_device_code(self) -> AsyncDeviceCodeLoginHandle:
+        """Start a device-code ChatGPT login attempt."""
+        await self._ensure_initialized()
+        response = await self._client.account_login_start(
+            LoginAccountParams(
+                root=ChatgptDeviceCodeLoginAccountParams(type="chatgptDeviceCode"),
+            )
+        )
+        response_root = response.root
+        if not isinstance(response_root, ChatgptDeviceCodeLoginAccountResponse):
+            raise RuntimeError(f"unexpected device-code login response: {response_root!r}")
+        return AsyncDeviceCodeLoginHandle(
+            self,
+            response_root.login_id,
+            response_root.verification_url,
+            response_root.user_code,
+        )
+
+    async def cancel_login(self, login_id: str) -> CancelLoginAccountResponse:
+        """Cancel one in-progress interactive login attempt."""
+        await self._ensure_initialized()
+        return await self._client.account_login_cancel(login_id)
+
+    async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        await self._ensure_initialized()
+        return await self._client.account_read(
+            GetAccountParams(refresh_token=refresh_token)
+        )
+
+    async def logout(self) -> None:
+        """Clear the current app-server account session."""
+        await self._ensure_initialized()
+        await self._client.account_logout()
+
     # BEGIN GENERATED: AsyncCodex.flat_methods
     async def thread_start(
         self,
@@ -440,6 +570,72 @@ class AsyncCodex:
     async def models(self, *, include_hidden: bool = False) -> ModelListResponse:
         await self._ensure_initialized()
         return await self._client.model_list(include_hidden=include_hidden)
+
+
+@dataclass(slots=True)
+class ChatgptLoginHandle:
+    _client: AppServerClient
+    login_id: str
+    auth_url: str
+
+    def wait(self) -> AccountLoginCompletedNotification:
+        """Wait until this browser login attempt completes."""
+        return self._client.wait_for_login_completed(self.login_id)
+
+    def cancel(self) -> CancelLoginAccountResponse:
+        """Cancel this browser login attempt."""
+        return self._client.account_login_cancel(self.login_id)
+
+
+@dataclass(slots=True)
+class DeviceCodeLoginHandle:
+    _client: AppServerClient
+    login_id: str
+    verification_url: str
+    user_code: str
+
+    def wait(self) -> AccountLoginCompletedNotification:
+        """Wait until this device-code login attempt completes."""
+        return self._client.wait_for_login_completed(self.login_id)
+
+    def cancel(self) -> CancelLoginAccountResponse:
+        """Cancel this device-code login attempt."""
+        return self._client.account_login_cancel(self.login_id)
+
+
+@dataclass(slots=True)
+class AsyncChatgptLoginHandle:
+    _codex: AsyncCodex
+    login_id: str
+    auth_url: str
+
+    async def wait(self) -> AccountLoginCompletedNotification:
+        """Wait until this browser login attempt completes."""
+        await self._codex._ensure_initialized()
+        return await self._codex._client.wait_for_login_completed(self.login_id)
+
+    async def cancel(self) -> CancelLoginAccountResponse:
+        """Cancel this browser login attempt."""
+        await self._codex._ensure_initialized()
+        return await self._codex._client.account_login_cancel(self.login_id)
+
+
+@dataclass(slots=True)
+class AsyncDeviceCodeLoginHandle:
+    _codex: AsyncCodex
+    login_id: str
+    verification_url: str
+    user_code: str
+
+    async def wait(self) -> AccountLoginCompletedNotification:
+        """Wait until this device-code login attempt completes."""
+        await self._codex._ensure_initialized()
+        return await self._codex._client.wait_for_login_completed(self.login_id)
+
+    async def cancel(self) -> CancelLoginAccountResponse:
+        """Cancel this device-code login attempt."""
+        await self._codex._ensure_initialized()
+        return await self._codex._client.account_login_cancel(self.login_id)
 
 
 @dataclass(slots=True)

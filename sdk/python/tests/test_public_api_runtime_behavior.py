@@ -12,7 +12,11 @@ from openai_codex.api import (
     AsyncCodex,
     Codex,
 )
-from openai_codex.generated.v2_all import TurnStartParams
+from openai_codex.generated.v2_all import (
+    ChatgptDeviceCodeLoginAccountResponse,
+    LoginAccountResponse,
+    TurnStartParams,
+)
 from openai_codex.models import InitializeResponse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +129,52 @@ def test_async_codex_initializes_only_once_under_concurrency() -> None:
         assert initialize_calls == 1
 
     asyncio.run(scenario())
+
+
+def test_device_code_login_returns_public_handle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public SDK should unwrap device-code start responses into a typed handle."""
+
+    class FakeClient:
+        def __init__(self, config=None) -> None:  # noqa: ANN001,ARG002
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def initialize(self) -> InitializeResponse:
+            return InitializeResponse.model_validate(
+                {
+                    "userAgent": "codex-cli/1.2.3",
+                    "serverInfo": {"name": "codex-cli", "version": "1.2.3"},
+                }
+            )
+
+        def close(self) -> None:
+            return None
+
+        def account_login_start(self, _params) -> LoginAccountResponse:  # noqa: ANN001
+            return LoginAccountResponse(
+                root=ChatgptDeviceCodeLoginAccountResponse(
+                    login_id="login-1",
+                    verification_url="https://example.test/device",
+                    user_code="CODE-123",
+                    type="chatgptDeviceCode",
+                )
+            )
+
+    monkeypatch.setattr(public_api_module, "AppServerClient", FakeClient)
+
+    handle = Codex().login_chatgpt_device_code()
+
+    assert {
+        "login_id": handle.login_id,
+        "verification_url": handle.verification_url,
+        "user_code": handle.user_code,
+    } == {
+        "login_id": "login-1",
+        "verification_url": "https://example.test/device",
+        "user_code": "CODE-123",
+    }
 
 
 def _approval_mode_turn_params(approval_mode: ApprovalMode) -> TurnStartParams:
