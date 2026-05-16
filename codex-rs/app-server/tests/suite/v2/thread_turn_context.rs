@@ -341,6 +341,73 @@ async fn thread_turn_context_update_after_turn_start_preserves_newer_update() ->
 }
 
 #[tokio::test]
+async fn queued_updates_keep_each_turn_context_notification_snapshot() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("gpt-5.2".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            ..Default::default()
+        })
+        .await?;
+    let update_request_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id,
+            model: Some("gpt-5.4".to_string()),
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        })
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_request_id)),
+    )
+    .await??;
+
+    let notifications = [
+        read_turn_context_updated(&mut mcp).await?,
+        read_turn_context_updated(&mut mcp).await?,
+    ];
+    assert!(notifications.iter().any(|notification| {
+        notification.turn_context.model == "gpt-5.2"
+            && notification.turn_context.effort == Some(ReasoningEffort::Low)
+    }));
+    assert!(notifications.iter().any(|notification| {
+        notification.turn_context.model == "gpt-5.4"
+            && notification.turn_context.effort == Some(ReasoningEffort::High)
+    }));
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_turn_context_update_after_no_op_turn_start_override_preserves_newer_update()
 -> Result<()> {
     assert_newer_update_survives_turn_start(TurnStartParams {
