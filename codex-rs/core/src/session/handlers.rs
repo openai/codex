@@ -164,52 +164,6 @@ pub(super) async fn user_input_or_turn_inner(
                 None,
             )
         }
-        Op::UserInputWithTurnContext {
-            cwd,
-            workspace_roots,
-            profile_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let mut updates = thread_settings_update(
-                sess,
-                ThreadSettingsOverrides {
-                    cwd,
-                    workspace_roots,
-                    profile_workspace_roots,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                },
-            )
-            .await;
-            updates.final_output_json_schema = Some(final_output_json_schema);
-            updates.environments = environments;
-            (items, updates, responsesapi_client_metadata)
-        }
         Op::UserInput {
             items,
             environments,
@@ -872,9 +826,7 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }

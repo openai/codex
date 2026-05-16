@@ -5227,31 +5227,6 @@ fn op_kind_distinguishes_turn_ops() {
         .kind(),
         "user_input"
     );
-    assert_eq!(
-        Op::UserInputWithTurnContext {
-            environments: None,
-            items: vec![],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            cwd: None,
-            workspace_roots: None,
-            profile_workspace_roots: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        }
-        .kind(),
-        "user_input_with_turn_context"
-    );
 }
 
 #[tokio::test]
