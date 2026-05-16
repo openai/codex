@@ -97,55 +97,11 @@ pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
 }
 
 pub async fn update_turn_context(sess: &Arc<Session>, sub_id: String, op: Op) {
-    let Op::TurnContext {
-        turn_context:
-            TurnContextOverrides {
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            },
-    } = op
-    else {
+    let Op::TurnContext { turn_context } = op else {
         unreachable!();
     };
-    let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
-        Some(collaboration_mode)
-    } else {
-        let state = sess.state.lock().await;
-        Some(
-            state
-                .session_configuration
-                .collaboration_mode
-                .with_updates(model, effort, /*developer_instructions*/ None),
-        )
-    };
-    let msg = match sess
-        .update_settings(SessionSettingsUpdate {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            collaboration_mode,
-            reasoning_summary: summary,
-            service_tier,
-            personality,
-            ..Default::default()
-        })
-        .await
-    {
+    let updates = turn_context_settings_update(sess, turn_context).await;
+    let msg = match sess.update_settings(updates).await {
         Ok(()) => turn_context_applied_event(sess).await,
         Err(err) => EventMsg::Error(ErrorEvent {
             message: format!("invalid turn context override: {err}"),
@@ -153,6 +109,51 @@ pub async fn update_turn_context(sess: &Arc<Session>, sub_id: String, op: Op) {
         }),
     };
     sess.send_event_raw(Event { id: sub_id, msg }).await;
+}
+
+async fn turn_context_settings_update(
+    sess: &Session,
+    turn_context: TurnContextOverrides,
+) -> SessionSettingsUpdate {
+    let TurnContextOverrides {
+        cwd,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        model,
+        effort,
+        summary,
+        service_tier,
+        collaboration_mode,
+        personality,
+    } = turn_context;
+    let collaboration_mode = match collaboration_mode {
+        Some(collaboration_mode) => collaboration_mode,
+        None => {
+            let state = sess.state.lock().await;
+            state
+                .session_configuration
+                .collaboration_mode
+                .with_updates(model, effort, /*developer_instructions*/ None)
+        }
+    };
+    SessionSettingsUpdate {
+        cwd,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        collaboration_mode: Some(collaboration_mode),
+        reasoning_summary: summary,
+        service_tier,
+        personality,
+        ..Default::default()
+    }
 }
 
 async fn turn_context_applied_event(sess: &Session) -> EventMsg {
@@ -239,56 +240,12 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             responsesapi_client_metadata,
             environments,
-            turn_context:
-                TurnContextOverrides {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                },
+            turn_context,
         } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                responsesapi_client_metadata,
-                true,
-            )
+            let mut updates = turn_context_settings_update(sess, turn_context).await;
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (items, updates, responsesapi_client_metadata, true)
         }
         Op::UserInput {
             items,

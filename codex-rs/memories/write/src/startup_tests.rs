@@ -244,19 +244,8 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
 
     test.codex
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-            collaboration_mode: None,
-            personality: None,
+            ..Default::default()
         })
         .await?;
 

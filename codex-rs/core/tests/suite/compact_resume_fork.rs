@@ -550,16 +550,6 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     conversation
         .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
             cwd: Some(override_cwd.to_path_buf()),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -568,7 +558,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
                     developer_instructions: Some(ROLLED_BACK_DEV_INSTRUCTIONS.to_string()),
                 },
             }),
-            personality: None,
+            ..Default::default()
         })
         .await?;
 
