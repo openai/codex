@@ -21,6 +21,7 @@ from openai_codex import (
     TextInput,
     is_retryable_error,
 )
+from openai_codex.types import TurnStatus
 
 ResultT = TypeVar("ResultT")
 
@@ -70,6 +71,10 @@ async def main() -> None:
             return
         except JsonRpcError as exc:
             print(f"JSON-RPC error {exc.code}: {exc.message}")
+            return
+
+        if result.status == TurnStatus.failed:
+            print("Turn failed:", result.error)
             return
 
         print("Text:", result.final_response)
