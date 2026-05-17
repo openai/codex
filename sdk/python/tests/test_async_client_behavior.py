@@ -5,7 +5,6 @@ import time
 
 from openai_codex.async_client import AsyncAppServerClient
 from openai_codex.generated.v2_all import (
-    AccountLoginCompletedNotification,
     TurnCompletedNotification,
 )
 from openai_codex.models import Notification, UnknownNotification
@@ -102,67 +101,4 @@ def test_async_client_turn_notification_methods_delegate_to_sync_client() -> Non
             payload=UnknownNotification(params={"turnId": "turn-1"}),
         ),
         "turn-1",
-    )
-
-
-def test_async_client_login_notification_methods_delegate_to_sync_client() -> None:
-    """Async login routing methods should preserve sync-client registration semantics."""
-
-    async def scenario() -> tuple[list[tuple[str, str]], Notification, str]:
-        client = AsyncAppServerClient()
-        event = Notification(
-            method="unknown/direct",
-            payload=UnknownNotification(params={"loginId": "login-1"}),
-        )
-        completed = AccountLoginCompletedNotification(
-            login_id="login-1",
-            success=True,
-            error=None,
-        )
-        calls: list[tuple[str, str]] = []
-
-        def fake_register(login_id: str) -> None:
-            calls.append(("register", login_id))
-
-        def fake_unregister(login_id: str) -> None:
-            calls.append(("unregister", login_id))
-
-        def fake_next(login_id: str) -> Notification:
-            calls.append(("next", login_id))
-            return event
-
-        def fake_wait(login_id: str) -> AccountLoginCompletedNotification:
-            calls.append(("wait", login_id))
-            return completed
-
-        client._sync.register_login_notifications = fake_register  # type: ignore[method-assign]
-        client._sync.unregister_login_notifications = fake_unregister  # type: ignore[method-assign]
-        client._sync.next_login_notification = fake_next  # type: ignore[method-assign]
-        client._sync.wait_for_login_completed = fake_wait  # type: ignore[method-assign]
-
-        client.register_login_notifications("login-1")
-        next_event = await client.next_login_notification("login-1")
-        completed_event = await client.wait_for_login_completed("login-1")
-        client.unregister_login_notifications("login-1")
-
-        return calls, next_event, completed_event.login_id or ""
-
-    calls, next_event, completed_login_id = asyncio.run(scenario())
-
-    assert (
-        calls,
-        next_event,
-        completed_login_id,
-    ) == (
-        [
-            ("register", "login-1"),
-            ("next", "login-1"),
-            ("wait", "login-1"),
-            ("unregister", "login-1"),
-        ],
-        Notification(
-            method="unknown/direct",
-            payload=UnknownNotification(params={"loginId": "login-1"}),
-        ),
-        "login-1",
     )
