@@ -147,6 +147,8 @@ pub enum Feature {
     AppsMcpPathOverride,
     /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
+    /// Enable skill discovery through a model-visible skill_search tool.
+    SkillSearchTool,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
@@ -998,6 +1000,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ToolSearch,
         key: "tool_search",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillSearchTool,
+        key: "skill_search_tool",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

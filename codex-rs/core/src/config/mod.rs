@@ -3245,11 +3245,12 @@ impl Config {
         let include_apps_instructions = cfg.include_apps_instructions.unwrap_or(true);
         let include_collaboration_mode_instructions =
             cfg.include_collaboration_mode_instructions.unwrap_or(true);
-        let include_skill_instructions = cfg
-            .skills
-            .as_ref()
-            .and_then(|skills| skills.include_instructions)
-            .unwrap_or(true);
+        let include_skill_instructions = !features.enabled(Feature::SkillSearchTool)
+            && cfg
+                .skills
+                .as_ref()
+                .and_then(|skills| skills.include_instructions)
+                .unwrap_or(true);
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
         let guardian_policy_config =
             guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())

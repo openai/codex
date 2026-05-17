@@ -105,7 +105,6 @@ pub(super) async fn spawn_review_thread(
     extension_data.insert(HostLoadedSkills::new(
         parent_turn_context.turn_skills.outcome.clone(),
     ));
-
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),

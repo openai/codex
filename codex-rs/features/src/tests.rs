@@ -190,6 +190,16 @@ fn tool_search_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn skill_search_tool_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::SkillSearchTool.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::SkillSearchTool.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("skill_search_tool"),
+        Some(Feature::SkillSearchTool)
+    );
+}
+
+#[test]
 fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
     assert_eq!(Feature::InAppBrowser.default_enabled(), true);

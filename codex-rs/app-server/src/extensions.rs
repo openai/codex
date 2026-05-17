@@ -74,6 +74,7 @@ where
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_mcp_extension::install(&mut builder);
+    codex_skill_search_extension::install(&mut builder);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
     let mut skill_providers = codex_skills_extension::SkillProviders::new()

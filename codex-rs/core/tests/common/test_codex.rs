@@ -25,6 +25,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
@@ -357,6 +358,13 @@ impl TestCodexBuilder {
         provider: Arc<dyn UserInstructionsProvider>,
     ) -> Self {
         self.user_instructions_provider = Some(provider);
+        self
+    }
+
+    pub fn with_skill_search_extension(mut self) -> Self {
+        let mut builder = ExtensionRegistryBuilder::<Config>::new();
+        codex_skill_search_extension::install(&mut builder);
+        self.extensions = Arc::new(builder.build());
         self
     }
 

@@ -1219,7 +1219,7 @@ pub(crate) async fn built_tools(
             mcp_tools,
             deferred_mcp_tools,
             discoverable_tools,
-            extension_tool_executors: extension_tool_executors(sess),
+            extension_tool_executors: extension_tool_executors(sess, turn_context),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     )))

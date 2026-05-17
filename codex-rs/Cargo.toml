@@ -51,6 +51,7 @@ members = [
     "ext/image-generation",
     "ext/memories",
     "ext/mcp",
+    "ext/skill-search",
     "ext/skills",
     "ext/web-search",
     "external-agent-migration",
@@ -190,6 +191,7 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
+codex-skill-search-extension = { path = "ext/skill-search" }
 codex-web-search-extension = { path = "ext/web-search" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
