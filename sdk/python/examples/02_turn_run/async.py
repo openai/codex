@@ -11,7 +11,7 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from openai_codex import AsyncCodex, TextInput
+from openai_codex import AsyncCodex
 
 
 async def main() -> None:
@@ -19,7 +19,7 @@ async def main() -> None:
         thread = await codex.thread_start(
             model="gpt-5.4", config={"model_reasoning_effort": "high"}
         )
-        turn = await thread.turn(TextInput("Give 3 bullets about SIMD."))
+        turn = await thread.turn("Give 3 bullets about SIMD.")
         result = await turn.run()
 
         print("thread_id:", thread.id)

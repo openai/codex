@@ -13,7 +13,6 @@ import asyncio
 
 from openai_codex import (
     AsyncCodex,
-    TextInput,
 )
 from openai_codex.types import (
     Personality,
@@ -91,7 +90,7 @@ async def main() -> None:
         )
 
         first_turn = await thread.turn(
-            TextInput("Give one short sentence about reliable production releases."),
+            "Give one short sentence about reliable production releases.",
             model=selected_model.model,
             effort=selected_effort,
         )
@@ -101,7 +100,7 @@ async def main() -> None:
         print("items:", len(first.items))
 
         second_turn = await thread.turn(
-            TextInput("Return JSON for a safe feature-flag rollout plan."),
+            "Return JSON for a safe feature-flag rollout plan.",
             cwd=str(Path.cwd()),
             effort=selected_effort,
             model=selected_model.model,

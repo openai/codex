@@ -40,6 +40,7 @@ EXPECTED_ROOT_EXPORTS = [
     "TurnResult",
     "Input",
     "InputItem",
+    "RunInput",
     "TextInput",
     "ImageInput",
     "LocalImageInput",
@@ -163,6 +164,22 @@ def test_turn_run_methods_return_turn_result() -> None:
 
     assert {fn: inspect.signature(fn).return_annotation for fn in funcs} == dict.fromkeys(
         funcs, "TurnResult"
+    )
+
+
+def test_turn_input_methods_accept_string_shortcut() -> None:
+    """Every public turn-input method should accept strings and typed inputs."""
+    funcs = [
+        Thread.run,
+        Thread.turn,
+        AsyncThread.run,
+        AsyncThread.turn,
+        TurnHandle.steer,
+        AsyncTurnHandle.steer,
+    ]
+
+    assert {fn: inspect.signature(fn).parameters["input"].annotation for fn in funcs} == (
+        dict.fromkeys(funcs, "RunInput")
     )
 
 

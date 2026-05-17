@@ -9,14 +9,12 @@ from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
-from openai_codex import Codex, TextInput
+from openai_codex import Codex
 
 with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
-    steer_turn = thread.turn(
-        TextInput("Count from 1 to 40 with commas, then one summary sentence.")
-    )
-    steer_result = steer_turn.steer(TextInput("Keep it brief and stop after 10 numbers."))
+    steer_turn = thread.turn("Count from 1 to 40 with commas, then one summary sentence.")
+    steer_result = steer_turn.steer("Keep it brief and stop after 10 numbers.")
 
     steer_event_count = 0
     steer_completed_status = None
@@ -33,9 +31,7 @@ with Codex(config=runtime_config()) as codex:
         raise RuntimeError("stream ended without turn/completed")
     steer_preview = "".join(steer_deltas).strip()
 
-    interrupt_turn = thread.turn(
-        TextInput("Count from 1 to 200 with commas, then one summary sentence.")
-    )
+    interrupt_turn = thread.turn("Count from 1 to 200 with commas, then one summary sentence.")
     interrupt_result = interrupt_turn.interrupt()
 
     interrupt_event_count = 0

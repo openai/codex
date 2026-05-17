@@ -18,7 +18,6 @@ from openai_codex import (
     AsyncCodex,
     JsonRpcError,
     ServerBusyError,
-    TextInput,
     is_retryable_error,
 )
 from openai_codex.types import TurnStatus
@@ -82,7 +81,7 @@ async def main() -> None:
 
 def _run_turn(thread, prompt: str):
     async def _inner():
-        turn = await thread.turn(TextInput(prompt))
+        turn = await thread.turn(prompt)
         return await turn.run()
 
     return _inner

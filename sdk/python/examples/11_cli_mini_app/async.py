@@ -13,7 +13,6 @@ import asyncio
 
 from openai_codex import (
     AsyncCodex,
-    TextInput,
 )
 from openai_codex.types import (
     ThreadTokenUsageUpdatedNotification,
@@ -51,7 +50,7 @@ async def main() -> None:
             if user_input in {"/exit", "/quit"}:
                 break
 
-            turn = await thread.turn(TextInput(user_input))
+            turn = await thread.turn(user_input)
             usage = None
             status = None
             error = None

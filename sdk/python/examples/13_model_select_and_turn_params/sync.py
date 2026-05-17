@@ -11,7 +11,6 @@ ensure_local_sdk_src()
 
 from openai_codex import (
     Codex,
-    TextInput,
 )
 from openai_codex.types import (
     Personality,
@@ -88,7 +87,7 @@ with Codex(config=runtime_config()) as codex:
     )
 
     first = thread.turn(
-        TextInput("Give one short sentence about reliable production releases."),
+        "Give one short sentence about reliable production releases.",
         model=selected_model.model,
         effort=selected_effort,
     ).run()
@@ -97,7 +96,7 @@ with Codex(config=runtime_config()) as codex:
     print("items:", len(first.items))
 
     second = thread.turn(
-        TextInput("Return JSON for a safe feature-flag rollout plan."),
+        "Return JSON for a safe feature-flag rollout plan.",
         cwd=str(Path.cwd()),
         effort=selected_effort,
         model=selected_model.model,

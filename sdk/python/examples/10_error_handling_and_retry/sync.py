@@ -13,7 +13,6 @@ from openai_codex import (
     Codex,
     JsonRpcError,
     ServerBusyError,
-    TextInput,
     retry_on_overload,
 )
 from openai_codex.types import TurnStatus
@@ -23,7 +22,7 @@ with Codex(config=runtime_config()) as codex:
 
     try:
         result = retry_on_overload(
-            lambda: thread.turn(TextInput("Summarize retry best practices in 3 bullets.")).run(),
+            lambda: thread.turn("Summarize retry best practices in 3 bullets.").run(),
             max_attempts=3,
             initial_delay_s=0.25,
             max_delay_s=2.0,

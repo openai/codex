@@ -72,6 +72,7 @@ What happened:
 - `thread_start(...)` created a thread.
 - `thread.run("...")` started a turn, consumed events until completion, and returned `TurnResult` with turn metadata, final assistant response, collected items, and usage.
 - `result.final_response` is `None` when no final-answer or phase-less assistant message item completes for the turn.
+- plain strings are accepted anywhere a turn input is accepted; typed inputs are still available for multimodal and structured cases
 - use `thread.turn(...)` when you need a `TurnHandle` for streaming, steering, or interrupting before collecting `TurnResult`
 - one client can consume multiple active turns concurrently; turn streams are routed by turn ID
 

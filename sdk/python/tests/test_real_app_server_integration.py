@@ -234,14 +234,14 @@ def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> No
         textwrap.dedent(
             """
             import json
-            from openai_codex import Codex, TextInput
+            from openai_codex import Codex
 
             with Codex() as codex:
                 thread = codex.thread_start(
                     model="gpt-5.4",
                     config={"model_reasoning_effort": "high"},
                 )
-                result = thread.turn(TextInput("hello")).run()
+                result = thread.turn("hello").run()
                 print(json.dumps({
                     "thread_id": thread.id,
                     "turn_id": result.id,
@@ -331,7 +331,7 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
             """
             import asyncio
             import json
-            from openai_codex import AsyncCodex, TextInput
+            from openai_codex import AsyncCodex
 
             async def main():
                 async with AsyncCodex() as codex:
@@ -339,7 +339,7 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
                         model="gpt-5.4",
                         config={"model_reasoning_effort": "high"},
                     )
-                    result = await (await thread.turn(TextInput("say ok"))).run()
+                    result = await (await thread.turn("say ok")).run()
                     print(json.dumps({
                         "thread_id": thread.id,
                         "turn_id": result.id,
@@ -458,14 +458,14 @@ def test_real_streaming_smoke_turn_completed(runtime_env: PreparedRuntimeEnv) ->
         textwrap.dedent(
             """
             import json
-            from openai_codex import Codex, TextInput
+            from openai_codex import Codex
 
             with Codex() as codex:
                 thread = codex.thread_start(
                     model="gpt-5.4",
                     config={"model_reasoning_effort": "high"},
                 )
-                turn = thread.turn(TextInput("Reply with one short sentence."))
+                turn = thread.turn("Reply with one short sentence.")
                 saw_delta = False
                 saw_completed = False
                 for event in turn.stream():
@@ -491,16 +491,16 @@ def test_real_turn_interrupt_smoke(runtime_env: PreparedRuntimeEnv) -> None:
         textwrap.dedent(
             """
             import json
-            from openai_codex import Codex, TextInput
+            from openai_codex import Codex
 
             with Codex() as codex:
                 thread = codex.thread_start(
                     model="gpt-5.4",
                     config={"model_reasoning_effort": "high"},
                 )
-                turn = thread.turn(TextInput("Count from 1 to 200 with commas."))
+                turn = thread.turn("Count from 1 to 200 with commas.")
                 turn.interrupt()
-                follow_up = thread.turn(TextInput("Say 'ok' only.")).run()
+                follow_up = thread.turn("Say 'ok' only.").run()
                 print(json.dumps({"status": follow_up.status.value}))
             """
         ),

@@ -11,7 +11,7 @@ from app_server_helpers import (
     streaming_response,
 )
 
-from openai_codex import AsyncCodex, Codex, TextInput
+from openai_codex import AsyncCodex, Codex
 from openai_codex.generated.v2_all import (
     AgentMessageDeltaNotification,
     TurnCompletedNotification,
@@ -26,8 +26,9 @@ def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            stream = thread.turn(TextInput("stream please")).stream()
+            stream = thread.turn("stream please").stream()
             events = list(stream)
+            request = harness.responses.single_request()
 
     assert {
         "deltas": [
@@ -36,6 +37,7 @@ def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
             if isinstance(event.payload, AgentMessageDeltaNotification)
         ],
         "agent_messages": agent_message_texts(events),
+        "request_user_texts": request.message_input_texts("user")[-1:],
         "completed_statuses": [
             event.payload.turn.status
             for event in events
@@ -44,6 +46,7 @@ def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
     } == {
         "deltas": ["he", "llo"],
         "agent_messages": ["hello"],
+        "request_user_texts": ["stream please"],
         "completed_statuses": [TurnStatus.completed],
     }
 
@@ -55,7 +58,7 @@ def test_turn_run_returns_completed_turn(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            turn = thread.turn(TextInput("complete this turn"))
+            turn = thread.turn("complete this turn")
             completed = turn.run()
 
     assert {
@@ -83,8 +86,9 @@ def test_async_stream_routes_text_deltas_and_completion(tmp_path) -> None:
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 thread = await codex.thread_start()
-                turn = await thread.turn(TextInput("async stream please"))
+                turn = await thread.turn("async stream please")
                 events = [event async for event in turn.stream()]
+                request = harness.responses.single_request()
 
         assert {
             "deltas": [
@@ -93,6 +97,7 @@ def test_async_stream_routes_text_deltas_and_completion(tmp_path) -> None:
                 if isinstance(event.payload, AgentMessageDeltaNotification)
             ],
             "agent_messages": agent_message_texts(events),
+            "request_user_texts": request.message_input_texts("user")[-1:],
             "completed_statuses": [
                 event.payload.turn.status
                 for event in events
@@ -101,6 +106,7 @@ def test_async_stream_routes_text_deltas_and_completion(tmp_path) -> None:
         } == {
             "deltas": ["as", "ync"],
             "agent_messages": ["async"],
+            "request_user_texts": ["async stream please"],
             "completed_statuses": [TurnStatus.completed],
         }
 
@@ -178,8 +184,8 @@ def test_interleaved_sync_turn_streams_route_by_turn_id(tmp_path) -> None:
         with Codex(config=harness.app_server_config()) as codex:
             first_thread = codex.thread_start()
             second_thread = codex.thread_start()
-            first_turn = first_thread.turn(TextInput("first"))
-            second_turn = second_thread.turn(TextInput("second"))
+            first_turn = first_thread.turn("first")
+            second_turn = second_thread.turn("second")
 
             first_stream = first_turn.stream()
             second_stream = second_turn.stream()
@@ -231,8 +237,8 @@ def test_interleaved_async_turn_streams_route_by_turn_id(tmp_path) -> None:
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 first_thread = await codex.thread_start()
                 second_thread = await codex.thread_start()
-                first_turn = await first_thread.turn(TextInput("async first"))
-                second_turn = await second_thread.turn(TextInput("async second"))
+                first_turn = await first_thread.turn("async first")
+                second_turn = await second_thread.turn("async second")
 
                 first_stream = first_turn.stream()
                 second_stream = second_turn.stream()
