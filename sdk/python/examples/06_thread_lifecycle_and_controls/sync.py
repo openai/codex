@@ -33,9 +33,7 @@ with Codex(config=runtime_config()) as codex:
     resumed_result = resumed.turn(TextInput("Continue in one short sentence.")).run()
 
     forked = codex.thread_fork(unarchived.id, model="gpt-5.4")
-    forked_result = forked.turn(
-        TextInput("Take a different angle in one short sentence.")
-    ).run()
+    forked_result = forked.turn(TextInput("Take a different angle in one short sentence.")).run()
 
     compact_result = unarchived.compact()
 

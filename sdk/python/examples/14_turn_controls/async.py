@@ -22,9 +22,7 @@ async def main() -> None:
         steer_turn = await thread.turn(
             TextInput("Count from 1 to 40 with commas, then one summary sentence.")
         )
-        steer_result = await steer_turn.steer(
-            TextInput("Keep it brief and stop after 10 numbers.")
-        )
+        steer_result = await steer_turn.steer(TextInput("Keep it brief and stop after 10 numbers."))
 
         steer_event_count = 0
         steer_completed_status = None
