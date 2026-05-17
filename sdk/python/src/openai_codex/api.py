@@ -407,9 +407,7 @@ class AsyncCodex:
     async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
         """Read the current app-server account state."""
         await self._ensure_initialized()
-        return await self._client.account_read(
-            GetAccountParams(refresh_token=refresh_token)
-        )
+        return await self._client.account_read(GetAccountParams(refresh_token=refresh_token))
 
     async def logout(self) -> None:
         """Clear the current app-server account session."""

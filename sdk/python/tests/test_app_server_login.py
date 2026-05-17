@@ -85,3 +85,77 @@ def test_browser_login_handle_cancel_waits_for_real_app_server_completion(tmp_pa
             "error_present": True,
         },
     }
+
+
+def test_browser_login_waiters_stay_scoped_across_replaced_attempts(tmp_path) -> None:
+    """Replacing one browser login should complete the matching handle only."""
+    with AppServerHarness(tmp_path) as harness:
+        with Codex(config=_app_server_config(harness)) as codex:
+            first = codex.login_chatgpt()
+            second = codex.login_chatgpt()
+            first_completed = first.wait()
+            second_canceled = codex.cancel_login(second.login_id)
+            second_completed = second.wait()
+
+    assert {
+        "distinct_attempts": first.login_id != second.login_id,
+        "first_completion": {
+            "login_id": first_completed.login_id,
+            "success": first_completed.success,
+            "error_present": bool(first_completed.error),
+        },
+        "second_cancel_status": second_canceled.status,
+        "second_completion": {
+            "login_id": second_completed.login_id,
+            "success": second_completed.success,
+            "error_present": bool(second_completed.error),
+        },
+    } == {
+        "distinct_attempts": True,
+        "first_completion": {
+            "login_id": first.login_id,
+            "success": False,
+            "error_present": True,
+        },
+        "second_cancel_status": CancelLoginAccountStatus.canceled,
+        "second_completion": {
+            "login_id": second.login_id,
+            "success": False,
+            "error_present": True,
+        },
+    }
+
+
+def test_async_browser_login_cancel_waits_for_real_app_server_completion(tmp_path) -> None:
+    """Async browser login handles should round-trip cancellation through app-server."""
+
+    async def scenario() -> dict[str, object]:
+        with AppServerHarness(tmp_path) as harness:
+            async with AsyncCodex(config=_app_server_config(harness)) as codex:
+                handle = await codex.login_chatgpt()
+                canceled = await codex.cancel_login(handle.login_id)
+                completed = await handle.wait()
+        return {
+            "login_id": handle.login_id,
+            "auth_url_has_local_redirect": "redirect_uri=http" in handle.auth_url,
+            "cancel_status": canceled.status,
+            "completion": {
+                "login_id": completed.login_id,
+                "success": completed.success,
+                "error_present": bool(completed.error),
+            },
+        }
+
+    result = asyncio.run(scenario())
+    login_id = result["login_id"]
+
+    assert result == {
+        "login_id": login_id,
+        "auth_url_has_local_redirect": True,
+        "cancel_status": CancelLoginAccountStatus.canceled,
+        "completion": {
+            "login_id": login_id,
+            "success": False,
+            "error_present": True,
+        },
+    }
