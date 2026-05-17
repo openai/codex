@@ -403,10 +403,47 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
     if path.trim().is_empty() {
         return Err("keyPath must not be empty".to_string());
     }
-    Ok(path
-        .split('.')
-        .map(std::string::ToString::to_string)
-        .collect())
+
+    let mut segments = Vec::new();
+    let mut segment = String::new();
+    let mut chars = path.chars();
+    let mut quoted = false;
+
+    // Split on dots unless they appear inside a quoted segment. Bare segments
+    // intentionally stay permissive so existing paths like `sample@catalog`
+    // remain valid.
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if segment.is_empty() && !quoted => quoted = true,
+            '"' if quoted => quoted = false,
+            '\\' if quoted => {
+                // Quoted segments may escape punctuation that would otherwise
+                // participate in parsing, such as `.` or `"`.
+                let Some(escaped) = chars.next() else {
+                    return Err("unterminated escape in keyPath".to_string());
+                };
+                segment.push(escaped);
+            }
+            '.' if !quoted => {
+                if segment.is_empty() {
+                    return Err("keyPath segments must not be empty".to_string());
+                }
+                segments.push(std::mem::take(&mut segment));
+            }
+            '"' => return Err("invalid quoted keyPath segment".to_string()),
+            _ => segment.push(ch),
+        }
+    }
+
+    if quoted {
+        return Err("unterminated quoted keyPath segment".to_string());
+    }
+    if segment.is_empty() {
+        return Err("keyPath segments must not be empty".to_string());
+    }
+
+    segments.push(segment);
+    Ok(segments)
 }
 
 #[derive(Debug)]
