@@ -466,18 +466,31 @@ fn collect_tool_executors(
         } else {
             let agent_type_description =
                 agent_type_description(config, params.default_agent_type_description);
-            executors.push(Arc::new(SpawnAgentHandler::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            executors.push(Arc::new(SendInputHandler));
-            executors.push(Arc::new(ResumeAgentHandler));
-            executors.push(Arc::new(WaitAgentHandler::new(params.wait_agent_timeouts)));
-            executors.push(Arc::new(CloseAgentHandler));
+            let defer_multi_agent_v1_tools = config.search_tool && config.namespace_tools;
+            let exposure = if defer_multi_agent_v1_tools {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
+            executors.push(multi_agent_v1_handler(
+                SpawnAgentHandler::new(SpawnAgentToolOptions {
+                    available_models: config.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
+                    include_usage_hint: config.spawn_agent_usage_hint
+                        && !defer_multi_agent_v1_tools,
+                    usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
+                }),
+                exposure,
+            ));
+            executors.push(multi_agent_v1_handler(SendInputHandler, exposure));
+            executors.push(multi_agent_v1_handler(ResumeAgentHandler, exposure));
+            executors.push(multi_agent_v1_handler(
+                WaitAgentHandler::new(params.wait_agent_timeouts),
+                exposure,
+            ));
+            executors.push(multi_agent_v1_handler(CloseAgentHandler, exposure));
         }
     }
 
@@ -587,6 +600,13 @@ fn append_extension_tool_executors(
         }
         registered_executors.push(Arc::new(ExtensionToolAdapter::new(executor)));
     }
+}
+
+fn multi_agent_v1_handler(
+    handler: impl CoreToolRuntime + 'static,
+    exposure: ToolExposure,
+) -> Arc<dyn CoreToolRuntime> {
+    override_tool_exposure(Arc::new(handler), exposure)
 }
 
 fn multi_agent_v2_handler(

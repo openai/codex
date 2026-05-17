@@ -390,6 +390,49 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
+fn test_build_specs_collab_tools_deferred_when_tool_search_available() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+        assert!(registry.has_tool(&ToolName::plain(tool_name)));
+    }
+
+    let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
+    let ToolSpec::ToolSearch { description, .. } = search_tool else {
+        panic!("expected tool_search tool");
+    };
+    assert!(description.contains("- Multi-agent tools: Spawn and manage sub-agents."));
+}
+
+#[test]
 fn goal_tools_require_goals_feature() {
     let model_info = model_info();
     let available_models = Vec::new();

@@ -718,6 +718,101 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search-spawn-agent";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "spawn agent",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Find the spawn agent tool",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_request_body = requests[0].body_json();
+    let first_request_tools = tool_names(&first_request_body);
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "first request should advertise tool_search: {first_request_tools:?}"
+    );
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert!(
+            !first_request_tools.iter().any(|name| name == tool_name),
+            "v1 multi-agent tools should be hidden before search: {first_request_tools:?}"
+        );
+    }
+    assert!(
+        first_request_body
+            .to_string()
+            .contains("Only use sub-agents if and only if the user explicitly asks"),
+        "deferred v1 multi-agent guidance should move into developer context"
+    );
+
+    let tools = tool_search_output_tools(&requests[1], call_id);
+    let spawn_agent = tools
+        .iter()
+        .find(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("function")
+                && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
+        })
+        .unwrap_or_else(|| panic!("expected tool_search to return spawn_agent: {tools:?}"));
+    assert_eq!(
+        spawn_agent.get("defer_loading").and_then(Value::as_bool),
+        Some(true)
+    );
+    let description = spawn_agent
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("spawn_agent description should be present");
+    assert!(!description.contains("### Designing delegated subtasks"));
+    assert!(!description.contains("Only use `spawn_agent` if and only if"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
