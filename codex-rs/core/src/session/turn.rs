@@ -757,7 +757,7 @@ async fn auto_compact_token_status(
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
                 let baseline = sess
-                    .auto_compact_window_prefix_input_tokens()
+                    .auto_compact_window_prefix_tokens()
                     .await
                     .unwrap_or(active_context_tokens);
                 (
@@ -838,8 +838,22 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(new_context_window) = turn_context.model_context_window() else {
         return Ok(false);
     };
-    let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
-    let should_run = token_status.token_limit_reached
+    let active_context_tokens = sess.get_total_token_usage().await;
+    let previous_model_limit_reached = match turn_context
+        .config
+        .model_auto_compact_token_limit_scope
+    {
+        AutoCompactTokenLimitScope::Total => {
+            let new_auto_compact_limit = turn_context
+                .model_info
+                .auto_compact_token_limit()
+                .unwrap_or(i64::MAX);
+            active_context_tokens > new_auto_compact_limit
+                || active_context_tokens >= new_context_window
+        }
+        AutoCompactTokenLimitScope::BodyAfterPrefix => active_context_tokens >= new_context_window,
+    };
+    let should_run = previous_model_limit_reached
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {

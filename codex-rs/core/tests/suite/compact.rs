@@ -2073,6 +2073,100 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn body_after_prefix_model_switch_budget_compacts_with_next_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+                model_info_with_context_window(next_model, /*context_window*/ 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_usage("r1", /*input_tokens*/ 100, /*output_tokens*/ 50),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "BODY_BUDGET_SUMMARY"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.enable(Feature::RemoteModels);
+            config.model_auto_compact_token_limit = Some(20);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit second user turn");
+    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, compact, and follow-up requests"
+    );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(previous_model)
+    );
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some(next_model));
+    assert_eq!(requests[2].body_json()["model"].as_str(), Some(next_model));
+    assert!(
+        body_contains_text(&requests[1].body_json().to_string(), SUMMARIZATION_PROMPT),
+        "body-budget compaction request should include summarization prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     skip_if_no_network!();
 
@@ -3065,6 +3159,91 @@ async fn auto_compact_body_after_prefix_ignores_starting_window_prefix() {
     assert!(
         body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
         "body-after-prefix mode should compact once tokens after the first assistant sample exceed the configured budget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_usage("r1", /*input_tokens*/ 100, /*output_tokens*/ 50),
+    ]);
+    let first_auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 20),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m3", SECOND_LARGE_REPLY),
+        ev_completed_with_usage(
+            "r3", /*input_tokens*/ 100_000, /*output_tokens*/ 10,
+        ),
+    ]);
+    let second_auto_compact_turn = sse(vec![
+        ev_assistant_message("m4", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r4", /*total_tokens*/ 20),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m5", FINAL_REPLY),
+        ev_completed_with_usage("r5", /*input_tokens*/ 80, /*output_tokens*/ 5),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            first_auto_compact_turn,
+            second_turn,
+            second_auto_compact_turn,
+            third_turn,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(200_000);
+            config.model_auto_compact_token_limit = Some(20);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    test.submit_turn("WINDOW_PREFIX")
+        .await
+        .expect("submit first turn");
+    test.submit_turn("GROWTH_AFTER_COMPACT")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "second turn should compact first and then sample the new growth"
+    );
+
+    test.submit_turn("AFTER_GROWTH")
+        .await
+        .expect("submit third turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "third turn should compact again because the post-compaction growth counted against the body budget"
+    );
+    let compact_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "post-compaction growth should trigger a second body-after-prefix compaction"
     );
 }
 

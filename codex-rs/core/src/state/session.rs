@@ -30,7 +30,7 @@ pub(crate) struct SessionState {
     previous_turn_settings: Option<PreviousTurnSettings>,
     /// Prefix size for the active compaction window when auto-compaction is
     /// configured to count only tokens after the carried window prefix.
-    auto_compact_window_prefix_input_tokens: Option<i64>,
+    auto_compact_window_prefix_tokens: Option<i64>,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
@@ -51,7 +51,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
-            auto_compact_window_prefix_input_tokens: None,
+            auto_compact_window_prefix_tokens: None,
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
@@ -101,7 +101,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
-        self.auto_compact_window_prefix_input_tokens = None;
+        self.auto_compact_window_prefix_tokens = None;
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -125,14 +125,21 @@ impl SessionState {
         self.history.update_token_info(usage, model_context_window);
     }
 
-    pub(crate) fn ensure_auto_compact_window_prefix_input_tokens(&mut self, usage: &TokenUsage) {
-        if self.auto_compact_window_prefix_input_tokens.is_none() {
-            self.auto_compact_window_prefix_input_tokens = Some(usage.input_tokens.max(0));
+    pub(crate) fn ensure_auto_compact_window_prefix_tokens_from_usage(
+        &mut self,
+        usage: &TokenUsage,
+    ) {
+        if self.auto_compact_window_prefix_tokens.is_none() {
+            self.auto_compact_window_prefix_tokens = Some(usage.input_tokens.max(0));
         }
     }
 
-    pub(crate) fn auto_compact_window_prefix_input_tokens(&self) -> Option<i64> {
-        self.auto_compact_window_prefix_input_tokens
+    pub(crate) fn set_auto_compact_window_prefix_tokens(&mut self, tokens: i64) {
+        self.auto_compact_window_prefix_tokens = Some(tokens.max(0));
+    }
+
+    pub(crate) fn auto_compact_window_prefix_tokens(&self) -> Option<i64> {
+        self.auto_compact_window_prefix_tokens
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

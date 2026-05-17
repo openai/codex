@@ -1108,9 +1108,9 @@ impl Session {
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
-    pub(crate) async fn auto_compact_window_prefix_input_tokens(&self) -> Option<i64> {
+    pub(crate) async fn auto_compact_window_prefix_tokens(&self) -> Option<i64> {
         let state = self.state.lock().await;
-        state.auto_compact_window_prefix_input_tokens()
+        state.auto_compact_window_prefix_tokens()
     }
 
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
@@ -1271,9 +1271,39 @@ impl Session {
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        let prefix_tokens = if matches!(
+            turn_context.config.model_auto_compact_token_limit_scope,
+            AutoCompactTokenLimitScope::BodyAfterPrefix
+        ) {
+            let history = self.clone_history().await;
+            let base_instructions = self.get_base_instructions().await;
+            history.estimate_token_count_with_base_instructions(&base_instructions)
+        } else {
+            None
+        };
+        if let Some(prefix_tokens) = prefix_tokens {
+            self.set_auto_compact_window_prefix_tokens_for_scope(turn_context, prefix_tokens)
+                .await;
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
+    }
+
+    async fn set_auto_compact_window_prefix_tokens_for_scope(
+        &self,
+        turn_context: &TurnContext,
+        tokens: i64,
+    ) {
+        if !matches!(
+            turn_context.config.model_auto_compact_token_limit_scope,
+            AutoCompactTokenLimitScope::BodyAfterPrefix
+        ) {
+            return;
+        }
+
+        let mut state = self.state.lock().await;
+        state.set_auto_compact_window_prefix_tokens(tokens);
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2952,7 +2982,7 @@ impl Session {
                     turn_context.config.model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix
                 ) {
-                    state.ensure_auto_compact_window_prefix_input_tokens(token_usage);
+                    state.ensure_auto_compact_window_prefix_tokens_from_usage(token_usage);
                 }
                 state.token_info()
             };
@@ -2999,6 +3029,8 @@ impl Session {
 
             state.set_token_info(Some(info));
         }
+        self.set_auto_compact_window_prefix_tokens_for_scope(turn_context, estimated_total_tokens)
+            .await;
         self.send_token_count_event(turn_context).await;
     }
 
