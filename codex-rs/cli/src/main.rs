@@ -915,6 +915,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
                 root_config_overrides,
                 strict_config || root_strict_config,
+                codex_mcp_server::McpServerEntrypoint::CodexCliSubcommand,
             )
             .await?;
         }

@@ -52,14 +52,32 @@ pub use crate::patch_approval::PatchApprovalResponse;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const MCP_SERVER_METRIC: &str = "codex.mcp_server";
+const MCP_SERVER_ENTRYPOINT_TAG: &str = "entrypoint";
 const OTEL_SERVICE_NAME: &str = "codex_mcp_server";
 
 type IncomingMessage = JsonRpcMessage<ClientRequest, Value, ClientNotification>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerEntrypoint {
+    CodexCliSubcommand,
+    StandaloneBinary,
+}
+
+impl McpServerEntrypoint {
+    fn telemetry_tag_value(self) -> &'static str {
+        match self {
+            Self::CodexCliSubcommand => "codex_cli_subcommand",
+            Self::StandaloneBinary => "standalone_binary",
+        }
+    }
+}
 
 pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     strict_config: bool,
+    entrypoint: McpServerEntrypoint,
 ) -> IoResult<()> {
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -91,6 +109,13 @@ pub async fn run_main(
         )
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
+    if let Some(metrics) = otel.as_ref().and_then(|provider| provider.metrics()) {
+        let _ = metrics.counter(
+            MCP_SERVER_METRIC,
+            /*inc*/ 1,
+            &[(MCP_SERVER_ENTRYPOINT_TAG, entrypoint.telemetry_tag_value())],
+        );
+    }
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let state_db = codex_core::init_state_db(&config).await;
     let environment_manager = Arc::new(
