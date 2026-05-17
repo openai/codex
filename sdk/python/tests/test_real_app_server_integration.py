@@ -434,7 +434,7 @@ def test_notebook_sync_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
         [
             _notebook_cell_source(1),
             _notebook_cell_source(2),
-            _notebook_cell_source(3),
+            _notebook_cell_source(4),
         ]
     )
     result = _run_python(runtime_env, source, timeout_s=240)
@@ -450,7 +450,7 @@ def test_notebook_advanced_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
         [
             _notebook_cell_source(1),
             _notebook_cell_source(2),
-            _notebook_cell_source(7),
+            _notebook_cell_source(8),
         ]
     )
     result = _run_python(runtime_env, source, timeout_s=360)

@@ -12,6 +12,10 @@ from openai_codex import (
     Codex,
     AsyncCodex,
     ApprovalMode,
+    ChatgptLoginHandle,
+    DeviceCodeLoginHandle,
+    AsyncChatgptLoginHandle,
+    AsyncDeviceCodeLoginHandle,
     RunResult,
     Thread,
     AsyncThread,
@@ -26,6 +30,11 @@ from openai_codex import (
     MentionInput,
 )
 from openai_codex.types import (
+    Account,
+    AccountLoginCompletedNotification,
+    CancelLoginAccountResponse,
+    CancelLoginAccountStatus,
+    GetAccountResponse,
     InitializeResponse,
     ThreadItem,
     ThreadTokenUsage,
@@ -47,6 +56,11 @@ Properties/methods:
 
 - `metadata -> InitializeResponse`
 - `close() -> None`
+- `login_api_key(api_key: str) -> None`
+- `login_chatgpt() -> ChatgptLoginHandle`
+- `login_chatgpt_device_code() -> DeviceCodeLoginHandle`
+- `account(*, refresh_token: bool = False) -> GetAccountResponse`
+- `logout() -> None`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> ThreadListResponse`
 - `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
@@ -82,6 +96,11 @@ Properties/methods:
 
 - `metadata -> InitializeResponse`
 - `close() -> Awaitable[None]`
+- `login_api_key(api_key: str) -> Awaitable[None]`
+- `login_chatgpt() -> Awaitable[AsyncChatgptLoginHandle]`
+- `login_chatgpt_device_code() -> Awaitable[AsyncDeviceCodeLoginHandle]`
+- `account(*, refresh_token: bool = False) -> Awaitable[GetAccountResponse]`
+- `logout() -> Awaitable[None]`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> Awaitable[ThreadListResponse]`
 - `thread_resume(thread_id: str, *, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
@@ -96,6 +115,30 @@ Async context manager:
 async with AsyncCodex() as codex:
     ...
 ```
+
+## Login handles
+
+### ChatgptLoginHandle / AsyncChatgptLoginHandle
+
+- `login_id: str`
+- `auth_url: str`
+- `wait() -> AccountLoginCompletedNotification`
+- `cancel() -> CancelLoginAccountResponse`
+
+Async handle methods return awaitables.
+
+### DeviceCodeLoginHandle / AsyncDeviceCodeLoginHandle
+
+- `login_id: str`
+- `verification_url: str`
+- `user_code: str`
+- `wait() -> AccountLoginCompletedNotification`
+- `cancel() -> CancelLoginAccountResponse`
+
+Async handle methods return awaitables.
+
+`wait()` consumes only the completion notification for its matching login
+attempt. API-key login completes synchronously and does not return a handle.
 
 ## Thread / AsyncThread
 
@@ -176,6 +219,11 @@ The SDK wrappers return and accept public app-server models wherever possible:
 
 ```python
 from openai_codex.types import (
+    Account,
+    AccountLoginCompletedNotification,
+    CancelLoginAccountResponse,
+    CancelLoginAccountStatus,
+    GetAccountResponse,
     ThreadReadResponse,
     Turn,
     TurnStatus,

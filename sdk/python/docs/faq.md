@@ -23,6 +23,16 @@ Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout
 
 If your app is not already async, stay with `Codex`.
 
+## How do I log in?
+
+- `login_api_key(...)` authenticates immediately with an API key.
+- `login_chatgpt()` starts browser login and returns a handle with `auth_url`.
+- `login_chatgpt_device_code()` starts device-code login and returns a handle
+  with `verification_url` and `user_code`.
+- Interactive handles expose `wait()` for the matching
+  `account/login/completed` notification and `cancel()` to stop that attempt.
+- `account()` reads the current account state, and `logout()` clears it.
+
 ## Public kwargs are snake_case
 
 Public API keyword names are snake_case. The SDK still maps them to wire camelCase under the hood.
@@ -56,7 +66,6 @@ Common causes:
 
 - published runtime package (`openai-codex-cli-bin`) is not installed
 - local `codex_bin` override points to a missing file
-- local auth/session is missing
 - incompatible/old app-server
 
 ## Why does a turn "hang"?

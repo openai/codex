@@ -27,6 +27,10 @@ EXPECTED_ROOT_EXPORTS = [
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
+    "ChatgptLoginHandle",
+    "DeviceCodeLoginHandle",
+    "AsyncChatgptLoginHandle",
+    "AsyncDeviceCodeLoginHandle",
     "Thread",
     "AsyncThread",
     "TurnHandle",
@@ -55,8 +59,13 @@ EXPECTED_ROOT_EXPORTS = [
 ]
 
 EXPECTED_TYPES_EXPORTS = [
+    "Account",
+    "AccountLoginCompletedNotification",
     "ApprovalsReviewer",
     "AskForApproval",
+    "CancelLoginAccountResponse",
+    "CancelLoginAccountStatus",
+    "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
     "ModelListResponse",
