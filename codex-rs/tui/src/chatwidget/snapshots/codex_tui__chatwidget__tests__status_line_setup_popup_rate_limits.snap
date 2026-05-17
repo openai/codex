@@ -9,8 +9,8 @@ expression: status_line_popup_snapshot(&mut chat)
   >
 › [x] Use theme colors      Apply colors from the active /theme
   ───────────────────────
-  [x] five-hour-limit       Remaining usage on the primary usage limit (omitted when unavailable)
-  [x] weekly-limit          Remaining usage on the secondary usage limit (omitted when unavailabl…
+  [x] five-hour-limit       Remaining usage on the 5-hour or only usage limit (omitted when unava…
+  [x] weekly-limit          Remaining usage on the weekly or secondary usage limit (omitted when …
   [ ] model                 Current model name
   [ ] model-with-reasoning  Current model name with reasoning level
   [ ] current-dir           Current working directory

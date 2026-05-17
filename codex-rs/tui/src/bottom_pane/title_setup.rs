@@ -107,10 +107,10 @@ impl TerminalTitleItem {
                 "Percentage of context window used (omitted when unknown)"
             }
             TerminalTitleItem::FiveHourLimit => {
-                "Remaining usage on the primary usage limit (omitted when unavailable)"
+                "Remaining usage on the 5-hour or only usage limit (omitted when unavailable)"
             }
             TerminalTitleItem::WeeklyLimit => {
-                "Remaining usage on the secondary usage limit (omitted when unavailable)"
+                "Remaining usage on the weekly or secondary usage limit (omitted when unavailable)"
             }
             TerminalTitleItem::CodexVersion => "Codex application version",
             TerminalTitleItem::UsedTokens => "Total tokens used in session (omitted when zero)",

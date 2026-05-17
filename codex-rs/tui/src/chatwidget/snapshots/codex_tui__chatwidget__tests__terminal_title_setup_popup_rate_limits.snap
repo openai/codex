@@ -7,8 +7,8 @@ expression: terminal_title_popup_snapshot(&mut chat)
 
   Type to search
   >
-› [x] five-hour-limit  Remaining usage on the primary usage limit (omitted when unavailable)
-  [x] weekly-limit     Remaining usage on the secondary usage limit (omitted when unavailable)
+› [x] five-hour-limit  Remaining usage on the 5-hour or only usage limit (omitted when unavailabl…
+  [x] weekly-limit     Remaining usage on the weekly or secondary usage limit (omitted when unava…
   [ ] app-name         Codex app name
   [ ] project-name     Project name (falls back to current directory name)
   [ ] current-dir      Current working directory
