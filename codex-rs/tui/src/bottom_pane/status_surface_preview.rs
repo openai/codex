@@ -169,6 +169,16 @@ impl StatusSurfacePreviewData {
         );
     }
 
+    pub(crate) fn suppress_placeholder(&mut self, item: StatusSurfacePreviewItem) {
+        if self
+            .values
+            .get(&item)
+            .is_some_and(|value| value.is_placeholder)
+        {
+            self.values.remove(&item);
+        }
+    }
+
     pub(crate) fn value_for(&self, item: StatusSurfacePreviewItem) -> Option<&str> {
         self.values.get(&item).map(|value| value.text.as_str())
     }
