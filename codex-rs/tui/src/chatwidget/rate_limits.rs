@@ -42,9 +42,8 @@ impl RateLimitWarningState {
                 self.secondary_index += 1;
             }
             if let Some(threshold) = highest_secondary {
-                let limit_label = secondary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| SECONDARY_LIMIT_FALLBACK_LABEL.to_string());
+                let limit_label =
+                    limit_label_for_window(secondary_window_minutes, /*is_secondary*/ true);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -61,9 +60,8 @@ impl RateLimitWarningState {
                 self.primary_index += 1;
             }
             if let Some(threshold) = highest_primary {
-                let limit_label = primary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| PRIMARY_LIMIT_FALLBACK_LABEL.to_string());
+                let limit_label =
+                    limit_label_for_window(primary_window_minutes, /*is_secondary*/ false);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -75,25 +73,34 @@ impl RateLimitWarningState {
     }
 }
 
-pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
+pub(crate) fn limit_label_for_window(window_minutes: Option<i64>, is_secondary: bool) -> String {
+    window_minutes
+        .and_then(get_limits_duration)
+        .unwrap_or_else(|| fallback_limit_label(is_secondary).to_string())
+}
+
+pub(crate) fn get_limits_duration(windows_minutes: i64) -> Option<String> {
     const MINUTES_PER_HOUR: i64 = 60;
     const MINUTES_PER_5_HOURS: i64 = 5 * MINUTES_PER_HOUR;
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
     const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
     const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
+    const MINUTES_PER_YEAR: i64 = 365 * MINUTES_PER_DAY;
 
     let windows_minutes = windows_minutes.max(0);
 
     if is_approximate_window(windows_minutes, MINUTES_PER_5_HOURS) {
-        "5h".to_string()
+        Some("5h".to_string())
     } else if is_approximate_window(windows_minutes, MINUTES_PER_DAY) {
-        "daily".to_string()
+        Some("daily".to_string())
     } else if is_approximate_window(windows_minutes, MINUTES_PER_WEEK) {
-        "weekly".to_string()
+        Some("weekly".to_string())
     } else if is_approximate_window(windows_minutes, MINUTES_PER_MONTH) {
-        "monthly".to_string()
+        Some("monthly".to_string())
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_YEAR) {
+        Some("annual".to_string())
     } else {
-        PRIMARY_LIMIT_FALLBACK_LABEL.to_string()
+        None
     }
 }
 

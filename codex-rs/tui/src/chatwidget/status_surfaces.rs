@@ -6,7 +6,7 @@
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
-use crate::chatwidget::fallback_limit_label;
+use crate::chatwidget::limit_label_for_window;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
 use codex_app_server_protocol::AskForApproval;
@@ -608,10 +608,10 @@ impl ChatWidget {
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
                     .and_then(|s| s.primary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ false).to_string());
+                let label = limit_label_for_window(
+                    window.and_then(|window| window.window_minutes),
+                    /*is_secondary*/ false,
+                );
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::WeeklyLimit => {
@@ -619,10 +619,10 @@ impl ChatWidget {
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
                     .and_then(|s| s.secondary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ true).to_string());
+                let label = limit_label_for_window(
+                    window.and_then(|window| window.window_minutes),
+                    /*is_secondary*/ true,
+                );
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),

@@ -6,7 +6,7 @@
 //! The key contract is that time-sensitive values are interpreted relative to a caller-provided
 //! capture timestamp so stale detection and reset labels remain coherent for a given draw cycle.
 use crate::chatwidget::fallback_limit_label;
-use crate::chatwidget::get_limits_duration;
+use crate::chatwidget::limit_label_for_window;
 use crate::text_formatting::capitalize_first;
 
 use super::helpers::format_reset_timestamp;
@@ -189,21 +189,13 @@ pub(crate) fn compose_rate_limit_data_many(
             .primary
             .as_ref()
             .map(|window| {
-                window
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ false).to_string())
+                limit_label_for_window(window.window_minutes, /*is_secondary*/ false)
             })
             .map(|label| capitalize_first(&label));
         let secondary_label = snapshot
             .secondary
             .as_ref()
-            .map(|window| {
-                window
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| fallback_limit_label(/*is_secondary*/ true).to_string())
-            })
+            .map(|window| limit_label_for_window(window.window_minutes, /*is_secondary*/ true))
             .map(|label| capitalize_first(&label));
         let window_count =
             usize::from(snapshot.primary.is_some()) + usize::from(snapshot.secondary.is_some());
@@ -425,7 +417,7 @@ mod tests {
             secondary: Some(RateLimitWindowDisplay {
                 used_percent: 40.0,
                 resets_at: Some("later".to_string()),
-                window_minutes: None,
+                window_minutes: Some(2 * 60),
             }),
             credits: None,
         };

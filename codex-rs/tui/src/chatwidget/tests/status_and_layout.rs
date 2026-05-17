@@ -520,8 +520,12 @@ async fn test_rate_limit_warnings_monthly() {
 
 #[test]
 fn rate_limit_duration_labels_only_render_supported_windows() {
-    assert_eq!(get_limits_duration(2 * 60), "usage");
-    assert_eq!(get_limits_duration(24 * 60), "daily");
+    assert_eq!(get_limits_duration(2 * 60), None);
+    assert_eq!(get_limits_duration(24 * 60).as_deref(), Some("daily"));
+    assert_eq!(
+        get_limits_duration(365 * 24 * 60).as_deref(),
+        Some("annual")
+    );
 }
 
 #[tokio::test]
@@ -543,6 +547,47 @@ async fn test_rate_limit_warnings_use_generic_fallback_labels() {
                 "Heads up, you have less than 25% of your usage limit left. Run /status for a breakdown.",
             ),
         ],
+    );
+}
+
+#[tokio::test]
+async fn test_rate_limit_warnings_use_secondary_fallback_for_unsupported_window() {
+    let mut state = RateLimitWarningState::default();
+
+    assert_eq!(
+        state.take_warnings(
+            /*secondary_used_percent*/ Some(75.0),
+            /*secondary_window_minutes*/ Some(2 * 60),
+            /*primary_used_percent*/ None,
+            /*primary_window_minutes*/ None,
+        ),
+        vec![String::from(
+            "Heads up, you have less than 25% of your secondary usage limit left. Run /status for a breakdown.",
+        )],
+    );
+}
+
+#[tokio::test]
+async fn status_line_uses_secondary_fallback_for_unsupported_window() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: Some(RateLimitWindow {
+            used_percent: 50,
+            window_duration_mins: Some(2 * 60),
+            resets_at: None,
+        }),
+        credits: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }));
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
+        Some("secondary usage 50%".to_string())
     );
 }
 
