@@ -14,17 +14,22 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::LocalThreadStore;
@@ -81,6 +86,89 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         arguments: "{}".to_string(),
         call_id: call_id.to_string(),
     }
+}
+
+fn turn_context_item_for_test(turn_id: &str) -> TurnContextItem {
+    TurnContextItem {
+        turn_id: Some(turn_id.to_string()),
+        trace_id: None,
+        cwd: std::path::PathBuf::from("/tmp"),
+        current_date: None,
+        timezone: None,
+        approval_policy: AskForApproval::OnRequest,
+        sandbox_policy: SandboxPolicy::ReadOnly {
+            network_access: false,
+        },
+        permission_profile: None,
+        network: None,
+        file_system_sandbox_policy: None,
+        model: "gpt-test".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        realtime_active: None,
+        effort: None,
+        summary: ReasoningSummary::Auto,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
+    }
+}
+
+#[test]
+fn strips_only_parent_startup_context_bundle() {
+    let parent_user_message = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "parent seed context".to_string(),
+        }],
+        phase: None,
+    };
+    let parent_later_context_update = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Parent later context update.".to_string(),
+        }],
+        phase: None,
+    };
+    let mut structural_rollout = vec![
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Parent startup context.".to_string(),
+            }],
+            phase: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+            }],
+            phase: None,
+        }),
+        RolloutItem::TurnContext(turn_context_item_for_test("startup")),
+        RolloutItem::ResponseItem(parent_user_message.clone()),
+        RolloutItem::ResponseItem(parent_later_context_update.clone()),
+        RolloutItem::TurnContext(turn_context_item_for_test("later")),
+    ];
+
+    strip_parent_startup_context_bundle_from_forked_rollout(&mut structural_rollout);
+
+    assert_eq!(structural_rollout.len(), 3);
+    assert!(
+        matches!(&structural_rollout[0], RolloutItem::ResponseItem(item) if item == &parent_user_message)
+    );
+    assert!(
+        matches!(&structural_rollout[1], RolloutItem::ResponseItem(item) if item == &parent_later_context_update)
+    );
+    assert!(
+        matches!(&structural_rollout[2], RolloutItem::TurnContext(_)),
+        "later parent context updates should survive startup-bundle stripping"
+    );
 }
 
 struct AgentControlHarness {
@@ -628,42 +716,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .session
         .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
-    let mut expected_history = parent_thread
-        .codex
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .to_vec();
-    for item in &mut expected_history {
-        if let ResponseItem::Message { role, content, .. } = item
-            && role == "developer"
-        {
-            content.retain(|content_item| {
-                !matches!(
-                    content_item,
-                    ContentItem::InputText { text }
-                        if text == "Parent developer instructions."
-                )
-            });
-        }
-    }
-    expected_history.retain(|item| match item {
-        ResponseItem::Message { role, content, .. } if role == "developer" => {
-            !content.is_empty()
-                && !matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }]
-                        if text == "Parent root guidance."
-                            || text == "Parent subagent guidance."
-                )
-        }
-        _ => true,
-    });
-    assert!(
-        !expected_history.is_empty(),
-        "test setup should keep parent startup context blocks"
-    );
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
@@ -736,21 +788,42 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
-    expected_history.extend([
+    let message_summary = |item: &ResponseItem| match item {
         ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "parent seed context".to_string(),
-            }],
-            phase: None,
-        },
-        assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
-    ]);
+            role,
+            content,
+            phase,
+            ..
+        } => {
+            let text = content
+                .iter()
+                .map(|content_item| match content_item {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text.as_str()
+                    }
+                    _ => "",
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (role.clone(), text, phase.clone())
+        }
+        _ => panic!("expected only message items in forked child history"),
+    };
     assert_eq!(
-        history.raw_items(),
-        expected_history.as_slice(),
-        "forked child history should keep parent context blocks while removing duplicated setup instructions"
+        history
+            .raw_items()
+            .iter()
+            .map(message_summary)
+            .collect::<Vec<_>>(),
+        vec![
+            ("user".to_string(), "parent seed context".to_string(), None,),
+            (
+                "assistant".to_string(),
+                "parent final answer".to_string(),
+                Some(MessagePhase::FinalAnswer),
+            ),
+        ],
+        "forked child history should drop parent startup context while keeping parent conversation items"
     );
     let child_rollout_path = child_thread
         .rollout_path()
@@ -765,7 +838,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         !child_rollout.contains("Parent root guidance."),
         "forked child rollout should not retain parent multi-agent setup guidance"
     );
-
     let expected = (
         child_thread_id,
         Op::UserInput {
