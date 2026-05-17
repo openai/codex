@@ -127,6 +127,47 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
     }
 }
 
+fn strip_parent_context_updates_from_forked_rollout(items: &mut Vec<RolloutItem>) {
+    let mut drop_item = vec![false; items.len()];
+    for idx in 0..items.len() {
+        if !matches!(items[idx], RolloutItem::TurnContext(_)) {
+            continue;
+        }
+
+        drop_item[idx] = true;
+        let mut context_idx = idx;
+        while context_idx > 0 {
+            let should_drop = match &items[context_idx - 1] {
+                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                    if role == "developer" =>
+                {
+                    true
+                }
+                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                    if role == "user"
+                        && crate::event_mapping::is_contextual_user_message_content(content) =>
+                {
+                    true
+                }
+                _ => false,
+            };
+            if !should_drop {
+                break;
+            }
+
+            context_idx -= 1;
+            drop_item[context_idx] = true;
+        }
+    }
+
+    let mut idx = 0;
+    items.retain(|_| {
+        let keep = !drop_item[idx];
+        idx += 1;
+        keep
+    });
+}
+
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
@@ -396,6 +437,10 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        // Parent context updates are keyed by parent TurnContext snapshots. Forked children drop
+        // those snapshots and build their own startup context, so inherited context messages would
+        // otherwise be duplicated or stale in the child prompt.
+        strip_parent_context_updates_from_forked_rollout(&mut forked_rollout_items);
         // MultiAgentV2 root/subagent usage hints are injected as standalone developer
         // messages at thread start. When forking history, drop hints from the parent
         // so the child gets a fresh hint that matches its own session source/config.

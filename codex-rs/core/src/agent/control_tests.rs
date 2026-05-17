@@ -608,6 +608,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Parent root guidance.".to_string());
     parent_config.multi_agent_v2.subagent_usage_hint_text =
         Some("Parent subagent guidance.".to_string());
+    parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
     child_config.multi_agent_v2.root_agent_usage_hint_text =
@@ -621,10 +622,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    parent_thread
+        .codex
+        .session
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
-    let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
     let trigger_message = InterAgentCommunication::new(
         AgentPath::root(),
@@ -639,22 +645,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .record_conversation_items(
             turn_context.as_ref(),
             &[
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent root guidance.".to_string(),
-                    }],
-                    phase: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent subagent guidance.".to_string(),
-                    }],
-                    phase: None,
-                },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
@@ -725,6 +715,19 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         history.raw_items(),
         &expected_history,
         "forked child history should keep only parent user messages and assistant final answers"
+    );
+    let child_rollout_path = child_thread
+        .rollout_path()
+        .expect("forked child rollout path");
+    let child_rollout = std::fs::read_to_string(&child_rollout_path)
+        .expect("forked child rollout should be readable");
+    assert!(
+        !child_rollout.contains("Parent developer instructions."),
+        "forked child rollout should not retain parent developer instructions from setup context"
+    );
+    assert!(
+        !child_rollout.contains("Parent root guidance."),
+        "forked child rollout should not retain parent multi-agent setup guidance"
     );
 
     let expected = (
