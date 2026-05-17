@@ -628,6 +628,42 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .session
         .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
+    let mut expected_history = parent_thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .to_vec();
+    for item in &mut expected_history {
+        if let ResponseItem::Message { role, content, .. } = item
+            && role == "developer"
+        {
+            content.retain(|content_item| {
+                !matches!(
+                    content_item,
+                    ContentItem::InputText { text }
+                        if text == "Parent developer instructions."
+                )
+            });
+        }
+    }
+    expected_history.retain(|item| match item {
+        ResponseItem::Message { role, content, .. } if role == "developer" => {
+            !content.is_empty()
+                && !matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }]
+                        if text == "Parent root guidance."
+                            || text == "Parent subagent guidance."
+                )
+        }
+        _ => true,
+    });
+    assert!(
+        !expected_history.is_empty(),
+        "test setup should keep parent startup context blocks"
+    );
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
@@ -700,7 +736,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
-    let expected_history = [
+    expected_history.extend([
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -710,11 +746,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             phase: None,
         },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
-    ];
+    ]);
     assert_eq!(
         history.raw_items(),
-        &expected_history,
-        "forked child history should keep only parent user messages and assistant final answers"
+        expected_history.as_slice(),
+        "forked child history should keep parent context blocks while removing duplicated setup instructions"
     );
     let child_rollout_path = child_thread
         .rollout_path()

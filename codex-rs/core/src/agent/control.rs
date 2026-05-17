@@ -127,47 +127,6 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
     }
 }
 
-fn strip_parent_context_updates_from_forked_rollout(items: &mut Vec<RolloutItem>) {
-    let mut drop_item = vec![false; items.len()];
-    for idx in 0..items.len() {
-        if !matches!(items[idx], RolloutItem::TurnContext(_)) {
-            continue;
-        }
-
-        drop_item[idx] = true;
-        let mut context_idx = idx;
-        while context_idx > 0 {
-            let should_drop = match &items[context_idx - 1] {
-                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                    if role == "developer" =>
-                {
-                    true
-                }
-                RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                    if role == "user"
-                        && crate::event_mapping::is_contextual_user_message_content(content) =>
-                {
-                    true
-                }
-                _ => false,
-            };
-            if !should_drop {
-                break;
-            }
-
-            context_idx -= 1;
-            drop_item[context_idx] = true;
-        }
-    }
-
-    let mut idx = 0;
-    items.retain(|_| {
-        let keep = !drop_item[idx];
-        idx += 1;
-        keep
-    });
-}
-
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
@@ -437,10 +396,6 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        // Parent context updates are keyed by parent TurnContext snapshots. Forked children drop
-        // those snapshots and build their own startup context, so inherited context messages would
-        // otherwise be duplicated or stale in the child prompt.
-        strip_parent_context_updates_from_forked_rollout(&mut forked_rollout_items);
         // MultiAgentV2 root/subagent usage hints are injected as standalone developer
         // messages at thread start. When forking history, drop hints from the parent
         // so the child gets a fresh hint that matches its own session source/config.
@@ -462,19 +417,56 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
-        forked_rollout_items.retain(|item| {
-            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-                && role == "developer"
-                && let [ContentItem::InputText { text }] = content.as_slice()
-                && multi_agent_v2_usage_hint_texts_to_filter
-                    .iter()
-                    .any(|usage_hint_text| usage_hint_text == text)
-            {
-                return false;
-            }
+        let developer_instruction_texts_to_filter = match parent_thread.as_ref() {
+            Some(parent_thread) => parent_thread
+                .codex
+                .session
+                .get_config()
+                .await
+                .developer_instructions
+                .clone(),
+            None => config.developer_instructions.clone(),
+        }
+        .into_iter()
+        .filter(|developer_instructions| !developer_instructions.is_empty())
+        .collect::<Vec<_>>();
+        // Parent developer instructions may be one fragment inside a larger startup context
+        // message. Strip only that fragment so parent context updates remain fork-visible.
+        forked_rollout_items = forked_rollout_items
+            .into_iter()
+            .filter_map(|mut item| {
+                if !keep_forked_rollout_item(&item) {
+                    return None;
+                }
 
-            keep_forked_rollout_item(item)
-        });
+                if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
+                    &mut item
+                    && role == "developer"
+                {
+                    if let [ContentItem::InputText { text }] = content.as_slice()
+                        && multi_agent_v2_usage_hint_texts_to_filter
+                            .iter()
+                            .any(|usage_hint_text| usage_hint_text == text)
+                    {
+                        return None;
+                    }
+
+                    content.retain(|content_item| {
+                        let ContentItem::InputText { text } = content_item else {
+                            return true;
+                        };
+                        !developer_instruction_texts_to_filter
+                            .iter()
+                            .any(|developer_instructions| developer_instructions == text)
+                    });
+                    if content.is_empty() {
+                        return None;
+                    }
+                }
+
+                Some(item)
+            })
+            .collect();
 
         state
             .fork_thread_with_source(
