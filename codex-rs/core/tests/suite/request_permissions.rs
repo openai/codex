@@ -201,10 +201,6 @@ async fn submit_turn(
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

@@ -165,12 +165,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -252,12 +247,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -338,12 +328,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -437,12 +422,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -507,16 +487,12 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(
                     config
                         .model_reasoning_summary
                         .unwrap_or(ReasoningSummary::Auto),
                 ),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -689,12 +665,9 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -930,12 +903,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

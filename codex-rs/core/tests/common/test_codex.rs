@@ -772,12 +772,9 @@ impl TestCodex {
                 turn_context: codex_protocol::protocol::TurnContextOverrides {
                     cwd: Some(self.config.cwd.to_path_buf()),
                     approval_policy: Some(approval_policy),
-                    approvals_reviewer: None,
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,
-                    summary: None,
                     service_tier,
-                    personality: None,
                     collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                         mode: codex_protocol::config_types::ModeKind::Default,
                         settings: codex_protocol::config_types::Settings {

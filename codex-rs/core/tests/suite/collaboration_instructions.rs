@@ -189,16 +189,12 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(
                     test.config
                         .model_reasoning_summary
                         .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
                 ),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(collaboration_mode),
                 ..Default::default()
             },
@@ -243,16 +239,12 @@ async fn collaboration_instructions_omitted_when_disabled() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(
                     test.config
                         .model_reasoning_summary
                         .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
                 ),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(collaboration_mode),
                 ..Default::default()
             },
@@ -370,16 +362,12 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(
                     test.config
                         .model_reasoning_summary
                         .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
                 ),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(turn_mode),
                 ..Default::default()
             },

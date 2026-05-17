@@ -116,12 +116,8 @@ fn read_only_user_turn_with_model(
         turn_context: codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(cwd),
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
-            summary: None,
-            service_tier: None,
-            personality: None,
             collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {

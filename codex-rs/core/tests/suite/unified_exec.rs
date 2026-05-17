@@ -201,12 +201,7 @@ async fn submit_unified_exec_turn(
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -294,12 +289,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -2145,12 +2135,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -2249,12 +2234,7 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -2732,12 +2712,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -2856,12 +2831,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(read_only_policy),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -2995,12 +2965,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
-                permission_profile: None,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

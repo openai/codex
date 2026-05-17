@@ -5258,9 +5258,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: config.model_reasoning_summary,
-                service_tier: None,
                 personality: config.personality,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
