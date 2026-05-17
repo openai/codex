@@ -893,8 +893,8 @@ fn five_hour_status_window(
     snapshot: &RateLimitSnapshotDisplay,
 ) -> Option<(&RateLimitWindowDisplay, bool)> {
     find_codex_window(snapshot, "5h")
-        .or_else(|| only_codex_window(snapshot))
-        .or_else(|| snapshot.primary.as_ref().map(|window| (window, false)))
+        .or_else(|| non_weekly_primary_window(snapshot))
+        .or_else(|| only_non_weekly_codex_window(snapshot))
 }
 
 fn weekly_status_window(
@@ -923,13 +923,30 @@ fn find_codex_window<'a>(
     None
 }
 
-fn only_codex_window(
+fn non_weekly_primary_window(
     snapshot: &RateLimitSnapshotDisplay,
 ) -> Option<(&RateLimitWindowDisplay, bool)> {
-    match (snapshot.primary.as_ref(), snapshot.secondary.as_ref()) {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, "weekly") {
+        None
+    } else {
+        Some((primary, false))
+    }
+}
+
+fn only_non_weekly_codex_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let (window, is_secondary) = match (snapshot.primary.as_ref(), snapshot.secondary.as_ref()) {
         (Some(primary), None) => Some((primary, false)),
         (None, Some(secondary)) => Some((secondary, true)),
         _ => None,
+    }?;
+
+    if matches_window_label(window, "weekly") {
+        None
+    } else {
+        Some((window, is_secondary))
     }
 }
 
