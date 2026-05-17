@@ -27,10 +27,8 @@ from ._login import (
     AsyncDeviceCodeLoginHandle,
     ChatgptLoginHandle,
     DeviceCodeLoginHandle,
-    async_login_api_key,
     async_start_chatgpt_login,
     async_start_device_code_login,
-    login_api_key,
     start_chatgpt_login,
     start_device_code_login,
 )
@@ -42,8 +40,10 @@ from ._run import (
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    ApiKeyLoginAccountParams,
     GetAccountParams,
     GetAccountResponse,
+    LoginAccountParams,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -101,7 +101,14 @@ class Codex:
 
     def login_api_key(self, api_key: str) -> None:
         """Authenticate app-server with an API key."""
-        login_api_key(self._client, api_key)
+        self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
 
     def login_chatgpt(self) -> ChatgptLoginHandle:
         """Start browser-based ChatGPT login and return its live handle."""
@@ -323,7 +330,14 @@ class AsyncCodex:
     async def login_api_key(self, api_key: str) -> None:
         """Authenticate app-server with an API key."""
         await self._ensure_initialized()
-        await async_login_api_key(self._client, api_key)
+        await self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
 
     async def login_chatgpt(self) -> AsyncChatgptLoginHandle:
         """Start browser-based ChatGPT login and return its live handle."""

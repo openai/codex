@@ -7,7 +7,6 @@ from .async_client import AsyncAppServerClient
 from .client import AppServerClient
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
-    ApiKeyLoginAccountParams,
     CancelLoginAccountResponse,
     ChatgptDeviceCodeLoginAccountParams,
     ChatgptDeviceCodeLoginAccountResponse,
@@ -25,30 +24,6 @@ class _AsyncLoginOwner(Protocol):
     async def _ensure_initialized(self) -> None:
         """Ensure the owning SDK client has a live app-server connection."""
         ...
-
-
-def login_api_key(client: AppServerClient, api_key: str) -> None:
-    """Authenticate one app-server session with an API key."""
-    client.account_login_start(
-        LoginAccountParams(
-            root=ApiKeyLoginAccountParams(
-                api_key=api_key,
-                type="apiKey",
-            )
-        )
-    )
-
-
-async def async_login_api_key(client: AsyncAppServerClient, api_key: str) -> None:
-    """Authenticate one async app-server session with an API key."""
-    await client.account_login_start(
-        LoginAccountParams(
-            root=ApiKeyLoginAccountParams(
-                api_key=api_key,
-                type="apiKey",
-            )
-        )
-    )
 
 
 def start_chatgpt_login(client: AppServerClient) -> ChatgptLoginHandle:
