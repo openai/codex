@@ -526,12 +526,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(fixture.cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile: Some(permission_profile),
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

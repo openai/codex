@@ -124,12 +124,8 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
