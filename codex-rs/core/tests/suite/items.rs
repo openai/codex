@@ -61,12 +61,8 @@ fn disabled_plan_turn(
         turn_context: codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(cwd),
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
-            summary: None,
-            service_tier: None,
-            personality: None,
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
         },
