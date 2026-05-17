@@ -1644,12 +1644,12 @@ mod tests {
             .expect("config should build")
     }
 
-    fn rate_limit_snapshot(limit_id: &str, used_percent: i32) -> RateLimitSnapshot {
+    fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {
         RateLimitSnapshot {
             limit_id: Some(limit_id.to_string()),
             limit_name: None,
             primary: Some(codex_app_server_protocol::RateLimitWindow {
-                used_percent,
+                used_percent: 0,
                 window_duration_mins: Some(10_080),
                 resets_at: None,
             }),
@@ -1663,10 +1663,10 @@ mod tests {
     #[test]
     fn app_server_rate_limit_snapshots_deduplicates_top_level_limit_from_map() {
         let response = GetAccountRateLimitsResponse {
-            rate_limits: rate_limit_snapshot("codex", 9),
+            rate_limits: rate_limit_snapshot("codex"),
             rate_limits_by_limit_id: Some(HashMap::from([
-                ("codex".to_string(), rate_limit_snapshot("codex", 9)),
-                ("other".to_string(), rate_limit_snapshot("other", 20)),
+                ("codex".to_string(), rate_limit_snapshot("codex")),
+                ("other".to_string(), rate_limit_snapshot("other")),
             ])),
         };
 
