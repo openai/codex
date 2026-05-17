@@ -444,13 +444,9 @@ impl TurnRequestProcessor {
             .as_ref()
             .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, base_snapshot.cwd.as_path()))
             .unwrap_or_else(|| base_snapshot.cwd.clone());
-        let runtime_workspace_roots =
-            request
-                .runtime_workspace_roots
-                .clone()
-                .map(|workspace_roots| {
-                    resolve_runtime_workspace_roots(workspace_roots, &effective_cwd)
-                });
+        let runtime_workspace_roots = request.runtime_workspace_roots.map(|workspace_roots| {
+            resolve_runtime_workspace_roots(workspace_roots, &effective_cwd)
+        });
         let effective_workspace_roots = effective_workspace_roots(
             base_snapshot,
             &effective_cwd,
