@@ -69,7 +69,7 @@ fn cache_rate_limit_snapshot(chat: &mut ChatWidget) {
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 50,
-            window_duration_mins: Some(2 * 60),
+            window_duration_mins: Some(7 * 24 * 60),
             resets_at: None,
         }),
         credits: None,
