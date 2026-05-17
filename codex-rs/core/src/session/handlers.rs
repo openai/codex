@@ -185,20 +185,9 @@ pub(super) async fn user_input_or_turn_inner(
             personality,
             environments,
         } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
+            let mut updates = turn_context_settings_update(
+                sess,
+                TurnContextOverrides {
                     cwd,
                     workspace_roots,
                     profile_workspace_roots,
@@ -208,17 +197,18 @@ pub(super) async fn user_input_or_turn_inner(
                     permission_profile,
                     active_permission_profile,
                     windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
+                    model,
+                    effort,
+                    summary,
                     service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
+                    collaboration_mode,
                     personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
                 },
-                responsesapi_client_metadata,
             )
+            .await;
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (items, updates, responsesapi_client_metadata)
         }
         Op::UserInput {
             items,
