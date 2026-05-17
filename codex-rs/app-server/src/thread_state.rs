@@ -147,6 +147,18 @@ impl ThreadState {
         rx
     }
 
+    pub(crate) fn track_current_pending_turn_contexts(
+        &mut self,
+    ) -> Vec<oneshot::Receiver<TurnContextAck>> {
+        let mut receivers = Vec::with_capacity(self.pending_turn_context_waiters.len());
+        for waiters in self.pending_turn_context_waiters.values_mut() {
+            let (tx, rx) = oneshot::channel();
+            waiters.push(tx);
+            receivers.push(rx);
+        }
+        receivers
+    }
+
     pub(crate) fn cancel_pending_turn_context(&mut self, submission_id: &str) {
         self.pending_turn_context_waiters.remove(submission_id);
     }

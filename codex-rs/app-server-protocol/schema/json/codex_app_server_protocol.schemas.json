@@ -10430,6 +10430,57 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "ManagedFileSystemPermissions": {
+        "oneOf": [
+          {
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+                },
+                "type": "array"
+              },
+              "globScanMaxDepth": {
+                "format": "uint",
+                "minimum": 1.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedManagedFileSystemPermissionsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entries",
+              "type"
+            ],
+            "title": "RestrictedManagedFileSystemPermissions",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "unrestricted"
+                ],
+                "title": "UnrestrictedManagedFileSystemPermissionsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "UnrestrictedManagedFileSystemPermissions",
+            "type": "object"
+          }
+        ]
+      },
       "ManagedHooksRequirements": {
         "properties": {
           "PermissionRequest": {
@@ -11541,6 +11592,13 @@
         },
         "type": "object"
       },
+      "NetworkSandboxPolicy": {
+        "enum": [
+          "enabled",
+          "restricted"
+        ],
+        "type": "string"
+      },
       "NetworkUnixSocketPermission": {
         "enum": [
           "allow",
@@ -11635,6 +11693,70 @@
               "type"
             ],
             "title": "UpdatePatchChangeKind",
+            "type": "object"
+          }
+        ]
+      },
+      "PermissionProfile": {
+        "oneOf": [
+          {
+            "properties": {
+              "fileSystem": {
+                "$ref": "#/definitions/v2/ManagedFileSystemPermissions"
+              },
+              "network": {
+                "$ref": "#/definitions/v2/NetworkSandboxPolicy"
+              },
+              "type": {
+                "enum": [
+                  "managed"
+                ],
+                "title": "ManagedPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "fileSystem",
+              "network",
+              "type"
+            ],
+            "title": "ManagedPermissionProfile",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "disabled"
+                ],
+                "title": "DisabledPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DisabledPermissionProfile",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "network": {
+                "$ref": "#/definitions/v2/NetworkSandboxPolicy"
+              },
+              "type": {
+                "enum": [
+                  "external"
+                ],
+                "title": "ExternalPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "network",
+              "type"
+            ],
+            "title": "ExternalPermissionProfile",
             "type": "object"
           }
         ]

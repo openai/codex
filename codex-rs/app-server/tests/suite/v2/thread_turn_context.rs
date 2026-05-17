@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
@@ -20,7 +21,11 @@ use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -72,6 +77,31 @@ async fn read_turn_context_updated(
         anyhow::bail!("expected thread/turnContext/updated notification");
     };
     Ok(notification)
+}
+
+fn assert_permission_profile_write_root(
+    permission_profile: &PermissionProfile,
+    expected_root: &AbsolutePathBuf,
+    unexpected_root: &AbsolutePathBuf,
+) {
+    let permission_profile: CorePermissionProfile = permission_profile.clone().into();
+    let sandbox_policy = permission_profile.file_system_sandbox_policy();
+    assert!(
+        sandbox_policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path == expected_root)
+        }),
+        "expected permission profile write entries to contain {expected_root:?}; got {:?}",
+        sandbox_policy.entries
+    );
+    assert!(
+        !sandbox_policy.entries.iter().any(|entry| {
+            entry.access == FileSystemAccessMode::Write
+                && matches!(&entry.path, FileSystemPath::Path { path } if path == unexpected_root)
+        }),
+        "did not expect permission profile write entries to contain {unexpected_root:?}; got {:?}",
+        sandbox_policy.entries
+    );
 }
 
 #[tokio::test]
@@ -128,6 +158,43 @@ async fn thread_turn_context_update_applies_partial_patch_and_emits_full_state()
         !mcp.pending_notification_methods()
             .iter()
             .any(|method| method == "thread/turnContext/updated")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turn_context_update_retargets_permissions_when_cwd_changes() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, &server.uri())?;
+    let next_cwd = TempDir::new()?;
+    let next_cwd_abs = AbsolutePathBuf::try_from(next_cwd.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
+
+    let request_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id,
+            cwd: Some(next_cwd.path().to_path_buf()),
+            permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response = to_response::<ThreadTurnContextUpdateResponse>(response)?;
+
+    assert_eq!(response.turn_context.cwd, next_cwd_abs);
+    assert_permission_profile_write_root(
+        &response.turn_context.permission_profile,
+        &next_cwd_abs,
+        &thread.cwd,
     );
 
     Ok(())
@@ -196,6 +263,68 @@ async fn thread_turn_context_update_rejects_sandbox_policy_with_permissions() ->
         "unexpected error message: {}",
         err.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turn_context_update_waits_for_pending_cwd_before_permissions() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, &server.uri())?;
+    let next_cwd = TempDir::new()?;
+    let next_cwd_abs = AbsolutePathBuf::try_from(next_cwd.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(next_cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .await?;
+    let update_request_id = mcp
+        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+            thread_id: thread.id,
+            permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
+            ..Default::default()
+        })
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let update_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_request_id)),
+    )
+    .await??;
+    let update_response = to_response::<ThreadTurnContextUpdateResponse>(update_response)?;
+
+    assert_eq!(update_response.turn_context.cwd, next_cwd_abs);
+    assert_permission_profile_write_root(
+        &update_response.turn_context.permission_profile,
+        &next_cwd_abs,
+        &thread.cwd,
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }

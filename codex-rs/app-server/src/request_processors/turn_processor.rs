@@ -85,6 +85,35 @@ fn resolve_runtime_workspace_roots(
     resolved_roots
 }
 
+fn effective_workspace_roots(
+    base_snapshot: &ThreadConfigSnapshot,
+    effective_cwd: &AbsolutePathBuf,
+    runtime_workspace_roots: Option<&[AbsolutePathBuf]>,
+) -> Vec<AbsolutePathBuf> {
+    if let Some(workspace_roots) = runtime_workspace_roots {
+        return workspace_roots.to_vec();
+    }
+
+    if effective_cwd != &base_snapshot.cwd
+        && base_snapshot.workspace_roots.contains(&base_snapshot.cwd)
+    {
+        let mut retargeted_roots = Vec::with_capacity(base_snapshot.workspace_roots.len());
+        for root in &base_snapshot.workspace_roots {
+            let root = if root == &base_snapshot.cwd {
+                effective_cwd.clone()
+            } else {
+                root.clone()
+            };
+            if !retargeted_roots.contains(&root) {
+                retargeted_roots.push(root);
+            }
+        }
+        retargeted_roots
+    } else {
+        base_snapshot.workspace_roots.clone()
+    }
+}
+
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -411,22 +440,22 @@ impl TurnRequestProcessor {
         }
 
         let cwd = request.cwd;
+        let effective_cwd = cwd
+            .as_ref()
+            .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, base_snapshot.cwd.as_path()))
+            .unwrap_or_else(|| base_snapshot.cwd.clone());
         let runtime_workspace_roots =
             request
                 .runtime_workspace_roots
                 .clone()
                 .map(|workspace_roots| {
-                    let base_cwd = cwd
-                        .as_ref()
-                        .map(|cwd| {
-                            AbsolutePathBuf::resolve_path_against_base(
-                                cwd,
-                                base_snapshot.cwd.as_path(),
-                            )
-                        })
-                        .unwrap_or_else(|| base_snapshot.cwd.clone());
-                    resolve_runtime_workspace_roots(workspace_roots, &base_cwd)
+                    resolve_runtime_workspace_roots(workspace_roots, &effective_cwd)
                 });
+        let effective_workspace_roots = effective_workspace_roots(
+            base_snapshot,
+            &effective_cwd,
+            runtime_workspace_roots.as_deref(),
+        );
         let approval_policy = request.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = request
             .approvals_reviewer
@@ -436,15 +465,12 @@ impl TurnRequestProcessor {
             if let Some(permissions) = request.permissions {
                 let mut overrides = ConfigOverrides {
                     cwd: cwd.clone(),
-                    workspace_roots: Some(request.runtime_workspace_roots.clone().unwrap_or_else(
-                        || {
-                            base_snapshot
-                                .workspace_roots
-                                .iter()
-                                .map(AbsolutePathBuf::to_path_buf)
-                                .collect()
-                        },
-                    )),
+                    workspace_roots: Some(
+                        effective_workspace_roots
+                            .iter()
+                            .map(AbsolutePathBuf::to_path_buf)
+                            .collect(),
+                    ),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
@@ -507,7 +533,8 @@ impl TurnRequestProcessor {
 
     async fn maybe_emit_turn_context_updated(
         &self,
-        thread_id: &str,
+        thread_id: ThreadId,
+        api_thread_id: &str,
         before: &ThreadTurnContext,
         after: ThreadTurnContext,
     ) {
@@ -515,14 +542,60 @@ impl TurnRequestProcessor {
             return;
         }
 
-        self.outgoing
-            .send_server_notification(ServerNotification::ThreadTurnContextUpdated(
-                ThreadTurnContextUpdatedNotification {
-                    thread_id: thread_id.to_string(),
-                    turn_context: after,
-                },
-            ))
+        let connection_ids = self
+            .thread_state_manager
+            .subscribed_connection_ids(thread_id)
             .await;
+        if connection_ids.is_empty() {
+            return;
+        }
+
+        self.outgoing
+            .send_server_notification_to_connections(
+                &connection_ids,
+                ServerNotification::ThreadTurnContextUpdated(
+                    ThreadTurnContextUpdatedNotification {
+                        thread_id: api_thread_id.to_string(),
+                        turn_context: after,
+                    },
+                ),
+            )
+            .await;
+    }
+
+    async fn wait_for_pending_turn_contexts(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        let pending = {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let mut thread_state = thread_state.lock().await;
+            thread_state.track_current_pending_turn_contexts()
+        };
+
+        for turn_context_applied in pending {
+            match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
+                .await
+            {
+                Ok(Ok(Ok(_))) => {}
+                Ok(Ok(Err(err))) => {
+                    return Err(internal_error(format!(
+                        "failed to apply pending turn context override: {err}"
+                    )));
+                }
+                Ok(Err(_)) => {
+                    return Err(internal_error(
+                        "pending turn context override waiter was cancelled".to_string(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(internal_error(
+                        "timed out waiting for pending turn context overrides to apply".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn turn_start_inner(
@@ -648,6 +721,7 @@ impl TurnRequestProcessor {
                         let after_turn_context = thread_turn_context_from_applied_event(&payload);
                         processor
                             .maybe_emit_turn_context_updated(
+                                thread_id,
                                 &api_thread_id,
                                 &before_turn_context,
                                 after_turn_context,
@@ -713,6 +787,7 @@ impl TurnRequestProcessor {
                 .inspect_err(|error| {
                     self.track_error_response(request_id, error, /*error_type*/ None);
                 })?;
+        self.wait_for_pending_turn_contexts(thread_id).await?;
         let before_snapshot = thread.config_snapshot().await;
         let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
         let resolved_overrides = self
@@ -783,6 +858,7 @@ impl TurnRequestProcessor {
             before_turn_context.clone()
         };
         self.maybe_emit_turn_context_updated(
+            thread_id,
             &params.thread_id,
             &before_turn_context,
             after_turn_context.clone(),

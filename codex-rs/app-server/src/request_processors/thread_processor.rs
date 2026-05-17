@@ -2691,8 +2691,17 @@ impl ThreadRequestProcessor {
 
             let thread_state = self
                 .thread_state_manager
-                .thread_state(existing_thread_id)
-                .await;
+                .try_ensure_connection_subscribed(
+                    existing_thread_id,
+                    request_id.connection_id,
+                    /*experimental_raw_events*/ false,
+                )
+                .await
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "failed to subscribe connection for running thread {existing_thread_id}"
+                    ))
+                })?;
             self.ensure_listener_task_running(
                 existing_thread_id,
                 existing_thread.clone(),
