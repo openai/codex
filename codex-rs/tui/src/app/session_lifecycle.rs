@@ -418,8 +418,44 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.pending_startup_thread_start_request_id = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
+    }
+
+    pub(super) async fn handle_startup_thread_started(
+        &mut self,
+        app_server: &mut AppServerSession,
+        request_id: String,
+        result: Result<AppServerStartedThread, String>,
+    ) -> Result<()> {
+        if self.pending_startup_thread_start_request_id.as_deref() != Some(request_id.as_str()) {
+            if let Ok(started) = result
+                && let Err(err) = app_server
+                    .thread_unsubscribe(started.session.thread_id)
+                    .await
+            {
+                tracing::warn!(
+                    thread_id = %started.session.thread_id,
+                    "failed to unsubscribe stale startup thread: {err}"
+                );
+            }
+            return Ok(());
+        }
+
+        self.pending_startup_thread_start_request_id = None;
+        match result {
+            Ok(started) => {
+                self.enqueue_primary_thread_session(started.session, started.turns)
+                    .await?;
+            }
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to start a fresh session through the app server: {err}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn start_fresh_session_with_summary_hint(

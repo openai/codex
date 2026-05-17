@@ -23,6 +23,10 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::StartupThreadStarted { request_id, result } => {
+                self.handle_startup_thread_started(app_server, request_id, result)
+                    .await?;
+            }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
