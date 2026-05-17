@@ -503,26 +503,22 @@ impl TurnRequestProcessor {
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
         }
 
-        let turn_context = if has_any_overrides {
-            codex_protocol::protocol::TurnContextOverrides {
-                cwd,
-                workspace_roots: runtime_workspace_roots,
-                profile_workspace_roots,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level: None,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            }
-        } else {
-            Default::default()
+        let turn_context = codex_protocol::protocol::TurnContextOverrides {
+            cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
         };
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
