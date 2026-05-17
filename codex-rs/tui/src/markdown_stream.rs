@@ -8,6 +8,9 @@
 //! On finalization, `finalize_and_drain_source()` flushes whatever remains (the last line, which
 //! may lack a trailing newline).
 
+use codex_utils_log::bounded_debug;
+#[cfg(test)]
+use codex_utils_log::bounded_str;
 #[cfg(test)]
 use ratatui::text::Line;
 use std::path::Path;
@@ -75,7 +78,7 @@ impl MarkdownStreamCollector {
 
     /// Append a raw streaming delta to the internal source buffer.
     pub fn push_delta(&mut self, delta: &str) {
-        tracing::trace!("push_delta: {delta:?}");
+        tracing::trace!("push_delta: {}", bounded_debug(&delta));
         self.buffer.push_str(delta);
     }
 
@@ -174,7 +177,10 @@ impl MarkdownStreamCollector {
             self.buffer.len(),
             source.len()
         );
-        tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
+        tracing::trace!(
+            "markdown finalize (raw source):\n---\n{}\n---",
+            bounded_str(&source)
+        );
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, Some(self.cwd.as_path()), &mut rendered);

@@ -39,7 +39,10 @@ impl AppEventSender {
             session_log::log_inbound_app_event(&event);
         }
         if let Err(e) = self.app_event_tx.send(event) {
-            tracing::error!("failed to send event: {e}");
+            tracing::error!(
+                "failed to send event: {}",
+                codex_utils_log::bounded_display(&e)
+            );
         }
     }
 

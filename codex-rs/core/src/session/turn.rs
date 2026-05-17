@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use codex_utils_log::bounded_str;
+
 use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::build_skill_injections;
@@ -662,7 +664,7 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(e) => {
-                info!("Turn error: {e:#}");
+                info!("Turn error: {}", bounded_str(&format!("{e:#}")));
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation

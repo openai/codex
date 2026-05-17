@@ -80,6 +80,7 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_log::bounded_debug;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -373,7 +374,7 @@ async fn handle_approved_mcp_tool_call(
     ))
     .await;
     if let Err(error) = &result {
-        tracing::warn!("MCP tool call error: {error:?}");
+        tracing::warn!("MCP tool call error: {}", bounded_debug(error));
     }
     let duration = start.elapsed();
     notify_mcp_tool_call_completed(

@@ -18,6 +18,8 @@ use crate::provider::Provider;
 use codex_client::backoff;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
+use codex_utils_log::bounded_debug;
+use codex_utils_log::bounded_str;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -345,7 +347,7 @@ impl RealtimeWebsocketWriter {
     async fn send_json(&self, message: &RealtimeOutboundMessage) -> Result<(), ApiError> {
         let payload = serde_json::to_string(message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
-        debug!(?message, "realtime websocket request");
+        debug!(message = %bounded_debug(message), "realtime websocket request");
         self.send_payload(payload).await
     }
 
@@ -356,7 +358,7 @@ impl RealtimeWebsocketWriter {
             ));
         }
 
-        trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket request: {payload}");
+        trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket request: {}", bounded_str(&payload));
         self.stream
             .send(Message::Text(payload.into()))
             .await
@@ -390,10 +392,10 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
-                    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket event: {text}");
+                    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket event: {}", bounded_str(&text));
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
-                        debug!(?event, "realtime websocket parsed event");
+                        debug!(event = %bounded_debug(&event), "realtime websocket parsed event");
                         return Ok(Some(event));
                     }
                     debug!("realtime websocket ignored unsupported text frame");

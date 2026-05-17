@@ -5,6 +5,7 @@ use crate::realtime_conversation::handle_text as handle_realtime_conversation_te
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::protocol::Submission;
+use codex_utils_log::bounded_debug;
 use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
@@ -738,7 +739,7 @@ pub(super) async fn submission_loop(
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
-        debug!(?sub, "Submission");
+        debug!(submission = %bounded_debug(&sub), "Submission");
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
             match sub.op.clone() {

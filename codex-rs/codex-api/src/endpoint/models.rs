@@ -6,6 +6,7 @@ use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_utils_log::bounded_bytes_lossy;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
@@ -65,7 +66,7 @@ impl<T: HttpTransport> ModelsClient<T> {
             .map_err(|e| {
                 ApiError::Stream(format!(
                     "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
+                    bounded_bytes_lossy(&resp.body)
                 ))
             })?;
 

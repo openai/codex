@@ -45,6 +45,7 @@ use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
+use codex_utils_log::bounded_debug;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
@@ -834,7 +835,7 @@ async fn handle_start_inner(
                 RealtimeEvent::AudioOut(_) => {}
                 _ => {
                     info!(
-                        event = ?event,
+                        event = %bounded_debug(&event),
                         "received realtime conversation event"
                     );
                 }

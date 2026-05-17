@@ -18,6 +18,8 @@ use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_utils_log::bounded_debug;
+use codex_utils_log::bounded_display;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -342,7 +344,10 @@ impl OutgoingMessageSender {
         };
 
         if let Err(err) = send_result {
-            warn!("failed to send request {outgoing_message_id:?} to client: {err:?}");
+            warn!(
+                "failed to send request {outgoing_message_id:?} to client: {}",
+                bounded_debug(&err)
+            );
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback.remove(&outgoing_message_id);
         }
@@ -365,7 +370,10 @@ impl OutgoingMessageSender {
                 })
                 .await
             {
-                warn!("failed to resend request to client: {err:?}");
+                warn!(
+                    "failed to resend request to client: {}",
+                    bounded_debug(&err)
+                );
             }
         }
     }
@@ -383,7 +391,10 @@ impl OutgoingMessageSender {
                         .track_server_response(completed_at_ms, response);
                 }
                 if let Err(err) = entry.callback.send(Ok(result)) {
-                    warn!("could not notify callback for {id:?} due to: {err:?}");
+                    warn!(
+                        "could not notify callback for {id:?} due to: {}",
+                        bounded_debug(&err)
+                    );
                 }
             }
             None => {
@@ -397,11 +408,17 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, entry)) => {
-                warn!("client responded with error for {id:?}: {error:?}");
+                warn!(
+                    "client responded with error for {id:?}: {}",
+                    bounded_debug(&error)
+                );
                 self.analytics_events_client
                     .track_server_request_aborted(now_unix_timestamp_ms(), id.clone());
                 if let Err(err) = entry.callback.send(Err(error)) {
-                    warn!("could not notify callback for {id:?} due to: {err:?}");
+                    warn!(
+                        "could not notify callback for {id:?} due to: {}",
+                        bounded_debug(&err)
+                    );
                 }
             }
             None => {
@@ -437,7 +454,10 @@ impl OutgoingMessageSender {
                 && let Err(err) = entry.callback.send(Err(error.clone()))
             {
                 let request_id = entry.request.id();
-                warn!("could not notify callback for {request_id:?} due to: {err:?}");
+                warn!(
+                    "could not notify callback for {request_id:?} due to: {}",
+                    bounded_debug(&err)
+                );
             }
         }
     }
@@ -495,7 +515,10 @@ impl OutgoingMessageSender {
                 && let Err(err) = entry.callback.send(Err(error.clone()))
             {
                 let request_id = entry.request.id();
-                warn!("could not notify callback for {request_id:?} due to: {err:?}",);
+                warn!(
+                    "could not notify callback for {request_id:?} due to: {}",
+                    bounded_debug(&err)
+                );
             }
         }
     }
@@ -560,9 +583,10 @@ impl OutgoingMessageSender {
         connection_ids: &[ConnectionId],
         notification: ServerNotification,
     ) {
+        let notification_log = bounded_display(&notification);
         tracing::trace!(
             targeted_connections = connection_ids.len(),
-            "app-server event: {notification}"
+            "app-server event: {notification_log}"
         );
         let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         if connection_ids.is_empty() {
@@ -573,7 +597,10 @@ impl OutgoingMessageSender {
                 })
                 .await
             {
-                warn!("failed to send server notification to client: {err:?}");
+                warn!(
+                    "failed to send server notification to client: {}",
+                    bounded_debug(&err)
+                );
             }
             return;
         }
@@ -587,7 +614,10 @@ impl OutgoingMessageSender {
                 })
                 .await
             {
-                warn!("failed to send server notification to client: {err:?}");
+                warn!(
+                    "failed to send server notification to client: {}",
+                    bounded_debug(&err)
+                );
             }
         }
     }
@@ -597,7 +627,7 @@ impl OutgoingMessageSender {
         connection_id: ConnectionId,
         notification: ServerNotification,
     ) {
-        tracing::trace!("app-server event: {notification}");
+        tracing::trace!("app-server event: {}", bounded_display(&notification));
         let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
         if let Err(err) = self
@@ -609,7 +639,10 @@ impl OutgoingMessageSender {
             })
             .await
         {
-            warn!("failed to send server notification to client: {err:?}");
+            warn!(
+                "failed to send server notification to client: {}",
+                bounded_debug(&err)
+            );
         }
         let _ = write_complete_rx.await;
     }
@@ -678,7 +711,10 @@ impl OutgoingMessageSender {
         };
 
         if let Err(err) = send_result {
-            warn!("failed to send {message_kind} to client: {err:?}");
+            warn!(
+                "failed to send {message_kind} to client: {}",
+                bounded_debug(&err)
+            );
         }
     }
 }

@@ -20,6 +20,7 @@ codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-terminal-detection = { workspace = true }
+codex-utils-log = { workspace = true }
 codex-utils-template = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }

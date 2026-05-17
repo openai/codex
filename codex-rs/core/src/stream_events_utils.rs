@@ -29,6 +29,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_log::bounded_debug;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
@@ -454,7 +455,7 @@ pub(crate) async fn handle_non_tool_response_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
-    debug!(?item, "Output item");
+    debug!(item = %bounded_debug(item), "Output item");
 
     match item {
         ResponseItem::Message { .. }

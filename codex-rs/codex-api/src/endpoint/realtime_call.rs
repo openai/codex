@@ -8,6 +8,7 @@ use bytes::Bytes;
 use codex_client::HttpTransport;
 use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
+use codex_utils_log::bounded_str;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
@@ -119,7 +120,7 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
-        trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
+        trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {}", bounded_str(&sdp));
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
         // session payload is sent with call creation. The sideband WebSocket still sends its normal
         // session.update after it joins.
@@ -202,7 +203,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::Stream("realtime call response missing Location".to_string()))?
         .to_str()
         .map_err(|err| ApiError::Stream(format!("invalid realtime call Location: {err}")))?;
-    trace!("realtime call Location: {location}");
+    trace!("realtime call Location: {}", bounded_str(location));
 
     location
         .split('?')

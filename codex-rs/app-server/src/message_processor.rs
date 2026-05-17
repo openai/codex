@@ -79,6 +79,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
+use codex_utils_log::bounded_debug;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
@@ -615,14 +616,14 @@ impl MessageProcessor {
     pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
         // Currently, we do not expect to receive any notifications from the
         // client, so we just log them.
-        tracing::info!("<- notification: {:?}", notification);
+        tracing::info!("<- notification: {}", bounded_debug(&notification));
     }
 
     /// Handles typed notifications from in-process clients.
     pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
         // Currently, we do not expect to receive any typed notifications from
         // in-process clients, so we just log them.
-        tracing::info!("<- typed notification: {:?}", notification);
+        tracing::info!("<- typed notification: {}", bounded_debug(&notification));
     }
 
     async fn run_request_with_context<F>(
@@ -722,14 +723,14 @@ impl MessageProcessor {
 
     /// Handle a standalone JSON-RPC response originating from the peer.
     pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
-        tracing::info!("<- response: {:?}", response);
+        tracing::info!("<- response: {}", bounded_debug(&response));
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }
 
     /// Handle an error object received from the peer.
     pub(crate) async fn process_error(&self, err: JSONRPCError) {
-        tracing::error!("<- error: {:?}", err);
+        tracing::error!("<- error: {}", bounded_debug(&err));
         self.outgoing.notify_client_error(err.id, err.error).await;
     }
 

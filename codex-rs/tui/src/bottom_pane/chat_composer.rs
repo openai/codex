@@ -216,6 +216,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
+use codex_utils_log::bounded_str;
 
 mod attachment_state;
 mod draft_state;
@@ -900,7 +901,7 @@ impl ChatComposer {
         // so we can directly try to read the image dimensions.
         match image::image_dimensions(&path_buf) {
             Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
+                tracing::info!("OK: {}", bounded_str(&pasted));
                 tracing::debug!("image dimensions={}x{}", width, height);
                 let format = pasted_image_format(&path_buf);
                 tracing::debug!("attached image format={}", format.label());

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use codex_utils_log::bounded_debug;
+use codex_utils_log::bounded_display;
 use rmcp::ClientHandler;
 use rmcp::RoleClient;
 use rmcp::model::CancelledNotificationParam;
@@ -51,9 +53,11 @@ impl ClientHandler for LoggingClientHandler {
         params: CancelledNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
+        let request_id = bounded_display(&params.request_id);
+        let reason = bounded_debug(&params.reason);
         info!(
-            "MCP server cancelled request (request_id: {}, reason: {:?})",
-            params.request_id, params.reason
+            "MCP server cancelled request (request_id: {}, reason: {})",
+            request_id, reason
         );
     }
 
@@ -62,9 +66,11 @@ impl ClientHandler for LoggingClientHandler {
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
+        let progress_token = bounded_debug(&params.progress_token);
+        let message = bounded_debug(&params.message);
         info!(
-            "MCP server progress notification (token: {:?}, progress: {}, total: {:?}, message: {:?})",
-            params.progress_token, params.progress, params.total, params.message
+            "MCP server progress notification (token: {}, progress: {}, total: {:?}, message: {})",
+            progress_token, params.progress, params.total, message
         );
     }
 
@@ -73,7 +79,8 @@ impl ClientHandler for LoggingClientHandler {
         params: ResourceUpdatedNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        info!("MCP server resource updated (uri: {})", params.uri);
+        let uri = bounded_display(&params.uri);
+        info!("MCP server resource updated (uri: {})", uri);
     }
 
     async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
@@ -103,31 +110,33 @@ impl ClientHandler for LoggingClientHandler {
             data,
         } = params;
         let logger = logger.as_deref();
+        let logger = bounded_debug(&logger);
+        let data = bounded_display(&data);
         match level {
             LoggingLevel::Emergency
             | LoggingLevel::Alert
             | LoggingLevel::Critical
             | LoggingLevel::Error => {
                 error!(
-                    "MCP server log message (level: {:?}, logger: {:?}, data: {})",
+                    "MCP server log message (level: {:?}, logger: {}, data: {})",
                     level, logger, data
                 );
             }
             LoggingLevel::Warning => {
                 warn!(
-                    "MCP server log message (level: {:?}, logger: {:?}, data: {})",
+                    "MCP server log message (level: {:?}, logger: {}, data: {})",
                     level, logger, data
                 );
             }
             LoggingLevel::Notice | LoggingLevel::Info => {
                 info!(
-                    "MCP server log message (level: {:?}, logger: {:?}, data: {})",
+                    "MCP server log message (level: {:?}, logger: {}, data: {})",
                     level, logger, data
                 );
             }
             LoggingLevel::Debug => {
                 debug!(
-                    "MCP server log message (level: {:?}, logger: {:?}, data: {})",
+                    "MCP server log message (level: {:?}, logger: {}, data: {})",
                     level, logger, data
                 );
             }

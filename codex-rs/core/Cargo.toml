@@ -65,6 +65,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-home-dir = { workspace = true }
+codex-utils-log = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }

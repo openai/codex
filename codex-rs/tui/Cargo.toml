@@ -62,6 +62,7 @@ codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
 codex-utils-home-dir = { workspace = true }
+codex-utils-log = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }

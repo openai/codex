@@ -42,6 +42,7 @@ use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
+use codex_utils_log::bounded_str;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -842,7 +843,7 @@ async fn request_chatgpt_token_refresh(
         Ok(refresh_response)
     } else {
         let body = response.text().await.unwrap_or_default();
-        tracing::error!("Failed to refresh token: {status}: {body}");
+        tracing::error!("Failed to refresh token: {status}: {}", bounded_str(&body));
         if status == StatusCode::UNAUTHORIZED {
             let failed = classify_refresh_token_failure(&body);
             Err(RefreshTokenError::Permanent(failed))
@@ -869,7 +870,7 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
     if reason == RefreshTokenFailedReason::Other {
         tracing::warn!(
             backend_code = normalized_code.as_deref(),
-            backend_body = body,
+            backend_body = %bounded_str(body),
             "Encountered unknown 401 response while refreshing token"
         );
     }

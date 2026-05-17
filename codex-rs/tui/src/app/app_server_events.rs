@@ -121,7 +121,10 @@ impl App {
                 };
 
                 if let Err(err) = result {
-                    tracing::warn!("failed to enqueue app-server notification: {err}");
+                    tracing::warn!(
+                        "failed to enqueue app-server notification: {}",
+                        codex_utils_log::bounded_display(&err)
+                    );
                 }
                 return;
             }
@@ -180,7 +183,10 @@ impl App {
                 self.enqueue_thread_request(thread_id, request).await
             };
         if let Err(err) = result {
-            tracing::warn!("failed to enqueue app-server request: {err}");
+            tracing::warn!(
+                "failed to enqueue app-server request: {}",
+                codex_utils_log::bounded_display(&err)
+            );
         }
     }
 }

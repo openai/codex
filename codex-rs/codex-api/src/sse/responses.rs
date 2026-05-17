@@ -8,6 +8,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
+use codex_utils_log::bounded_str;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -415,7 +416,7 @@ pub async fn process_sse(
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
+                debug!("SSE Error: {}", bounded_str(&format!("{e:#}")));
                 let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
                 return;
             }
@@ -434,12 +435,15 @@ pub async fn process_sse(
             }
         };
 
-        trace!("SSE event: {}", &sse.data);
+        trace!("SSE event: {}", bounded_str(&sse.data));
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                debug!(
+                    "Failed to parse SSE event: {e}, data: {}",
+                    bounded_str(&sse.data)
+                );
                 continue;
             }
         };

@@ -1,6 +1,7 @@
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_protocol::protocol::RealtimeTranscriptDone;
+use codex_utils_log::bounded_str;
 use serde_json::Value;
 use tracing::debug;
 
@@ -8,7 +9,10 @@ pub(super) fn parse_realtime_payload(payload: &str, parser_name: &str) -> Option
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(message) => message,
         Err(err) => {
-            debug!("failed to parse {parser_name} event: {err}, data: {payload}");
+            debug!(
+                "failed to parse {parser_name} event: {err}, data: {}",
+                bounded_str(payload)
+            );
             return None;
         }
     };
@@ -16,7 +20,10 @@ pub(super) fn parse_realtime_payload(payload: &str, parser_name: &str) -> Option
     let message_type = match parsed.get("type").and_then(Value::as_str) {
         Some(message_type) => message_type.to_string(),
         None => {
-            debug!("received {parser_name} event without type field: {payload}");
+            debug!(
+                "received {parser_name} event without type field: {}",
+                bounded_str(payload)
+            );
             return None;
         }
     };

@@ -34,6 +34,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_utils_log::bounded_str;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -454,7 +455,7 @@ async fn send_track_events_request(auth: &CodexAuth, url: &str, events: Vec<Trac
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::warn!("events failed with status {status}: {body}");
+            tracing::warn!("events failed with status {status}: {}", bounded_str(&body));
         }
         Err(err) => {
             tracing::warn!("failed to send events request: {err}");

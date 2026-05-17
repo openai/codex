@@ -1216,7 +1216,7 @@ async fn run_ratatui_app(
     // (including backtraces) after we restore the terminal.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!("panic: {info}");
+        tracing::error!("panic: {}", codex_utils_log::bounded_display(info));
         prev_hook(info);
     }));
     let mut terminal = tui::init()?;

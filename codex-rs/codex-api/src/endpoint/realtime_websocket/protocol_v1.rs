@@ -6,6 +6,7 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_utils_log::bounded_str;
 use serde_json::Value;
 use tracing::debug;
 
@@ -83,7 +84,10 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
         }
         "error" => parse_error_event(&parsed),
         _ => {
-            debug!("received unsupported realtime v1 event type: {message_type}, data: {payload}");
+            debug!(
+                "received unsupported realtime v1 event type: {message_type}, data: {}",
+                bounded_str(payload)
+            );
             None
         }
     }

@@ -11,6 +11,7 @@ use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
+use codex_utils_log::bounded_str;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -72,7 +73,10 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         })),
         "error" => parse_error_event(&parsed),
         _ => {
-            debug!("received unsupported realtime v2 event type: {message_type}, data: {payload}");
+            debug!(
+                "received unsupported realtime v2 event type: {message_type}, data: {}",
+                bounded_str(payload)
+            );
             None
         }
     }

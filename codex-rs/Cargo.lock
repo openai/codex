@@ -1821,6 +1821,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-log",
  "os_info",
  "pretty_assertions",
  "serde",
@@ -1852,6 +1853,7 @@ dependencies = [
  "chrono",
  "codex-client",
  "codex-protocol",
+ "codex-utils-log",
  "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
@@ -1926,6 +1928,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
+ "codex-utils-log",
  "codex-utils-pty",
  "core_test_support",
  "flate2",
@@ -2532,6 +2535,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-image",
+ "codex-utils-log",
  "codex-utils-output-truncation",
  "codex-utils-path",
  "codex-utils-plugins",
@@ -3049,6 +3053,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-terminal-detection",
+ "codex-utils-log",
  "codex-utils-template",
  "core_test_support",
  "jsonwebtoken",
@@ -3493,6 +3498,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
+ "codex-utils-log",
  "codex-utils-pty",
  "futures",
  "keyring",
@@ -3800,6 +3806,7 @@ dependencies = [
  "codex-utils-elapsed",
  "codex-utils-fuzzy-match",
  "codex-utils-home-dir",
+ "codex-utils-log",
  "codex-utils-oss",
  "codex-utils-path",
  "codex-utils-plugins",
@@ -3962,6 +3969,14 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
+name = "codex-utils-log"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "sha2",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_utils_log::bounded_str;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -702,7 +703,7 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
+                trace!("websocket event: {}", bounded_str(&text));
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
@@ -713,7 +714,10 @@ async fn run_websocket_response_stream(
                 let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
                     Ok(event) => event,
                     Err(err) => {
-                        debug!("failed to parse websocket event: {err}, data: {text}");
+                        debug!(
+                            "failed to parse websocket event: {err}, data: {}",
+                            bounded_str(&text)
+                        );
                         continue;
                     }
                 };
@@ -787,7 +791,7 @@ async fn send_websocket_request(
             )));
         }
     };
-    trace!("websocket request: {request_text}");
+    trace!("websocket request: {}", bounded_str(&request_text));
 
     let request_start = Instant::now();
     let result = tokio::time::timeout(

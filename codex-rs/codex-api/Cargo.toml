@@ -12,6 +12,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-log = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
