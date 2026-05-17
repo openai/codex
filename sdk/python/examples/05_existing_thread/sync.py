@@ -5,12 +5,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import (
-    assistant_text_from_turn,
-    ensure_local_sdk_src,
-    find_turn_by_id,
-    runtime_config,
-)
+from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
@@ -25,6 +20,4 @@ with Codex(config=runtime_config()) as codex:
     # Resume the existing thread by ID.
     resumed = codex.thread_resume(original.id)
     second = resumed.turn(TextInput("Continue with one more fact.")).run()
-    persisted = resumed.read(include_turns=True)
-    persisted_turn = find_turn_by_id(persisted.thread.turns, second.id)
-    print(assistant_text_from_turn(persisted_turn))
+    print(second.final_response)

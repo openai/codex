@@ -34,8 +34,9 @@ with Codex() as codex:
     print(len(result.items))
 ```
 
-`result.final_response` is `None` when the turn completes without a final-answer
-or phase-less assistant message item.
+`thread.run(...)` and `thread.turn(...).run()` return `TurnResult`. Its
+`final_response` is `None` when the turn completes without a final-answer or
+phase-less assistant message item.
 
 ## Login
 

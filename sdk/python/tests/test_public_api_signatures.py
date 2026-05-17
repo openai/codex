@@ -14,9 +14,11 @@ from openai_codex import (
     AppServerConfig,
     AsyncCodex,
     AsyncThread,
+    AsyncTurnHandle,
     Codex,
-    RunResult,
     Thread,
+    TurnHandle,
+    TurnResult,
 )
 from openai_codex._initialize_metadata import validate_initialize_metadata
 from openai_codex.types import InitializeResponse
@@ -35,7 +37,7 @@ EXPECTED_ROOT_EXPORTS = [
     "AsyncThread",
     "TurnHandle",
     "AsyncTurnHandle",
-    "RunResult",
+    "TurnResult",
     "Input",
     "InputItem",
     "TextInput",
@@ -92,6 +94,7 @@ EXPECTED_TYPES_EXPORTS = [
     "ThreadTokenUsageUpdatedNotification",
     "Turn",
     "TurnCompletedNotification",
+    "TurnError",
     "TurnInterruptResponse",
     "TurnStatus",
     "TurnSteerResponse",
@@ -128,9 +131,39 @@ def test_root_exports_app_server_config() -> None:
     assert AppServerConfig.__name__ == "AppServerConfig"
 
 
-def test_root_exports_run_result() -> None:
-    """The root package should expose the common-case run result wrapper."""
-    assert RunResult.__name__ == "RunResult"
+def test_root_exports_turn_result() -> None:
+    """The root package should expose the collected turn result wrapper."""
+    assert {
+        "name": TurnResult.__name__,
+        "fields": list(TurnResult.__dataclass_fields__),
+    } == {
+        "name": "TurnResult",
+        "fields": [
+            "id",
+            "status",
+            "error",
+            "started_at",
+            "completed_at",
+            "duration_ms",
+            "final_response",
+            "items",
+            "usage",
+        ],
+    }
+
+
+def test_turn_run_methods_return_turn_result() -> None:
+    """Both convenience and handle-based run APIs return the same result shape."""
+    funcs = [
+        Thread.run,
+        TurnHandle.run,
+        AsyncThread.run,
+        AsyncTurnHandle.run,
+    ]
+
+    assert {fn: inspect.signature(fn).return_annotation for fn in funcs} == dict.fromkeys(
+        funcs, "TurnResult"
+    )
 
 
 def test_root_exports_approval_mode() -> None:

@@ -6,12 +6,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import (
-    assistant_text_from_turn,
-    ensure_local_sdk_src,
-    find_turn_by_id,
-    runtime_config,
-)
+from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
@@ -54,9 +49,7 @@ with Codex(config=runtime_config()) as codex:
         summary=SUMMARY,
     )
     result = turn.run()
-    persisted = thread.read(include_turns=True)
-    persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
-    structured_text = assistant_text_from_turn(persisted_turn).strip()
+    structured_text = result.final_response.strip()
     try:
         structured = json.loads(structured_text)
     except json.JSONDecodeError as exc:
@@ -64,8 +57,8 @@ with Codex(config=runtime_config()) as codex:
             f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}"
         ) from exc
 
-    summary = structured.get("summary")
-    actions = structured.get("actions")
+    summary = structured["summary"]
+    actions = structured["actions"]
     if (
         not isinstance(summary, str)
         or not isinstance(actions, list)
@@ -80,4 +73,4 @@ with Codex(config=runtime_config()) as codex:
     print("actions:")
     for action in actions:
         print("-", action)
-    print("Items:", 0 if persisted_turn is None else len(persisted_turn.items or []))
+    print("Items:", len(result.items))

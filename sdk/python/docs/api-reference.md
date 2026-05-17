@@ -16,11 +16,11 @@ from openai_codex import (
     DeviceCodeLoginHandle,
     AsyncChatgptLoginHandle,
     AsyncDeviceCodeLoginHandle,
-    RunResult,
     Thread,
     AsyncThread,
     TurnHandle,
     AsyncTurnHandle,
+    TurnResult,
     Input,
     InputItem,
     TextInput,
@@ -38,6 +38,7 @@ from openai_codex.types import (
     InitializeResponse,
     ThreadItem,
     ThreadTokenUsage,
+    TurnError,
     TurnStatus,
 )
 ```
@@ -146,7 +147,7 @@ attempt. API-key login completes synchronously and does not return a handle.
 
 ### Thread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> RunResult`
+- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> TurnResult`
 - `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
@@ -154,7 +155,7 @@ attempt. API-key login completes synchronously and does not return a handle.
 
 ### AsyncThread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[RunResult]`
+- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[TurnResult]`
 - `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
@@ -164,6 +165,12 @@ attempt. API-key login completes synchronously and does not return a handle.
 the turn, consumes notifications until completion, and returns a small result
 object with:
 
+- `id: str`
+- `status: TurnStatus`
+- `error: TurnError | None`
+- `started_at: int | None`
+- `completed_at: int | None`
+- `duration_ms: int | None`
 - `final_response: str | None`
 - `items: list[ThreadItem]`
 - `usage: ThreadTokenUsage | None`
@@ -172,7 +179,7 @@ object with:
 phase-less assistant message item.
 
 Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
-`interrupt()`) or the public `Turn` model from `TurnHandle.run()`.
+`interrupt()`) before collecting the turn result.
 
 ## TurnHandle / AsyncTurnHandle
 
@@ -181,7 +188,7 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 - `steer(input: Input) -> TurnSteerResponse`
 - `interrupt() -> TurnInterruptResponse`
 - `stream() -> Iterator[Notification]`
-- `run() -> openai_codex.types.Turn`
+- `run() -> TurnResult`
 
 Behavior notes:
 
@@ -193,7 +200,7 @@ Behavior notes:
 - `steer(input: Input) -> Awaitable[TurnSteerResponse]`
 - `interrupt() -> Awaitable[TurnInterruptResponse]`
 - `stream() -> AsyncIterator[Notification]`
-- `run() -> Awaitable[openai_codex.types.Turn]`
+- `run() -> Awaitable[TurnResult]`
 
 Behavior notes:
 

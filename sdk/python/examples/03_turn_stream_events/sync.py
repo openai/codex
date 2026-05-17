@@ -5,12 +5,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import (
-    assistant_text_from_turn,
-    ensure_local_sdk_src,
-    find_turn_by_id,
-    runtime_config,
-)
+from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
@@ -23,7 +18,8 @@ with Codex(config=runtime_config()) as codex:
     event_count = 0
     saw_started = False
     saw_delta = False
-    completed_status = "unknown"
+    completed_status = None
+    completed_texts = []
 
     for event in turn.stream():
         event_count += 1
@@ -32,24 +28,27 @@ with Codex(config=runtime_config()) as codex:
             print("stream.started")
             continue
         if event.method == "item/agentMessage/delta":
-            delta = getattr(event.payload, "delta", "")
+            delta = event.payload.delta
             if delta:
                 if not saw_delta:
                     print("assistant> ", end="", flush=True)
                 print(delta, end="", flush=True)
                 saw_delta = True
             continue
+        if event.method == "item/completed":
+            root = event.payload.item.root
+            if root.type == "agentMessage":
+                completed_texts.append(root.text)
+            continue
         if event.method == "turn/completed":
-            completed_status = getattr(
-                event.payload.turn.status, "value", str(event.payload.turn.status)
-            )
+            completed_status = event.payload.turn.status.value
 
+    if completed_status is None:
+        raise RuntimeError("stream ended without turn/completed")
     if saw_delta:
         print()
     else:
-        persisted = thread.read(include_turns=True)
-        persisted_turn = find_turn_by_id(persisted.thread.turns, turn.id)
-        final_text = assistant_text_from_turn(persisted_turn).strip() or "[no assistant text]"
+        final_text = "".join(completed_texts).strip()
         print("assistant>", final_text)
 
     print("stream.started.seen:", saw_started)

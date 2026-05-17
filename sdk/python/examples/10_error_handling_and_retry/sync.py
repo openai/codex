@@ -5,12 +5,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import (
-    assistant_text_from_turn,
-    ensure_local_sdk_src,
-    find_turn_by_id,
-    runtime_config,
-)
+from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
@@ -21,7 +16,6 @@ from openai_codex import (
     TextInput,
     retry_on_overload,
 )
-from openai_codex.types import TurnStatus
 
 with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
@@ -35,13 +29,7 @@ with Codex(config=runtime_config()) as codex:
         )
     except ServerBusyError as exc:
         print("Server overloaded after retries:", exc.message)
-        print("Text:")
     except JsonRpcError as exc:
         print(f"JSON-RPC error {exc.code}: {exc.message}")
-        print("Text:")
     else:
-        persisted = thread.read(include_turns=True)
-        persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
-        if result.status == TurnStatus.failed:
-            print("Turn failed:", result.error)
-        print("Text:", assistant_text_from_turn(persisted_turn))
+        print("Text:", result.final_response)
