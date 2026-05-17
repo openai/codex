@@ -651,7 +651,7 @@ pub(super) async fn send_initialize_request(
     id: i64,
     client_name: &str,
 ) -> Result<()> {
-    send_initialize_request_with_capabilities(stream, id, client_name, None).await
+    send_initialize_request_with_capabilities(stream, id, client_name, /*capabilities*/ None).await
 }
 
 async fn send_initialize_experimental_request(
