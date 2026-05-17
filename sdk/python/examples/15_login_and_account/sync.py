@@ -11,7 +11,6 @@ ensure_local_sdk_src()
 
 from openai_codex import Codex
 
-
 with Codex(config=runtime_config()) as codex:
     # Browser login returns a live handle. Open `auth_url` and call `wait()`
     # in a real app; this example cancels immediately so it stays non-blocking.
