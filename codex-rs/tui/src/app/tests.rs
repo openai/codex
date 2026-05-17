@@ -5368,7 +5368,7 @@ fn override_turn_context_updates_app_server_next_turn_state() {
             /*cwd*/ None,
             /*approval_policy*/ None,
             /*approvals_reviewer*/ None,
-            /*permission_profile*/ None,
+            /*active_permission_profile*/ None,
             /*windows_sandbox_level*/ None,
             Some("gpt-5.2".to_string()),
             Some(Some(codex_protocol::openai_models::ReasoningEffort::Low)),
