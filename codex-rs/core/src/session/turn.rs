@@ -20,6 +20,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
@@ -663,6 +664,15 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
+                if e.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation

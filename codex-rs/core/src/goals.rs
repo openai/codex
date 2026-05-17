@@ -155,6 +155,9 @@ pub(crate) enum GoalRuntimeEvent<'a> {
         turn_context: Option<&'a TurnContext>,
         reason: TurnAbortReason,
     },
+    UsageLimitReached {
+        turn_context: &'a TurnContext,
+    },
     ExternalMutationStarting,
     ExternalSet {
         external_set: ExternalGoalSet,
@@ -390,6 +393,11 @@ impl Session {
             } => Box::pin(async move {
                 self.handle_thread_goal_task_abort(turn_context, reason)
                     .await;
+                Ok(())
+            }),
+            GoalRuntimeEvent::UsageLimitReached { turn_context } => Box::pin(async move {
+                self.usage_limit_active_thread_goal_for_turn(turn_context)
+                    .await?;
                 Ok(())
             }),
             GoalRuntimeEvent::ExternalMutationStarting => Box::pin(async move {
@@ -669,7 +677,10 @@ impl Session {
                     self.clear_stopped_thread_goal_runtime_state().await;
                 }
             }
-            codex_state::ThreadGoalStatus::Paused | codex_state::ThreadGoalStatus::Complete => {
+            codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited
+            | codex_state::ThreadGoalStatus::Complete => {
                 self.clear_stopped_thread_goal_runtime_state().await;
             }
         }
@@ -735,7 +746,10 @@ impl Session {
         let counter = match goal.status {
             codex_state::ThreadGoalStatus::BudgetLimited => GOAL_BUDGET_LIMITED_METRIC,
             codex_state::ThreadGoalStatus::Complete => GOAL_COMPLETED_METRIC,
-            codex_state::ThreadGoalStatus::Active | codex_state::ThreadGoalStatus::Paused => {
+            codex_state::ThreadGoalStatus::Active
+            | codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited => {
                 return;
             }
         };
@@ -985,6 +999,8 @@ impl Session {
                         matches!(budget_limit_steering, BudgetLimitSteering::Suppressed)
                     }
                     codex_state::ThreadGoalStatus::Paused
+                    | codex_state::ThreadGoalStatus::Blocked
+                    | codex_state::ThreadGoalStatus::UsageLimited
                     | codex_state::ThreadGoalStatus::Complete => true,
                 };
                 {
@@ -1172,6 +1188,54 @@ impl Session {
         Ok(())
     }
 
+    async fn usage_limit_active_thread_goal_for_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) -> anyhow::Result<()> {
+        if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
+            return Ok(());
+        }
+
+        if !self.enabled(Feature::Goals) {
+            return Ok(());
+        }
+
+        let _continuation_guard = self
+            .goal_runtime
+            .continuation_lock
+            .acquire()
+            .await
+            .context("goal continuation semaphore closed")?;
+        let Some(state_db) = self.state_db_for_thread_goals().await? else {
+            return Ok(());
+        };
+        self.account_thread_goal_progress(
+            turn_context,
+            BudgetLimitSteering::Suppressed,
+            TerminalMetricEmission::Emit,
+        )
+        .await?;
+        let Some(goal) = state_db
+            .usage_limit_active_thread_goal(self.conversation_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        let goal = protocol_goal_from_state(goal);
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+        self.clear_active_goal_accounting(turn_context).await;
+        self.send_event(
+            turn_context,
+            EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: self.conversation_id,
+                turn_id: Some(turn_context.sub_id.clone()),
+                goal,
+            }),
+        )
+        .await;
+        Ok(())
+    }
+
     async fn restore_thread_goal_runtime_after_resume(&self) -> anyhow::Result<()> {
         if !self.enabled(Feature::Goals) {
             return Ok(());
@@ -1206,6 +1270,8 @@ impl Session {
                     .mark_active_goal(goal.goal_id);
             }
             codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited
             | codex_state::ThreadGoalStatus::BudgetLimited
             | codex_state::ThreadGoalStatus::Complete => {
                 self.clear_stopped_thread_goal_runtime_state().await;
@@ -1553,6 +1619,8 @@ pub(crate) fn protocol_goal_status_from_state(
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
+        codex_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
         codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
@@ -1564,6 +1632,8 @@ pub(crate) fn state_goal_status_from_protocol(
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Blocked => codex_state::ThreadGoalStatus::Blocked,
+        ThreadGoalStatus::UsageLimited => codex_state::ThreadGoalStatus::UsageLimited,
         ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
@@ -1642,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_prompt_only_tells_model_to_update_goal_when_complete() {
+    fn continuation_prompt_allows_complete_and_strict_blocked_updates() {
         let prompt = continuation_prompt(&ThreadGoal {
             thread_id: ThreadId::new(),
             objective: "finish the stack".to_string(),
@@ -1659,9 +1729,11 @@ mod tests {
         assert!(prompt.contains("<objective>\nfinish the stack\n</objective>"));
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("call update_goal with status \"complete\""));
-        assert!(!prompt.contains(
-            "explain the blocker or next required input to the user and wait for new input"
-        ));
+        assert!(prompt.contains("status \"blocked\""));
+        assert!(prompt.contains("at least three consecutive goal turns"));
+        assert!(prompt.contains("same blocking condition"));
+        assert!(prompt.contains("original/user-triggered turn"));
+        assert!(prompt.contains("truly at an impasse"));
         assert!(!prompt.contains("budgetLimited"));
         assert!(!prompt.contains("status \"paused\""));
     }
