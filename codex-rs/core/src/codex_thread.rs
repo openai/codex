@@ -271,10 +271,9 @@ impl CodexThread {
     pub async fn update_turn_context_overrides(
         &self,
         overrides: CodexThreadTurnContextOverrides,
-    ) -> ConstraintResult<ThreadConfigSnapshot> {
+    ) -> ConstraintResult<()> {
         let updates = self.turn_context_settings_update(overrides).await;
-        self.codex.session.update_settings(updates).await?;
-        Ok(self.config_snapshot().await)
+        self.codex.session.update_settings(updates).await
     }
 
     async fn turn_context_settings_update(
