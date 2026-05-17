@@ -134,6 +134,8 @@ pub enum Feature {
     AppsMcpPathOverride,
     /// Enable the tool_search tool for apps.
     ToolSearch,
+    /// Enable skill discovery through a model-visible skill_search tool.
+    SkillSearchTool,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
     /// Enable discoverable tool suggestions for apps.
@@ -945,6 +947,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tool_search",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SkillSearchTool,
+        key: "skill_search_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,

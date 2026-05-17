@@ -156,6 +156,7 @@ impl ToolRouter {
 
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    turn: &TurnContext,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
@@ -166,6 +167,7 @@ pub(crate) fn extension_tool_executors(
             contributor.tools(
                 &session.services.session_extension_data,
                 &session.services.thread_extension_data,
+                &turn.extension_data,
             )
         })
         .collect()

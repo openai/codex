@@ -47,6 +47,7 @@ members = [
     "ext/extension-api",
     "ext/guardian",
     "ext/memories",
+    "ext/skill-search",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -179,6 +180,7 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
+codex-skill-search-extension = { path = "ext/skill-search" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }

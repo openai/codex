@@ -23,6 +23,7 @@ use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::empty_extension_registry;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -219,6 +220,7 @@ pub struct TestCodexBuilder {
     cloud_requirements: Option<CloudRequirementsLoader>,
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
+    skill_search_extension_enabled: bool,
 }
 
 impl TestCodexBuilder {
@@ -277,6 +279,11 @@ impl TestCodexBuilder {
 
     pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
         self.exec_server_url = Some(exec_server_url.into());
+        self
+    }
+
+    pub fn with_skill_search_extension(mut self) -> Self {
+        self.skill_search_extension_enabled = true;
         self
     }
 
@@ -468,12 +475,19 @@ impl TestCodexBuilder {
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
         let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let extensions = if self.skill_search_extension_enabled {
+            let mut builder = ExtensionRegistryBuilder::<Config>::new();
+            codex_skill_search_extension::install(&mut builder);
+            Arc::new(builder.build())
+        } else {
+            empty_extension_registry()
+        };
         let thread_manager = ThreadManager::new(
             &config,
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
-            empty_extension_registry(),
+            extensions,
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
@@ -1043,6 +1057,7 @@ pub fn test_codex() -> TestCodexBuilder {
         cloud_requirements: None,
         user_shell_override: None,
         exec_server_url: None,
+        skill_search_extension_enabled: false,
     }
 }
 

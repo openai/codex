@@ -28,7 +28,8 @@ fn tools_are_not_contributed_without_thread_config() {
         extension
             .tools(
                 &ExtensionData::new("session"),
-                &ExtensionData::new("thread")
+                &ExtensionData::new("thread"),
+                &ExtensionData::new("turn")
             )
             .is_empty()
     );
@@ -45,7 +46,11 @@ fn tools_are_not_contributed_when_disabled() {
 
     assert!(
         extension
-            .tools(&ExtensionData::new("session"), &thread_store)
+            .tools(
+                &ExtensionData::new("session"),
+                &thread_store,
+                &ExtensionData::new("turn"),
+            )
             .is_empty()
     );
 }
@@ -60,7 +65,11 @@ fn tools_are_contributed_when_enabled() {
     });
 
     let tool_names = extension
-        .tools(&ExtensionData::new("session"), &thread_store)
+        .tools(
+            &ExtensionData::new("session"),
+            &thread_store,
+            &ExtensionData::new("turn"),
+        )
         .into_iter()
         .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
