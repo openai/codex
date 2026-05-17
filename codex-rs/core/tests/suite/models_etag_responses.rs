@@ -115,12 +115,8 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

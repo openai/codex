@@ -113,12 +113,8 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -198,12 +194,8 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -293,12 +285,8 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -398,12 +386,8 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -540,12 +524,8 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

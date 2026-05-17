@@ -128,12 +128,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(first_turn_cwd),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -167,11 +163,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(preturn_context_diff_cwd),
                 approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: None,
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
-                summary: None,
-                service_tier: None,
                 personality: Some(Personality::Friendly),
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
@@ -259,12 +252,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_one.clone()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -296,12 +285,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd_two),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -424,11 +409,8 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(resume_override_cwd),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
                 personality: Some(Personality::Friendly),
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,

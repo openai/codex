@@ -147,12 +147,8 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(CollaborationMode {
                     mode,
                     settings: Settings {
@@ -294,12 +290,8 @@ async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Re
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Plan,
                     settings: Settings {
@@ -402,12 +394,8 @@ where
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
-                summary: None,
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(collaboration_mode),
                 ..Default::default()
             },
