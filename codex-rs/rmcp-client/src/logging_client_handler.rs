@@ -14,7 +14,9 @@ use rmcp::model::ProgressNotificationParam;
 use rmcp::model::ResourceUpdatedNotificationParam;
 use rmcp::service::NotificationContext;
 use rmcp::service::RequestContext;
+use tracing::Level;
 use tracing::debug;
+use tracing::enabled;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -110,35 +112,49 @@ impl ClientHandler for LoggingClientHandler {
             data,
         } = params;
         let logger = logger.as_deref();
-        let logger = bounded_debug(&logger);
-        let data = bounded_display(&data);
         match level {
             LoggingLevel::Emergency
             | LoggingLevel::Alert
             | LoggingLevel::Critical
             | LoggingLevel::Error => {
-                error!(
-                    "MCP server log message (level: {:?}, logger: {}, data: {})",
-                    level, logger, data
-                );
+                if enabled!(Level::ERROR) {
+                    let logger = bounded_debug(&logger);
+                    let data = bounded_display(&data);
+                    error!(
+                        "MCP server log message (level: {:?}, logger: {}, data: {})",
+                        level, logger, data
+                    );
+                }
             }
             LoggingLevel::Warning => {
-                warn!(
-                    "MCP server log message (level: {:?}, logger: {}, data: {})",
-                    level, logger, data
-                );
+                if enabled!(Level::WARN) {
+                    let logger = bounded_debug(&logger);
+                    let data = bounded_display(&data);
+                    warn!(
+                        "MCP server log message (level: {:?}, logger: {}, data: {})",
+                        level, logger, data
+                    );
+                }
             }
             LoggingLevel::Notice | LoggingLevel::Info => {
-                info!(
-                    "MCP server log message (level: {:?}, logger: {}, data: {})",
-                    level, logger, data
-                );
+                if enabled!(Level::INFO) {
+                    let logger = bounded_debug(&logger);
+                    let data = bounded_display(&data);
+                    info!(
+                        "MCP server log message (level: {:?}, logger: {}, data: {})",
+                        level, logger, data
+                    );
+                }
             }
             LoggingLevel::Debug => {
-                debug!(
-                    "MCP server log message (level: {:?}, logger: {}, data: {})",
-                    level, logger, data
-                );
+                if enabled!(Level::DEBUG) {
+                    let logger = bounded_debug(&logger);
+                    let data = bounded_display(&data);
+                    debug!(
+                        "MCP server log message (level: {:?}, logger: {}, data: {})",
+                        level, logger, data
+                    );
+                }
             }
         }
     }

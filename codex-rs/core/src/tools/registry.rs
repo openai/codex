@@ -281,10 +281,6 @@ impl ToolRegistry {
         self.tools.get(name).map(Arc::clone)
     }
 
-    pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure())
-    }
-
     #[cfg(test)]
     pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
         self.tool(name).is_some()

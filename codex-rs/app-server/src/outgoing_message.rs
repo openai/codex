@@ -24,7 +24,9 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::Instrument;
+use tracing::Level;
 use tracing::Span;
+use tracing::enabled;
 use tracing::warn;
 
 use crate::error_code::internal_error;
@@ -583,11 +585,13 @@ impl OutgoingMessageSender {
         connection_ids: &[ConnectionId],
         notification: ServerNotification,
     ) {
-        let notification_log = bounded_display(&notification);
-        tracing::trace!(
-            targeted_connections = connection_ids.len(),
-            "app-server event: {notification_log}"
-        );
+        if enabled!(Level::TRACE) {
+            let notification_log = bounded_display(&notification);
+            tracing::trace!(
+                targeted_connections = connection_ids.len(),
+                "app-server event: {notification_log}"
+            );
+        }
         let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         if connection_ids.is_empty() {
             if let Err(err) = self
@@ -627,7 +631,9 @@ impl OutgoingMessageSender {
         connection_id: ConnectionId,
         notification: ServerNotification,
     ) {
-        tracing::trace!("app-server event: {}", bounded_display(&notification));
+        if enabled!(Level::TRACE) {
+            tracing::trace!("app-server event: {}", bounded_display(&notification));
+        }
         let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
         if let Err(err) = self

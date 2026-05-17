@@ -8,6 +8,9 @@ Each example folder contains runnable versions:
 All examples intentionally use only public SDK exports from `openai_codex`
 and `openai_codex.types`.
 
+Examples use plain strings for text-only turns and typed input objects for
+multimodal or structured input lists.
+
 ## Prerequisites
 
 - Python `>=3.10`
@@ -81,6 +84,6 @@ python examples/01_quickstart_constructor/async.py
 - `13_model_select_and_turn_params/`
   - list models, pick highest model + highest supported reasoning effort, run turns, print message and usage
 - `14_turn_controls/`
-  - separate best-effort `steer()` and `interrupt()` demos with concise summaries
+  - separate `steer()` and `interrupt()` demos with concise summaries
 - `15_login_and_account/`
   - browser-login handle lifecycle, cancellation, and account inspection

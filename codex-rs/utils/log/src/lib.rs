@@ -9,14 +9,14 @@ pub fn bounded_display<T>(value: &T) -> String
 where
     T: fmt::Display + ?Sized,
 {
-    bounded_str(&value.to_string())
+    bounded_format_with_limit(format_args!("{value}"), DEFAULT_BOUNDED_LOG_VALUE_BYTES)
 }
 
 pub fn bounded_debug<T>(value: &T) -> String
 where
     T: fmt::Debug + ?Sized,
 {
-    bounded_str(&format!("{value:?}"))
+    bounded_format_with_limit(format_args!("{value:?}"), DEFAULT_BOUNDED_LOG_VALUE_BYTES)
 }
 
 pub fn bounded_str(value: &str) -> String {
@@ -59,6 +59,110 @@ fn bounded_utf8_bytes(value: &[u8], max_bytes: usize) -> String {
     let suffix = &text[suffix_start..];
     let shown_bytes = prefix.len().saturating_add(suffix.len());
     assemble_bounded_log_value(prefix, suffix, value.len(), shown_bytes, digest_hex(value))
+}
+
+fn bounded_format_with_limit(args: fmt::Arguments<'_>, max_bytes: usize) -> String {
+    let mut writer = BoundedFormatWriter::new(max_bytes);
+    if fmt::write(&mut writer, args).is_err() {
+        return String::from("<failed to format bounded log value>");
+    }
+    writer.finish()
+}
+
+struct BoundedFormatWriter {
+    max_bytes: usize,
+    head: String,
+    tail: String,
+    full: Option<String>,
+    original_bytes: usize,
+    digest: Sha256,
+}
+
+impl BoundedFormatWriter {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            head: String::new(),
+            tail: String::new(),
+            full: Some(String::new()),
+            original_bytes: 0,
+            digest: Sha256::new(),
+        }
+    }
+
+    fn finish(self) -> String {
+        if let Some(full) = self.full {
+            return full;
+        }
+
+        let shown_bytes = self.head.len().saturating_add(self.tail.len());
+        let digest = self.digest.finalize();
+        assemble_bounded_log_value(
+            &self.head,
+            &self.tail,
+            self.original_bytes,
+            shown_bytes,
+            format!("{digest:x}"),
+        )
+    }
+
+    fn head_capacity(&self) -> usize {
+        self.max_bytes / 2
+    }
+
+    fn tail_capacity(&self) -> usize {
+        self.max_bytes - self.head_capacity()
+    }
+
+    fn push_head(&mut self, value: &str) {
+        let remaining = self.head_capacity().saturating_sub(self.head.len());
+        if remaining == 0 {
+            return;
+        }
+
+        let boundary = utf8_prefix_boundary(value, remaining);
+        self.head.push_str(&value[..boundary]);
+    }
+
+    fn push_tail(&mut self, value: &str) {
+        let capacity = self.tail_capacity();
+        if capacity == 0 {
+            return;
+        }
+
+        if value.len() >= capacity {
+            let start = utf8_suffix_boundary(value, capacity);
+            self.tail.clear();
+            self.tail.push_str(&value[start..]);
+            return;
+        }
+
+        self.tail.push_str(value);
+        if self.tail.len() > capacity {
+            let start = utf8_suffix_boundary(&self.tail, capacity);
+            self.tail.replace_range(..start, "");
+        }
+    }
+}
+
+impl fmt::Write for BoundedFormatWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let original_bytes = self.original_bytes.saturating_add(value.len());
+        self.digest.update(value.as_bytes());
+        self.push_head(value);
+        self.push_tail(value);
+
+        if let Some(full) = &mut self.full {
+            if original_bytes <= self.max_bytes {
+                full.push_str(value);
+            } else {
+                self.full = None;
+            }
+        }
+
+        self.original_bytes = original_bytes;
+        Ok(())
+    }
 }
 
 fn split_bytes(value: &[u8], max_bytes: usize) -> (&[u8], &[u8]) {
@@ -160,5 +264,26 @@ mod tests {
 
         assert!(bounded.starts_with("Some(\""));
         assert!(bounded.contains("[truncated:"));
+    }
+
+    #[test]
+    fn bounded_format_streams_prefix_suffix_and_hash() {
+        struct ChunkedDisplay;
+
+        impl fmt::Display for ChunkedDisplay {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for chunk in ["abcd", "efgh", "ijkl", "mnop"] {
+                    f.write_str(chunk)?;
+                }
+                Ok(())
+            }
+        }
+
+        let bounded =
+            bounded_format_with_limit(format_args!("{ChunkedDisplay}"), /*max_bytes*/ 8);
+
+        assert!(bounded.starts_with("abcd...[truncated: original_bytes=16 shown_bytes=8"));
+        assert!(bounded.ends_with("]...mnop"));
+        assert!(bounded.contains(&digest_hex(b"abcdefghijklmnop")));
     }
 }
