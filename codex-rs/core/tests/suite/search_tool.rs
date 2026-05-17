@@ -274,7 +274,7 @@ async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
+async fn app_search_sources_are_hidden_for_api_key_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -306,8 +306,13 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME} for API key auth: {tools:?}"
+        !tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "tools list should not include app tools for API key auth: {tools:?}"
+    );
+    let description = tool_search_description(&body).unwrap_or_default();
+    assert!(
+        !description.contains("Calendar"),
+        "tool_search description should not include app sources for API key auth: {description}"
     );
 
     Ok(())
@@ -755,12 +760,17 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     )
     .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
+    let requests = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        loop {
+            let requests = mock.requests();
+            if requests.len() >= 2 {
+                return requests;
+            }
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
     })
     .await;
-
-    let requests = mock.requests();
+    let requests = requests.expect("timed out waiting for tool_search follow-up request");
     assert_eq!(requests.len(), 2);
 
     let first_request_body = requests[0].body_json();
@@ -784,10 +794,10 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         );
     }
     assert!(
-        first_request_body
+        !first_request_body
             .to_string()
-            .contains("Only use sub-agents if and only if the user explicitly asks"),
-        "deferred v1 multi-agent guidance should move into developer context"
+            .contains("Only use `spawn_agent` if and only if"),
+        "deferred v1 multi-agent guidance should stay out of initial developer context"
     );
 
     let tools = tool_search_output_tools(&requests[1], call_id);
@@ -806,8 +816,8 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .get("description")
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
-    assert!(!description.contains("### Designing delegated subtasks"));
-    assert!(!description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains("### Designing delegated subtasks"));
 
     Ok(())
 }

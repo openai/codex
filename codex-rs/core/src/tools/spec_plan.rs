@@ -477,8 +477,7 @@ fn collect_tool_executors(
                     available_models: config.available_models.clone(),
                     agent_type_description,
                     hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                    include_usage_hint: config.spawn_agent_usage_hint
-                        && !defer_multi_agent_v1_tools,
+                    include_usage_hint: config.spawn_agent_usage_hint,
                     usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
                     max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
                 }),

@@ -662,6 +662,10 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
+        config
+            .features
+            .disable(Feature::ToolSearch)
+            .expect("test config should allow feature update");
         let role_path = config.codex_home.join("custom-role.toml");
         std::fs::write(
             &role_path,
