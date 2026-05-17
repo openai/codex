@@ -629,6 +629,24 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
+        let turn_context_request = TurnContextOverrideRequest {
+            cwd: params.cwd,
+            runtime_workspace_roots: params.runtime_workspace_roots,
+            approval_policy: params.approval_policy,
+            approvals_reviewer: params.approvals_reviewer,
+            sandbox_policy: params.sandbox_policy,
+            permissions: params.permissions,
+            model: params.model,
+            service_tier: params.service_tier,
+            effort: params.effort.map(Some),
+            summary: params.summary,
+            collaboration_mode: params.collaboration_mode,
+            personality: params.personality,
+        };
+        if turn_context_request.has_any_overrides() {
+            self.wait_for_pending_turn_contexts(thread_id).await?;
+        }
+
         let before_snapshot = thread.config_snapshot().await;
         let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
         let environment_selections = self.parse_environment_selections(params.environments)?;
@@ -641,23 +659,7 @@ impl TurnRequestProcessor {
             .collect();
         let turn_has_input = !mapped_items.is_empty();
         let resolved_overrides = self
-            .resolve_turn_context_overrides(
-                &before_snapshot,
-                TurnContextOverrideRequest {
-                    cwd: params.cwd,
-                    runtime_workspace_roots: params.runtime_workspace_roots,
-                    approval_policy: params.approval_policy,
-                    approvals_reviewer: params.approvals_reviewer,
-                    sandbox_policy: params.sandbox_policy,
-                    permissions: params.permissions,
-                    model: params.model,
-                    service_tier: params.service_tier,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
-                    personality: params.personality,
-                },
-            )
+            .resolve_turn_context_overrides(&before_snapshot, turn_context_request)
             .await?;
         let has_turn_context_overrides = resolved_overrides.is_some();
         if let Some(overrides) = resolved_overrides.as_ref() {
