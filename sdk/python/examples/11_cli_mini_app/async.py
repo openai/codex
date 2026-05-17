@@ -21,19 +21,9 @@ from openai_codex.types import (
 )
 
 
-def _status_value(status: object | None) -> str:
-    return str(getattr(status, "value", status))
-
-
-def _format_usage(usage: object | None) -> str:
-    if usage is None:
-        return "usage> (none)"
-
-    last = getattr(usage, "last", None)
-    total = getattr(usage, "total", None)
-    if last is None or total is None:
-        return f"usage> {usage}"
-
+def _format_usage(usage: object) -> str:
+    last = usage.last
+    total = usage.total
     return (
         "usage>\n"
         f"  last: input={last.input_tokens} output={last.output_tokens} reasoning={last.reasoning_output_tokens} total={last.total_tokens} cached={last.cached_input_tokens}\n"
@@ -65,16 +55,14 @@ async def main() -> None:
             usage = None
             status = None
             error = None
-            printed_delta = False
 
             print("assistant> ", end="", flush=True)
             async for event in turn.stream():
                 payload = event.payload
                 if event.method == "item/agentMessage/delta":
-                    delta = getattr(payload, "delta", "")
+                    delta = payload.delta
                     if delta:
                         print(delta, end="", flush=True)
-                        printed_delta = True
                     continue
                 if isinstance(payload, ThreadTokenUsageUpdatedNotification):
                     usage = payload.token_usage
@@ -83,12 +71,13 @@ async def main() -> None:
                     status = payload.turn.status
                     error = payload.turn.error
 
-            if printed_delta:
-                print()
-            else:
-                print("[no text]")
+            print()
+            if status is None:
+                raise RuntimeError("stream ended without turn/completed")
+            if usage is None:
+                raise RuntimeError("stream ended without token usage")
 
-            status_text = _status_value(status)
+            status_text = status.value
             print(f"assistant.status> {status_text}")
             if status_text == "failed":
                 print("assistant.error>", error)

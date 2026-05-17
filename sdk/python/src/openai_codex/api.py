@@ -22,14 +22,28 @@ from ._inputs import (
     _normalize_run_input,
     _to_wire_input,
 )
+from ._login import (
+    AsyncChatgptLoginHandle,
+    AsyncDeviceCodeLoginHandle,
+    ChatgptLoginHandle,
+    DeviceCodeLoginHandle,
+    async_start_chatgpt_login,
+    async_start_device_code_login,
+    start_chatgpt_login,
+    start_device_code_login,
+)
 from ._run import (
-    RunResult,
-    _collect_async_run_result,
-    _collect_run_result,
+    TurnResult,
+    _collect_async_turn_result,
+    _collect_turn_result,
 )
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    ApiKeyLoginAccountParams,
+    GetAccountParams,
+    GetAccountResponse,
+    LoginAccountParams,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -51,7 +65,6 @@ from .generated.v2_all import (
     ThreadSourceKind,
     ThreadStartParams,
     ThreadStartSource,
-    Turn as AppServerTurn,
     TurnCompletedNotification,
     TurnInterruptResponse,
     TurnStartParams,
@@ -84,6 +97,33 @@ class Codex:
 
     def close(self) -> None:
         self._client.close()
+
+    def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    def login_chatgpt(self) -> ChatgptLoginHandle:
+        """Start browser-based ChatGPT login and return its live handle."""
+        return start_chatgpt_login(self._client)
+
+    def login_chatgpt_device_code(self) -> DeviceCodeLoginHandle:
+        """Start device-code ChatGPT login and return its live handle."""
+        return start_device_code_login(self._client)
+
+    def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        return self._client.account_read(GetAccountParams(refresh_token=refresh_token))
+
+    def logout(self) -> None:
+        """Clear the current app-server account session."""
+        self._client.account_logout()
 
     # BEGIN GENERATED: Codex.flat_methods
     def thread_start(
@@ -286,6 +326,38 @@ class AsyncCodex:
         self._init = None
         self._initialized = False
 
+    async def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        await self._ensure_initialized()
+        await self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    async def login_chatgpt(self) -> AsyncChatgptLoginHandle:
+        """Start browser-based ChatGPT login and return its live handle."""
+        await self._ensure_initialized()
+        return await async_start_chatgpt_login(self)
+
+    async def login_chatgpt_device_code(self) -> AsyncDeviceCodeLoginHandle:
+        """Start device-code ChatGPT login and return its live handle."""
+        await self._ensure_initialized()
+        return await async_start_device_code_login(self)
+
+    async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        await self._ensure_initialized()
+        return await self._client.account_read(GetAccountParams(refresh_token=refresh_token))
+
+    async def logout(self) -> None:
+        """Clear the current app-server account session."""
+        await self._ensure_initialized()
+        await self._client.account_logout()
+
     # BEGIN GENERATED: AsyncCodex.flat_methods
     async def thread_start(
         self,
@@ -460,7 +532,7 @@ class Thread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> RunResult:
+    ) -> TurnResult:
         turn = self.turn(
             _normalize_run_input(input),
             approval_mode=approval_mode,
@@ -475,7 +547,7 @@ class Thread:
         )
         stream = turn.stream()
         try:
-            return _collect_run_result(stream, turn_id=turn.id)
+            return _collect_turn_result(stream, turn_id=turn.id)
         finally:
             stream.close()
 
@@ -543,7 +615,7 @@ class AsyncThread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> RunResult:
+    ) -> TurnResult:
         turn = await self.turn(
             _normalize_run_input(input),
             approval_mode=approval_mode,
@@ -558,7 +630,7 @@ class AsyncThread:
         )
         stream = turn.stream()
         try:
-            return await _collect_async_run_result(stream, turn_id=turn.id)
+            return await _collect_async_turn_result(stream, turn_id=turn.id)
         finally:
             await stream.aclose()
 
@@ -644,20 +716,12 @@ class TurnHandle:
         finally:
             self._client.unregister_turn_notifications(self.id)
 
-    def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
+    def run(self) -> TurnResult:
         stream = self.stream()
         try:
-            for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
+            return _collect_turn_result(stream, turn_id=self.id)
         finally:
             stream.close()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn
 
 
 @dataclass(slots=True)
@@ -695,17 +759,9 @@ class AsyncTurnHandle:
         finally:
             self._codex._client.unregister_turn_notifications(self.id)
 
-    async def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
+    async def run(self) -> TurnResult:
         stream = self.stream()
         try:
-            async for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
+            return await _collect_async_turn_result(stream, turn_id=self.id)
         finally:
             await stream.aclose()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn

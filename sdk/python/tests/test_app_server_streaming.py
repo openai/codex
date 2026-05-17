@@ -5,6 +5,7 @@ import asyncio
 from app_server_harness import AppServerHarness
 from app_server_helpers import (
     agent_message_texts,
+    agent_message_texts_from_items,
     next_async_delta,
     next_sync_delta,
     streaming_response,
@@ -48,7 +49,7 @@ def test_sync_stream_routes_text_deltas_and_completion(tmp_path) -> None:
 
 
 def test_turn_run_returns_completed_turn(tmp_path) -> None:
-    """TurnHandle.run should wait for the app-server completion notification."""
+    """TurnHandle.run should collect output and completion metadata."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_assistant_message("turn complete", response_id="turn-run-1")
 
@@ -60,11 +61,13 @@ def test_turn_run_returns_completed_turn(tmp_path) -> None:
     assert {
         "turn_id": completed.id,
         "status": completed.status,
-        "items": completed.items,
+        "agent_messages": agent_message_texts_from_items(completed.items),
+        "final_response": completed.final_response,
     } == {
         "turn_id": turn.id,
         "status": TurnStatus.completed,
-        "items": [],
+        "agent_messages": ["turn complete"],
+        "final_response": "turn complete",
     }
 
 
