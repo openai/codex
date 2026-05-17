@@ -261,18 +261,18 @@ pub enum ExecServerError {
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
-    #[error("executor registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
-    ExecutorRegistryHttp {
+    #[error("environment registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
+    EnvironmentRegistryHttp {
         status: reqwest::StatusCode,
         code: Option<String>,
         message: String,
     },
-    #[error("executor registry configuration error: {0}")]
-    ExecutorRegistryConfig(String),
-    #[error("executor registry authentication error: {0}")]
-    ExecutorRegistryAuth(String),
-    #[error("executor registry request failed: {0}")]
-    ExecutorRegistryRequest(#[from] reqwest::Error),
+    #[error("environment registry configuration error: {0}")]
+    EnvironmentRegistryConfig(String),
+    #[error("environment registry authentication error: {0}")]
+    EnvironmentRegistryAuth(String),
+    #[error("environment registry request failed: {0}")]
+    EnvironmentRegistryRequest(#[from] reqwest::Error),
 }
 
 impl ExecServerClient {

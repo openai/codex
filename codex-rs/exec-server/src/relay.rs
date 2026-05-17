@@ -333,7 +333,7 @@ pub(crate) async fn run_multiplexed_executor<S>(
                 continue;
             }
             Some(Err(err)) => {
-                debug!("multiplexed executor websocket read failed: {err}");
+                debug!("multiplexed environment websocket read failed: {err}");
                 break;
             }
         };
