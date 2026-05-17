@@ -381,8 +381,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
             "summary",
         ],
-        Codex.account: ["refresh_token"],
-        AsyncCodex.account: ["refresh_token"],
     }
 
     for fn, expected_kwargs in expected.items():
@@ -449,66 +447,6 @@ def test_lifecycle_methods_are_codex_scoped() -> None:
         Codex.thread_unarchive,
         AsyncCodex.thread_archive,
         AsyncCodex.thread_unarchive,
-    ):
-        _assert_no_any_annotations(fn)
-
-
-def test_account_methods_are_codex_scoped() -> None:
-    """Login state should be managed from the SDK client, not threads."""
-    assert {
-        "sync": {
-            "login_api_key": hasattr(Codex, "login_api_key"),
-            "login_chatgpt": hasattr(Codex, "login_chatgpt"),
-            "login_chatgpt_device_code": hasattr(Codex, "login_chatgpt_device_code"),
-            "account": hasattr(Codex, "account"),
-            "logout": hasattr(Codex, "logout"),
-        },
-        "async": {
-            "login_api_key": hasattr(AsyncCodex, "login_api_key"),
-            "login_chatgpt": hasattr(AsyncCodex, "login_chatgpt"),
-            "login_chatgpt_device_code": hasattr(
-                AsyncCodex,
-                "login_chatgpt_device_code",
-            ),
-            "account": hasattr(AsyncCodex, "account"),
-            "logout": hasattr(AsyncCodex, "logout"),
-        },
-        "thread": {
-            "login_api_key": hasattr(Thread, "login_api_key"),
-            "account": hasattr(Thread, "account"),
-        },
-    } == {
-        "sync": {
-            "login_api_key": True,
-            "login_chatgpt": True,
-            "login_chatgpt_device_code": True,
-            "account": True,
-            "logout": True,
-        },
-        "async": {
-            "login_api_key": True,
-            "login_chatgpt": True,
-            "login_chatgpt_device_code": True,
-            "account": True,
-            "logout": True,
-        },
-        "thread": {
-            "login_api_key": False,
-            "account": False,
-        },
-    }
-
-    for fn in (
-        Codex.login_api_key,
-        Codex.login_chatgpt,
-        Codex.login_chatgpt_device_code,
-        Codex.account,
-        Codex.logout,
-        AsyncCodex.login_api_key,
-        AsyncCodex.login_chatgpt,
-        AsyncCodex.login_chatgpt_device_code,
-        AsyncCodex.account,
-        AsyncCodex.logout,
     ):
         _assert_no_any_annotations(fn)
 

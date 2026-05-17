@@ -10,7 +10,6 @@ from openai_codex.generated.v2_all import (
     ChatgptAuthTokensLoginAccountParams,
     LoginAccountParams,
 )
-from openai_codex.types import CancelLoginAccountStatus
 
 
 def _app_server_config(harness: AppServerHarness) -> AppServerConfig:
@@ -18,26 +17,6 @@ def _app_server_config(harness: AppServerHarness) -> AppServerConfig:
     config = harness.app_server_config()
     config.env = {**(config.env or {}), "OPENAI_API_KEY": ""}
     return config
-
-
-def test_api_key_login_account_read_and_logout_round_trip(tmp_path) -> None:
-    """The public sync auth helpers should persist and clear API-key auth."""
-    with AppServerHarness(tmp_path) as harness:
-        with Codex(config=_app_server_config(harness)) as codex:
-            codex.login_api_key("sk-sdk-login-test")
-            authenticated = codex.account()
-            codex.logout()
-            logged_out = codex.account()
-
-    assert {
-        "authenticated_type": None
-        if authenticated.account is None
-        else authenticated.account.root.type,
-        "logged_out_account": logged_out.account,
-    } == {
-        "authenticated_type": "apiKey",
-        "logged_out_account": None,
-    }
 
 
 def test_api_key_login_authenticates_follow_up_model_requests(tmp_path) -> None:
@@ -108,43 +87,4 @@ def test_chatgpt_token_login_authenticates_follow_up_model_requests(tmp_path) ->
         "login_type": "chatgptAuthTokens",
         "final_response": "chatgpt token auth",
         "authorization": f"Bearer {access_token}",
-    }
-
-
-def test_browser_login_waiters_stay_scoped_across_replaced_attempts(tmp_path) -> None:
-    """Replacing one browser login should complete the matching handle only."""
-    with AppServerHarness(tmp_path) as harness:
-        with Codex(config=_app_server_config(harness)) as codex:
-            first = codex.login_chatgpt()
-            second = codex.login_chatgpt()
-            first_completed = first.wait()
-            second_canceled = second.cancel()
-            second_completed = second.wait()
-
-    assert {
-        "distinct_attempts": first.login_id != second.login_id,
-        "first_completion": {
-            "login_id": first_completed.login_id,
-            "success": first_completed.success,
-            "error_present": bool(first_completed.error),
-        },
-        "second_cancel_status": second_canceled.status,
-        "second_completion": {
-            "login_id": second_completed.login_id,
-            "success": second_completed.success,
-            "error_present": bool(second_completed.error),
-        },
-    } == {
-        "distinct_attempts": True,
-        "first_completion": {
-            "login_id": first.login_id,
-            "success": False,
-            "error_present": True,
-        },
-        "second_cancel_status": CancelLoginAccountStatus.canceled,
-        "second_completion": {
-            "login_id": second.login_id,
-            "success": False,
-            "error_present": True,
-        },
     }

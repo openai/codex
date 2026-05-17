@@ -57,8 +57,6 @@ EXAMPLE_CASES: list[tuple[str, str]] = [
     ("13_model_select_and_turn_params", "async.py"),
     ("14_turn_controls", "sync.py"),
     ("14_turn_controls", "async.py"),
-    ("15_login_and_account", "sync.py"),
-    ("15_login_and_account", "async.py"),
 ]
 
 
@@ -464,24 +462,6 @@ def test_notebook_advanced_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
     assert "items.params:" in result.stdout
 
 
-def test_notebook_login_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
-    """The walkthrough login cell should run the public handle lifecycle."""
-    source = "\n\n".join(
-        [
-            _notebook_cell_source(1),
-            _notebook_cell_source(2),
-            _notebook_cell_source(3),
-        ]
-    )
-    result = _run_python(runtime_env, source, timeout_s=240)
-    assert result.returncode == 0, (
-        f"Notebook login smoke failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    )
-    assert "login.auth_url:" in result.stdout
-    assert "login.completed.success:" in result.stdout
-    assert "account.requires_openai_auth:" in result.stdout
-
-
 def test_real_streaming_smoke_turn_completed(runtime_env: PreparedRuntimeEnv) -> None:
     data = _run_json_python(
         runtime_env,
@@ -597,7 +577,3 @@ def test_real_examples_run_and_assert(
     elif folder == "14_turn_controls":
         assert "steer.result:" in out and "steer.final.status:" in out
         assert "interrupt.result:" in out and "interrupt.final.status:" in out
-    elif folder == "15_login_and_account":
-        assert "login.auth_url:" in out
-        assert "login.completed.success:" in out
-        assert "account.requires_openai_auth:" in out

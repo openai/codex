@@ -12,9 +12,7 @@ from openai_codex.api import (
     AsyncCodex,
     Codex,
 )
-from openai_codex.generated.v2_all import (
-    TurnStartParams,
-)
+from openai_codex.generated.v2_all import TurnStartParams
 from openai_codex.models import InitializeResponse
 
 ROOT = Path(__file__).resolve().parents[1]
