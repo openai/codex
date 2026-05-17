@@ -660,6 +660,7 @@ impl App {
         startup_hooks_browser: Option<HooksListEntry>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
+        let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
@@ -703,7 +704,9 @@ impl App {
                 });
             }
         };
+        let bootstrap_started_at = Instant::now();
         let bootstrap = app_server.bootstrap(&config).await?;
+        let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
         let exit_info = handle_model_migration_prompt_if_needed(
@@ -760,8 +763,10 @@ impl App {
         let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
             AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
         );
+        let runtime_model_provider_started_at = Instant::now();
         let runtime_model_provider_base_url =
             resolve_runtime_model_provider_base_url(&config.model_provider).await;
+        let runtime_model_provider_ms = runtime_model_provider_started_at.elapsed().as_millis();
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -772,6 +777,7 @@ impl App {
                 &initial_prompt,
                 &initial_images,
             );
+        let thread_and_widget_started_at = Instant::now();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&config).await?;
@@ -888,6 +894,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);
         }
@@ -958,6 +965,7 @@ See the Codex keymap documentation for supported actions and examples."
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }
+        let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -967,6 +975,7 @@ See the Codex keymap documentation for supported actions and examples."
                     .await;
             }
         }
+        let initial_session_ms = initial_session_started_at.elapsed().as_millis();
 
         // On startup, if a managed filesystem sandbox is active, warn about
         // world-writable dirs on Windows.
@@ -996,10 +1005,20 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        let event_stream_started_at = Instant::now();
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        tracing::info!(
+            duration_ms = %startup_started_at.elapsed().as_millis(),
+            bootstrap_ms = %bootstrap_ms,
+            runtime_model_provider_ms = %runtime_model_provider_ms,
+            thread_and_widget_ms = %thread_and_widget_ms,
+            initial_session_ms = %initial_session_ms,
+            event_stream_ms = %event_stream_started_at.elapsed().as_millis(),
+            "tui startup initial frame scheduled"
+        );
         app.refresh_startup_skills(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
