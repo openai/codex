@@ -1781,16 +1781,12 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(
                     config
                         .model_reasoning_summary
                         .unwrap_or(ReasoningSummary::Auto),
                 ),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(collaboration_mode),
                 ..Default::default()
             },
@@ -1906,12 +1902,8 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                approvals_reviewer: None,
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
-                permission_profile: None,
                 summary: Some(ReasoningSummary::Concise),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {

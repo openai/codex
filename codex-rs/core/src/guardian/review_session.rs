@@ -715,11 +715,9 @@ async fn run_review_on_session(
                 #[allow(deprecated)]
                 cwd: Some(params.parent_turn.cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(legacy_sandbox_policy),
                 permission_profile: Some(guardian_permission_profile),
                 summary: Some(params.reasoning_summary),
-                service_tier: None,
                 personality: params.personality,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,

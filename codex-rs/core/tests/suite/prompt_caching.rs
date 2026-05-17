@@ -724,12 +724,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(new_cwd.path().to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Detailed),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -847,12 +844,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(default_cwd.to_path_buf()),
                 approval_policy: Some(default_approval_policy),
-                approvals_reviewer: None,
                 sandbox_policy: Some(default_sandbox_policy.clone()),
-                permission_profile: None,
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -879,12 +872,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(default_cwd.to_path_buf()),
                 approval_policy: Some(default_approval_policy),
-                approvals_reviewer: None,
                 sandbox_policy: Some(default_sandbox_policy.clone()),
-                permission_profile: None,
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -994,12 +983,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(default_cwd.to_path_buf()),
                 approval_policy: Some(default_approval_policy),
-                approvals_reviewer: None,
                 sandbox_policy: Some(default_sandbox_policy.clone()),
-                permission_profile: None,
                 summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
@@ -1028,12 +1013,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             turn_context: codex_protocol::protocol::TurnContextOverrides {
                 cwd: Some(default_cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
-                approvals_reviewer: None,
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Detailed),
-                service_tier: None,
-                personality: None,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
