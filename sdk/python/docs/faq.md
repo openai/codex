@@ -23,6 +23,16 @@ Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout
 
 If your app is not already async, stay with `Codex`.
 
+## How do I log in?
+
+- `login_api_key(...)` authenticates immediately with an API key.
+- `login_chatgpt()` starts browser login and returns a handle with `auth_url`.
+- `login_chatgpt_device_code()` starts device-code login and returns a handle
+  with `verification_url` and `user_code`.
+- Interactive handles expose `wait()` for the matching
+  `account/login/completed` notification and `cancel()` to stop that attempt.
+- `account()` reads the current account state, and `logout()` clears it.
+
 ## Public kwargs are snake_case
 
 Public API keyword names are snake_case. The SDK still maps them to wire camelCase under the hood.
@@ -56,31 +66,7 @@ Common causes:
 
 - published runtime package (`openai-codex-cli-bin`) is not installed
 - local `codex_bin` override points to a missing file
-- local auth/session is missing
 - incompatible/old app-server
-
-Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version. Publish `openai-codex-cli-bin`
-as platform wheels only; do not publish an sdist:
-
-```bash
-cd sdk/python
-python scripts/update_sdk_artifacts.py generate-types
-python scripts/update_sdk_artifacts.py \
-  stage-sdk \
-  /tmp/codex-python-release/openai-codex \
-  --codex-version <codex-release-tag-or-pep440-version>
-python scripts/update_sdk_artifacts.py \
-  stage-runtime \
-  /tmp/codex-python-release/openai-codex-cli-bin \
-  /path/to/codex \
-  --codex-version <codex-release-tag-or-pep440-version>
-```
-
-If you are packaging a binary for a different target than the Python build
-host, pass `--platform-tag ...` to `stage-runtime`. The intended one-off matrix
-is `macosx_11_0_arm64`, `macosx_10_9_x86_64`, `musllinux_1_1_aarch64`,
-`musllinux_1_1_x86_64`, `win_arm64`, and `win_amd64`.
 
 ## Why does a turn "hang"?
 

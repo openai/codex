@@ -121,6 +121,10 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     format!("http://{addr}/backend-api/")
 }
 
+fn test_server_name() -> String {
+    gethostname().to_string_lossy().trim().to_string()
+}
+
 async fn expect_remote_control_status(
     status_rx: &mut watch::Receiver<RemoteControlStatusChangedNotification>,
     expected_status: Option<RemoteControlConnectionStatus>,
@@ -134,6 +138,7 @@ async fn expect_remote_control_status(
     if let Some(expected_status) = expected_status {
         assert_eq!(status.status, expected_status);
     }
+    assert_eq!(status.server_name, test_server_name());
     assert_eq!(status.installation_id, TEST_INSTALLATION_ID);
     assert_eq!(status.environment_id.as_deref(), expected_environment_id);
 }
@@ -630,6 +635,7 @@ async fn remote_control_start_reports_missing_state_db_as_disabled_when_enabled(
         status_rx.borrow().clone(),
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         }
@@ -698,6 +704,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connected,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: Some("env_test".to_string()),
         },
@@ -708,6 +715,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         remote_handle.disable(),
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         }
@@ -716,6 +724,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         },
@@ -732,6 +741,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         remote_handle.enable().expect("enable should succeed"),
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         }
@@ -740,6 +750,7 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
         &mut status_rx,
         RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            server_name: test_server_name(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         },

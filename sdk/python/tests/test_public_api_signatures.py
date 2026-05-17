@@ -18,6 +18,7 @@ from openai_codex import (
     RunResult,
     Thread,
 )
+from openai_codex._initialize_metadata import validate_initialize_metadata
 from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
@@ -26,6 +27,10 @@ EXPECTED_ROOT_EXPORTS = [
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
+    "ChatgptLoginHandle",
+    "DeviceCodeLoginHandle",
+    "AsyncChatgptLoginHandle",
+    "AsyncDeviceCodeLoginHandle",
     "Thread",
     "AsyncThread",
     "TurnHandle",
@@ -54,8 +59,13 @@ EXPECTED_ROOT_EXPORTS = [
 ]
 
 EXPECTED_TYPES_EXPORTS = [
+    "Account",
+    "AccountLoginCompletedNotification",
     "ApprovalsReviewer",
     "AskForApproval",
+    "CancelLoginAccountResponse",
+    "CancelLoginAccountStatus",
+    "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
     "ModelListResponse",
@@ -444,7 +454,7 @@ def test_lifecycle_methods_are_codex_scoped() -> None:
 def test_initialize_metadata_parses_user_agent_shape() -> None:
     """Initialize metadata should accept the legacy user-agent-only payload shape."""
     payload = InitializeResponse.model_validate({"userAgent": "codex-cli/1.2.3"})
-    parsed = Codex._validate_initialize(payload)
+    parsed = validate_initialize_metadata(payload)
     assert parsed is payload
     assert parsed.userAgent == "codex-cli/1.2.3"
     assert parsed.serverInfo is not None
@@ -455,7 +465,7 @@ def test_initialize_metadata_parses_user_agent_shape() -> None:
 def test_initialize_metadata_requires_non_empty_information() -> None:
     """Initialize metadata should fail when the runtime gives no identity signal."""
     try:
-        Codex._validate_initialize(InitializeResponse.model_validate({}))
+        validate_initialize_metadata(InitializeResponse.model_validate({}))
     except RuntimeError as exc:
         assert "missing required metadata" in str(exc)
     else:

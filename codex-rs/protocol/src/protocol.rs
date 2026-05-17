@@ -34,6 +34,7 @@ use crate::memory_citation::MemoryCitation;
 use crate::models::ActivePermissionProfile;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
+use crate::models::ImageDetail;
 use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
@@ -2225,7 +2226,7 @@ pub struct AgentMessageEvent {
     pub memory_citation: Option<MemoryCitation>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
     pub message: String,
     /// Image URLs sourced from `UserInput::Image`. These are safe
@@ -2233,11 +2234,19 @@ pub struct UserMessageEvent {
     /// the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Detail hints for `images`, indexed in parallel. Missing entries imply
+    /// default image detail behavior.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_details: Vec<Option<ImageDetail>>,
     /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
     /// the UI can reattach images when editing history, and should not be sent
     /// to the model or treated as API-ready URLs.
     #[serde(default)]
     pub local_images: Vec<std::path::PathBuf>,
+    /// Detail hints for `local_images`, indexed in parallel. Missing entries
+    /// imply default image detail behavior.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_image_details: Vec<Option<ImageDetail>>,
     /// UI-defined spans within `message` used to render or persist special elements.
     #[serde(default)]
     pub text_elements: Vec<crate::user_input::TextElement>,
@@ -5133,6 +5142,7 @@ mod tests {
             images: None,
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            ..Default::default()
         };
 
         let json_event = serde_json::to_value(event)?;
@@ -5146,6 +5156,62 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn user_message_event_deserializes_without_image_detail_fields() -> Result<()> {
+        let event: UserMessageEvent = serde_json::from_value(json!({
+            "message": "hello",
+            "images": ["https://example.com/image.png"],
+            "local_images": ["/tmp/local.png"],
+            "text_elements": [],
+        }))?;
+
+        assert_eq!(event.message, "hello");
+        assert_eq!(
+            event.images,
+            Some(vec!["https://example.com/image.png".to_string()])
+        );
+        assert_eq!(event.image_details, Vec::<Option<ImageDetail>>::new());
+        assert_eq!(event.local_images, vec![PathBuf::from("/tmp/local.png")]);
+        assert_eq!(event.local_image_details, Vec::<Option<ImageDetail>>::new());
+        assert_eq!(event.text_elements, Vec::new());
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_message_item_legacy_event_preserves_image_details() {
+        let local_path = PathBuf::from("/tmp/local.png");
+        let item = UserMessageItem::new(&[
+            crate::user_input::UserInput::Image {
+                image_url: "https://example.com/first.png".to_string(),
+                detail: Some(ImageDetail::Original),
+            },
+            crate::user_input::UserInput::Image {
+                image_url: "https://example.com/second.png".to_string(),
+                detail: None,
+            },
+            crate::user_input::UserInput::LocalImage {
+                path: local_path.clone(),
+                detail: Some(ImageDetail::Original),
+            },
+        ]);
+
+        let EventMsg::UserMessage(event) = item.as_legacy_event() else {
+            panic!("expected user message event");
+        };
+
+        assert_eq!(
+            event.images,
+            Some(vec![
+                "https://example.com/first.png".to_string(),
+                "https://example.com/second.png".to_string(),
+            ])
+        );
+        assert_eq!(event.image_details, vec![Some(ImageDetail::Original)]);
+        assert_eq!(event.local_images, vec![local_path]);
+        assert_eq!(event.local_image_details, vec![Some(ImageDetail::Original)]);
     }
 
     #[test]

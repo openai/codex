@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from enum import Enum
-from typing import AsyncIterator, Iterator, NoReturn
+from typing import AsyncIterator, Iterator
 
+from ._approval_mode import (
+    ApprovalMode as ApprovalMode,
+    _approval_mode_override_settings,
+    _approval_mode_settings,
+)
+from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
     ImageInput as ImageInput,
     Input,
@@ -17,6 +22,16 @@ from ._inputs import (
     _normalize_run_input,
     _to_wire_input,
 )
+from ._login import (
+    AsyncChatgptLoginHandle,
+    AsyncDeviceCodeLoginHandle,
+    ChatgptLoginHandle,
+    DeviceCodeLoginHandle,
+    async_start_chatgpt_login,
+    async_start_device_code_login,
+    start_chatgpt_login,
+    start_device_code_login,
+)
 from ._run import (
     RunResult,
     _collect_async_run_result,
@@ -25,9 +40,10 @@ from ._run import (
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
-    ApprovalsReviewer,
-    AskForApproval,
-    AskForApprovalValue,
+    ApiKeyLoginAccountParams,
+    GetAccountParams,
+    GetAccountResponse,
+    LoginAccountParams,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -55,71 +71,17 @@ from .generated.v2_all import (
     TurnStartParams,
     TurnSteerResponse,
 )
-from .models import InitializeResponse, JsonObject, Notification, ServerInfo
-
-
-def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
-    raw = user_agent.strip()
-    if not raw:
-        return None, None
-    if "/" in raw:
-        name, version = raw.split("/", 1)
-        return (name or None), (version or None)
-    parts = raw.split(maxsplit=1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
-    return raw, None
-
-
-class ApprovalMode(str, Enum):
-    """High-level approval behavior for escalated permission requests."""
-
-    deny_all = "deny_all"
-    auto_review = "auto_review"
-
-
-def _approval_mode_settings(
-    approval_mode: ApprovalMode,
-) -> tuple[AskForApproval, ApprovalsReviewer | None]:
-    """Map the public approval mode to generated app-server start params."""
-    if not isinstance(approval_mode, ApprovalMode):
-        supported = ", ".join(mode.value for mode in ApprovalMode)
-        raise ValueError(f"approval_mode must be one of: {supported}")
-
-    match approval_mode:
-        case ApprovalMode.auto_review:
-            return (
-                AskForApproval(root=AskForApprovalValue.on_request),
-                ApprovalsReviewer.auto_review,
-            )
-        case ApprovalMode.deny_all:
-            return AskForApproval(root=AskForApprovalValue.never), None
-        case _:
-            return _assert_never_approval_mode(approval_mode)
-
-
-def _assert_never_approval_mode(approval_mode: NoReturn) -> NoReturn:
-    """Make approval mode mapping exhaustive for static type checkers."""
-    raise AssertionError(f"Unhandled approval mode: {approval_mode!r}")
-
-
-def _approval_mode_override_settings(
-    approval_mode: ApprovalMode | None,
-) -> tuple[AskForApproval | None, ApprovalsReviewer | None]:
-    """Map an optional public approval mode to app-server override params."""
-    if approval_mode is None:
-        return None, None
-    return _approval_mode_settings(approval_mode)
+from .models import InitializeResponse, JsonObject, Notification
 
 
 class Codex:
-    """Minimal typed SDK surface for app-server v2."""
+    """Typed Python client for app-server v2 workflows."""
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self._client = AppServerClient(config=config)
         try:
             self._client.start()
-            self._init = self._validate_initialize(self._client.initialize())
+            self._init = validate_initialize_metadata(self._client.initialize())
         except Exception:
             self._client.close()
             raise
@@ -130,50 +92,39 @@ class Codex:
     def __exit__(self, _exc_type, _exc, _tb) -> None:
         self.close()
 
-    @staticmethod
-    def _validate_initialize(payload: InitializeResponse) -> InitializeResponse:
-        user_agent = (payload.userAgent or "").strip()
-        server = payload.serverInfo
-
-        server_name: str | None = None
-        server_version: str | None = None
-
-        if server is not None:
-            server_name = (server.name or "").strip() or None
-            server_version = (server.version or "").strip() or None
-
-        if (server_name is None or server_version is None) and user_agent:
-            parsed_name, parsed_version = _split_user_agent(user_agent)
-            if server_name is None:
-                server_name = parsed_name
-            if server_version is None:
-                server_version = parsed_version
-
-        normalized_server_name = (server_name or "").strip()
-        normalized_server_version = (server_version or "").strip()
-        if not user_agent or not normalized_server_name or not normalized_server_version:
-            raise RuntimeError(
-                "initialize response missing required metadata "
-                f"(user_agent={user_agent!r}, server_name={normalized_server_name!r}, server_version={normalized_server_version!r})"
-            )
-
-        if server is None:
-            payload.serverInfo = ServerInfo(
-                name=normalized_server_name,
-                version=normalized_server_version,
-            )
-        else:
-            server.name = normalized_server_name
-            server.version = normalized_server_version
-
-        return payload
-
     @property
     def metadata(self) -> InitializeResponse:
         return self._init
 
     def close(self) -> None:
         self._client.close()
+
+    def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    def login_chatgpt(self) -> ChatgptLoginHandle:
+        """Start browser-based ChatGPT login and return its live handle."""
+        return start_chatgpt_login(self._client)
+
+    def login_chatgpt_device_code(self) -> DeviceCodeLoginHandle:
+        """Start device-code ChatGPT login and return its live handle."""
+        return start_device_code_login(self._client)
+
+    def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        return self._client.account_read(GetAccountParams(refresh_token=refresh_token))
+
+    def logout(self) -> None:
+        """Clear the current app-server account session."""
+        self._client.account_logout()
 
     # BEGIN GENERATED: Codex.flat_methods
     def thread_start(
@@ -354,7 +305,7 @@ class AsyncCodex:
             try:
                 await self._client.start()
                 payload = await self._client.initialize()
-                self._init = Codex._validate_initialize(payload)
+                self._init = validate_initialize_metadata(payload)
                 self._initialized = True
             except Exception:
                 await self._client.close()
@@ -375,6 +326,38 @@ class AsyncCodex:
         await self._client.close()
         self._init = None
         self._initialized = False
+
+    async def login_api_key(self, api_key: str) -> None:
+        """Authenticate app-server with an API key."""
+        await self._ensure_initialized()
+        await self._client.account_login_start(
+            LoginAccountParams(
+                root=ApiKeyLoginAccountParams(
+                    api_key=api_key,
+                    type="apiKey",
+                )
+            )
+        )
+
+    async def login_chatgpt(self) -> AsyncChatgptLoginHandle:
+        """Start browser-based ChatGPT login and return its live handle."""
+        await self._ensure_initialized()
+        return await async_start_chatgpt_login(self)
+
+    async def login_chatgpt_device_code(self) -> AsyncDeviceCodeLoginHandle:
+        """Start device-code ChatGPT login and return its live handle."""
+        await self._ensure_initialized()
+        return await async_start_device_code_login(self)
+
+    async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
+        """Read the current app-server account state."""
+        await self._ensure_initialized()
+        return await self._client.account_read(GetAccountParams(refresh_token=refresh_token))
+
+    async def logout(self) -> None:
+        """Clear the current app-server account session."""
+        await self._ensure_initialized()
+        await self._client.account_logout()
 
     # BEGIN GENERATED: AsyncCodex.flat_methods
     async def thread_start(

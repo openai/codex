@@ -621,6 +621,7 @@ fn user_input_for_step(scenario_name: &str, idx: usize, step: Step) -> Vec<UserI
     if matches!(step, Step::ImageAssistant) {
         items.push(UserInput::Image {
             image_url: IMAGE_URL.to_string(),
+            detail: None,
         });
     }
     items.push(UserInput::Text {

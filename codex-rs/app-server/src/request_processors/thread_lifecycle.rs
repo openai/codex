@@ -626,7 +626,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
-        permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,
     };

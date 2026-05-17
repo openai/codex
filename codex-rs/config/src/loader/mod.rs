@@ -61,6 +61,7 @@ const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "openai_base_url",
     "chatgpt_base_url",
+    "apps_mcp_product_sku",
     "model_provider",
     "model_providers",
     "notify",

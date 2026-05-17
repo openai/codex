@@ -439,6 +439,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
+                    detail: None,
                 },
                 UserInput::Text {
                     text: "first turn".to_string(),

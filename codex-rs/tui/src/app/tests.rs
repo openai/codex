@@ -28,6 +28,7 @@ use crate::app_command::AppCommand as Op;
 use crate::diff_model::FileChange;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
@@ -1640,7 +1641,18 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             .config_ref()
             .permissions
             .permission_profile(),
-        &auto_review.permission_profile
+        &auto_review.permission_profile()
+    );
+    assert_eq!(
+        app.config.permissions.active_permission_profile(),
+        Some(auto_review.active_permission_profile.clone())
+    );
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile(),
+        Some(auto_review.active_permission_profile.clone())
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
@@ -1649,7 +1661,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(
         app.runtime_permission_profile_override,
-        Some(auto_review.permission_profile.clone())
+        Some(auto_review.permission_profile())
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1657,7 +1669,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            permission_profile: Some(auto_review.permission_profile.clone()),
+            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1719,7 +1731,9 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_permission_profile(PermissionProfile::workspace_write())?;
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+            PermissionProfile::workspace_write(),
+        ))?;
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -1747,7 +1761,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1817,7 +1831,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             .config_ref()
             .permissions
             .permission_profile(),
-        &auto_review.permission_profile
+        &auto_review.permission_profile()
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1825,7 +1839,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            permission_profile: Some(auto_review.permission_profile.clone()),
+            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1882,7 +1896,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1941,7 +1955,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
-            permission_profile: Some(auto_review.permission_profile.clone()),
+            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2028,7 +2042,7 @@ guardian_approval = true
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
-            permission_profile: None,
+            active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -3139,7 +3153,9 @@ async fn side_fork_config_inherits_parent_thread_runtime_settings() {
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
     app.chat_widget
-        .set_permission_profile(parent_permission_profile.clone())
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+            parent_permission_profile.clone(),
+        ))
         .expect("test permission profile should be accepted");
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
@@ -4727,7 +4743,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     assert!(items.iter().any(|item| {
         matches!(
             item,
-            UserInput::Image { url } if url == &data_image_url
+            UserInput::Image { url, .. } if url == &data_image_url
         )
     }));
 }
