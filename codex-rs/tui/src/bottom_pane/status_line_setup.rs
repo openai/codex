@@ -268,7 +268,11 @@ impl StatusLineSetupView {
                 if !used_ids.insert(item_id.clone()) {
                     continue;
                 }
-                items.push(Self::status_line_select_item(item, /*enabled*/ true));
+                items.push(Self::status_line_select_item(
+                    item,
+                    /*enabled*/ true,
+                    &preview_data,
+                ));
             }
         }
 
@@ -277,7 +281,11 @@ impl StatusLineSetupView {
             if used_ids.contains(&item_id) {
                 continue;
             }
-            items.push(Self::status_line_select_item(item, /*enabled*/ false));
+            items.push(Self::status_line_select_item(
+                item,
+                /*enabled*/ false,
+                &preview_data,
+            ));
         }
 
         Self {
@@ -324,11 +332,25 @@ impl StatusLineSetupView {
     }
 
     /// Converts a [`StatusLineItem`] into a [`MultiSelectItem`] for the picker.
-    fn status_line_select_item(item: StatusLineItem, enabled: bool) -> MultiSelectItem {
+    fn status_line_select_item(
+        item: StatusLineItem,
+        enabled: bool,
+        preview_data: &StatusSurfacePreviewData,
+    ) -> MultiSelectItem {
+        let default_name = item.to_string();
+        let default_description = item.description();
+        let (name, description) = match item {
+            StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => (
+                preview_data.rate_limit_item_name(item.preview_item(), &default_name),
+                preview_data.rate_limit_item_description(item.preview_item(), default_description),
+            ),
+            _ => (default_name, default_description.to_string()),
+        };
+
         MultiSelectItem {
             id: item.to_string(),
-            name: item.to_string(),
-            description: Some(item.description().to_string()),
+            name,
+            description: Some(description),
             enabled,
             orderable: true,
             section_break_after: false,
