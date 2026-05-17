@@ -502,26 +502,22 @@ impl TurnRequestProcessor {
                 })?;
         }
 
-        let thread_settings = if has_any_overrides {
-            codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd,
-                workspace_roots: runtime_workspace_roots,
-                profile_workspace_roots,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level: None,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            }
-        } else {
-            Default::default()
+        let thread_settings = codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
         };
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
