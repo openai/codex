@@ -9,13 +9,13 @@ from _bootstrap import ensure_local_sdk_src, runtime_config, server_label
 
 ensure_local_sdk_src()
 
-from openai_codex import Codex, TextInput
+from openai_codex import Codex
 
 with Codex(config=runtime_config()) as codex:
     print("Server:", server_label(codex.metadata))
 
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
-    turn = thread.turn(TextInput("Say hello in one sentence."))
+    turn = thread.turn("Say hello in one sentence.")
     result = turn.run()
 
     print("Thread:", thread.id)

@@ -102,6 +102,8 @@ target wheel. The SDK package version and runtime package version must match.
 
 - `Codex()` is eager and performs startup + `initialize` in the constructor.
 - Use context managers (`with Codex() as codex:`) to ensure shutdown.
+- Plain strings are accepted anywhere a turn input is accepted; they are
+  shorthand for `TextInput(...)`.
 - Prefer `thread.run("...")` for the common case. Use `thread.turn(...)` when
   you need streaming, steering, or interrupt control.
 - For transient overload, use `retry_on_overload` from the package root.

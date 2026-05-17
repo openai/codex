@@ -11,7 +11,6 @@ ensure_local_sdk_src()
 
 from openai_codex import (
     Codex,
-    TextInput,
 )
 from openai_codex.types import (
     ThreadTokenUsageUpdatedNotification,
@@ -46,7 +45,7 @@ with Codex(config=runtime_config()) as codex:
         if user_input in {"/exit", "/quit"}:
             break
 
-        turn = thread.turn(TextInput(user_input))
+        turn = thread.turn(user_input)
         usage = None
         status = None
         error = None

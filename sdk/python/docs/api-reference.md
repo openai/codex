@@ -3,7 +3,7 @@
 Public surface of `openai_codex` for app-server v2.
 
 This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
-Thread and turn starts expose `approval_mode`. `ApprovalMode.auto_review` is the default; use `ApprovalMode.deny_all` to deny escalated permissions.
+Thread starts default to `ApprovalMode.auto_review`; turn starts accept an optional `approval_mode` override.
 
 ## Package Entry
 
@@ -23,6 +23,7 @@ from openai_codex import (
     TurnResult,
     Input,
     InputItem,
+    RunInput,
     TextInput,
     ImageInput,
     LocalImageInput,
@@ -147,16 +148,16 @@ attempt. API-key login completes synchronously and does not return a handle.
 
 ### Thread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> TurnResult`
-- `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
+- `run(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> TurnResult`
+- `turn(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
 - `compact() -> ThreadCompactStartResponse`
 
 ### AsyncThread
 
-- `run(input: str | Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[TurnResult]`
-- `turn(input: Input, *, approval_mode=ApprovalMode.auto_review, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
+- `run(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[TurnResult]`
+- `turn(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
 - `compact() -> Awaitable[ThreadCompactStartResponse]`
@@ -185,7 +186,7 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 
 ### TurnHandle
 
-- `steer(input: Input) -> TurnSteerResponse`
+- `steer(input: str | Input) -> TurnSteerResponse`
 - `interrupt() -> TurnInterruptResponse`
 - `stream() -> Iterator[Notification]`
 - `run() -> TurnResult`
@@ -197,7 +198,7 @@ Behavior notes:
 
 ### AsyncTurnHandle
 
-- `steer(input: Input) -> Awaitable[TurnSteerResponse]`
+- `steer(input: str | Input) -> Awaitable[TurnSteerResponse]`
 - `interrupt() -> Awaitable[TurnInterruptResponse]`
 - `stream() -> AsyncIterator[Notification]`
 - `run() -> Awaitable[TurnResult]`
@@ -218,7 +219,11 @@ Behavior notes:
 
 InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
+RunInput = Input | str
 ```
+
+Use a plain `str` as shorthand for `TextInput(...)` anywhere a turn input is accepted:
+`thread.run("...")`, `thread.turn("...")`, and `turn.steer("...")`.
 
 ## Public Types
 

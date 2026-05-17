@@ -14,7 +14,6 @@ import asyncio
 
 from openai_codex import (
     AsyncCodex,
-    TextInput,
 )
 from openai_codex.types import (
     Personality,
@@ -49,7 +48,7 @@ async def main() -> None:
         )
 
         turn = await thread.turn(
-            TextInput(PROMPT),
+            PROMPT,
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
             summary=SUMMARY,

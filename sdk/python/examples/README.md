@@ -8,6 +8,9 @@ Each example folder contains runnable versions:
 All examples intentionally use only public SDK exports from `openai_codex`
 and `openai_codex.types`.
 
+Examples use plain strings for text-only turns and typed input objects for
+multimodal or structured input lists.
+
 ## Prerequisites
 
 - Python `>=3.10`

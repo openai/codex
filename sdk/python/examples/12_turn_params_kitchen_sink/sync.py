@@ -12,7 +12,6 @@ ensure_local_sdk_src()
 
 from openai_codex import (
     Codex,
-    TextInput,
 )
 from openai_codex.types import (
     Personality,
@@ -43,7 +42,7 @@ with Codex(config=runtime_config()) as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
     turn = thread.turn(
-        TextInput(PROMPT),
+        PROMPT,
         output_schema=OUTPUT_SCHEMA,
         personality=Personality.pragmatic,
         summary=SUMMARY,

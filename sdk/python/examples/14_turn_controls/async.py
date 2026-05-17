@@ -11,7 +11,7 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from openai_codex import AsyncCodex, TextInput
+from openai_codex import AsyncCodex
 
 
 async def main() -> None:
@@ -19,10 +19,8 @@ async def main() -> None:
         thread = await codex.thread_start(
             model="gpt-5.4", config={"model_reasoning_effort": "high"}
         )
-        steer_turn = await thread.turn(
-            TextInput("Count from 1 to 40 with commas, then one summary sentence.")
-        )
-        steer_result = await steer_turn.steer(TextInput("Keep it brief and stop after 10 numbers."))
+        steer_turn = await thread.turn("Count from 1 to 40 with commas, then one summary sentence.")
+        steer_result = await steer_turn.steer("Keep it brief and stop after 10 numbers.")
 
         steer_event_count = 0
         steer_completed_status = None
@@ -40,7 +38,7 @@ async def main() -> None:
         steer_preview = "".join(steer_deltas).strip()
 
         interrupt_turn = await thread.turn(
-            TextInput("Count from 1 to 200 with commas, then one summary sentence.")
+            "Count from 1 to 200 with commas, then one summary sentence."
         )
         interrupt_result = await interrupt_turn.interrupt()
 
