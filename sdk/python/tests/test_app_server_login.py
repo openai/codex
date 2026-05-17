@@ -94,7 +94,7 @@ def test_browser_login_waiters_stay_scoped_across_replaced_attempts(tmp_path) ->
             first = codex.login_chatgpt()
             second = codex.login_chatgpt()
             first_completed = first.wait()
-            second_canceled = codex.cancel_login(second.login_id)
+            second_canceled = second.cancel()
             second_completed = second.wait()
 
     assert {
@@ -133,7 +133,7 @@ def test_async_browser_login_cancel_waits_for_real_app_server_completion(tmp_pat
         with AppServerHarness(tmp_path) as harness:
             async with AsyncCodex(config=_app_server_config(harness)) as codex:
                 handle = await codex.login_chatgpt()
-                canceled = await codex.cancel_login(handle.login_id)
+                canceled = await handle.cancel()
                 completed = await handle.wait()
         return {
             "login_id": handle.login_id,

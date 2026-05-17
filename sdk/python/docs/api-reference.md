@@ -59,7 +59,6 @@ Properties/methods:
 - `login_api_key(api_key: str) -> None`
 - `login_chatgpt() -> ChatgptLoginHandle`
 - `login_chatgpt_device_code() -> DeviceCodeLoginHandle`
-- `cancel_login(login_id: str) -> CancelLoginAccountResponse`
 - `account(*, refresh_token: bool = False) -> GetAccountResponse`
 - `logout() -> None`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
@@ -100,7 +99,6 @@ Properties/methods:
 - `login_api_key(api_key: str) -> Awaitable[None]`
 - `login_chatgpt() -> Awaitable[AsyncChatgptLoginHandle]`
 - `login_chatgpt_device_code() -> Awaitable[AsyncDeviceCodeLoginHandle]`
-- `cancel_login(login_id: str) -> Awaitable[CancelLoginAccountResponse]`
 - `account(*, refresh_token: bool = False) -> Awaitable[GetAccountResponse]`
 - `logout() -> Awaitable[None]`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`

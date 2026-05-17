@@ -139,10 +139,6 @@ class Codex:
             response_root.user_code,
         )
 
-    def cancel_login(self, login_id: str) -> CancelLoginAccountResponse:
-        """Cancel one in-progress interactive login attempt."""
-        return self._client.account_login_cancel(login_id)
-
     def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
         """Read the current app-server account state."""
         return self._client.account_read(GetAccountParams(refresh_token=refresh_token))
@@ -398,11 +394,6 @@ class AsyncCodex:
             response_root.verification_url,
             response_root.user_code,
         )
-
-    async def cancel_login(self, login_id: str) -> CancelLoginAccountResponse:
-        """Cancel one in-progress interactive login attempt."""
-        await self._ensure_initialized()
-        return await self._client.account_login_cancel(login_id)
 
     async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
         """Read the current app-server account state."""

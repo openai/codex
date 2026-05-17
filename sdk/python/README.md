@@ -61,9 +61,9 @@ with Codex() as codex:
     print(completed.success)
 ```
 
-Use `login_chatgpt_device_code()` for device-code auth, `cancel_login(...)` or
-`handle.cancel()` to stop an in-progress interactive login, and `logout()` to
-clear the active app-server account session.
+Use `login_chatgpt_device_code()` for device-code auth, `handle.cancel()` to
+stop an in-progress interactive login, and `logout()` to clear the active
+app-server account session.
 
 ## Docs map
 
