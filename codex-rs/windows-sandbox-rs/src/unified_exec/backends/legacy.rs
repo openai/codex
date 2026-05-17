@@ -331,8 +331,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 
     let persist_aces = common.uses_write_capabilities;
     let guards = apply_legacy_session_acl_rules(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         codex_home,
         &common.current_dir,
         &env_map,
