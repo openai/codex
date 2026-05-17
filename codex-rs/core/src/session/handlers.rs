@@ -93,10 +93,11 @@ pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     .await;
 }
 
-pub async fn update_turn_context(sess: &Arc<Session>, sub_id: String, op: Op) {
-    let Op::TurnContext { turn_context } = op else {
-        unreachable!();
-    };
+pub async fn update_turn_context(
+    sess: &Arc<Session>,
+    sub_id: String,
+    turn_context: TurnContextOverrides,
+) {
     let updates = turn_context_settings_update(sess, turn_context).await;
     let msg = match sess.update_settings(updates).await {
         Ok(()) => turn_context_applied_event(sess).await,
@@ -768,8 +769,8 @@ pub(super) async fn submission_loop(
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
-                Op::TurnContext { .. } => {
-                    update_turn_context(&sess, sub.id.clone(), sub.op).await;
+                Op::TurnContext { turn_context } => {
+                    update_turn_context(&sess, sub.id.clone(), turn_context).await;
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
