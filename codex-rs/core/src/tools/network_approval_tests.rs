@@ -4,7 +4,6 @@ use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -189,10 +188,10 @@ fn only_never_policy_disables_network_approval_flow() {
 #[test]
 fn network_approval_flow_is_limited_to_restricted_sandbox_modes() {
     assert!(permission_profile_allows_network_approval_flow(
-        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy())
+        &PermissionProfile::read_only()
     ));
     assert!(permission_profile_allows_network_approval_flow(
-        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())
+        &PermissionProfile::workspace_write()
     ));
     assert!(!permission_profile_allows_network_approval_flow(
         &PermissionProfile::Disabled
@@ -229,7 +228,7 @@ async fn register_call_with_default_shell_trigger(
             "turn-1".to_string(),
             GuardianNetworkAccessTrigger {
                 call_id: "call-1".to_string(),
-                tool_name: "shell".to_string(),
+                tool_name: "shell_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
                 cwd: test_path_buf("/tmp").abs(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
@@ -249,7 +248,7 @@ async fn active_call_preserves_triggering_command_context() {
     let service = NetworkApprovalService::default();
     let expected = GuardianNetworkAccessTrigger {
         call_id: "call-1".to_string(),
-        tool_name: "shell".to_string(),
+        tool_name: "shell_command".to_string(),
         command: vec!["curl".to_string(), "https://example.com".to_string()],
         cwd: test_path_buf("/repo").abs(),
         sandbox_permissions: SandboxPermissions::UseDefault,

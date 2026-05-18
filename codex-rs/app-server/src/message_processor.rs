@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
@@ -29,6 +30,7 @@ use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
+use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -172,6 +174,7 @@ pub(crate) struct MessageProcessor {
     marketplace_processor: MarketplaceRequestProcessor,
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
+    remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
@@ -298,21 +301,23 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager.clone(),
-            session_source,
-            environment_manager,
-            thread_extensions(),
-            Some(analytics_events_client.clone()),
-            Arc::clone(&thread_store),
-            state_db.clone(),
-            installation_id,
-            Some(app_server_attestation_provider(
-                outgoing.clone(),
-                thread_state_manager.clone(),
-            )),
-        ));
+        let thread_manager = Arc::new_cyclic(|thread_manager| {
+            ThreadManager::new(
+                config.as_ref(),
+                auth_manager.clone(),
+                session_source,
+                environment_manager,
+                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
+                Some(analytics_events_client.clone()),
+                Arc::clone(&thread_store),
+                state_db.clone(),
+                installation_id,
+                Some(app_server_attestation_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
+            )
+        });
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
@@ -349,6 +354,7 @@ impl MessageProcessor {
             arg0_paths.clone(),
             Arc::clone(&config),
             outgoing.clone(),
+            config_manager.clone(),
         );
         let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
@@ -386,6 +392,7 @@ impl MessageProcessor {
             config_manager.clone(),
             workspace_settings_cache,
         );
+        let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
@@ -443,7 +450,6 @@ impl MessageProcessor {
             auth_manager,
             thread_manager.clone(),
             analytics_events_client,
-            remote_control_handle,
         );
         let external_agent_config_processor = ExternalAgentConfigRequestProcessor::new(
             outgoing.clone(),
@@ -485,6 +491,7 @@ impl MessageProcessor {
             marketplace_processor,
             mcp_processor,
             plugin_processor,
+            remote_control_processor,
             search_processor,
             thread_goal_processor,
             thread_processor,
@@ -883,6 +890,18 @@ impl MessageProcessor {
                     .experimental_feature_enablement_set(request_id.clone(), params)
                     .await
             }
+            ClientRequest::RemoteControlEnable { .. } => self
+                .remote_control_processor
+                .enable()
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlDisable { .. } => self
+                .remote_control_processor
+                .disable()
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlStatusRead { .. } => self
+                .remote_control_processor
+                .status_read()
+                .map(|response| Some(response.into())),
             ClientRequest::ConfigRequirementsRead { params: _, .. } => self
                 .config_processor
                 .config_requirements_read()
@@ -1083,6 +1102,9 @@ impl MessageProcessor {
             ClientRequest::PluginList { params, .. } => {
                 self.plugin_processor.plugin_list(params).await
             }
+            ClientRequest::PluginInstalled { params, .. } => {
+                self.plugin_processor.plugin_installed(params).await
+            }
             ClientRequest::PluginRead { params, .. } => {
                 self.plugin_processor.plugin_read(params).await
             }
@@ -1099,6 +1121,9 @@ impl MessageProcessor {
             }
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor.plugin_share_list(params).await
+            }
+            ClientRequest::PluginShareCheckout { params, .. } => {
+                self.plugin_processor.plugin_share_checkout(params).await
             }
             ClientRequest::PluginShareDelete { params, .. } => {
                 self.plugin_processor.plugin_share_delete(params).await

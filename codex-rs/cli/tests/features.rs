@@ -11,6 +11,34 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     Ok(cmd)
 }
 
+#[test]
+fn strict_config_rejects_unknown_config_override() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["--strict-config", "-c", "foo=bar", "mcp-server"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown configuration field"));
+
+    Ok(())
+}
+
+#[test]
+fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["--strict-config", "-c", "foo=bar", "cloud", "list"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "`--strict-config` is not supported for `codex cloud`",
+        ));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
     let codex_home = TempDir::new()?;

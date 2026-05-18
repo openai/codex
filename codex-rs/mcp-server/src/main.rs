@@ -5,7 +5,12 @@ use codex_utils_cli::CliConfigOverrides;
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        run_main(arg0_paths, CliConfigOverrides::default()).await?;
+        run_main(
+            arg0_paths,
+            CliConfigOverrides::default(),
+            /*strict_config*/ false,
+        )
+        .await?;
         Ok(())
     })
 }

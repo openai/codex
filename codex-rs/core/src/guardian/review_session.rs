@@ -151,7 +151,6 @@ struct GuardianReviewSessionReuseKey {
     main_execve_wrapper_exe: Option<PathBuf>,
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
-    include_apply_patch_tool: bool,
     use_experimental_unified_exec_tool: bool,
 }
 
@@ -176,7 +175,6 @@ impl GuardianReviewSessionReuseKey {
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
-            include_apply_patch_tool: spawn_config.include_apply_patch_tool,
             use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
         }
     }
@@ -701,6 +699,9 @@ async fn run_review_on_session(
         .total_token_usage()
         .await
         .unwrap_or_default();
+    // The legacy SandboxPolicy should match the PermissionProfile.
+    let guardian_permission_profile = PermissionProfile::read_only();
+    let legacy_sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let submit_result = run_before_review_deadline(
         deadline,
@@ -708,11 +709,12 @@ async fn run_review_on_session(
         Box::pin(review_session.codex.submit(Op::UserTurn {
             environments: None,
             items: prompt_items.items,
+            #[allow(deprecated)]
             cwd: params.parent_turn.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
+            sandbox_policy: legacy_sandbox_policy,
+            permission_profile: Some(guardian_permission_profile),
             model: params.model.clone(),
             effort: params.reasoning_effort,
             summary: Some(params.reasoning_summary),
@@ -894,15 +896,11 @@ pub(crate) fn build_guardian_review_session_config(
     );
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    guardian_config.permissions.permission_profile = Constrained::allow_only(
-        PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
-    );
     guardian_config
         .permissions
-        .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())
+        .set_permission_profile(PermissionProfile::read_only())
         .map_err(|err| {
-            anyhow::anyhow!("guardian review session could not set sandbox policy: {err}")
+            anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
     guardian_config.include_apps_instructions = false;
     guardian_config
@@ -923,7 +921,7 @@ pub(crate) fn build_guardian_review_session_config(
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
-            guardian_config.permissions.permission_profile.get(),
+            guardian_config.permissions.permission_profile(),
         )?);
     }
     for feature in [
@@ -1086,6 +1084,7 @@ mod tests {
         let reasoning_effort = turn.reasoning_effort;
         let reasoning_summary = turn.reasoning_summary;
         let personality = turn.personality;
+        #[allow(deprecated)]
         let cwd = turn.cwd.clone();
         let spawn_config = build_guardian_review_session_config(
             turn.config.as_ref(),

@@ -185,6 +185,79 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let extra_root_tmp = TempDir::new()?;
+    let extra_root = extra_root_tmp.path().join("extra-root");
+    std::fs::create_dir_all(&extra_root)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            runtime_workspace_roots: Some(vec![extra_root.clone(), extra_root.join(".")]),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        runtime_workspace_roots,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        runtime_workspace_roots,
+        vec![AbsolutePathBuf::from_absolute_path(extra_root)?]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -821,6 +894,92 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
 }
 
 #[tokio::test]
+async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    for (wire_status, expected_status) in [
+        ("blocked", ThreadGoalStatus::Blocked),
+        ("usageLimited", ThreadGoalStatus::UsageLimited),
+    ] {
+        let goal_id = mcp
+            .send_raw_request(
+                "thread/goal/set",
+                Some(json!({
+                    "threadId": thread.id.clone(),
+                    "objective": "keep polishing",
+                    "status": wire_status,
+                })),
+            )
+            .await?;
+        let goal_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+        )
+        .await??;
+        let goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+        assert_eq!(goal.goal.status, expected_status);
+
+        let notification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("thread/goal/updated"),
+        )
+        .await??;
+        let notification: ServerNotification = notification.try_into()?;
+        let ServerNotification::ThreadGoalUpdated(notification) = notification else {
+            anyhow::bail!("expected thread goal update notification");
+        };
+        assert_eq!(notification.goal.status, expected_status);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -870,10 +1029,12 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
     let thread_id = ThreadId::from_string(&thread_id)?;
     let persisted_goal = state_db
+        .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .expect("goal should exist");
     state_db
+        .thread_goals()
         .account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 12,
@@ -901,6 +1062,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
     .await??;
     let edit: ThreadGoalSetResponse = to_response(edit_resp)?;
     let updated_goal = state_db
+        .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .expect("goal should still exist");

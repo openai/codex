@@ -1,6 +1,5 @@
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
 use codex_tools::ToolName;
 
@@ -11,18 +10,18 @@ use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -92,10 +91,12 @@ impl ShellCommandHandler {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
+        #[allow(deprecated)]
+        let cwd = turn_context.resolve_path(params.workdir.clone());
 
         Ok(ExecParams {
             command,
-            cwd: turn_context.resolve_path(params.workdir.clone()),
+            cwd,
             expiration: params.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
@@ -125,9 +126,8 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     }
 }
 
-impl ToolHandler for ShellCommandHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("shell_command")
     }
@@ -145,29 +145,68 @@ impl ToolHandler for ShellCommandHandler {
         self.options.is_some()
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            tracker,
+            call_id,
+            payload,
+            ..
+        } = invocation;
 
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return true;
+        let tool_name = self.tool_name();
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported payload for shell_command handler: {tool_name}"
+            )));
         };
 
-        serde_json::from_str::<ShellCommandToolCallParams>(arguments)
-            .map(|params| {
-                let use_login_shell = match Self::resolve_use_login_shell(
-                    params.login,
-                    invocation.turn.tools_config.allow_login_shell,
-                ) {
-                    Ok(use_login_shell) => use_login_shell,
-                    Err(_) => return true,
-                };
-                let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-                !is_known_safe_command(&command)
-            })
-            .unwrap_or(true)
+        #[allow(deprecated)]
+        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
+        #[allow(deprecated)]
+        let workdir = turn.resolve_path(params.workdir.clone());
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            turn.as_ref(),
+            &params.command,
+            &workdir,
+        )
+        .await;
+        let prefix_rule = params.prefix_rule.clone();
+        let exec_params = Self::to_exec_params(
+            &params,
+            session.as_ref(),
+            turn.as_ref(),
+            session.conversation_id,
+            turn.tools_config.allow_login_shell,
+        )?;
+        let shell_type = Some(session.user_shell().shell_type.clone());
+        run_exec_like(RunExecLikeArgs {
+            tool_name,
+            exec_params,
+            hook_command: params.command,
+            shell_type,
+            additional_permissions: params.additional_permissions.clone(),
+            prefix_rule,
+            session,
+            turn,
+            tracker,
+            call_id,
+            shell_runtime_backend: self.shell_runtime_backend(),
+        })
+        .await
+        .map(boxed_tool_output)
+    }
+}
+
+impl CoreToolRuntime for ShellCommandHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -201,7 +240,7 @@ impl ToolHandler for ShellCommandHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
@@ -212,56 +251,5 @@ impl ToolHandler for ShellCommandHandler {
             tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tracker,
-            call_id,
-            payload,
-            ..
-        } = invocation;
-
-        let tool_name = self.tool_name();
-        let ToolPayload::Function { arguments } = payload else {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported payload for shell_command handler: {tool_name}"
-            )));
-        };
-
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
-        let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
-        let workdir = turn.resolve_path(params.workdir.clone());
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            turn.as_ref(),
-            &params.command,
-            &workdir,
-        )
-        .await;
-        let prefix_rule = params.prefix_rule.clone();
-        let exec_params = Self::to_exec_params(
-            &params,
-            session.as_ref(),
-            turn.as_ref(),
-            session.conversation_id,
-            turn.tools_config.allow_login_shell,
-        )?;
-        run_exec_like(RunExecLikeArgs {
-            tool_name,
-            exec_params,
-            hook_command: params.command,
-            additional_permissions: params.additional_permissions.clone(),
-            prefix_rule,
-            session,
-            turn,
-            tracker,
-            call_id,
-            freeform: true,
-            shell_runtime_backend: self.shell_runtime_backend(),
-        })
-        .await
     }
 }

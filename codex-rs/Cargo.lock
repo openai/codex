@@ -1902,11 +1902,12 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-file-watcher",
- "codex-git-attribution",
  "codex-git-utils",
+ "codex-guardian",
  "codex-hooks",
  "codex-login",
  "codex-mcp",
+ "codex-memories-extension",
  "codex-memories-write",
  "codex-model-provider",
  "codex-model-provider-info",
@@ -1921,7 +1922,6 @@ dependencies = [
  "codex-state",
  "codex-thread-store",
  "codex-tools",
- "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1930,13 +1930,16 @@ dependencies = [
  "core_test_support",
  "flate2",
  "futures",
+ "hmac",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "shlex",
  "tar",
  "tempfile",
@@ -1967,6 +1970,8 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-uds",
+ "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
  "futures",
  "pretty_assertions",
@@ -2053,8 +2058,11 @@ dependencies = [
 name = "codex-app-server-transport"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "axum",
  "base64 0.22.1",
  "chrono",
+ "clap",
  "codex-api",
  "codex-app-server-protocol",
  "codex-config",
@@ -2065,12 +2073,18 @@ dependencies = [
  "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
+ "constant_time_eq 0.3.1",
  "futures",
  "gethostname",
+ "hmac",
+ "jsonwebtoken",
+ "owo-colors",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "time",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -2207,6 +2221,7 @@ dependencies = [
  "assert_matches",
  "clap",
  "clap_complete",
+ "codex-api",
  "codex-app-server",
  "codex-app-server-daemon",
  "codex-app-server-protocol",
@@ -2221,11 +2236,14 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-mcp-server",
  "codex-memories-write",
+ "codex-model-provider",
  "codex-models-manager",
+ "codex-plugin",
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
@@ -2240,11 +2258,14 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "crossterm",
+ "http 1.4.0",
  "libc",
  "owo-colors",
  "predicates",
  "pretty_assertions",
  "regex-lite",
+ "serde",
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
@@ -2418,6 +2439,7 @@ dependencies = [
  "prost 0.14.3",
  "schemars 0.8.22",
  "serde",
+ "serde_ignored",
  "serde_json",
  "serde_path_to_error",
  "sha2",
@@ -2504,7 +2526,6 @@ dependencies = [
  "codex-terminal-detection",
  "codex-test-binary-support",
  "codex-thread-store",
- "codex-tool-api",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2515,7 +2536,6 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-plugins",
  "codex-utils-pty",
- "codex-utils-readiness",
  "codex-utils-stream-parser",
  "codex-utils-string",
  "codex-utils-template",
@@ -2525,7 +2545,6 @@ dependencies = [
  "ctor 0.6.3",
  "dirs",
  "dunce",
- "env-flags",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
@@ -2697,6 +2716,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-oss",
+ "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
  "opentelemetry",
@@ -2728,6 +2748,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
+ "codex-api",
  "codex-app-server-protocol",
  "codex-client",
  "codex-file-system",
@@ -2739,7 +2760,9 @@ dependencies = [
  "codex-utils-rustls-provider",
  "ctor 0.6.3",
  "futures",
+ "http 1.4.0",
  "pretty_assertions",
+ "prost 0.14.3",
  "reqwest",
  "serde",
  "serde_json",
@@ -2806,8 +2829,9 @@ dependencies = [
 name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-protocol",
- "codex-tool-api",
+ "codex-tools",
 ]
 
 [[package]]
@@ -2900,16 +2924,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-git-attribution"
-version = "0.0.0"
-dependencies = [
- "codex-core",
- "codex-extension-api",
- "codex-features",
- "pretty_assertions",
-]
-
-[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
@@ -2931,6 +2945,28 @@ dependencies = [
  "tokio",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-goal-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-extension-api",
+ "codex-protocol",
+ "codex-tools",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codex-guardian"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-core",
+ "codex-extension-api",
+ "codex-protocol",
 ]
 
 [[package]]
@@ -3114,6 +3150,27 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "codex-memories-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-memories-read",
+ "codex-tools",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3440,6 +3497,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "codex-api",
  "codex-client",
@@ -3503,6 +3561,7 @@ dependencies = [
  "anyhow",
  "codex-code-mode",
  "codex-protocol",
+ "http 1.4.0",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3675,6 +3734,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-state",
+ "codex-utils-path",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3686,28 +3746,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-tool-api"
-version = "0.0.0"
-dependencies = [
- "pretty_assertions",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-app-server-protocol",
  "codex-code-mode",
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-pty",
+ "codex-utils-string",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -3749,6 +3803,7 @@ dependencies = [
  "codex-protocol",
  "codex-realtime-webrtc",
  "codex-rollout",
+ "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
@@ -3758,15 +3813,16 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-elapsed",
  "codex-utils-fuzzy-match",
+ "codex-utils-home-dir",
  "codex-utils-oss",
  "codex-utils-path",
  "codex-utils-plugins",
- "codex-utils-pty",
  "codex-utils-sandbox-summary",
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
  "codex-windows-sandbox",
  "color-eyre",
+ "core_test_support",
  "cpal",
  "crossterm",
  "derive_more 2.1.1",
@@ -3790,6 +3846,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.28.0",
@@ -3816,6 +3873,7 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.52.0",
  "winsplit",
+ "wiremock",
 ]
 
 [[package]]
@@ -3875,6 +3933,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-protocol",
+ "codex-shell-command",
  "pretty_assertions",
  "serde",
  "toml 0.9.11+spec-1.1.0",
@@ -5365,12 +5424,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env-flags"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbfd0e7fc632dec5e6c9396a27bc9f9975b4e039720e1fd3e34021d3ce28c415"
-
-[[package]]
 name = "env_filter"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5421,7 +5474,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11627,6 +11680,16 @@ dependencies = [
  "indexmap 2.13.0",
  "itoa",
  "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
  "serde_core",
 ]
 

@@ -232,8 +232,39 @@ impl ReadDenyMatcher {
     /// can skip read-deny checks without allocating matcher state. The `cwd`
     /// resolves cwd-relative policy paths and special paths before matching.
     pub fn new(file_system_sandbox_policy: &FileSystemSandboxPolicy, cwd: &Path) -> Option<Self> {
+        match Self::build(
+            file_system_sandbox_policy,
+            cwd,
+            InvalidDenyReadGlobBehavior::FailClosed,
+        ) {
+            Ok(matcher) => matcher,
+            Err(_) => unreachable!("fail-closed glob handling does not return errors"),
+        }
+    }
+
+    /// Builds a matcher for callers that must reject malformed glob patterns.
+    ///
+    /// Runtime read checks intentionally fail closed on malformed deny patterns.
+    /// Host-side expansion work should use this constructor instead so a typo
+    /// cannot broaden the set of paths it mutates before execution starts.
+    pub fn try_new(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+    ) -> Result<Option<Self>, String> {
+        Self::build(
+            file_system_sandbox_policy,
+            cwd,
+            InvalidDenyReadGlobBehavior::ReturnError,
+        )
+    }
+
+    fn build(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        cwd: &Path,
+        invalid_glob_behavior: InvalidDenyReadGlobBehavior,
+    ) -> Result<Option<Self>, String> {
         if !file_system_sandbox_policy.has_denied_read_restrictions() {
-            return None;
+            return Ok(None);
         }
 
         // Exact roots are stored as all meaningful path spellings we can derive
@@ -247,22 +278,23 @@ impl ReadDenyMatcher {
         // Pattern entries stay as policy-level globs. They are matched at read
         // time here instead of being snapshotted to startup filesystem state.
         let mut invalid_pattern = false;
-        let deny_read_matchers = file_system_sandbox_policy
-            .get_unreadable_globs_with_cwd(cwd)
-            .into_iter()
-            .filter_map(|pattern| match build_glob_matcher(&pattern) {
-                Some(matcher) => Some(matcher),
-                None => {
-                    invalid_pattern = true;
-                    None
-                }
-            })
-            .collect();
-        Some(Self {
+        let mut deny_read_matchers = Vec::new();
+        for pattern in file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd) {
+            match build_glob_matcher(&pattern) {
+                Ok(matcher) => deny_read_matchers.push(matcher),
+                Err(err) => match invalid_glob_behavior {
+                    InvalidDenyReadGlobBehavior::FailClosed => invalid_pattern = true,
+                    InvalidDenyReadGlobBehavior::ReturnError => {
+                        return Err(format!("invalid deny-read glob pattern `{pattern}`: {err}"));
+                    }
+                },
+            }
+        }
+        Ok(Some(Self {
             denied_candidates,
             deny_read_matchers,
             invalid_pattern,
-        })
+        }))
     }
 
     /// Returns whether `path` is denied by the policy used to build this matcher.
@@ -295,6 +327,12 @@ impl ReadDenyMatcher {
     }
 }
 
+#[derive(Clone, Copy)]
+enum InvalidDenyReadGlobBehavior {
+    FailClosed,
+    ReturnError,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
@@ -310,6 +348,12 @@ pub enum FileSystemPath {
     Special {
         value: FileSystemSpecialPath,
     },
+}
+
+const PROJECT_ROOTS_GLOB_PATTERN_PREFIX: &str = "codex-project-roots://";
+
+pub fn project_roots_glob_pattern(subpath: &Path) -> String {
+    format!("{PROJECT_ROOTS_GLOB_PATTERN_PREFIX}{}", subpath.display())
 }
 
 impl Default for FileSystemSandboxPolicy {
@@ -657,7 +701,7 @@ impl FileSystemSandboxPolicy {
         )
     }
 
-    /// Replaces symbolic `:project_roots` entries with absolute paths resolved
+    /// Replaces symbolic `:workspace_roots` entries with absolute paths resolved
     /// against `cwd`.
     ///
     /// Use this when a durable permission profile must survive a cwd-only
@@ -665,15 +709,100 @@ impl FileSystemSandboxPolicy {
     pub fn materialize_project_roots_with_cwd(mut self, cwd: &Path) -> Self {
         let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
         for entry in &mut self.entries {
-            let FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { .. },
-            } = &entry.path
-            else {
-                continue;
-            };
+            match &entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { .. },
+                } => {
+                    if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
+                        entry.path = FileSystemPath::Path { path };
+                    }
+                }
+                FileSystemPath::GlobPattern { pattern } => {
+                    if let (Some(cwd), Some(subpath)) =
+                        (cwd.as_ref(), parse_project_roots_glob_pattern(pattern))
+                    {
+                        entry.path = FileSystemPath::GlobPattern {
+                            pattern: resolve_project_roots_glob_pattern(subpath, cwd),
+                        };
+                    }
+                }
+                FileSystemPath::Special { value: _ } => {}
+                FileSystemPath::Path { .. } => {}
+            }
+        }
+        self
+    }
 
-            if let Some(path) = resolve_file_system_path(&entry.path, cwd.as_ref()) {
-                entry.path = FileSystemPath::Path { path };
+    /// Replaces symbolic `:workspace_roots` entries with concrete entries for
+    /// each workspace root.
+    pub fn materialize_project_roots_with_workspace_roots(
+        mut self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries {
+            match entry.path {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { subpath },
+                } => {
+                    entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: match subpath.as_ref() {
+                                Some(subpath) => AbsolutePathBuf::resolve_path_against_base(
+                                    subpath,
+                                    root.as_path(),
+                                ),
+                                None => root.clone(),
+                            },
+                        },
+                        access: entry.access,
+                    }));
+                }
+                FileSystemPath::GlobPattern { pattern } => {
+                    if let Some(subpath) = parse_project_roots_glob_pattern(&pattern) {
+                        entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
+                            path: FileSystemPath::GlobPattern {
+                                pattern: resolve_project_roots_glob_pattern(subpath, root),
+                            },
+                            access: entry.access,
+                        }));
+                    } else {
+                        entries.push(FileSystemSandboxEntry {
+                            path: FileSystemPath::GlobPattern { pattern },
+                            access: entry.access,
+                        });
+                    }
+                }
+                FileSystemPath::Path { path } => {
+                    entries.push(FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path },
+                        access: entry.access,
+                    });
+                }
+                FileSystemPath::Special { value } => {
+                    entries.push(FileSystemSandboxEntry {
+                        path: FileSystemPath::Special { value },
+                        access: entry.access,
+                    });
+                }
+            }
+        }
+        self.entries = entries;
+        self
+    }
+
+    /// Preserves symbolic `:workspace_roots` entries while also adding concrete
+    /// entries for each provided workspace root.
+    pub fn with_materialized_project_roots_for_workspace_roots(
+        mut self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        let materialized = self
+            .clone()
+            .materialize_project_roots_with_workspace_roots(workspace_roots);
+        for entry in materialized.entries {
+            if !self.entries.contains(&entry) {
+                self.entries.push(entry);
             }
         }
         self
@@ -725,7 +854,7 @@ impl FileSystemSandboxPolicy {
     ///
     /// Unlike [`Self::with_additional_writable_roots`], this mirrors legacy
     /// writable-roots semantics by adding exact roots even when they are
-    /// already writable through `:project_roots`, and by adding the default
+    /// already writable through `:workspace_roots`, and by adding the default
     /// read-only protected subpaths for each new root.
     pub fn with_additional_legacy_workspace_writable_roots(
         mut self,
@@ -1171,6 +1300,18 @@ fn resolve_entry_path(
     }
 }
 
+fn parse_project_roots_glob_pattern(pattern: &str) -> Option<&Path> {
+    pattern
+        .strip_prefix(PROJECT_ROOTS_GLOB_PATTERN_PREFIX)
+        .map(Path::new)
+}
+
+fn resolve_project_roots_glob_pattern(subpath: &Path, root: &AbsolutePathBuf) -> String {
+    AbsolutePathBuf::resolve_path_against_base(subpath, root.as_path())
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     if path.is_absolute() {
         AbsolutePathBuf::from_absolute_path(path).ok()
@@ -1291,15 +1432,15 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-fn build_glob_matcher(pattern: &str) -> Option<GlobMatcher> {
+fn build_glob_matcher(pattern: &str) -> Result<GlobMatcher, String> {
     // Keep `*` and `?` within a single path component and preserve an unclosed
     // `[` as a literal so matcher behavior stays aligned with config parsing.
     GlobBuilder::new(pattern)
         .literal_separator(true)
         .allow_unclosed_class(true)
         .build()
-        .ok()
         .map(|glob| glob.compile_matcher())
+        .map_err(|err| err.to_string())
 }
 
 fn resolve_file_system_special_path(
@@ -2709,6 +2850,115 @@ mod tests {
                     access: FileSystemAccessMode::Write,
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn materialize_project_roots_with_workspace_roots_expands_exact_and_glob_entries() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let first = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("first"))
+            .expect("resolve first root");
+        let second = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("second"))
+            .expect("resolve second root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: project_roots_glob_pattern(Path::new("**/*.env")),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let actual =
+            policy.materialize_project_roots_with_workspace_roots(&[first.clone(), second.clone()]);
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            first.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            second.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn materialize_project_roots_with_cwd_expands_symbolic_glob_entries() {
+        let cwd = TempDir::new().expect("tempdir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: project_roots_glob_pattern(Path::new("**/*.env")),
+            },
+            access: FileSystemAccessMode::None,
+        }]);
+
+        let actual = policy.materialize_project_roots_with_cwd(cwd.path());
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: AbsolutePathBuf::resolve_path_against_base("**/*.env", cwd.path())
+                        .to_string_lossy()
+                        .into_owned(),
+                },
+                access: FileSystemAccessMode::None,
+            }])
         );
     }
 

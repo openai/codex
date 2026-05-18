@@ -21,6 +21,7 @@ use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -47,6 +48,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub shell_type: Option<ShellType>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
@@ -62,19 +64,8 @@ pub struct ShellRequest {
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
-///
-/// Note: `Generic` is not the same as `ShellCommandClassic`.
-/// `Generic` means "no `shell_command`-specific backend behavior" (used by the
-/// generic `shell` tool path). The `ShellCommand*` variants are only for the
-/// `shell_command` tool family.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellRuntimeBackend {
-    /// Tool-agnostic/default runtime path.
-    ///
-    /// Uses the normal `ShellRuntime` execution flow without enabling any
-    /// `shell_command`-specific backend selection.
-    #[default]
-    Generic,
     /// Legacy backend for the `shell_command` tool.
     ///
     /// Keeps `shell_command` on the standard shell runtime flow without the
@@ -88,7 +79,6 @@ pub(crate) enum ShellRuntimeBackend {
     ShellCommandZshFork,
 }
 
-#[derive(Default)]
 pub struct ShellRuntime {
     backend: ShellRuntimeBackend,
 }
@@ -102,12 +92,6 @@ pub(crate) struct ApprovalKey {
 }
 
 impl ShellRuntime {
-    pub fn new() -> Self {
-        Self {
-            backend: ShellRuntimeBackend::Generic,
-        }
-    }
-
     pub(crate) fn for_shell_command(backend: ShellRuntimeBackend) -> Self {
         Self { backend }
     }
@@ -254,6 +238,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.cwd,
             &req.explicit_env_overrides,
             &env,
+        );
+        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            req.shell_type.as_ref(),
+            attempt.sandbox,
+            attempt.windows_sandbox_level,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)

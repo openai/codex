@@ -132,11 +132,11 @@ async fn responses_websocket_streams_request() {
         Some(harness.thread_id.to_string())
     );
     assert_eq!(
-        handshake.header("session_id"),
+        handshake.header("session-id"),
         Some(harness.session_id.to_string())
     );
     assert_eq!(
-        handshake.header("thread_id"),
+        handshake.header("thread-id"),
         Some(harness.thread_id.to_string())
     );
     assert_eq!(
@@ -253,7 +253,7 @@ async fn responses_websocket_sends_response_processed_after_remote_compaction_v2
             json!({
                 "type": "response.output_item.done",
                 "item": {
-                    "type": "context_compaction",
+                    "type": "compaction",
                     "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
                 }
             }),

@@ -52,6 +52,7 @@ use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
@@ -764,10 +765,8 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-    let request_session_id = request.header("session_id").expect("session_id header");
-    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
-    let request_thread_id = request.header("thread_id").expect("thread_id header");
-    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -779,12 +778,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let thread_id_string = expected_thread_id.to_string();
 
     assert_eq!(request_session_id, expected_session_id.to_string());
-    assert_eq!(
-        request_session_id_hyphenated,
-        expected_session_id.to_string()
-    );
     assert_eq!(request_thread_id, thread_id_string.as_str());
-    assert_eq!(request_thread_id_hyphenated, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
     assert_eq!(
@@ -1046,20 +1040,13 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
 
-    let request_session_id = request.header("session_id").expect("session_id header");
-    let request_session_id_hyphenated = request.header("session-id").expect("session-id header");
-    let request_thread_id = request.header("thread_id").expect("thread_id header");
-    let request_thread_id_hyphenated = request.header("thread-id").expect("thread-id header");
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
     assert_eq!(request_session_id, expected_session_id.to_string());
-    assert_eq!(
-        request_session_id_hyphenated,
-        expected_session_id.to_string()
-    );
     assert_eq!(request_thread_id, expected_thread_id.to_string());
-    assert_eq!(request_thread_id_hyphenated, expected_thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
@@ -2497,38 +2484,6 @@ async fn token_count_includes_rate_limits_snapshot() {
         .await
         .unwrap();
 
-    let first_token_event =
-        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let rate_limit_only = match first_token_event {
-        EventMsg::TokenCount(ev) => ev,
-        _ => unreachable!(),
-    };
-
-    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
-    pretty_assertions::assert_eq!(
-        rate_limit_json,
-        json!({
-            "info": null,
-            "rate_limits": {
-                "limit_id": "codex",
-                "limit_name": null,
-                "primary": {
-                    "used_percent": 12.5,
-                    "window_minutes": 10,
-                    "resets_at": 1704069000
-                },
-                "secondary": {
-                    "used_percent": 40.0,
-                    "window_minutes": 60,
-                    "resets_at": 1704074400
-                },
-                "credits": null,
-                "plan_type": null,
-                "rate_limit_reached_type": null
-            }
-        })
-    );
-
     let token_event = wait_for_event(
         &codex,
         |msg| matches!(msg, EventMsg::TokenCount(ev) if ev.info.is_some()),
@@ -3062,22 +3017,15 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let server = MockServer::start().await;
 
     // Build a small SSE stream with deltas and a final assistant message.
-    // We emit the same body for all 3 turns; ids vary but are unused by assertions.
-    let sse_raw = r##"[
-        {"type":"response.output_item.added", "item":{
-            "type":"message", "role":"assistant",
-            "content":[{"type":"output_text","text":""}]
-        }},
-        {"type":"response.output_text.delta", "delta":"Hey "},
-        {"type":"response.output_text.delta", "delta":"there"},
-        {"type":"response.output_text.delta", "delta":"!\n"},
-        {"type":"response.output_item.done", "item":{
-            "type":"message", "role":"assistant",
-            "content":[{"type":"output_text","text":"Hey there!\n"}]
-        }},
-        {"type":"response.completed", "response": {"id": "__ID__"}}
-    ]"##;
-    let sse1 = core_test_support::load_sse_fixture_with_id_from_str(sse_raw, "resp1");
+    // We emit the same body for all 3 turns.
+    let sse1 = sse(vec![
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta("Hey "),
+        ev_output_text_delta("there"),
+        ev_output_text_delta("!\n"),
+        ev_assistant_message("msg-1", "Hey there!\n"),
+        ev_completed("resp1"),
+    ]);
 
     let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
 

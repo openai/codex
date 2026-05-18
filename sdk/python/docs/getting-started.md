@@ -2,7 +2,7 @@
 
 This is the fastest path from install to a multi-turn thread using the public SDK surface.
 
-The SDK is experimental. Treat the API, bundled runtime strategy, and packaging details as unstable until the first public release.
+The SDK is experimental, so the public API and runtime requirements may keep evolving before the first public release.
 
 ## 1) Install
 
@@ -19,9 +19,37 @@ Requirements:
 - Python `>=3.10`
 - uv
 - installed `openai-codex-cli-bin` runtime package, or an explicit `codex_bin` override
-- local Codex auth/session configured
 
-## 2) Run your first turn (sync)
+## 2) Authenticate when needed
+
+Existing Codex auth state is reused automatically. To authenticate from the SDK,
+use the flow that fits your app:
+
+```python
+from openai_codex import Codex
+
+with Codex() as codex:
+    codex.login_api_key("sk-...")
+    account = codex.account()
+    print(account.account)
+```
+
+Interactive ChatGPT browser login returns a handle that carries the URL and the
+matching completion event:
+
+```python
+with Codex() as codex:
+    login = codex.login_chatgpt()
+    print(login.auth_url)
+    completed = login.wait()
+    print(completed.success)
+```
+
+Device-code login works the same way with
+`login_chatgpt_device_code()`, which exposes `verification_url`, `user_code`,
+and `wait()`.
+
+## 3) Run your first turn (sync)
 
 ```python
 from openai_codex import Codex
@@ -42,12 +70,13 @@ What happened:
 
 - `Codex()` started and initialized `codex app-server`.
 - `thread_start(...)` created a thread.
-- `thread.run("...")` started a turn, consumed events until completion, and returned the final assistant response plus collected items and usage.
+- `thread.run("...")` started a turn, consumed events until completion, and returned `TurnResult` with turn metadata, final assistant response, collected items, and usage.
 - `result.final_response` is `None` when no final-answer or phase-less assistant message item completes for the turn.
-- use `thread.turn(...)` when you need a `TurnHandle` for streaming, steering, interrupting, or turn IDs/status
+- plain strings are accepted anywhere a turn input is accepted; typed inputs are still available for multimodal and structured cases
+- use `thread.turn(...)` when you need a `TurnHandle` for streaming, steering, or interrupting before collecting `TurnResult`
 - one client can consume multiple active turns concurrently; turn streams are routed by turn ID
 
-## 3) Continue the same thread (multi-turn)
+## 4) Continue the same thread (multi-turn)
 
 ```python
 from openai_codex import Codex
@@ -62,7 +91,7 @@ with Codex() as codex:
     print("second:", second.final_response)
 ```
 
-## 4) Async parity
+## 5) Async parity
 
 Use `async with AsyncCodex()` as the normal async entrypoint. `AsyncCodex`
 initializes lazily, and context entry makes startup/shutdown explicit.
@@ -82,7 +111,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## 5) Resume an existing thread
+## 6) Resume an existing thread
 
 ```python
 from openai_codex import Codex
@@ -95,7 +124,7 @@ with Codex() as codex:
     print(result.final_response)
 ```
 
-## 6) Public app-server types
+## 7) Public app-server types
 
 The convenience wrappers live at the package root. Public app-server value and
 event types live under:
@@ -104,7 +133,7 @@ event types live under:
 from openai_codex.types import ThreadReadResponse, Turn, TurnStatus
 ```
 
-## 7) Next stops
+## 8) Next stops
 
 - API surface and signatures: `docs/api-reference.md`
 - Common decisions/pitfalls: `docs/faq.md`

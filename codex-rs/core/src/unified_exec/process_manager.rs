@@ -875,6 +875,28 @@ impl UnifiedExecProcessManager {
                     "windows sandbox: failed to resolve codex_home: {err}"
                 ))
             })?;
+            let additional_deny_write_paths = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .map(|overrides| overrides.additional_deny_write_paths.clone())
+                .unwrap_or_default();
+            let additional_deny_read_paths = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .map(|overrides| overrides.additional_deny_read_paths.clone())
+                .unwrap_or_default();
+            let elevated_read_roots_override = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.read_roots_override.clone());
+            let elevated_read_roots_include_platform_defaults = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
+            let elevated_write_roots_override = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.write_roots_override.clone());
             let spawned = match request.windows_sandbox_level {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
@@ -885,6 +907,11 @@ impl UnifiedExecProcessManager {
                         request.cwd.as_path(),
                         request.env.clone(),
                         None,
+                        elevated_read_roots_override.as_deref(),
+                        elevated_read_roots_include_platform_defaults,
+                        elevated_write_roots_override.as_deref(),
+                        &additional_deny_read_paths,
+                        &additional_deny_write_paths,
                         tty,
                         tty,
                         request.windows_sandbox_private_desktop,
@@ -901,6 +928,8 @@ impl UnifiedExecProcessManager {
                         request.cwd.as_path(),
                         request.env.clone(),
                         None,
+                        &additional_deny_read_paths,
+                        &additional_deny_write_paths,
                         tty,
                         tty,
                         request.windows_sandbox_private_desktop,
@@ -999,7 +1028,9 @@ impl UnifiedExecProcessManager {
                 approval_policy: context.turn.approval_policy.value(),
                 permission_profile: context.turn.permission_profile(),
                 file_system_sandbox_policy: &file_system_sandbox_policy,
-                sandbox_cwd: cwd.as_path(),
+                // The process cwd may be model-controlled. Policy resolution
+                // stays anchored to the selected turn environment cwd instead.
+                sandbox_cwd: request.sandbox_cwd.as_path(),
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -1010,9 +1041,11 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
+            shell_type: request.shell_type.clone(),
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
+            sandbox_cwd: request.sandbox_cwd.clone(),
             environment: Arc::clone(&request.environment),
             env,
             exec_server_env_config: Some(exec_server_env_config),

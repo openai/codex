@@ -1,9 +1,6 @@
-use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
-use codex_tool_api::ToolError as ExtensionToolError;
-use codex_tools::ResponsesApiTool;
+use std::sync::Arc;
+
+use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde_json::Value;
@@ -14,50 +11,16 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 
-pub(crate) struct BundledToolOutput {
-    value: Value,
-}
+pub(crate) struct ExtensionToolAdapter(Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>);
 
-impl ToolOutput for BundledToolOutput {
-    fn log_preview(&self) -> String {
-        self.value.to_string()
-    }
-
-    fn success_for_logging(&self) -> bool {
-        true
-    }
-
-    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_string(),
-            output: FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::Text(self.value.to_string()),
-                success: Some(true),
-            },
-        }
-    }
-
-    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<Value> {
-        Some(self.value.clone())
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
-        self.value.clone()
-    }
-}
-
-pub(crate) struct BundledToolHandler {
-    bundle: ExtensionToolBundle,
-    spec: ToolSpec,
-}
-
-impl BundledToolHandler {
-    pub(crate) fn new(bundle: ExtensionToolBundle, spec: ToolSpec) -> Self {
-        Self { bundle, spec }
+impl ExtensionToolAdapter {
+    pub(crate) fn new(executor: Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>) -> Self {
+        Self(executor)
     }
 
     fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
@@ -68,23 +31,35 @@ impl BundledToolHandler {
     }
 }
 
-impl ToolHandler for BundledToolHandler {
-    type Output = BundledToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(self.bundle.tool_name())
+        self.0.tool_name()
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
+        self.0.spec()
     }
 
+    fn exposure(&self) -> crate::tools::registry::ToolExposure {
+        self.0.exposure()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.0.supports_parallel_tool_calls()
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        self.0.handle(to_extension_call(&invocation)).await
+    }
+}
+
+impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.arguments_from_payload(payload).is_some()
-    }
-
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -98,7 +73,7 @@ impl ToolHandler for BundledToolHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let arguments = self.arguments_from_payload(&invocation.payload)?;
         Some(PostToolUsePayload {
@@ -109,47 +84,13 @@ impl ToolHandler for BundledToolHandler {
                 .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
         })
     }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let arguments = self
-            .arguments_from_payload(&invocation.payload)
-            .ok_or_else(|| {
-                FunctionCallError::Fatal(format!(
-                    "tool {} invoked with incompatible payload",
-                    self.bundle.tool_name()
-                ))
-            })?
-            .to_string();
-        let value = self
-            .bundle
-            .executor()
-            .execute(codex_tool_api::ToolCall {
-                call_id: invocation.call_id,
-                arguments,
-            })
-            .await
-            .map_err(map_extension_tool_error)?;
-        Ok(BundledToolOutput { value })
-    }
 }
 
-pub(crate) fn extension_tool_spec(
-    spec: &codex_tool_api::FunctionToolSpec,
-) -> Result<ToolSpec, serde_json::Error> {
-    Ok(ToolSpec::Function(ResponsesApiTool {
-        name: spec.name.clone(),
-        description: spec.description.clone(),
-        strict: spec.strict,
-        defer_loading: None,
-        parameters: codex_tools::parse_tool_input_schema(&spec.parameters)?,
-        output_schema: None,
-    }))
-}
-
-fn map_extension_tool_error(error: ExtensionToolError) -> FunctionCallError {
-    match error {
-        ExtensionToolError::RespondToModel(message) => FunctionCallError::RespondToModel(message),
-        ExtensionToolError::Fatal(message) => FunctionCallError::Fatal(message),
+fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+    ExtensionToolCall {
+        call_id: invocation.call_id.clone(),
+        tool_name: invocation.tool_name.clone(),
+        payload: invocation.payload.clone(),
     }
 }
 
@@ -168,46 +109,58 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    use super::BundledToolHandler;
-    use super::BundledToolOutput;
-    use super::extension_tool_spec;
+    use super::ExtensionToolAdapter;
     use crate::tools::context::ToolCallSource;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
     use crate::tools::hook_names::HookToolName;
+    use crate::tools::registry::CoreToolRuntime;
     use crate::tools::registry::PostToolUsePayload;
     use crate::tools::registry::PreToolUsePayload;
-    use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
 
     struct StubExtensionExecutor;
 
-    impl codex_tool_api::ToolExecutor for StubExtensionExecutor {
-        fn execute(&self, _call: codex_tool_api::ToolCall) -> codex_tool_api::ToolFuture<'_> {
-            Box::pin(async { Ok(json!({ "ok": true })) })
+    #[async_trait::async_trait]
+    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for StubExtensionExecutor {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            codex_tools::ToolName::plain("extension_echo")
+        }
+
+        fn spec(&self) -> Option<codex_tools::ToolSpec> {
+            Some(codex_tools::ToolSpec::Function(
+                codex_tools::ResponsesApiTool {
+                    name: "extension_echo".to_string(),
+                    description: "Echoes arguments.".to_string(),
+                    strict: true,
+                    parameters: codex_tools::parse_tool_input_schema(&json!({
+                        "type": "object",
+                        "properties": {
+                            "message": { "type": "string" },
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false,
+                    }))
+                    .expect("extension schema should parse"),
+                    output_schema: None,
+                    defer_loading: None,
+                },
+            ))
+        }
+
+        async fn handle(
+            &self,
+            _call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            Ok(Box::new(codex_tools::JsonToolOutput::new(
+                json!({ "ok": true }),
+            )))
         }
     }
 
     #[tokio::test]
-    async fn exposes_generic_hook_payloads_and_is_conservatively_mutating() {
-        let bundle = codex_tool_api::ToolBundle::new(
-            codex_tool_api::FunctionToolSpec {
-                name: "extension_echo".to_string(),
-                description: "Echoes arguments.".to_string(),
-                strict: true,
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "message": { "type": "string" },
-                    },
-                    "required": ["message"],
-                    "additionalProperties": false,
-                }),
-            },
-            Arc::new(StubExtensionExecutor),
-        );
-        let spec = extension_tool_spec(bundle.spec()).expect("extension spec should convert");
-        let handler = BundledToolHandler::new(bundle, spec);
+    async fn exposes_generic_hook_payloads() {
+        let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let invocation = ToolInvocation {
             session: session.into(),
@@ -221,20 +174,17 @@ mod tests {
                 arguments: json!({ "message": "hello" }).to_string(),
             },
         };
-        let output = BundledToolOutput {
-            value: json!({ "ok": true }),
-        };
+        let output = codex_tools::JsonToolOutput::new(json!({ "ok": true }));
 
-        assert!(ToolHandler::is_mutating(&handler, &invocation).await);
         assert_eq!(
-            ToolHandler::pre_tool_use_payload(&handler, &invocation),
+            CoreToolRuntime::pre_tool_use_payload(&handler, &invocation),
             Some(PreToolUsePayload {
                 tool_name: HookToolName::new("extension_echo"),
                 tool_input: json!({ "message": "hello" }),
             })
         );
         assert_eq!(
-            ToolHandler::post_tool_use_payload(&handler, &invocation, &output),
+            CoreToolRuntime::post_tool_use_payload(&handler, &invocation, &output),
             Some(PostToolUsePayload {
                 tool_name: HookToolName::new("extension_echo"),
                 tool_use_id: "call-extension".to_string(),

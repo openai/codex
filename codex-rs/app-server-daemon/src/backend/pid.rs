@@ -1,3 +1,4 @@
+use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -10,6 +11,8 @@ use anyhow::bail;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 #[cfg(unix)]
 use tokio::process::Command;
 use tokio::time::sleep;
@@ -18,6 +21,7 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(70);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+const STDERR_LOG_TAIL_BYTES: u64 = 4096;
 
 #[derive(Debug)]
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -33,6 +37,25 @@ pub(crate) struct PidBackend {
 struct PidRecord {
     pid: u32,
     process_start_time: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PidLogTail {
+    pub(crate) path: PathBuf,
+    pub(crate) contents: String,
+}
+
+impl PidLogTail {
+    pub(crate) fn append_to_context(&self, context: &mut String) {
+        context.push_str(&format!(
+            "\n\nManaged app-server stderr ({}):",
+            self.path.display()
+        ));
+        for line in self.contents.lines() {
+            context.push_str("\n  ");
+            context.push_str(line);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,11 +152,18 @@ impl PidBackend {
             }
         };
         let mut command = Command::new(&self.codex_bin);
+        let stderr_log = match self.open_stderr_log().await {
+            Ok(stderr_log) => stderr_log,
+            Err(err) => {
+                let _ = fs::remove_file(&self.pid_file).await;
+                return Err(err);
+            }
+        };
         command
             .args(self.command_args())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr_log.into_std().await));
 
         #[cfg(unix)]
         {
@@ -169,8 +199,11 @@ impl PidBackend {
             },
             Err(err) => {
                 let _ = self.terminate_process(pid);
+                let mut context =
+                    format!("failed to record pid-managed app-server process {pid} startup");
+                super::append_stderr_log_tail_context(&self.pid_file, &mut context).await;
                 let _ = fs::remove_file(&self.pid_file).await;
-                return Err(err);
+                return Err(err).context(context);
             }
         };
         let contents = serde_json::to_vec(&record).context("failed to serialize pid record")?;
@@ -345,17 +378,28 @@ impl PidBackend {
     }
 
     #[cfg(unix)]
+    async fn open_stderr_log(&self) -> Result<fs::File> {
+        let stderr_log_file = stderr_log_file_for_pid_file(&self.pid_file);
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&stderr_log_file)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to open stderr log for pid-managed app server {}",
+                    stderr_log_file.display()
+                )
+            })
+    }
+
+    #[cfg(unix)]
     fn command_args(&self) -> Vec<&'static str> {
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
-            } => vec![
-                "--enable",
-                "remote_control",
-                "app-server",
-                "--listen",
-                "unix://",
-            ],
+            } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
             } => vec!["app-server", "--listen", "unix://"],
@@ -380,6 +424,56 @@ impl PidBackend {
     async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
         process_matches_record(record).await
     }
+}
+
+pub(crate) async fn read_stderr_log_tail(pid_file: &Path) -> Result<Option<PidLogTail>> {
+    let path = stderr_log_file_for_pid_file(pid_file);
+    let Some(contents) = read_log_tail(&path, STDERR_LOG_TAIL_BYTES).await? else {
+        return Ok(None);
+    };
+    Ok(Some(PidLogTail { path, contents }))
+}
+
+fn stderr_log_file_for_pid_file(pid_file: &Path) -> PathBuf {
+    pid_file.with_extension("stderr.log")
+}
+
+async fn read_log_tail(path: &Path, byte_limit: u64) -> Result<Option<String>> {
+    let mut file = match fs::File::open(path).await {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to open stderr log {}", path.display()));
+        }
+    };
+    let len = file
+        .metadata()
+        .await
+        .with_context(|| format!("failed to inspect stderr log {}", path.display()))?
+        .len();
+    if len == 0 {
+        return Ok(None);
+    }
+
+    let start = len.saturating_sub(byte_limit);
+    file.seek(SeekFrom::Start(start))
+        .await
+        .with_context(|| format!("failed to seek stderr log {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .await
+        .with_context(|| format!("failed to read stderr log {}", path.display()))?;
+    if start > 0
+        && let Some(newline_index) = bytes.iter().position(|byte| *byte == b'\n')
+    {
+        bytes.drain(..=newline_index);
+    }
+    let contents = String::from_utf8_lossy(&bytes).trim_end().to_string();
+    if contents.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(contents))
 }
 
 #[cfg(unix)]

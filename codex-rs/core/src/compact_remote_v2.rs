@@ -12,6 +12,10 @@ use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
+use crate::hook_runtime::PostCompactHookOutcome;
+use crate::hook_runtime::PreCompactHookOutcome;
+use crate::hook_runtime::run_post_compact_hooks;
+use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
@@ -97,6 +101,21 @@ async fn run_remote_compact_task_inner(
         phase,
     )
     .await;
+    let pre_compact_outcome = run_pre_compact_hooks(sess, turn_context, trigger).await;
+    match pre_compact_outcome {
+        PreCompactHookOutcome::Continue => {}
+        PreCompactHookOutcome::Stopped { reason } => {
+            let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
+            attempt
+                .track(
+                    sess.as_ref(),
+                    codex_analytics::CompactionStatus::Interrupted,
+                    Some(error),
+                )
+                .await;
+            return Err(CodexErr::TurnAborted);
+        }
+    }
     let result = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
@@ -104,13 +123,16 @@ async fn run_remote_compact_task_inner(
         initial_context_injection,
     )
     .await;
-    attempt
-        .track(
-            sess.as_ref(),
-            compaction_status_from_result(&result),
-            result.as_ref().err().map(ToString::to_string),
-        )
-        .await;
+    let status = compaction_status_from_result(&result);
+    let error = result.as_ref().err().map(ToString::to_string);
+    if result.is_ok() {
+        let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
+        if let PostCompactHookOutcome::Stopped = post_compact_outcome {
+            attempt.track(sess.as_ref(), status, error).await;
+            return Err(CodexErr::TurnAborted);
+        }
+    }
+    attempt.track(sess.as_ref(), status, error.clone()).await;
     if let Err(err) = result {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
@@ -165,9 +187,7 @@ async fn run_remote_compact_task_inner_impl(
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::ContextCompaction {
-        encrypted_content: None,
-    });
+    input.push(ResponseItem::CompactionTrigger);
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -276,38 +296,25 @@ async fn run_remote_compaction_request_v2(
             Err(err)
         })
         .await?;
-    collect_context_compaction_output(stream).await
+    collect_compaction_output(stream).await
 }
 
-async fn collect_context_compaction_output(
+async fn collect_compaction_output(
     mut stream: ResponseStream,
 ) -> CodexResult<(ResponseItem, String)> {
     let mut output_item_count = 0usize;
-    let mut context_compaction_count = 0usize;
-    let mut context_compaction_output = None;
+    let mut compaction_count = 0usize;
+    let mut compaction_output = None;
     let mut completed_response_id = None;
     while let Some(event) = stream.next().await {
         match event? {
             ResponseEvent::OutputItemDone(item) => {
                 output_item_count += 1;
-                match item {
-                    ResponseItem::ContextCompaction {
-                        encrypted_content: Some(_),
-                    } => {
-                        context_compaction_count += 1;
-                        if context_compaction_output.is_none() {
-                            context_compaction_output = Some(item);
-                        }
+                if let ResponseItem::Compaction { .. } = item {
+                    compaction_count += 1;
+                    if compaction_output.is_none() {
+                        compaction_output = Some(item);
                     }
-                    ResponseItem::ContextCompaction {
-                        encrypted_content: None,
-                    } => {
-                        return Err(CodexErr::Fatal(
-                            "remote compaction v2 returned context_compaction without encrypted_content"
-                                .to_string(),
-                        ));
-                    }
-                    _ => {}
                 }
             }
             ResponseEvent::Completed { response_id, .. } => {
@@ -324,16 +331,16 @@ async fn collect_context_compaction_output(
         ));
     };
 
-    if context_compaction_count != 1 {
+    if compaction_count != 1 {
         return Err(CodexErr::Fatal(format!(
-            "remote compaction v2 expected exactly one context_compaction output item, got {context_compaction_count} from {output_item_count} output items"
+            "remote compaction v2 expected exactly one compaction output item, got {compaction_count} from {output_item_count} output items"
         )));
     }
 
-    let Some(context_compaction_output) = context_compaction_output else {
-        unreachable!("context compaction output must exist when count is exactly one");
+    let Some(compaction_output) = compaction_output else {
+        unreachable!("compaction output must exist when count is exactly one");
     };
-    Ok((context_compaction_output, response_id))
+    Ok((compaction_output, response_id))
 }
 
 fn build_v2_compacted_history(
@@ -401,7 +408,7 @@ mod tests {
             message("assistant", "final", Some(MessagePhase::FinalAnswer)),
             ResponseItem::FunctionCall {
                 id: None,
-                name: "shell".to_string(),
+                name: "shell_command".to_string(),
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call_1".to_string(),
@@ -410,8 +417,8 @@ mod tests {
                 encrypted_content: "old".to_string(),
             },
         ];
-        let output = ResponseItem::ContextCompaction {
-            encrypted_content: Some("new".to_string()),
+        let output = ResponseItem::Compaction {
+            encrypted_content: "new".to_string(),
         };
 
         let history = build_v2_compacted_history(&input, output.clone());
@@ -428,9 +435,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn collect_context_compaction_output_accepts_additional_output_items() {
-        let context_compaction = ResponseItem::ContextCompaction {
-            encrypted_content: Some("encrypted".to_string()),
+    async fn collect_compaction_output_accepts_additional_output_items() {
+        let compaction = ResponseItem::Compaction {
+            encrypted_content: "encrypted".to_string(),
         };
         let stream = response_stream(vec![
             Ok(ResponseEvent::OutputItemDone(message(
@@ -438,7 +445,7 @@ mod tests {
                 "IGNORED_COMPACT_REPLY",
                 Some(MessagePhase::FinalAnswer),
             ))),
-            Ok(ResponseEvent::OutputItemDone(context_compaction.clone())),
+            Ok(ResponseEvent::OutputItemDone(compaction.clone())),
             Ok(ResponseEvent::Completed {
                 response_id: "resp-compact".to_string(),
                 token_usage: None,
@@ -446,11 +453,11 @@ mod tests {
             }),
         ]);
 
-        let (output, response_id) = collect_context_compaction_output(stream)
+        let (output, response_id) = collect_compaction_output(stream)
             .await
-            .expect("context compaction should be collected");
+            .expect("compaction should be collected");
 
-        assert_eq!(output, context_compaction);
+        assert_eq!(output, compaction);
         assert_eq!(response_id, "resp-compact");
     }
 }

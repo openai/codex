@@ -36,6 +36,7 @@ impl ChatWidget {
             .show_view(Box::new(HooksBrowserView::from_entry(
                 entry,
                 self.app_event_tx.clone(),
+                self.bottom_pane.list_keymap(),
             )));
         self.request_redraw();
     }

@@ -23,7 +23,13 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
-use core_test_support::PathExt;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::SessionSource;
+use codex_rollout_trace::ThreadStartedTraceMetadata;
+use codex_rollout_trace::ToolDispatchInvocation;
+use codex_rollout_trace::ToolDispatchPayload;
+use codex_rollout_trace::ToolDispatchRequester;
+use codex_rollout_trace::replay_bundle;
 use core_test_support::hooks::trusted_config_layer_stack;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -34,6 +40,9 @@ use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tracing::Instrument;
@@ -114,6 +123,60 @@ fn prompt_options(
         allow_session_remember,
         allow_persistent_approval,
     }
+}
+
+#[tokio::test]
+async fn execute_mcp_tool_call_records_replayable_correlation() -> anyhow::Result<()> {
+    let temp = tempdir()?;
+    let (mut session, turn_context) = make_session_and_context().await;
+    attach_trace_bundle(&mut session, &turn_context, temp.path())?;
+
+    let dispatch_trace = session
+        .services
+        .rollout_thread_trace
+        .start_tool_dispatch_trace(|| {
+            Some(ToolDispatchInvocation {
+                thread_id: session.conversation_id.to_string(),
+                codex_turn_id: turn_context.sub_id.clone(),
+                tool_call_id: "mcp-call".to_string(),
+                tool_name: "search".to_string(),
+                tool_namespace: Some("mcp__docs__".to_string()),
+                requester: ToolDispatchRequester::Model {
+                    model_visible_call_id: "mcp-call".to_string(),
+                },
+                payload: ToolDispatchPayload::Function {
+                    arguments: r#"{"query":"trace"}"#.to_string(),
+                },
+            })
+        });
+    assert!(dispatch_trace.is_enabled());
+
+    let result = execute_mcp_tool_call(
+        &session,
+        &turn_context,
+        "mcp-call",
+        &McpInvocation {
+            server: "docs".to_string(),
+            tool: "search".to_string(),
+            arguments: Some(serde_json::json!({ "query": "trace" })),
+        },
+        /*rewritten_arguments*/ None,
+        /*metadata*/ None,
+        /*request_meta*/ None,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "the synthetic backend is absent; only trace emission matters",
+    );
+
+    let replayed = replay_bundle(single_bundle_dir(temp.path())?)?;
+    assert!(
+        replayed.tool_calls["mcp-call"].mcp_call_id.is_some(),
+        "the real MCP execution path should emit a reducer-visible correlation ID",
+    );
+
+    Ok(())
 }
 
 fn install_mcp_permission_request_hook(
@@ -203,6 +266,45 @@ print({hook_output:?})
         })));
 
     log_path.to_path_buf()
+}
+
+/// Attaches a replayable rollout bundle to one synthetic session under test.
+fn attach_trace_bundle(
+    session: &mut Session,
+    turn_context: &TurnContext,
+    root: &Path,
+) -> anyhow::Result<()> {
+    let rollout_thread_trace =
+        codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
+            root,
+            ThreadStartedTraceMetadata {
+                thread_id: session.conversation_id.to_string(),
+                agent_path: "/root".to_string(),
+                task_name: None,
+                nickname: None,
+                agent_role: None,
+                session_source: SessionSource::Exec,
+                cwd: PathBuf::from("/workspace"),
+                rollout_path: None,
+                model: "gpt-test".to_string(),
+                provider_name: "test-provider".to_string(),
+                approval_policy: "never".to_string(),
+                sandbox_policy: "danger-full-access".to_string(),
+            },
+        )?;
+    rollout_thread_trace.record_codex_turn_started(turn_context.sub_id.as_str());
+    session.services.rollout_thread_trace = rollout_thread_trace;
+    Ok(())
+}
+
+/// Returns the sole bundle emitted under a temporary rollout trace root.
+fn single_bundle_dir(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut entries = fs::read_dir(root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort();
+    assert_eq!(entries.len(), 1);
+    Ok(entries.remove(0))
 }
 
 #[test]
@@ -1118,7 +1220,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.sub_id.clone(),
         session.get_tx_event(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeEnvironment::new(environment, turn_context.cwd.to_path_buf()),
+        codex_mcp::McpRuntimeEnvironment::new(environment, {
+            #[allow(deprecated)]
+            turn_context.cwd.to_path_buf()
+        }),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
@@ -1768,8 +1873,13 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
 #[tokio::test]
 async fn persist_codex_app_tool_approval_writes_tool_override() {
     let tmp = tempdir().expect("tempdir");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
 
-    persist_codex_app_tool_approval(&tmp.path().abs(), "calendar", "calendar/list_events")
+    persist_codex_app_tool_approval(&config, "calendar", "calendar/list_events")
         .await
         .expect("persist approval");
 
@@ -2010,7 +2120,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
 
 #[tokio::test]
 async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_server() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     std::fs::write(
@@ -2018,6 +2128,12 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
         "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
     )
     .expect("seed config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.clone().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
         connector_id: None,
@@ -2127,7 +2243,6 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .build()
         .await
         .expect("load project config");
-    turn_context.cwd = config.cwd.clone();
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),
@@ -2328,12 +2443,14 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
         .collect::<Vec<_>>();
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
-            "cwd": turn_context.cwd,
+            "cwd": turn_cwd,
             "transcript_path": null,
             "model": turn_context.model_info.slug,
             "permission_mode": "default",
@@ -2388,12 +2505,14 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
         .collect::<Vec<_>>();
+    #[allow(deprecated)]
+    let turn_cwd = turn_context.cwd.clone();
     assert_eq!(
         inputs,
         vec![serde_json::json!({
-            "session_id": session.conversation_id,
+            "session_id": session.session_id(),
             "turn_id": "turn_id",
-            "cwd": turn_context.cwd,
+            "cwd": turn_cwd,
             "transcript_path": null,
             "model": turn_context.model_info.slug,
             "permission_mode": "default",

@@ -29,6 +29,8 @@ use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::history_cell;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::render::renderable::Renderable;
 
 #[cfg(test)]
@@ -138,15 +140,35 @@ pub(crate) struct RequestUserInputOverlay {
     done: bool,
     pending_submission_draft: Option<ComposerDraft>,
     confirm_unanswered: Option<ScrollState>,
+    list_keymap: ListKeymap,
 }
 
 impl RequestUserInputOverlay {
+    #[cfg(test)]
     pub(crate) fn new(
         request: ToolRequestUserInputParams,
         app_event_tx: AppEventSender,
         has_input_focus: bool,
         enhanced_keys_supported: bool,
         disable_paste_burst: bool,
+    ) -> Self {
+        Self::new_with_keymap(
+            request,
+            app_event_tx,
+            has_input_focus,
+            enhanced_keys_supported,
+            disable_paste_burst,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        )
+    }
+
+    pub(crate) fn new_with_keymap(
+        request: ToolRequestUserInputParams,
+        app_event_tx: AppEventSender,
+        has_input_focus: bool,
+        enhanced_keys_supported: bool,
+        disable_paste_burst: bool,
+        list_keymap: ListKeymap,
     ) -> Self {
         // Use the same composer widget, but disable popups/slash-commands and
         // image-path attachment so it behaves like a focused notes field.
@@ -171,6 +193,7 @@ impl RequestUserInputOverlay {
             done: false,
             pending_submission_draft: None,
             confirm_unanswered: None,
+            list_keymap,
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -1063,11 +1086,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                 code: KeyCode::Char('h'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(/*next*/ false);
-                return;
             }
-            KeyEvent {
+            | KeyEvent {
                 code: KeyCode::Left,
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -1075,19 +1095,30 @@ impl BottomPaneView for RequestUserInputOverlay {
                 self.move_question(/*next*/ false);
                 return;
             }
+            _ if self.has_options()
+                && matches!(self.focus, Focus::Options)
+                && self.list_keymap.move_left.is_pressed(key_event) =>
+            {
+                self.move_question(/*next*/ false);
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
                 self.move_question(/*next*/ true);
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.has_options() && matches!(self.focus, Focus::Options) => {
+            _ if self.has_options()
+                && matches!(self.focus, Focus::Options)
+                && self.list_keymap.move_right.is_pressed(key_event) =>
+            {
                 self.move_question(/*next*/ true);
                 return;
             }
@@ -1883,6 +1914,30 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Right));
         assert_eq!(overlay.current_index(), 1);
         overlay.handle_key_event(KeyEvent::from(KeyCode::Left));
+        assert_eq!(overlay.current_index(), 0);
+    }
+
+    #[test]
+    fn horizontal_list_keys_move_between_questions_in_options() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        assert_eq!(overlay.current_index(), 0);
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(overlay.current_index(), 1);
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(overlay.current_index(), 0);
     }
 

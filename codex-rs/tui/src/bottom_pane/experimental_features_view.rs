@@ -13,6 +13,8 @@ use ratatui::widgets::Widget;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -43,12 +45,14 @@ pub(crate) struct ExperimentalFeaturesView {
     app_event_tx: AppEventSender,
     header: Box<dyn Renderable>,
     footer_hint: Line<'static>,
+    keymap: ListKeymap,
 }
 
 impl ExperimentalFeaturesView {
     pub(crate) fn new(
         features: Vec<ExperimentalFeatureItem>,
         app_event_tx: AppEventSender,
+        keymap: ListKeymap,
     ) -> Self {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Experimental features".bold()));
@@ -63,6 +67,7 @@ impl ExperimentalFeaturesView {
             app_event_tx,
             header: Box::new(header),
             footer_hint: experimental_popup_hint_line(),
+            keymap,
         };
         view.initialize_selection();
         view
@@ -119,6 +124,30 @@ impl ExperimentalFeaturesView {
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
+    fn page_up(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.state.page_up_clamped(len, visible);
+    }
+
+    fn page_down(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.state.page_down_clamped(len, visible);
+    }
+
+    fn jump_top(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.state.jump_top(len, visible);
+    }
+
+    fn jump_bottom(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.state.jump_bottom(len, visible);
+    }
+
     fn toggle_selected(&mut self) {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
@@ -137,56 +166,20 @@ impl ExperimentalFeaturesView {
 impl BottomPaneView for ExperimentalFeaturesView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_down(),
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_down(),
+            _ if self.keymap.move_up.is_pressed(key_event) => self.move_up(),
+            _ if self.keymap.move_down.is_pressed(key_event) => self.move_down(),
+            _ if self.keymap.page_up.is_pressed(key_event) => self.page_up(),
+            _ if self.keymap.page_down.is_pressed(key_event) => self.page_down(),
+            _ if self.keymap.jump_top.is_pressed(key_event) => self.jump_top(),
+            _ if self.keymap.jump_bottom.is_pressed(key_event) => self.jump_bottom(),
             KeyEvent {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.toggle_selected(),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            _ if self.keymap.accept.is_pressed(key_event)
+                || self.keymap.cancel.is_pressed(key_event) =>
+            {
                 self.on_ctrl_c();
             }
             _ => {}

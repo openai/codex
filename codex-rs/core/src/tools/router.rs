@@ -1,5 +1,4 @@
 use crate::function_tool::FunctionCallError;
-use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -8,22 +7,19 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::build_specs_with_discoverable_tools;
+use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
-use codex_tool_api::ToolBundle as ExtensionToolBundle;
-use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
-use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
-use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -38,101 +34,31 @@ pub struct ToolCall {
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
-    pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
-    pub(crate) extension_tool_bundles: Vec<ExtensionToolBundle>,
+    pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
 impl ToolRouter {
     pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
-        let ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            unavailable_called_tools,
-            discoverable_tools,
-            extension_tool_bundles,
-            dynamic_tools,
-        } = params;
-        let builder = build_specs_with_discoverable_tools(
-            config,
-            mcp_tools,
-            deferred_mcp_tools,
-            unavailable_called_tools,
-            discoverable_tools,
-            &extension_tool_bundles,
-            dynamic_tools,
-        );
-        let (specs, registry) = builder.build();
-        let deferred_dynamic_tools = dynamic_tools
-            .iter()
-            .filter(|tool| tool.defer_loading)
-            .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
-            .collect::<HashSet<_>>();
-        let model_visible_specs = specs
-            .iter()
-            .filter_map(|configured_tool| {
-                if config.code_mode_only_enabled
-                    && codex_code_mode::is_code_mode_nested_tool(configured_tool.name())
-                {
-                    return None;
-                }
+        build_tool_router(config, params)
+    }
 
-                filter_deferred_dynamic_tool_spec(
-                    configured_tool.spec.clone(),
-                    &deferred_dynamic_tools,
-                )
-            })
-            .collect();
-
+    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
-            specs,
             model_visible_specs,
         }
     }
 
-    pub fn specs(&self) -> Vec<ToolSpec> {
-        self.specs
-            .iter()
-            .map(|config| config.spec.clone())
-            .collect()
-    }
-
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
-    }
-
-    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
-        self.specs.iter().find_map(|config| match &config.spec {
-            ToolSpec::Function(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(config.spec.clone())
-            }
-            ToolSpec::Freeform(tool)
-                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
-            {
-                Some(config.spec.clone())
-            }
-            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool)
-                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
-                        && tool.name == tool_name.name =>
-                {
-                    Some(ToolSpec::Function(tool.clone()))
-                }
-                _ => None,
-            }),
-            _ => None,
-        })
     }
 
     pub(crate) fn create_diff_consumer(
@@ -142,29 +68,10 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
-    fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
-        if tool_name.namespace.is_some() {
-            return false;
-        }
-
-        self.specs
-            .iter()
-            .filter(|config| config.supports_parallel_tool_calls)
-            .any(|config| match &config.spec {
-                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Namespace(_)
-                | ToolSpec::ToolSearch { .. }
-                | ToolSpec::LocalShell {}
-                | ToolSpec::ImageGeneration { .. }
-                | ToolSpec::WebSearch { .. } => false,
-            })
-    }
-
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
         self.registry
             .supports_parallel_tool_calls(&call.tool_name)
-            .unwrap_or_else(|| self.configured_tool_supports_parallel(&call.tool_name))
+            .unwrap_or(false)
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -213,39 +120,11 @@ impl ToolRouter {
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
-            ResponseItem::LocalShellCall {
-                id,
-                call_id,
-                action,
-                ..
-            } => {
-                let call_id = call_id
-                    .or(id)
-                    .ok_or(FunctionCallError::MissingLocalShellCallId)?;
-
-                match action {
-                    LocalShellAction::Exec(exec) => {
-                        let params = ShellToolCallParams {
-                            command: exec.command,
-                            workdir: exec.working_directory,
-                            timeout_ms: exec.timeout_ms,
-                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
-                            additional_permissions: None,
-                            prefix_rule: None,
-                            justification: None,
-                        };
-                        Ok(Some(ToolCall {
-                            tool_name: ToolName::plain("local_shell"),
-                            call_id,
-                            payload: ToolPayload::LocalShell { params },
-                        }))
-                    }
-                }
-            }
             _ => Ok(None),
         }
     }
 
+    #[allow(dead_code)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
@@ -255,6 +134,53 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            /*terminal_outcome_reached*/ None,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Arc<AtomicBool>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            Some(terminal_outcome_reached),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_tool_call_with_code_mode_result_inner(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -273,11 +199,15 @@ impl ToolRouter {
             payload,
         };
 
-        self.registry.dispatch_any(invocation).await
+        self.registry
+            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
+            .await
     }
 }
 
-pub(crate) fn extension_tool_bundles(session: &Session) -> Vec<ExtensionToolBundle> {
+pub(crate) fn extension_tool_executors(
+    session: &Session,
+) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
         .extensions
@@ -292,38 +222,6 @@ pub(crate) fn extension_tool_bundles(session: &Session) -> Vec<ExtensionToolBund
         .collect()
 }
 
-fn filter_deferred_dynamic_tool_spec(
-    spec: ToolSpec,
-    deferred_dynamic_tools: &HashSet<ToolName>,
-) -> Option<ToolSpec> {
-    if deferred_dynamic_tools.is_empty() {
-        return Some(spec);
-    }
-
-    match spec {
-        ToolSpec::Function(tool) => {
-            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
-                None
-            } else {
-                Some(ToolSpec::Function(tool))
-            }
-        }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
-    }
-}
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;

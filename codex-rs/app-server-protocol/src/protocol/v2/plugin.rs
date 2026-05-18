@@ -125,6 +125,19 @@ pub struct PluginListParams {
     pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInstalledParams {
+    /// Optional working directories used to discover repo marketplaces.
+    #[ts(optional = nullable)]
+    pub cwds: Option<Vec<AbsolutePathBuf>>,
+    /// Additional uninstalled plugin names that should be returned when present locally.
+    /// This is used by mention surfaces that intentionally expose install entrypoints.
+    #[ts(optional = nullable)]
+    pub install_suggestion_plugin_names: Option<Vec<String>>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[ts(export_to = "v2/")]
 pub enum PluginListMarketplaceKind {
@@ -148,6 +161,15 @@ pub struct PluginListResponse {
     pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginInstalledResponse {
+    pub marketplaces: Vec<PluginMarketplaceEntry>,
+    #[serde(default)]
+    pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -240,6 +262,26 @@ pub struct PluginShareListParams {}
 #[ts(export_to = "v2/")]
 pub struct PluginShareListResponse {
     pub data: Vec<PluginShareListItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareCheckoutParams {
+    pub remote_plugin_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginShareCheckoutResponse {
+    pub remote_plugin_id: String,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub plugin_path: AbsolutePathBuf,
+    pub marketplace_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+    pub remote_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -538,6 +580,11 @@ pub enum PluginAvailability {
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
     pub id: String,
+    /// Backend remote plugin identifier when available.
+    pub remote_plugin_id: Option<String>,
+    /// Version of the locally materialized plugin package when available.
+    #[serde(default)]
+    pub local_version: Option<String>,
     pub name: String,
     /// Remote sharing context associated with this plugin when available.
     pub share_context: Option<PluginShareContext>,
@@ -559,6 +606,9 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
+    /// Version of the remote shared plugin release when available.
+    #[serde(default)]
+    pub remote_version: Option<String>,
     pub discoverability: Option<PluginShareDiscoverability>,
     pub share_url: Option<String>,
     pub creator_account_user_id: Option<String>,

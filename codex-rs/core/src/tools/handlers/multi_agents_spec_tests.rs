@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_tools::JsonSchemaPrimitiveType;
@@ -20,7 +21,11 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         }],
         supports_personality: false,
         additional_speed_tiers: Vec::new(),
-        service_tiers: Vec::new(),
+        service_tiers: vec![ModelServiceTier {
+            id: "priority".to_string(),
+            name: "Fast".to_string(),
+            description: "1.5x speed, increased usage".to_string(),
+        }],
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -69,8 +74,10 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
-    assert!(description.contains("visible display (`visible-model`)"));
-    assert!(!description.contains("hidden display (`hidden-model`)"));
+    assert!(description.contains(
+        "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
+    ));
+    assert!(!description.contains("hidden-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
@@ -85,6 +92,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             .get("model")
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
+    );
+    assert_eq!(
+        properties
+            .get("service_tier")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
     );
     assert_eq!(
         parameters.required.as_ref(),
@@ -127,6 +140,68 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION)
     );
+    assert_eq!(
+        properties
+            .get("service_tier")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
+    );
+}
+
+#[test]
+fn spawn_agent_tool_caps_visible_model_summaries() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![
+            model_preset("first", /*show_in_picker*/ true),
+            model_preset("second", /*show_in_picker*/ true),
+            model_preset("third", /*show_in_picker*/ true),
+            model_preset("fourth", /*show_in_picker*/ true),
+            model_preset("fifth", /*show_in_picker*/ true),
+            model_preset("sixth", /*show_in_picker*/ true),
+        ],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        max_concurrent_threads_per_session: Some(4),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+
+    for model in ["first", "second", "third", "fourth", "fifth"] {
+        assert!(
+            description.contains(&format!("`{model}-model`")),
+            "expected {model} model summary in spawn_agent description: {description:?}"
+        );
+    }
+    assert!(!description.contains("`sixth-model`"));
+}
+
+#[test]
+fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: true,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        max_concurrent_threads_per_session: Some(4),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("spawn_agent should use object params");
+
+    assert!(!properties.contains_key("agent_type"));
+    assert!(!properties.contains_key("model"));
+    assert!(!properties.contains_key("reasoning_effort"));
+    assert!(!properties.contains_key("service_tier"));
 }
 
 #[test]

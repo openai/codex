@@ -174,7 +174,7 @@ async fn assert_user_turn_local_image_resizes_to(
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -201,6 +201,7 @@ async fn assert_user_turn_local_image_resizes_to(
             &test,
             vec![UserInput::LocalImage {
                 path: abs_path.clone(),
+                detail: None,
             }],
             session_model,
         ))
@@ -266,7 +267,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -562,7 +563,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
     let local_selection = TurnEnvironmentSelection {
@@ -582,9 +583,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
             /*sandbox*/ None,
         )
         .await?;
-    let png = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-    )?;
+    let png = png_bytes(/*width*/ 1, /*height*/ 1, [0, 255, 0, 255])?;
     test.fs()
         .write_file(&image_path, png, /*sandbox*/ None)
         .await?;
@@ -664,7 +663,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -755,7 +754,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -816,7 +815,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
         .expect("output text present");
     assert_eq!(
         output_text,
-        "view_image.detail only supports `original`; omit `detail` for default resized behavior, got `low`"
+        "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `low`"
     );
 
     assert!(
@@ -833,7 +832,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -923,7 +922,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.2");
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1017,7 +1016,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.3-codex");
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1108,7 +1107,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1178,7 +1177,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1255,7 +1254,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         config,
@@ -1385,7 +1384,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         .with_config(|config| {
             config.model = Some(model_slug.to_string());
         });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex { codex, .. } = &test;
 
     let rel_path = "assets/example.png";
@@ -1472,7 +1471,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let completion_mock = responses::mount_sse_once(&server, success_response).await;
 
     let mut builder = test_codex();
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     let TestCodex {
         codex,
         session_configured,
@@ -1489,6 +1488,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             &test,
             vec![UserInput::LocalImage {
                 path: abs_path.clone(),
+                detail: None,
             }],
             session_model,
         ))
