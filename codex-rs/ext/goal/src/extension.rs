@@ -232,18 +232,10 @@ where
 {
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
-            if !goal_enabled(input.thread_store) {
-                return;
-            }
-
-            if !tool_attempt_counts_for_goal_progress(input.outcome) {
-                return;
-            }
-
-            if input.tool_name.namespace.is_none() && input.tool_name.name == UPDATE_GOAL_TOOL_NAME
-            {
-                return;
-            }
+            let _should_count_for_goal_progress = goal_enabled(input.thread_store)
+                && tool_attempt_counts_for_goal_progress(input.outcome)
+                && !(input.tool_name.namespace.is_none()
+                    && input.tool_name.name == UPDATE_GOAL_TOOL_NAME);
 
             // TODO: commit active goal progress through host goal storage and emit
             // ThreadGoalUpdated when the persisted goal changes. This replaces

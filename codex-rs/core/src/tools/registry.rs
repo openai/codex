@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::function_tool::FunctionCallError;
@@ -301,13 +303,23 @@ impl ToolRegistry {
         Some(tool.supports_parallel_tool_calls())
     }
 
+    #[allow(dead_code)]
+    pub(crate) async fn dispatch_any(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_any_with_handler_finished(invocation, /*handler_finished*/ None)
+            .await
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "tool dispatch must keep active-turn accounting atomic"
     )]
-    pub(crate) async fn dispatch_any(
+    pub(crate) async fn dispatch_any_with_handler_finished(
         &self,
         mut invocation: ToolInvocation,
+        handler_finished: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let tool_name_flat = flat_tool_name(&tool_name);
@@ -449,7 +461,9 @@ impl ToolRegistry {
                     let tool = tool.clone();
                     let response_cell = &response_cell;
                     async move {
-                        match handle_any_tool(tool.as_ref(), invocation_for_tool).await {
+                        match handle_any_tool(tool.as_ref(), invocation_for_tool, handler_finished)
+                            .await
+                        {
                             Ok(result) => {
                                 let preview = result.result.log_preview();
                                 let success = result.result.success_for_logging();
@@ -576,10 +590,15 @@ impl ToolRegistry {
 async fn handle_any_tool(
     tool: &dyn CoreToolRuntime,
     invocation: ToolInvocation,
+    handler_finished: Option<Arc<AtomicBool>>,
 ) -> Result<AnyToolResult, FunctionCallError> {
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
-    let output = tool.handle(invocation.clone()).await?;
+    let output = tool.handle(invocation.clone()).await;
+    if let Some(handler_finished) = handler_finished {
+        handler_finished.store(true, Ordering::Release);
+    }
+    let output = output?;
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {
