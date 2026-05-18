@@ -98,21 +98,22 @@ impl<'a> AgentsMdManager<'a> {
         None
     }
 
-    /// Combines configured user instructions and AGENTS.md content into a
-    /// single model-visible instruction string.
-    pub(crate) async fn user_instructions(
+    pub(crate) async fn user_instructions_with_warnings(
         &self,
         environment: Option<&Environment>,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<String> {
         let fs = environment?.get_filesystem();
-        self.user_instructions_with_fs(fs.as_ref()).await
+        self.user_instructions_with_fs_and_warnings(fs.as_ref(), startup_warnings)
+            .await
     }
 
-    pub(crate) async fn user_instructions_with_fs(
+    async fn user_instructions_with_fs_and_warnings(
         &self,
         fs: &dyn ExecutorFileSystem,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<String> {
-        let agents_md_docs = self.read_agents_md(fs).await;
+        let agents_md_docs = self.read_agents_md(fs, startup_warnings).await;
 
         let mut output = String::new();
 
@@ -173,7 +174,11 @@ impl<'a> AgentsMdManager<'a> {
     /// concatenation of all discovered docs. If no documentation file is found
     /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
     /// `Err` so callers can decide how to handle them.
-    async fn read_agents_md(&self, fs: &dyn ExecutorFileSystem) -> io::Result<Option<String>> {
+    async fn read_agents_md(
+        &self,
+        fs: &dyn ExecutorFileSystem,
+        startup_warnings: &mut Vec<String>,
+    ) -> io::Result<Option<String>> {
         let max_total = self.config.project_doc_max_bytes;
 
         if max_total == 0 {
@@ -205,6 +210,13 @@ impl<'a> AgentsMdManager<'a> {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             };
+            if let Err(err) = std::str::from_utf8(&data) {
+                startup_warnings.push(format!(
+                    "Project AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
+                    p.display()
+                ));
+            }
+
             let size = data.len() as u64;
             if size > remaining {
                 data.truncate(remaining as usize);

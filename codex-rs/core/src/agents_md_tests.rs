@@ -11,8 +11,9 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 async fn get_user_instructions(config: &Config) -> Option<String> {
+    let mut warnings = Vec::new();
     AgentsMdManager::new(config)
-        .user_instructions_with_fs(LOCAL_FS.as_ref())
+        .user_instructions_with_fs_and_warnings(LOCAL_FS.as_ref(), &mut warnings)
         .await
 }
 
@@ -105,11 +106,13 @@ async fn no_environment_returns_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
 
+    let mut warnings = Vec::new();
     let res = AgentsMdManager::new(&config)
-        .user_instructions(/*environment*/ None)
+        .user_instructions_with_warnings(/*environment*/ None, &mut warnings)
         .await;
 
     assert_eq!(res, None);
+    assert_eq!(warnings, Vec::<String>::new());
 }
 
 /// Small file within the byte-limit is returned unmodified.
@@ -126,6 +129,30 @@ async fn doc_smaller_than_limit_is_returned() {
     assert_eq!(
         res, "hello world",
         "The document should be returned verbatim when it is smaller than the limit and there are no existing instructions"
+    );
+}
+
+#[tokio::test]
+async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("AGENTS.md");
+    fs::write(&path, b"project\xFF doc").unwrap();
+
+    let config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let mut warnings = Vec::new();
+    let res = AgentsMdManager::new(&config)
+        .user_instructions_with_fs_and_warnings(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("doc expected");
+
+    assert_eq!(res, "project\u{FFFD} doc");
+    let canonical_path = dunce::canonicalize(&path).expect("canonical doc path");
+    assert_eq!(
+        warnings,
+        vec![format!(
+            "Project AGENTS.md instructions from `{}` contain invalid UTF-8: invalid utf-8 sequence of 1 bytes from index 7. Invalid byte sequences were replaced.",
+            canonical_path.display()
+        )]
     );
 }
 

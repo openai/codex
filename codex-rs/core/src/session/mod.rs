@@ -490,9 +490,14 @@ impl Codex {
         }
 
         let primary_environment = environment_selections.primary_environment();
+        let mut user_instruction_warnings = Vec::new();
         let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(primary_environment.as_deref())
+            .user_instructions_with_warnings(
+                primary_environment.as_deref(),
+                &mut user_instruction_warnings,
+            )
             .await;
+        config.startup_warnings.extend(user_instruction_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
