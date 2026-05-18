@@ -24,14 +24,16 @@ async fn turn_context_update_does_not_persist_when_config_exists() {
     let codex = test.codex.clone();
     let config_path = test.home.path().join(CONFIG_TOML);
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             ..Default::default()
-        })
-        .await
-        .expect("submit override");
+        },
+    )
+    .await
+    .expect("submit override");
 
     codex.submit(Op::Shutdown).await.expect("request shutdown");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -54,14 +56,16 @@ async fn turn_context_update_does_not_create_config_file() {
         "test setup should start without config"
     );
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
             ..Default::default()
-        })
-        .await
-        .expect("submit override");
+        },
+    )
+    .await
+    .expect("submit override");
 
     codex.submit(Op::Shutdown).await.expect("request shutdown");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;

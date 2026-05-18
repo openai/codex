@@ -501,14 +501,15 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
-    resumed
-        .codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &resumed.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(resume_override_cwd),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
     resumed
         .codex
         .submit(Op::UserInput {

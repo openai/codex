@@ -442,16 +442,18 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let sandbox_policy = permission_profile
         .to_legacy_sandbox_policy(config.cwd.as_path())
         .expect("workspace profile should have legacy projection");
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile: Some(permission_profile),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     // Second turn after overrides
     codex
@@ -523,15 +525,17 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         },
     };
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     codex
         .submit(Op::UserInput {

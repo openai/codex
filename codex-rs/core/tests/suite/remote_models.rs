@@ -614,12 +614,14 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         .await;
     assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let call_id = "call";
     let args = json!({
@@ -861,12 +863,14 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model).await;
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some(model.to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     let cwd_path = cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =

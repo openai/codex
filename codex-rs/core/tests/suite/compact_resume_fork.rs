@@ -548,8 +548,9 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
 
     let override_cwd = config.cwd.join(PRETURN_CONTEXT_DIFF_CWD);
     std::fs::create_dir_all(&override_cwd)?;
-    conversation
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &conversation,
+        codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(override_cwd.to_path_buf()),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
@@ -560,8 +561,9 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
                 },
             }),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     user_turn(&conversation, TURN_TWO_USER).await;
 

@@ -789,13 +789,15 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     })
     .await;
 
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(repo_path.to_path_buf()),
             ..Default::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     codex
         .submit(Op::Review {
