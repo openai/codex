@@ -239,9 +239,12 @@ async fn skill_search_tool_is_visible_and_returns_matching_repo_skill() -> Resul
         first_request.body_contains_text("Use `skill_search` when a task may benefit from one"),
         "skill-search guidance should replace the static skills block"
     );
+    let developer_texts = first_request.message_input_texts("developer");
     assert!(
-        !first_request.body_contains_text("<skills_instructions>"),
-        "static skills instructions should be disabled when skill_search is enabled"
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("<skills_instructions>")),
+        "static skills instructions should be disabled when skill_search is enabled: {developer_texts:?}"
     );
 
     let output = mock
