@@ -291,6 +291,7 @@ use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
+use crate::state::AutoCompactWindowSnapshot;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
@@ -1108,9 +1109,9 @@ impl Session {
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
-    pub(crate) async fn auto_compact_window_prefix_tokens(&self) -> Option<i64> {
+    pub(crate) async fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
         let state = self.state.lock().await;
-        state.auto_compact_window_prefix_tokens()
+        state.auto_compact_window_snapshot()
     }
 
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
@@ -1282,7 +1283,7 @@ impl Session {
             None
         };
         if let Some(prefix_tokens) = prefix_tokens {
-            self.set_auto_compact_window_prefix_tokens_for_scope(turn_context, prefix_tokens)
+            self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
                 .await;
         }
         self.set_previous_turn_settings(previous_turn_settings.clone())
@@ -1290,7 +1291,7 @@ impl Session {
         previous_turn_settings
     }
 
-    async fn set_auto_compact_window_prefix_tokens_for_scope(
+    async fn set_auto_compact_window_estimated_prefill_for_scope(
         &self,
         turn_context: &TurnContext,
         tokens: i64,
@@ -1303,7 +1304,7 @@ impl Session {
         }
 
         let mut state = self.state.lock().await;
-        state.set_auto_compact_window_prefix_tokens(tokens);
+        state.set_auto_compact_window_estimated_prefill(tokens);
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2619,8 +2620,11 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
-        self.replace_history(items, reference_context_item.clone())
-            .await;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(items, reference_context_item.clone());
+            state.start_next_auto_compact_window();
+        }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2982,7 +2986,7 @@ impl Session {
                     turn_context.config.model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix
                 ) {
-                    state.ensure_auto_compact_window_prefix_tokens_from_usage(token_usage);
+                    state.ensure_auto_compact_window_server_prefill_from_usage(token_usage);
                 }
                 state.token_info()
             };
@@ -3029,8 +3033,11 @@ impl Session {
 
             state.set_token_info(Some(info));
         }
-        self.set_auto_compact_window_prefix_tokens_for_scope(turn_context, estimated_total_tokens)
-            .await;
+        self.set_auto_compact_window_estimated_prefill_for_scope(
+            turn_context,
+            estimated_total_tokens,
+        )
+        .await;
         self.send_token_count_event(turn_context).await;
     }
 

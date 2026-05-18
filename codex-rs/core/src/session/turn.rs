@@ -489,6 +489,8 @@ pub(crate) async fn run_turn(
                     estimated_token_count = ?estimated_token_count,
                     auto_compact_limit = token_status.auto_compact_limit,
                     auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
+                    auto_compact_window_ordinal = ?token_status.auto_compact_window_ordinal,
+                    auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
                     context_window_limit = ?token_status.context_window_limit,
                     context_window_limit_reached = token_status.context_window_limit_reached,
                     token_limit_reached,
@@ -736,6 +738,8 @@ struct AutoCompactTokenStatus {
     budgeted_tokens: i64,
     auto_compact_limit: i64,
     context_window_limit: Option<i64>,
+    auto_compact_window_ordinal: Option<u64>,
+    auto_compact_window_prefill_tokens: Option<i64>,
     context_window_limit_reached: bool,
     token_limit_reached: bool,
 }
@@ -745,6 +749,8 @@ async fn auto_compact_token_status(
     turn_context: &TurnContext,
 ) -> AutoCompactTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
+    let mut auto_compact_window_ordinal = None;
+    let mut auto_compact_window_prefill_tokens = None;
     let (budgeted_tokens, auto_compact_limit, context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
@@ -756,10 +762,10 @@ async fn auto_compact_token_status(
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
-                let baseline = sess
-                    .auto_compact_window_prefix_tokens()
-                    .await
-                    .unwrap_or(active_context_tokens);
+                let window = sess.auto_compact_window_snapshot().await;
+                auto_compact_window_ordinal = Some(window.ordinal);
+                auto_compact_window_prefill_tokens = window.prefill_input_tokens;
+                let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
                 (
                     active_context_tokens.saturating_sub(baseline),
                     turn_context
@@ -780,6 +786,8 @@ async fn auto_compact_token_status(
         budgeted_tokens,
         auto_compact_limit,
         context_window_limit,
+        auto_compact_window_ordinal,
+        auto_compact_window_prefill_tokens,
         context_window_limit_reached,
         token_limit_reached,
     }

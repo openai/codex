@@ -3182,13 +3182,19 @@ async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
             "r3", /*input_tokens*/ 100_000, /*output_tokens*/ 10,
         ),
     ]);
-    let second_auto_compact_turn = sse(vec![
-        ev_assistant_message("m4", AUTO_SUMMARY_TEXT),
-        ev_completed_with_tokens("r4", /*total_tokens*/ 20),
-    ]);
     let third_turn = sse(vec![
-        ev_assistant_message("m5", FINAL_REPLY),
-        ev_completed_with_usage("r5", /*input_tokens*/ 80, /*output_tokens*/ 5),
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_usage(
+            "r4", /*input_tokens*/ 100_100, /*output_tokens*/ 5,
+        ),
+    ]);
+    let second_auto_compact_turn = sse(vec![
+        ev_assistant_message("m5", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r5", /*total_tokens*/ 20),
+    ]);
+    let fourth_turn = sse(vec![
+        ev_assistant_message("m6", FINAL_REPLY),
+        ev_completed_with_usage("r6", /*input_tokens*/ 80, /*output_tokens*/ 5),
     ]);
     let request_log = mount_sse_sequence(
         &server,
@@ -3196,8 +3202,9 @@ async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
             first_turn,
             first_auto_compact_turn,
             second_turn,
-            second_auto_compact_turn,
             third_turn,
+            second_auto_compact_turn,
+            fourth_turn,
         ],
     )
     .await;
@@ -3208,7 +3215,7 @@ async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
             config.model_context_window = Some(200_000);
-            config.model_auto_compact_token_limit = Some(20);
+            config.model_auto_compact_token_limit = Some(40);
             config.model_auto_compact_token_limit_scope =
                 AutoCompactTokenLimitScope::BodyAfterPrefix;
         })
@@ -3237,10 +3244,21 @@ async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        5,
-        "third turn should compact again because the post-compaction growth counted against the body budget"
+        4,
+        "the first server-observed input in the new window should become the prefill baseline"
     );
-    let compact_body = requests[3].body_json().to_string();
+
+    test.submit_turn("AFTER_GROWTH_TRIGGER")
+        .await
+        .expect("submit fourth turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "fourth turn should compact because later post-compaction growth counted against the body budget"
+    );
+    let compact_body = requests[4].body_json().to_string();
     assert!(
         body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
         "post-compaction growth should trigger a second body-after-prefix compaction"
