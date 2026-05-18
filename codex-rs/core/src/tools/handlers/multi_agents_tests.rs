@@ -3982,7 +3982,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     #[allow(deprecated)]
     {
-        expected.cwd = turn.cwd.clone();
+        expected.set_cwd_retargeting_implicit_workspace_root(turn.cwd.clone());
     }
     expected
         .permissions
@@ -3994,6 +3994,24 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set_permission_profile(permission_profile)
         .expect("permission profile set");
     assert_eq!(config, expected);
+}
+
+#[tokio::test]
+async fn build_agent_spawn_config_retargets_implicit_workspace_root_with_turn_cwd() {
+    let (_session, mut turn) = make_session_and_context().await;
+    let base_instructions = BaseInstructions {
+        text: "base".to_string(),
+    };
+    let turn_cwd = tempfile::tempdir().expect("temp dir").abs();
+    #[allow(deprecated)]
+    {
+        turn.cwd = turn_cwd.clone();
+    }
+
+    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+
+    assert_eq!(config.cwd, turn_cwd);
+    assert_eq!(config.workspace_roots, vec![turn_cwd]);
 }
 
 #[tokio::test]
