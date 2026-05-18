@@ -2707,7 +2707,33 @@ mod tests {
                 "id": 8,
                 "params": {
                     "cursor": null,
-                    "limit": null
+                    "limit": null,
+                    "cwd": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_experimental_features_with_cwd() -> Result<()> {
+        let request = ClientRequest::ExperimentalFeatureList {
+            request_id: RequestId::Integer(8),
+            params: v2::ExperimentalFeatureListParams {
+                cursor: Some("3".to_string()),
+                limit: Some(2),
+                cwd: Some(absolute_path_string("tmp/project")),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "experimentalFeature/list",
+                "id": 8,
+                "params": {
+                    "cursor": "3",
+                    "limit": 2,
+                    "cwd": absolute_path_string("tmp/project")
                 }
             }),
             serde_json::to_value(&request)?,

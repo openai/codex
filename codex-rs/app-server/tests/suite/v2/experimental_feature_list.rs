@@ -157,6 +157,50 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
 }
 
 #[tokio::test]
+async fn experimental_feature_list_resolves_project_config_for_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"[features]
+memories = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams {
+            cursor: None,
+            limit: None,
+            cwd: Some(workspace.path().display().to_string()),
+        })
+        .await?;
+
+    let actual = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
+    let memories = actual
+        .data
+        .iter()
+        .find(|feature| feature.name == "memories")
+        .expect("memories feature should be present");
+    assert!(memories.enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_feature_enablement_set_applies_to_global_and_thread_config_reads()
 -> Result<()> {
     let codex_home = TempDir::new()?;

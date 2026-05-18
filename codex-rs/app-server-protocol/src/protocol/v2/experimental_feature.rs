@@ -14,6 +14,13 @@ pub struct ExperimentalFeatureListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Working directory used to resolve project-local config when computing
+    /// feature enablement. Pass `cwd` when available so `enabled` is computed
+    /// with the same project-local config layers that apply to that workspace or
+    /// thread; if omitted, the server uses its default config resolution
+    /// context.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

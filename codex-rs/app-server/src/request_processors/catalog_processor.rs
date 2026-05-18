@@ -285,8 +285,9 @@ impl CatalogRequestProcessor {
         &self,
         params: ExperimentalFeatureListParams,
     ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
-        let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let ExperimentalFeatureListParams { cursor, limit, cwd } = params;
+        let fallback_cwd = cwd.as_ref().map(PathBuf::from);
+        let config = self.load_latest_config(fallback_cwd).await?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
