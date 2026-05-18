@@ -76,9 +76,8 @@ impl ToolExecutor<ToolCall> for ListInstallablePluginsTool {
     fn spec(&self) -> Option<ToolSpec> {
         Some(ToolSpec::Function(ResponsesApiTool {
             name: LIST_INSTALLABLE_PLUGINS_TOOL_NAME.to_string(),
-            description: format!(
-                "Use this ONLY when all of the following are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.\nReturns a list of plugins eligible to be installed."
-            ),
+            description: "Use this ONLY when all of the following are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.\nReturns a list of plugins eligible to be installed."
+                .to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
