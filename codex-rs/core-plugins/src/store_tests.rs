@@ -307,25 +307,13 @@ fn install_with_new_version_keeps_existing_plugin_root_and_prunes_old_versions()
 }
 
 #[test]
-fn removing_blocking_old_version_errors_when_prune_fails() {
-    let tmp = tempdir().unwrap();
-    let plugin_root = tmp.path().join("plugins/cache/debug/sample-plugin");
-    write_plugin(&plugin_root, DEFAULT_PLUGIN_VERSION, "sample-plugin");
-    write_plugin(&plugin_root, "1.0.0", "sample-plugin");
-
-    let err = remove_old_plugin_versions_with_remover(&plugin_root, "1.0.0", |path| {
-        if path.ends_with(DEFAULT_PLUGIN_VERSION) {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, "held open"))
-        } else {
-            fs::remove_dir_all(path)
-        }
-    })
-    .unwrap_err();
-
-    assert_eq!(
-        err.to_string(),
-        "failed to activate updated plugin cache version `1.0.0` while `local` remains active"
-    );
+fn old_plugin_version_would_stay_active_for_local_or_later_versions() {
+    assert!(old_plugin_version_would_stay_active(
+        DEFAULT_PLUGIN_VERSION,
+        "1.0.0"
+    ));
+    assert!(old_plugin_version_would_stay_active("9.0.0", "1.0.0"));
+    assert!(!old_plugin_version_would_stay_active("1.0.0", "2.0.0"));
 }
 
 #[test]
