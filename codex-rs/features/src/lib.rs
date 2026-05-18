@@ -174,8 +174,6 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
     SkillEnvVarDependencyPrompt,
-    /// Enable the unified mention popup prototype.
-    MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
@@ -240,6 +238,9 @@ pub enum Feature {
     CollaborationModes,
     /// Removed compatibility flag for the deleted remote control feature.
     RemoteControl,
+    /// Removed compatibility flag retained as a no-op now that unified
+    /// `@mentions` are always enabled.
+    MentionsV2,
     /// Removed compatibility flag retained as a no-op so old wrappers can
     /// still pass `--enable image_detail_original`.
     ImageDetailOriginal,
@@ -427,6 +428,9 @@ impl Features {
                     continue;
                 }
                 "remote_control" => {
+                    continue;
+                }
+                "mentions_v2" => {
                     continue;
                 }
                 "apply_patch_freeform" => {
@@ -1066,16 +1070,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::MentionsV2,
-        key: "mentions_v2",
-        stage: Stage::Experimental {
-            name: "Mentions v2",
-            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
-            announcement: "",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Removed,
@@ -1146,6 +1140,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_control",
         stage: Stage::Removed,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Removed,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ImageDetailOriginal,

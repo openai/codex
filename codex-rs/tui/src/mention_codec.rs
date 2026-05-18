@@ -35,7 +35,11 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
     let mut index = 0usize;
 
     while index < bytes.len() {
-        if bytes[index] == TOOL_MENTION_SIGIL as u8 {
+        if matches!(
+            bytes[index],
+            byte if byte == TOOL_MENTION_SIGIL as u8 || byte == PLUGIN_TEXT_MENTION_SIGIL as u8
+        ) {
+            let sigil = bytes[index] as char;
             let name_start = index + 1;
             if let Some(first) = bytes.get(name_start)
                 && is_mention_name_char(*first)
@@ -50,7 +54,7 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
                 let name = &text[name_start..name_end];
                 if let Some(path) = mentions_by_name.get_mut(name).and_then(VecDeque::pop_front) {
                     out.push('[');
-                    out.push(TOOL_MENTION_SIGIL);
+                    out.push(sigil);
                     out.push_str(name);
                     out.push_str("](");
                     out.push_str(path);
@@ -79,9 +83,10 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
 
     while index < bytes.len() {
         if bytes[index] == b'['
-            && let Some((name, path, end_index)) = parse_history_linked_mention(text, bytes, index)
+            && let Some((sigil, name, path, end_index)) =
+                parse_history_linked_mention(text, bytes, index)
         {
-            out.push(TOOL_MENTION_SIGIL);
+            out.push(sigil);
             out.push_str(name);
             mentions.push(LinkedMention {
                 mention: name.to_string(),
@@ -108,22 +113,23 @@ fn parse_history_linked_mention<'a>(
     text: &'a str,
     text_bytes: &[u8],
     start: usize,
-) -> Option<(&'a str, &'a str, usize)> {
-    // TUI writes `$name`, but may read plugin `[@name](plugin://...)` links from other clients.
-    if let Some(mention @ (name, path, _)) =
+) -> Option<(char, &'a str, &'a str, usize)> {
+    // TUI historically wrote `$name`, but selected unified `@` mentions should preserve `@` on
+    // history round-trip for any canonical tool path.
+    if let Some((name, path, end_index)) =
         parse_linked_tool_mention(text, text_bytes, start, TOOL_MENTION_SIGIL)
         && !is_common_env_var(name)
         && is_tool_path(path)
     {
-        return Some(mention);
+        return Some((TOOL_MENTION_SIGIL, name, path, end_index));
     }
 
-    if let Some(mention @ (name, path, _)) =
+    if let Some((name, path, end_index)) =
         parse_linked_tool_mention(text, text_bytes, start, PLUGIN_TEXT_MENTION_SIGIL)
         && !is_common_env_var(name)
-        && path.starts_with("plugin://")
+        && is_tool_path(path)
     {
-        return Some(mention);
+        return Some((PLUGIN_TEXT_MENTION_SIGIL, name, path, end_index));
     }
 
     None
@@ -254,7 +260,7 @@ mod tests {
         let decoded = decode_history_mentions(
             "Use [@sample](plugin://sample@test) and [$figma](app://figma-1).",
         );
-        assert_eq!(decoded.text, "Use $sample and $figma.");
+        assert_eq!(decoded.text, "Use @sample and $figma.");
         assert_eq!(
             decoded.mentions,
             vec![
@@ -271,11 +277,17 @@ mod tests {
     }
 
     #[test]
-    fn decode_history_mentions_ignores_at_sigil_for_non_plugin_paths() {
+    fn decode_history_mentions_restores_at_sigil_for_tool_paths() {
         let decoded = decode_history_mentions("Use [@figma](app://figma-1).");
 
-        assert_eq!(decoded.text, "Use [@figma](app://figma-1).");
-        assert_eq!(decoded.mentions, Vec::<LinkedMention>::new());
+        assert_eq!(decoded.text, "Use @figma.");
+        assert_eq!(
+            decoded.mentions,
+            vec![LinkedMention {
+                mention: "figma".to_string(),
+                path: "app://figma-1".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -301,6 +313,28 @@ mod tests {
         assert_eq!(
             encoded,
             "[$figma](app://figma-app) then [$sample](plugin://sample@test) then [$figma](/tmp/figma/SKILL.md) then $other"
+        );
+    }
+
+    #[test]
+    fn encode_history_mentions_preserves_at_sigils() {
+        let text = "@figma then @sample then $other";
+        let encoded = encode_history_mentions(
+            text,
+            &[
+                LinkedMention {
+                    mention: "figma".to_string(),
+                    path: "/tmp/figma/SKILL.md".to_string(),
+                },
+                LinkedMention {
+                    mention: "sample".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                },
+            ],
+        );
+        assert_eq!(
+            encoded,
+            "[@figma](/tmp/figma/SKILL.md) then [@sample](plugin://sample@test) then $other"
         );
     }
 }

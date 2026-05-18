@@ -1761,7 +1761,6 @@ impl ChatWidget {
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
-        self.sync_mentions_v2_enabled();
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {

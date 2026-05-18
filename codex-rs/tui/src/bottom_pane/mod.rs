@@ -81,7 +81,7 @@ pub(crate) struct LocalImageAttachment {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MentionBinding {
-    /// Mention token text without the leading `$`.
+    /// Mention token text without the leading sigil (`$` or `@`).
     pub(crate) mention: String,
     /// Canonical mention target (for example `app://...` or absolute SKILL.md path).
     pub(crate) path: String,
@@ -91,7 +91,6 @@ mod chat_composer_history;
 mod command_popup;
 pub(crate) mod custom_prompt_view;
 mod experimental_features_view;
-mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
@@ -318,11 +317,6 @@ impl BottomPane {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
-        self.composer.set_mentions_v2_enabled(enabled);
         self.request_redraw();
     }
 
