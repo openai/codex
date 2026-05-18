@@ -528,6 +528,7 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
 "#,
@@ -550,6 +551,7 @@ non_code_mode_only = true
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
+            tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
             non_code_mode_only: Some(true),
         }))
@@ -588,6 +590,7 @@ usage_hint_enabled = false
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
+            tool_namespace: None,
             hide_spawn_agent_metadata: None,
             non_code_mode_only: None,
         }))

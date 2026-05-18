@@ -78,7 +78,7 @@ pub struct RemotePluginCacheMutationGuard {
     key: RemotePluginCacheMutationKey,
 }
 
-pub fn maybe_start_remote_installed_plugin_bundle_sync(
+pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,

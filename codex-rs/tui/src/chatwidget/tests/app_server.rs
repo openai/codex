@@ -637,6 +637,40 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
 }
 
 #[tokio::test]
+async fn live_app_server_failed_turn_consolidates_streamed_answer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_turn_started(&mut chat, "turn-1");
+    while rx.try_recv().is_ok() {}
+
+    handle_agent_message_delta(&mut chat, "```diff\n+ streamed patch\n```\n");
+    chat.run_commit_tick();
+    while rx.try_recv().is_ok() {}
+
+    handle_error(
+        &mut chat,
+        "stream disconnected before completion",
+        /*codex_error_info*/ None,
+    );
+
+    let mut saw_consolidate = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ConsolidateAgentMessage { source, .. } = event {
+            saw_consolidate = true;
+            assert!(
+                source.contains("streamed patch"),
+                "expected partial stream source to be consolidated, got {source:?}"
+            );
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "failed turn should consolidate streamed cells before clearing the stream controller"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -36,16 +36,17 @@ pub trait ContextContributor: Send + Sync {
 /// Implementations should use these callbacks to seed, rehydrate, or flush
 /// extension-private thread state. Heavy dependencies belong on the extension
 /// value created by the host, not in these inputs.
-pub trait ThreadLifecycleContributor<C>: Send + Sync {
+#[async_trait::async_trait]
+pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after thread-scoped extension stores are created, before later
     /// contributors can read from them.
-    fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
+    async fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
 
     /// Called after the host constructs a runtime from persisted history.
-    fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+    async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
 
     /// Called before the host drops the thread runtime and thread-scoped store.
-    fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
+    async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
 }
 
 /// Contributor for host-owned turn lifecycle gates.
@@ -53,16 +54,17 @@ pub trait ThreadLifecycleContributor<C>: Send + Sync {
 /// Implementations should use these callbacks to seed, observe, or clear
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
+#[async_trait::async_trait]
 pub trait TurnLifecycleContributor: Send + Sync {
     /// Called after turn-scoped extension stores are created, before the task
     /// for the turn starts running.
-    fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
+    async fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
 
     /// Called before the host drops the completed turn runtime and turn store.
-    fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
+    async fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
 
     /// Called after the host aborts a running turn.
-    fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+    async fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
 }
 
 /// Contributor for host-owned configuration changes.
@@ -86,9 +88,10 @@ pub trait ConfigContributor<C>: Send + Sync {
 /// Implementations should keep this callback cheap. The host calls it after
 /// updating cached token usage and before emitting the corresponding client
 /// token-count notification.
+#[async_trait::async_trait]
 pub trait TokenUsageContributor: Send + Sync {
     /// Called each time the host records token usage from a model response.
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,

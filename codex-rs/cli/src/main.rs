@@ -2346,7 +2346,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+    fn exec_resume_accepts_output_flags_after_subcommand() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
             "exec",
@@ -2354,6 +2354,8 @@ mod tests {
             "session-123",
             "-o",
             "/tmp/resume-output.md",
+            "--output-schema",
+            "/tmp/schema.json",
             "re-review",
         ])
         .expect("parse should succeed");
@@ -2368,6 +2370,10 @@ mod tests {
         assert_eq!(
             exec.last_message_file,
             Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(
+            exec.output_schema,
+            Some(std::path::PathBuf::from("/tmp/schema.json"))
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));

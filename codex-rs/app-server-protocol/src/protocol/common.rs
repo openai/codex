@@ -625,6 +625,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::PluginListResponse,
     },
+    PluginInstalled => "plugin/installed" {
+        params: v2::PluginInstalledParams,
+        serialization: None,
+        response: v2::PluginInstalledResponse,
+    },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
         serialization: None,
@@ -1718,6 +1723,15 @@ mod tests {
             },
         };
         assert_eq!(plugin_read.serialization_scope(), None);
+
+        let plugin_installed = ClientRequest::PluginInstalled {
+            request_id: request_id(),
+            params: v2::PluginInstalledParams {
+                cwds: None,
+                install_suggestion_plugin_names: None,
+            },
+        };
+        assert_eq!(plugin_installed.serialization_scope(), None);
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),

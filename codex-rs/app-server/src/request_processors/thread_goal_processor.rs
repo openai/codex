@@ -150,12 +150,14 @@ impl ThreadGoalRequestProcessor {
 
         let (goal, previous_status) = (if let Some(objective) = objective {
             let existing_goal = state_db
+                .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .map_err(|err| invalid_request(err.to_string()))?;
             if let Some(goal) = existing_goal.as_ref() {
                 let previous_status = ExternalGoalPreviousStatus::from(goal);
                 state_db
+                    .thread_goals()
                     .update_thread_goal(
                         thread_id,
                         codex_state::ThreadGoalUpdate {
@@ -177,6 +179,7 @@ impl ThreadGoalRequestProcessor {
             } else {
                 let previous_status = ExternalGoalPreviousStatus::NewGoal;
                 state_db
+                    .thread_goals()
                     .replace_thread_goal(
                         thread_id,
                         objective,
@@ -188,6 +191,7 @@ impl ThreadGoalRequestProcessor {
             }
         } else {
             let existing_goal = state_db
+                .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .map_err(|err| invalid_request(err.to_string()))?;
@@ -198,6 +202,7 @@ impl ThreadGoalRequestProcessor {
             };
             let previous_status = ExternalGoalPreviousStatus::from(&existing_goal);
             state_db
+                .thread_goals()
                 .update_thread_goal(
                     thread_id,
                     codex_state::ThreadGoalUpdate {
@@ -246,6 +251,7 @@ impl ThreadGoalRequestProcessor {
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
         let state_db = self.state_db_for_materialized_thread(thread_id).await?;
         let goal = state_db
+            .thread_goals()
             .get_thread_goal(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to read thread goal: {err}")))?
@@ -303,6 +309,7 @@ impl ThreadGoalRequestProcessor {
             thread_state.listener_command_tx()
         };
         let cleared = state_db
+            .thread_goals()
             .delete_thread_goal(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to clear thread goal: {err}")))?;

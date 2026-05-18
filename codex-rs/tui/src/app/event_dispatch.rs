@@ -1303,8 +1303,10 @@ impl App {
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
-                let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
+                let profile = self.active_profile.as_deref();
                 let edits = crate::config_update::build_service_tier_selection_edits(
                     profile,
                     service_tier.as_deref(),

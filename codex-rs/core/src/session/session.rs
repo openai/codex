@@ -877,7 +877,7 @@ impl Session {
                     config: config.as_ref(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
-                });
+                }).await;
             }
 
             let services = SessionServices {

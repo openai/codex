@@ -19,6 +19,7 @@ use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
 use codex_otel::GOAL_COMPLETED_METRIC;
 use codex_otel::GOAL_CREATED_METRIC;
 use codex_otel::GOAL_DURATION_SECONDS_METRIC;
+use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -430,6 +431,7 @@ impl Session {
 
         let state_db = self.require_state_db_for_thread_goals().await?;
         state_db
+            .thread_goals()
             .get_thread_goal(self.conversation_id)
             .await
             .map(|goal| goal.map(protocol_goal_from_state))
@@ -467,10 +469,14 @@ impl Session {
         let mut replacing_goal = false;
         let previous_status;
         let goal = if let Some(objective) = objective.as_deref() {
-            let existing_goal = state_db.get_thread_goal(self.conversation_id).await?;
+            let existing_goal = state_db
+                .thread_goals()
+                .get_thread_goal(self.conversation_id)
+                .await?;
             previous_status = existing_goal.as_ref().map(|goal| goal.status);
             if let Some(existing_goal) = existing_goal.as_ref() {
                 state_db
+                    .thread_goals()
                     .update_thread_goal(
                         self.conversation_id,
                         codex_state::ThreadGoalUpdate {
@@ -490,6 +496,7 @@ impl Session {
             } else {
                 replacing_goal = true;
                 state_db
+                    .thread_goals()
                     .replace_thread_goal(
                         self.conversation_id,
                         objective,
@@ -501,11 +508,15 @@ impl Session {
                     .await?
             }
         } else {
-            let existing_goal = state_db.get_thread_goal(self.conversation_id).await?;
+            let existing_goal = state_db
+                .thread_goals()
+                .get_thread_goal(self.conversation_id)
+                .await?;
             previous_status = existing_goal.as_ref().map(|goal| goal.status);
             let expected_goal_id = existing_goal.map(|goal| goal.goal_id);
             let status = status.map(state_goal_status_from_protocol);
             state_db
+                .thread_goals()
                 .update_thread_goal(
                     self.conversation_id,
                     codex_state::ThreadGoalUpdate {
@@ -589,6 +600,7 @@ impl Session {
         )
         .await?;
         let goal = state_db
+            .thread_goals()
             .insert_thread_goal(
                 self.conversation_id,
                 objective,
@@ -734,6 +746,12 @@ impl Session {
             .counter(GOAL_CREATED_METRIC, /*inc*/ 1, &[]);
     }
 
+    fn emit_goal_resumed_metric(&self) {
+        self.services
+            .session_telemetry
+            .counter(GOAL_RESUMED_METRIC, /*inc*/ 1, &[]);
+    }
+
     fn emit_goal_terminal_metrics_if_status_changed(
         &self,
         previous_status: Option<codex_state::ThreadGoalStatus>,
@@ -774,7 +792,10 @@ impl Session {
         state_db: &StateDbHandle,
         expected_goal_id: Option<&str>,
     ) -> anyhow::Result<Option<codex_state::ThreadGoalStatus>> {
-        let goal = state_db.get_thread_goal(self.conversation_id).await?;
+        let goal = state_db
+            .thread_goals()
+            .get_thread_goal(self.conversation_id)
+            .await?;
         Ok(goal.and_then(|goal| {
             expected_goal_id
                 .is_none_or(|expected_goal_id| goal.goal_id == expected_goal_id)
@@ -815,7 +836,11 @@ impl Session {
                 return;
             }
         };
-        match state_db.get_thread_goal(self.conversation_id).await {
+        match state_db
+            .thread_goals()
+            .get_thread_goal(self.conversation_id)
+            .await
+        {
             Ok(Some(goal))
                 if matches!(
                     goal.status,
@@ -977,6 +1002,7 @@ impl Session {
             .current_goal_status_for_metrics(&state_db, expected_goal_id.as_deref())
             .await?;
         let outcome = state_db
+            .thread_goals()
             .account_thread_goal_usage(
                 self.conversation_id,
                 time_delta_seconds,
@@ -1101,6 +1127,7 @@ impl Session {
             .await?;
 
         match state_db
+            .thread_goals()
             .account_thread_goal_usage(
                 self.conversation_id,
                 time_delta_seconds,
@@ -1163,6 +1190,7 @@ impl Session {
         )
         .await?;
         let Some(goal) = state_db
+            .thread_goals()
             .pause_active_thread_goal(self.conversation_id)
             .await?
         else {
@@ -1256,7 +1284,11 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
+        let Some(goal) = state_db
+            .thread_goals()
+            .get_thread_goal(self.conversation_id)
+            .await?
+        else {
             self.clear_stopped_thread_goal_runtime_state().await;
             return Ok(());
         };
@@ -1268,6 +1300,7 @@ impl Session {
                     .await
                     .wall_clock
                     .mark_active_goal(goal.goal_id);
+                self.emit_goal_resumed_metric();
             }
             codex_state::ThreadGoalStatus::Paused
             | codex_state::ThreadGoalStatus::Blocked
@@ -1303,7 +1336,11 @@ impl Session {
             Arc::clone(&active_turn.turn_state)
         };
         let goal_is_current = match self.state_db_for_thread_goals().await {
-            Ok(Some(state_db)) => match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(state_db)) => match state_db
+                .thread_goals()
+                .get_thread_goal(self.conversation_id)
+                .await
+            {
                 Ok(Some(goal))
                     if goal.goal_id == candidate.goal_id
                         && goal.status == codex_state::ThreadGoalStatus::Active =>
@@ -1399,7 +1436,11 @@ impl Session {
                 return None;
             }
         };
-        let goal = match state_db.get_thread_goal(self.conversation_id).await {
+        let goal = match state_db
+            .thread_goals()
+            .get_thread_goal(self.conversation_id)
+            .await
+        {
             Ok(Some(goal)) => goal,
             Ok(None) => {
                 tracing::debug!("skipping active goal continuation because no goal is set");
