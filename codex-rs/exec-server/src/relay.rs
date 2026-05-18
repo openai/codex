@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use codex_app_server_protocol::JSONRPCMessage;
+use futures::Sink;
 use futures::SinkExt;
+use futures::Stream;
 use futures::StreamExt;
 use prost::Message as ProstMessage;
 use tokio::io::AsyncRead;
@@ -140,12 +142,13 @@ fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError>
     serde_json::to_vec(message).map_err(ExecServerError::Json)
 }
 
-pub(crate) fn harness_connection_from_websocket<S>(
-    stream: WebSocketStream<S>,
+pub(crate) fn harness_connection_from_websocket<T, E>(
+    stream: T,
     connection_label: String,
 ) -> JsonRpcConnection
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
+    E: std::fmt::Display + Send + 'static,
 {
     let stream_id = Uuid::new_v4().to_string();
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -492,10 +495,20 @@ fn spawn_virtual_stream(
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::task::Context;
+    use std::task::Poll;
     use std::time::Duration;
 
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::RequestId;
+    use futures::Sink;
+    use futures::Stream;
+    use futures::channel::mpsc as futures_mpsc;
+    use futures::task::AtomicWaker;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
     use tokio_tungstenite::accept_async;
@@ -606,6 +619,48 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn harness_connection_keeps_outbound_frame_while_send_is_backpressured()
+    -> anyhow::Result<()> {
+        let (websocket, control, mut outbound_rx) = ControlledWebSocket::new(true);
+        let mut connection = harness_connection_from_websocket(websocket, "test".to_string());
+        let Message::Binary(resume_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
+            .await?
+            .expect("resume frame")
+        else {
+            anyhow::bail!("expected relay resume frame");
+        };
+        let stream_id = decode_relay_message_frame(resume_payload.as_ref())?.stream_id;
+        let message = test_jsonrpc_message();
+
+        control.set_write_blocked();
+        connection.outgoing_tx.send(message.clone()).await?;
+        control.send_inbound(Message::Ping(b"check".to_vec().into()))?;
+        assert!(
+            timeout(Duration::from_millis(50), connection.incoming_rx.recv())
+                .await
+                .is_err()
+        );
+
+        control.set_write_ready();
+        let Message::Binary(data_payload) = timeout(Duration::from_secs(1), outbound_rx.next())
+            .await?
+            .expect("data frame")
+        else {
+            anyhow::bail!("expected relay data frame");
+        };
+        let frame = decode_relay_message_frame(data_payload.as_ref())?;
+        assert_eq!(frame.stream_id, stream_id);
+        assert_eq!(frame.into_jsonrpc_message()?, message);
+        assert!(matches!(
+            timeout(Duration::from_secs(1), outbound_rx.next()).await?,
+            Some(Message::Pong(payload)) if payload.as_ref() == b"check"
+        ));
+
+        drop(connection);
+        Ok(())
+    }
+
     async fn websocket_pair() -> anyhow::Result<(
         WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
         WebSocketStream<tokio::net::TcpStream>,
@@ -660,6 +715,107 @@ mod tests {
                 | Message::Frame(_) => {}
                 Message::Close(_) => anyhow::bail!("websocket closed before pong"),
             }
+        }
+    }
+
+    struct ControlledWebSocket {
+        inbound_rx: futures_mpsc::UnboundedReceiver<Result<Message, std::convert::Infallible>>,
+        outbound_tx: futures_mpsc::UnboundedSender<Message>,
+        write_ready: Arc<AtomicBool>,
+        write_waker: Arc<AtomicWaker>,
+    }
+
+    struct ControlledWebSocketHandle {
+        inbound_tx: futures_mpsc::UnboundedSender<Result<Message, std::convert::Infallible>>,
+        write_ready: Arc<AtomicBool>,
+        write_waker: Arc<AtomicWaker>,
+    }
+
+    impl ControlledWebSocket {
+        fn new(
+            write_ready: bool,
+        ) -> (
+            Self,
+            ControlledWebSocketHandle,
+            futures_mpsc::UnboundedReceiver<Message>,
+        ) {
+            let (inbound_tx, inbound_rx) = futures_mpsc::unbounded();
+            let (outbound_tx, outbound_rx) = futures_mpsc::unbounded();
+            let write_ready = Arc::new(AtomicBool::new(write_ready));
+            let write_waker = Arc::new(AtomicWaker::new());
+            (
+                Self {
+                    inbound_rx,
+                    outbound_tx,
+                    write_ready: Arc::clone(&write_ready),
+                    write_waker: Arc::clone(&write_waker),
+                },
+                ControlledWebSocketHandle {
+                    inbound_tx,
+                    write_ready,
+                    write_waker,
+                },
+                outbound_rx,
+            )
+        }
+    }
+
+    impl ControlledWebSocketHandle {
+        fn send_inbound(&self, message: Message) -> anyhow::Result<()> {
+            self.inbound_tx
+                .unbounded_send(Ok(message))
+                .map_err(anyhow::Error::from)
+        }
+
+        fn set_write_blocked(&self) {
+            self.write_ready.store(false, Ordering::Release);
+        }
+
+        fn set_write_ready(&self) {
+            self.write_ready.store(true, Ordering::Release);
+            self.write_waker.wake();
+        }
+    }
+
+    impl Sink<Message> for ControlledWebSocket {
+        type Error = std::convert::Infallible;
+
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            if self.write_ready.load(Ordering::Acquire) {
+                Poll::Ready(Ok(()))
+            } else {
+                self.write_waker.register(cx.waker());
+                Poll::Pending
+            }
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            self.outbound_tx
+                .unbounded_send(item)
+                .expect("test outbound receiver should stay open");
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl Stream for ControlledWebSocket {
+        type Item = Result<Message, std::convert::Infallible>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.inbound_rx).poll_next(cx)
         }
     }
 }
