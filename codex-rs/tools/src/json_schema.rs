@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
@@ -33,6 +34,8 @@ pub enum JsonSchemaType {
 /// Generic JSON-Schema subset needed for our tool definitions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct JsonSchema {
+    #[serde(rename = "$ref", skip_serializing_if = "Option::is_none")]
+    pub schema_ref: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub schema_type: Option<JsonSchemaType>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +55,8 @@ pub struct JsonSchema {
     pub additional_properties: Option<AdditionalProperties>,
     #[serde(rename = "anyOf", skip_serializing_if = "Option::is_none")]
     pub any_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "$defs", skip_serializing_if = "Option::is_none")]
+    pub defs: Option<BTreeMap<String, JsonSchema>>,
 }
 
 impl JsonSchema {
@@ -149,6 +154,7 @@ impl From<JsonSchema> for AdditionalProperties {
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
     let mut input_schema = input_schema.clone();
     sanitize_json_schema(&mut input_schema);
+    prune_unreachable_definitions(&mut input_schema);
     let schema: JsonSchema = serde_json::from_value(input_schema)?;
     if matches!(
         schema.schema_type,
@@ -163,6 +169,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// schema representation. This function:
 /// - Ensures every typed schema object has a `"type"` when required.
 /// - Preserves explicit `anyOf`.
+/// - Preserves `$ref` and reachable local `$defs`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
@@ -200,6 +207,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(value) = map.get_mut("anyOf") {
                 sanitize_json_schema(value);
             }
+            sanitize_schema_table(map, "$defs");
 
             if let Some(const_value) = map.remove("const") {
                 map.insert("enum".to_string(), JsonValue::Array(vec![const_value]));
@@ -207,7 +215,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             let mut schema_types = normalized_schema_types(map);
 
-            if schema_types.is_empty() && map.contains_key("anyOf") {
+            if schema_types.is_empty() && (map.contains_key("$ref") || map.contains_key("anyOf")) {
                 return;
             }
 
@@ -241,6 +249,30 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
+/// Sanitize a schema definition table before deserializing into `JsonSchema`.
+///
+/// Responses requires `$defs`, when present, to be an object. Codex keeps valid
+/// definition tables and recursively applies the same compatibility lowering
+/// used for inline schemas, but drops malformed tables so `strict: false` tool
+/// registration degrades gracefully instead of failing on an unreachable or
+/// invalid definition table.
+fn sanitize_schema_table(map: &mut serde_json::Map<String, JsonValue>, key: &str) {
+    let should_remove = match map.get_mut(key) {
+        Some(JsonValue::Object(definitions)) => {
+            for definition in definitions.values_mut() {
+                sanitize_json_schema(definition);
+            }
+            false
+        }
+        Some(_) => true,
+        None => false,
+    };
+
+    if should_remove {
+        map.remove(key);
+    }
+}
+
 fn ensure_default_children_for_schema_types(
     map: &mut serde_json::Map<String, JsonValue>,
     schema_types: &[JsonSchemaPrimitiveType],
@@ -255,6 +287,146 @@ fn ensure_default_children_for_schema_types(
     if schema_types.contains(&JsonSchemaPrimitiveType::Array) && !map.contains_key("items") {
         map.insert("items".to_string(), json!({ "type": "string" }));
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DefinitionPointer {
+    name: String,
+}
+
+/// Prune unused root `$defs` entries to avoid sending tokens for definitions
+/// Responses will parse but the tool schema never references.
+fn prune_unreachable_definitions(value: &mut JsonValue) {
+    let reachable = collect_reachable_definitions(value);
+    let JsonValue::Object(map) = value else {
+        return;
+    };
+
+    prune_schema_table(map, "$defs", &reachable);
+}
+
+fn prune_schema_table(
+    map: &mut serde_json::Map<String, JsonValue>,
+    key: &str,
+    reachable: &BTreeSet<DefinitionPointer>,
+) {
+    let Some(JsonValue::Object(definitions)) = map.get_mut(key) else {
+        return;
+    };
+
+    definitions.retain(|name, _| reachable.contains(&DefinitionPointer { name: name.clone() }));
+
+    if definitions.is_empty() {
+        map.remove(key);
+    }
+}
+
+fn collect_reachable_definitions(value: &JsonValue) -> BTreeSet<DefinitionPointer> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = Vec::new();
+
+    collect_refs_outside_definitions(value, &mut pending);
+
+    while let Some(pointer) = pending.pop() {
+        if !reachable.insert(pointer.clone()) {
+            continue;
+        }
+
+        if let Some(definition) = definition_for_pointer(value, &pointer) {
+            collect_refs(definition, &mut pending);
+        }
+    }
+
+    reachable
+}
+
+fn collect_refs_outside_definitions(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_refs_outside_definitions(value, refs);
+            }
+        }
+        JsonValue::Object(map) => {
+            collect_ref_from_map(map, refs);
+            for (key, value) in map {
+                if key == "$defs" || key == "definitions" {
+                    continue;
+                }
+                collect_refs_outside_definitions(value, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_refs(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_refs(value, refs);
+            }
+        }
+        JsonValue::Object(map) => {
+            collect_ref_from_map(map, refs);
+            for value in map.values() {
+                collect_refs(value, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_ref_from_map(
+    map: &serde_json::Map<String, JsonValue>,
+    refs: &mut Vec<DefinitionPointer>,
+) {
+    if let Some(JsonValue::String(schema_ref)) = map.get("$ref")
+        && let Some(pointer) = parse_local_definition_ref(schema_ref)
+    {
+        refs.push(pointer);
+    }
+}
+
+fn definition_for_pointer<'a>(
+    value: &'a JsonValue,
+    pointer: &DefinitionPointer,
+) -> Option<&'a JsonValue> {
+    let JsonValue::Object(map) = value else {
+        return None;
+    };
+
+    map.get("$defs")
+        .and_then(JsonValue::as_object)
+        .and_then(|definitions| definitions.get(&pointer.name))
+}
+
+fn parse_local_definition_ref(schema_ref: &str) -> Option<DefinitionPointer> {
+    let name = schema_ref.strip_prefix("#/$defs/")?;
+    if name.contains('/') {
+        return None;
+    }
+    decode_json_pointer_segment(name).map(|name| DefinitionPointer { name })
+}
+
+fn decode_json_pointer_segment(segment: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(segment.len());
+    let mut chars = segment.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            decoded.push(ch);
+            continue;
+        }
+
+        match chars.next()? {
+            '0' => decoded.push('~'),
+            '1' => decoded.push('/'),
+            _ => return None,
+        }
+    }
+
+    Some(decoded)
 }
 
 fn normalized_schema_types(
