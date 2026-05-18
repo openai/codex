@@ -78,14 +78,21 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
                 FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
             })?;
 
-        let interaction = TerminalInteractionEvent {
-            call_id: response.event_call_id.clone(),
-            process_id: args.session_id.to_string(),
-            stdin: args.chars.clone(),
-        };
-        session
-            .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
-            .await;
+        // Empty stdin is a background poll, so emit it only while there is
+        // still a live process for the UI to wait on. Non-empty stdin is a real
+        // terminal interaction and should remain visible even if it completes
+        // the process before the response returns.
+        if !args.chars.is_empty() || response.process_id.is_some() {
+            let process_id = response.process_id.unwrap_or(args.session_id);
+            let interaction = TerminalInteractionEvent {
+                call_id: response.event_call_id.clone(),
+                process_id: process_id.to_string(),
+                stdin: args.chars.clone(),
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                .await;
+        }
 
         Ok(boxed_tool_output(response))
     }
