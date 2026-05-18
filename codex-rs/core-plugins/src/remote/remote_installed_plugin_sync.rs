@@ -166,25 +166,7 @@ async fn sync_remote_installed_plugin_bundles_once_for_scopes(
 
     let store = PluginStore::try_new(codex_home.clone())?;
     let mut installed_plugin_names_by_marketplace =
-        BTreeMap::<String, BTreeSet<String>>::from_iter([
-            (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
-            (
-                REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-        ]);
+        remote_installed_marketplace_buckets_for_scopes(scopes);
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
@@ -278,6 +260,28 @@ async fn sync_remote_installed_plugin_bundles_once_for_scopes(
         removed_cache_plugin_ids,
         failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
     })
+}
+
+fn remote_installed_marketplace_buckets_for_scopes(
+    scopes: &[RemotePluginScope],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut installed_plugin_names_by_marketplace = BTreeMap::new();
+    if scopes.contains(&RemotePluginScope::Global) {
+        installed_plugin_names_by_marketplace
+            .insert(REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new());
+    }
+    if scopes.contains(&RemotePluginScope::Workspace) {
+        for marketplace_name in [
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+        ] {
+            installed_plugin_names_by_marketplace
+                .insert(marketplace_name.to_string(), BTreeSet::new());
+        }
+    }
+    installed_plugin_names_by_marketplace
 }
 
 pub fn mark_remote_plugin_cache_mutation_in_flight(
@@ -521,6 +525,47 @@ mod tests {
         .expect("cleanup after install guard is dropped");
         assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
         assert!(!cached_manifest.exists());
+    }
+
+    #[test]
+    fn stale_remote_plugin_cleanup_keeps_cache_for_unfetched_scopes() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let global_cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_GLOBAL_MARKETPLACE_NAME)
+            .join("linear")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(global_cached_manifest.parent().expect("manifest parent"))
+            .expect("create global cached plugin manifest parent");
+        std::fs::write(&global_cached_manifest, r#"{"name":"linear"}"#)
+            .expect("write global cached plugin manifest");
+        let workspace_cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_WORKSPACE_MARKETPLACE_NAME)
+            .join("workspace-plugin")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(workspace_cached_manifest.parent().expect("manifest parent"))
+            .expect("create workspace cached plugin manifest parent");
+        std::fs::write(&workspace_cached_manifest, r#"{"name":"workspace-plugin"}"#)
+            .expect("write workspace cached plugin manifest");
+        let installed_plugin_names_by_marketplace =
+            remote_installed_marketplace_buckets_for_scopes(&[RemotePluginScope::Global]);
+
+        let removed = remove_stale_remote_plugin_caches(
+            codex_home.path(),
+            &installed_plugin_names_by_marketplace,
+        )
+        .expect("cleanup global cache only");
+
+        assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert!(!global_cached_manifest.exists());
+        assert!(workspace_cached_manifest.is_file());
     }
 
     #[test]
