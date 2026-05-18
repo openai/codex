@@ -2,10 +2,10 @@
 source: tui/src/pager_overlay.rs
 expression: "render_snapshot(&mut overlay, Rect::new(0, 0, 28, 8),)"
 ---
- Transcript · 1 prompt · 100
+ Transcript ────────────────
 
 › prompt
 
-────────────────────────────
+───────────── 1 / 1 · 100% ─
 No agent response to copy f…
  q   ctrl + o   ⌥ + r

@@ -99,6 +99,14 @@ pub(crate) fn render_footer_separator(area: Rect, buf: &mut Buffer, label: Strin
     }
 }
 
+pub(crate) fn first_fitting_right_label(width: u16, labels: &[String]) -> String {
+    labels
+        .iter()
+        .find(|label| UnicodeWidthStr::width(label.as_str()) < width as usize)
+        .cloned()
+        .unwrap_or_default()
+}
+
 pub(crate) fn render_footer_line_with_optional_right(
     area: Rect,
     buf: &mut Buffer,
@@ -371,5 +379,26 @@ mod tests {
         );
 
         assert_eq!(buffer_text(&buf, area), "sta…");
+    }
+
+    #[test]
+    fn first_fitting_right_label_picks_first_that_fits() {
+        let labels = vec![
+            " 10 / 120 · 55% ".to_string(),
+            " 10/120 · 55% ".to_string(),
+            " 55% ".to_string(),
+        ];
+
+        assert_eq!(
+            first_fitting_right_label(/*width*/ 15, &labels),
+            " 10/120 · 55% "
+        );
+    }
+
+    #[test]
+    fn first_fitting_right_label_returns_empty_when_nothing_fits() {
+        let labels = vec![" 100% ".to_string()];
+
+        assert_eq!(first_fitting_right_label(/*width*/ 4, &labels), "");
     }
 }

@@ -2,10 +2,10 @@
 source: tui/src/pager_overlay.rs
 expression: "render_snapshot(&mut overlay, Rect::new(0, 0, 80, 8),)"
 ---
- Transcript · 1 prompt · 100% ──────────────────────────────────────────────────
+ Transcript ────────────────────────────────────────────────────────────────────
 
 › prompt
 
-────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────── 1 / 1 · 100% ─
  ↑/↓ scroll   ←/→ prompts   pgup/pgdn page   … Copied selected turn to clipboard
  q quit   ctrl + o copy   ⌥ + r raw   esc/← prev

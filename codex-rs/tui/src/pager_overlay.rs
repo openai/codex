@@ -23,6 +23,7 @@ use std::time::Instant;
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::chatwidget::CopyStatus;
 use crate::footer_hints::FooterHint;
+use crate::footer_hints::first_fitting_right_label;
 use crate::footer_hints::footer_hint_line_for_row;
 use crate::footer_hints::render_footer_line_with_optional_right;
 use crate::footer_hints::render_footer_separator;
@@ -144,6 +145,8 @@ struct PagerView {
     renderables: Vec<Box<dyn Renderable>>,
     scroll_offset: usize,
     title: String,
+    footer_separator_label: String,
+    show_header_progress: bool,
     keymap: PagerKeymap,
     last_content_height: Option<usize>,
     last_rendered_height: Option<usize>,
@@ -171,6 +174,8 @@ impl PagerView {
             renderables,
             scroll_offset,
             title,
+            footer_separator_label: String::new(),
+            show_header_progress: true,
             keymap,
             last_content_height: None,
             last_rendered_height: None,
@@ -238,10 +243,13 @@ impl PagerView {
     fn render_header(&self, area: Rect, content_area: Rect, buf: &mut Buffer, total_len: usize) {
         let header = Rect::new(area.x, area.y, area.width, 1);
         render_footer_separator(header, buf, String::new());
-        let percent = self.scroll_percent(content_area.height, total_len);
-        format!(" {} · {percent}% ", self.title)
-            .dim()
-            .render_ref(header, buf);
+        let title = if self.show_header_progress {
+            let percent = self.scroll_percent(content_area.height, total_len);
+            format!(" {} · {percent}% ", self.title)
+        } else {
+            format!(" {} ", self.title)
+        };
+        title.dim().render_ref(header, buf);
     }
 
     fn render_content(&mut self, area: Rect, buf: &mut Buffer) {
@@ -309,7 +317,7 @@ impl PagerView {
         let sep_y = content_area.bottom();
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
 
-        render_footer_separator(sep_rect, buf, String::new());
+        render_footer_separator(sep_rect, buf, self.footer_separator_label.clone());
     }
 
     fn scroll_percent(&self, content_height: u16, total_len: usize) -> u8 {
@@ -560,12 +568,16 @@ impl TranscriptOverlay {
         state: TranscriptOverlayState,
     ) -> Self {
         Self {
-            view: PagerView::new(
-                Self::render_cells(&transcript_cells, state.highlight_cell, state.render_mode),
-                "Transcript".to_string(),
-                state.scroll_offset,
-                keymap,
-            ),
+            view: {
+                let mut view = PagerView::new(
+                    Self::render_cells(&transcript_cells, state.highlight_cell, state.render_mode),
+                    "Transcript".to_string(),
+                    state.scroll_offset,
+                    keymap,
+                );
+                view.show_header_progress = false;
+                view
+            },
             cells: transcript_cells,
             highlight_cell: state.highlight_cell,
             render_mode: state.render_mode,
@@ -857,26 +869,34 @@ impl TranscriptOverlay {
     }
 
     fn header_title(&self) -> String {
+        "Transcript".to_string()
+    }
+
+    fn footer_progress_label(&self, content_height: u16, total_len: usize, width: u16) -> String {
         let total = self
             .cells
             .iter()
             .filter(|cell| cell.is_user_prompt())
             .count();
-        let Some(highlight_cell) = self.highlight_cell else {
-            let noun = if total == 1 { "prompt" } else { "prompts" };
-            return format!("Transcript · {total} {noun}");
-        };
         let selected = self
-            .cells
-            .iter()
-            .take(highlight_cell.saturating_add(1))
-            .filter(|cell| cell.is_user_prompt())
-            .count();
-        if selected == 0 || total == 0 {
-            let noun = if total == 1 { "prompt" } else { "prompts" };
-            return format!("Transcript · {total} {noun}");
-        }
-        format!("Transcript · {selected}/{total}")
+            .highlight_cell
+            .and_then(|highlight_cell| {
+                let selected = self
+                    .cells
+                    .iter()
+                    .take(highlight_cell.saturating_add(1))
+                    .filter(|cell| cell.is_user_prompt())
+                    .count();
+                (selected > 0).then_some(selected)
+            })
+            .unwrap_or(total);
+        let percent = self.view.scroll_percent(content_height, total_len);
+        let labels = [
+            format!(" {selected} / {total} · {percent}% "),
+            format!(" {selected}/{total} · {percent}% "),
+            format!(" {percent}% "),
+        ];
+        first_fitting_right_label(width, &labels)
     }
 
     fn rebuild_renderables(&mut self) {
@@ -1061,6 +1081,10 @@ impl TranscriptOverlay {
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
         self.view.title = self.header_title();
+        let content_area = self.view.content_area(top);
+        let total_len = self.view.content_height(content_area.width);
+        self.view.footer_separator_label =
+            self.footer_progress_label(content_area.height, total_len, top.width);
         self.view.render(top, buf);
         self.render_hints(bottom, buf);
     }
@@ -1517,7 +1541,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_header_counts_selected_user_prompt() {
+    fn transcript_header_title_is_stable() {
         let mut overlay = transcript_overlay(vec![
             user_cell("first"),
             Arc::new(AgentMessageCell::new(
@@ -1527,13 +1551,48 @@ mod tests {
             user_cell("second"),
         ]);
 
-        assert_eq!(overlay.header_title(), "Transcript · 2 prompts");
+        assert_eq!(overlay.header_title(), "Transcript");
 
         overlay.move_prompt_selection(PromptSelectionDirection::Previous);
-        assert_eq!(overlay.header_title(), "Transcript · 2/2");
+        assert_eq!(overlay.header_title(), "Transcript");
 
         overlay.move_prompt_selection(PromptSelectionDirection::Previous);
-        assert_eq!(overlay.header_title(), "Transcript · 1/2");
+        assert_eq!(overlay.header_title(), "Transcript");
+    }
+
+    #[test]
+    fn transcript_footer_progress_label_counts_selected_user_prompt() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )),
+            user_cell("second"),
+        ]);
+
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 2 / 2 · 100% "
+        );
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 2 / 2 · 100% "
+        );
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 1 / 2 · 100% "
+        );
     }
 
     #[test]

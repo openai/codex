@@ -10,6 +10,7 @@ use crate::app_server_session::AppServerSession;
 use crate::color::blend;
 use crate::color::is_light;
 use crate::footer_hints::FooterHint;
+use crate::footer_hints::first_fitting_right_label;
 use crate::footer_hints::footer_hint_line_for_row;
 use crate::footer_hints::render_footer_separator;
 use crate::git_action_directives::parse_assistant_markdown;
@@ -2067,10 +2068,7 @@ fn picker_footer_progress_label(state: &PickerState, list_height: u16, width: u1
         format!(" {position}/{total} · {percent}% "),
         format!(" {percent}% "),
     ];
-    labels
-        .into_iter()
-        .find(|label| UnicodeWidthStr::width(label.as_str()) < width as usize)
-        .unwrap_or_default()
+    first_fitting_right_label(width, &labels)
 }
 
 fn picker_footer_percent(state: &PickerState, list_height: u16) -> u8 {
