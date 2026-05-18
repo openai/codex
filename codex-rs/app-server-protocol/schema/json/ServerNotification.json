@@ -4532,6 +4532,106 @@
       ],
       "type": "object"
     },
+    "ThreadSettings": {
+      "properties": {
+        "activePermissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivePermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalPolicy": {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        "approvalsReviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        "collaborationMode": {
+          "$ref": "#/definitions/CollaborationMode"
+        },
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "permissionProfile": {
+          "$ref": "#/definitions/PermissionProfile"
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandboxPolicy": {
+          "$ref": "#/definitions/SandboxPolicy"
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "collaborationMode",
+        "cwd",
+        "model",
+        "modelProvider",
+        "permissionProfile",
+        "sandboxPolicy"
+      ],
+      "type": "object"
+    },
+    "ThreadSettingsUpdatedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "threadSettings": {
+          "$ref": "#/definitions/ThreadSettings"
+        }
+      },
+      "required": [
+        "threadId",
+        "threadSettings"
+      ],
+      "type": "object"
+    },
     "ThreadSource": {
       "enum": [
         "user",
@@ -4679,106 +4779,6 @@
         "threadId",
         "tokenUsage",
         "turnId"
-      ],
-      "type": "object"
-    },
-    "ThreadTurnContext": {
-      "properties": {
-        "activePermissionProfile": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ActivePermissionProfile"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "approvalPolicy": {
-          "$ref": "#/definitions/AskForApproval"
-        },
-        "approvalsReviewer": {
-          "$ref": "#/definitions/ApprovalsReviewer"
-        },
-        "collaborationMode": {
-          "$ref": "#/definitions/CollaborationMode"
-        },
-        "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "type": "string"
-        },
-        "modelProvider": {
-          "type": "string"
-        },
-        "permissionProfile": {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        "personality": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Personality"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sandboxPolicy": {
-          "$ref": "#/definitions/SandboxPolicy"
-        },
-        "serviceTier": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "summary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "approvalPolicy",
-        "approvalsReviewer",
-        "collaborationMode",
-        "cwd",
-        "model",
-        "modelProvider",
-        "permissionProfile",
-        "sandboxPolicy"
-      ],
-      "type": "object"
-    },
-    "ThreadTurnContextUpdatedNotification": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "turnContext": {
-          "$ref": "#/definitions/ThreadTurnContext"
-        }
-      },
-      "required": [
-        "threadId",
-        "turnContext"
       ],
       "type": "object"
     },
@@ -5437,20 +5437,20 @@
       "properties": {
         "method": {
           "enum": [
-            "thread/turnContext/updated"
+            "thread/settings/updated"
           ],
-          "title": "Thread/turnContext/updatedNotificationMethod",
+          "title": "Thread/settings/updatedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ThreadTurnContextUpdatedNotification"
+          "$ref": "#/definitions/ThreadSettingsUpdatedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Thread/turnContext/updatedNotification",
+      "title": "Thread/settings/updatedNotification",
       "type": "object"
     },
     {

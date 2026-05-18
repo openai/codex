@@ -45,7 +45,7 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
-        turn_context: codex_protocol::protocol::TurnContextOverrides {
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.cwd_path().to_path_buf()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),

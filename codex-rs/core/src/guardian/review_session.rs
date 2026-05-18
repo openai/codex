@@ -711,7 +711,7 @@ async fn run_review_on_session(
             environments: None,
             final_output_json_schema: Some(params.schema.clone()),
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 #[allow(deprecated)]
                 cwd: Some(params.parent_turn.cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),

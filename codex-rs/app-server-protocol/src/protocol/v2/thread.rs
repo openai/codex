@@ -181,7 +181,7 @@ pub struct ThreadStartParams {
 )]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnContextUpdateParams {
+pub struct ThreadSettingsUpdateParams {
     pub thread_id: String,
     /// Override the working directory for subsequent turns.
     #[ts(optional = nullable)]
@@ -198,7 +198,7 @@ pub struct ThreadTurnContextUpdateParams {
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Select a named permissions profile for subsequent turns. Cannot be
     /// combined with `sandboxPolicy`.
-    #[experimental("thread/turnContext/update.permissions")]
+    #[experimental("thread/settings/update.permissions")]
     #[schemars(with = "Option<String>")]
     #[ts(type = "string | null")]
     #[ts(optional = nullable)]
@@ -231,7 +231,7 @@ pub struct ThreadTurnContextUpdateParams {
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// Set a pre-set collaboration mode for subsequent turns.
-    #[experimental("thread/turnContext/update.collaborationMode")]
+    #[experimental("thread/settings/update.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
 }
@@ -239,7 +239,7 @@ pub struct ThreadTurnContextUpdateParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnContext {
+pub struct ThreadSettings {
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,
@@ -258,8 +258,8 @@ pub struct ThreadTurnContext {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnContextUpdateResponse {
-    pub turn_context: ThreadTurnContext,
+pub struct ThreadSettingsUpdateResponse {
+    pub thread_settings: ThreadSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -1236,9 +1236,9 @@ pub struct ThreadStatusChangedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadTurnContextUpdatedNotification {
+pub struct ThreadSettingsUpdatedNotification {
     pub thread_id: String,
-    pub turn_context: ThreadTurnContext,
+    pub thread_settings: ThreadSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

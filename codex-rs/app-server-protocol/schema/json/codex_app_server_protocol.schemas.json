@@ -3871,20 +3871,20 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/turnContext/updated"
+                "thread/settings/updated"
               ],
-              "title": "Thread/turnContext/updatedNotificationMethod",
+              "title": "Thread/settings/updatedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadTurnContextUpdatedNotification"
+              "$ref": "#/definitions/v2/ThreadSettingsUpdatedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/turnContext/updatedNotification",
+          "title": "Thread/settings/updatedNotification",
           "type": "object"
         },
         {
@@ -17118,6 +17118,108 @@
         "title": "ThreadSetNameResponse",
         "type": "object"
       },
+      "ThreadSettings": {
+        "properties": {
+          "activePermissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ActivePermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approvalPolicy": {
+            "$ref": "#/definitions/v2/AskForApproval"
+          },
+          "approvalsReviewer": {
+            "$ref": "#/definitions/v2/ApprovalsReviewer"
+          },
+          "collaborationMode": {
+            "$ref": "#/definitions/v2/CollaborationMode"
+          },
+          "cwd": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelProvider": {
+            "type": "string"
+          },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxPolicy": {
+            "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "approvalPolicy",
+          "approvalsReviewer",
+          "collaborationMode",
+          "cwd",
+          "model",
+          "modelProvider",
+          "permissionProfile",
+          "sandboxPolicy"
+        ],
+        "type": "object"
+      },
+      "ThreadSettingsUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "threadSettings": {
+            "$ref": "#/definitions/v2/ThreadSettings"
+          }
+        },
+        "required": [
+          "threadId",
+          "threadSettings"
+        ],
+        "title": "ThreadSettingsUpdatedNotification",
+        "type": "object"
+      },
       "ThreadShellCommandParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -17519,108 +17621,6 @@
           "turnId"
         ],
         "title": "ThreadTokenUsageUpdatedNotification",
-        "type": "object"
-      },
-      "ThreadTurnContext": {
-        "properties": {
-          "activePermissionProfile": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ActivePermissionProfile"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "approvalPolicy": {
-            "$ref": "#/definitions/v2/AskForApproval"
-          },
-          "approvalsReviewer": {
-            "$ref": "#/definitions/v2/ApprovalsReviewer"
-          },
-          "collaborationMode": {
-            "$ref": "#/definitions/v2/CollaborationMode"
-          },
-          "cwd": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "effort": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningEffort"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model": {
-            "type": "string"
-          },
-          "modelProvider": {
-            "type": "string"
-          },
-          "permissionProfile": {
-            "$ref": "#/definitions/v2/PermissionProfile"
-          },
-          "personality": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Personality"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "sandboxPolicy": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
-          },
-          "serviceTier": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "summary": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningSummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "approvalPolicy",
-          "approvalsReviewer",
-          "collaborationMode",
-          "cwd",
-          "model",
-          "modelProvider",
-          "permissionProfile",
-          "sandboxPolicy"
-        ],
-        "type": "object"
-      },
-      "ThreadTurnContextUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "turnContext": {
-            "$ref": "#/definitions/v2/ThreadTurnContext"
-          }
-        },
-        "required": [
-          "threadId",
-          "turnContext"
-        ],
-        "title": "ThreadTurnContextUpdatedNotification",
         "type": "object"
       },
       "ThreadUnarchiveParams": {

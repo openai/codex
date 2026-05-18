@@ -733,12 +733,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnStartResponse,
     },
-    #[experimental("thread/turnContext/update")]
-    ThreadTurnContextUpdate => "thread/turnContext/update" {
-        params: v2::ThreadTurnContextUpdateParams,
+    #[experimental("thread/settings/update")]
+    ThreadSettingsUpdate => "thread/settings/update" {
+        params: v2::ThreadSettingsUpdateParams,
         inspect_params: true,
         serialization: thread_id(params.thread_id),
-        response: v2::ThreadTurnContextUpdateResponse,
+        response: v2::ThreadSettingsUpdateResponse,
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
@@ -1458,8 +1458,8 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
-    #[experimental("thread/turnContext/updated")]
-    ThreadTurnContextUpdated => "thread/turnContext/updated" (v2::ThreadTurnContextUpdatedNotification),
+    #[experimental("thread/settings/updated")]
+    ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
@@ -1583,8 +1583,8 @@ mod tests {
         test_path_buf(&path).abs()
     }
 
-    fn sample_thread_turn_context(cwd: AbsolutePathBuf) -> v2::ThreadTurnContext {
-        v2::ThreadTurnContext {
+    fn sample_thread_settings(cwd: AbsolutePathBuf) -> v2::ThreadSettings {
+        v2::ThreadSettings {
             model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
@@ -1645,15 +1645,15 @@ mod tests {
             })
         );
 
-        let thread_turn_context_update = ClientRequest::ThreadTurnContextUpdate {
+        let thread_settings_update = ClientRequest::ThreadSettingsUpdate {
             request_id: request_id(),
-            params: v2::ThreadTurnContextUpdateParams {
+            params: v2::ThreadSettingsUpdateParams {
                 thread_id: thread_id.clone(),
                 ..Default::default()
             },
         };
         assert_eq!(
-            thread_turn_context_update.serialization_scope(),
+            thread_settings_update.serialization_scope(),
             Some(ClientRequestSerializationScope::Thread {
                 thread_id: thread_id.clone()
             })
@@ -2324,10 +2324,10 @@ mod tests {
     }
 
     #[test]
-    fn serialize_thread_turn_context_update_request() -> Result<()> {
-        let request = ClientRequest::ThreadTurnContextUpdate {
+    fn serialize_thread_settings_update_request() -> Result<()> {
+        let request = ClientRequest::ThreadSettingsUpdate {
             request_id: RequestId::Integer(5),
-            params: v2::ThreadTurnContextUpdateParams {
+            params: v2::ThreadSettingsUpdateParams {
                 thread_id: "thread-1".to_string(),
                 model: Some("gpt-5.2".to_string()),
                 service_tier: Some(None),
@@ -2336,7 +2336,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "thread/turnContext/update",
+                "method": "thread/settings/update",
                 "id": 5,
                 "params": {
                     "threadId": "thread-1",
@@ -2449,39 +2449,38 @@ mod tests {
     }
 
     #[test]
-    fn serialize_thread_turn_context_response_and_notification() -> Result<()> {
+    fn serialize_thread_settings_response_and_notification() -> Result<()> {
         let cwd = absolute_path("/tmp");
-        let turn_context = sample_thread_turn_context(cwd);
-        let turn_context_json = serde_json::to_value(&turn_context)?;
-        let response = ClientResponse::ThreadTurnContextUpdate {
+        let thread_settings = sample_thread_settings(cwd);
+        let thread_settings_json = serde_json::to_value(&thread_settings)?;
+        let response = ClientResponse::ThreadSettingsUpdate {
             request_id: RequestId::Integer(11),
-            response: v2::ThreadTurnContextUpdateResponse {
-                turn_context: turn_context.clone(),
+            response: v2::ThreadSettingsUpdateResponse {
+                thread_settings: thread_settings.clone(),
             },
         };
-        let notification = ServerNotification::ThreadTurnContextUpdated(
-            v2::ThreadTurnContextUpdatedNotification {
+        let notification =
+            ServerNotification::ThreadSettingsUpdated(v2::ThreadSettingsUpdatedNotification {
                 thread_id: "thread-1".to_string(),
-                turn_context,
-            },
-        );
+                thread_settings,
+            });
 
         assert_eq!(
             json!({
-                "method": "thread/turnContext/update",
+                "method": "thread/settings/update",
                 "id": 11,
                 "response": {
-                    "turnContext": turn_context_json
+                    "threadSettings": thread_settings_json
                 }
             }),
             serde_json::to_value(&response)?,
         );
         assert_eq!(
             json!({
-                "method": "thread/turnContext/updated",
+                "method": "thread/settings/updated",
                 "params": {
                     "threadId": "thread-1",
-                    "turnContext": turn_context_json
+                    "threadSettings": thread_settings_json
                 }
             }),
             serde_json::to_value(&notification)?,

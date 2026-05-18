@@ -17,7 +17,7 @@ pub(crate) struct TurnRequestProcessor {
     skills_watcher: Arc<SkillsWatcher>,
 }
 
-struct TurnContextOverrideRequest {
+struct ThreadSettingsOverrideRequest {
     cwd: Option<PathBuf>,
     runtime_workspace_roots: Option<Vec<PathBuf>>,
     approval_policy: Option<AskForApproval>,
@@ -32,7 +32,7 @@ struct TurnContextOverrideRequest {
     personality: Option<Personality>,
 }
 
-impl TurnContextOverrideRequest {
+impl ThreadSettingsOverrideRequest {
     fn has_any_overrides(&self) -> bool {
         self.cwd.is_some()
             || self.runtime_workspace_roots.is_some()
@@ -49,8 +49,10 @@ impl TurnContextOverrideRequest {
     }
 }
 
-fn op_turn_context_overrides(overrides: CodexThreadTurnContextOverrides) -> TurnContextOverrides {
-    TurnContextOverrides {
+fn op_thread_settings_overrides(
+    overrides: CodexThreadSettingsOverrides,
+) -> ThreadSettingsOverrides {
+    ThreadSettingsOverrides {
         cwd: overrides.cwd,
         workspace_roots: overrides.workspace_roots,
         profile_workspace_roots: overrides.profile_workspace_roots,
@@ -69,7 +71,7 @@ fn op_turn_context_overrides(overrides: CodexThreadTurnContextOverrides) -> Turn
     }
 }
 
-const TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+const THREAD_SETTINGS_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn resolve_runtime_workspace_roots(
     workspace_roots: Vec<PathBuf>,
@@ -172,12 +174,12 @@ impl TurnRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn thread_turn_context_update(
+    pub(crate) async fn thread_settings_update(
         &self,
         request_id: &ConnectionRequestId,
-        params: ThreadTurnContextUpdateParams,
+        params: ThreadSettingsUpdateParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_turn_context_update_inner(request_id, params)
+        self.thread_settings_update_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -420,13 +422,13 @@ impl TurnRequestProcessor {
         Ok(())
     }
 
-    async fn resolve_turn_context_overrides(
+    async fn resolve_thread_settings_overrides(
         &self,
         base_snapshot: &ThreadConfigSnapshot,
-        request: TurnContextOverrideRequest,
-    ) -> Result<Option<CodexThreadTurnContextOverrides>, JSONRPCErrorError> {
-        // Both turn/start and thread/turnContext/update accept the same
-        // persistent turn-context fields. Resolve them once into the core
+        request: ThreadSettingsOverrideRequest,
+    ) -> Result<Option<CodexThreadSettingsOverrides>, JSONRPCErrorError> {
+        // Both turn/start and thread/settings/update accept the same
+        // persistent thread-settings fields. Resolve them once into the core
         // override shape so validation and permission-profile expansion stay
         // consistent between the two entry points.
         if request.sandbox_policy.is_some() && request.permissions.is_some() {
@@ -485,13 +487,13 @@ impl TurnRequestProcessor {
                     .await
                     .map_err(|err| config_load_error(&err))?;
                 // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn context
+                // disallow a configured profile. An explicit thread settings
                 // update is different: reject it before accepting the request.
                 if let Some(warning) = config.startup_warnings.iter().find(|warning| {
                     warning.contains("Configured value for `permission_profile` is disallowed")
                 }) {
                     return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
+                        "invalid thread settings override: {warning}"
                     )));
                 }
                 (
@@ -503,10 +505,10 @@ impl TurnRequestProcessor {
                 (None, None, None)
             };
 
-        // None means the caller sent no context fields at all. Some means at
+        // None means the caller sent no settings fields at all. Some means at
         // least one explicit override was present, even if the effective value
-        // matches the current thread context.
-        Ok(Some(CodexThreadTurnContextOverrides {
+        // matches the current thread settings.
+        Ok(Some(CodexThreadSettingsOverrides {
             cwd,
             workspace_roots: runtime_workspace_roots,
             profile_workspace_roots,
@@ -527,12 +529,12 @@ impl TurnRequestProcessor {
         }))
     }
 
-    async fn maybe_emit_turn_context_updated(
+    async fn maybe_emit_thread_settings_updated(
         &self,
         thread_id: ThreadId,
         api_thread_id: &str,
-        before: &ThreadTurnContext,
-        after: ThreadTurnContext,
+        before: &ThreadSettings,
+        after: ThreadSettings,
     ) {
         if before == &after {
             return;
@@ -549,44 +551,41 @@ impl TurnRequestProcessor {
         self.outgoing
             .send_server_notification_to_connections(
                 &connection_ids,
-                ServerNotification::ThreadTurnContextUpdated(
-                    ThreadTurnContextUpdatedNotification {
-                        thread_id: api_thread_id.to_string(),
-                        turn_context: after,
-                    },
-                ),
+                ServerNotification::ThreadSettingsUpdated(ThreadSettingsUpdatedNotification {
+                    thread_id: api_thread_id.to_string(),
+                    thread_settings: after,
+                }),
             )
             .await;
     }
 
-    async fn wait_for_pending_turn_contexts(
+    async fn wait_for_pending_thread_settings(
         &self,
         thread_id: ThreadId,
     ) -> Result<(), JSONRPCErrorError> {
         let pending = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let mut thread_state = thread_state.lock().await;
-            thread_state.track_current_pending_turn_contexts()
+            thread_state.track_current_pending_thread_settings()
         };
 
-        for turn_context_applied in pending {
-            match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
-                .await
-            {
+        for thread_settings_applied in pending {
+            match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied).await {
                 Ok(Ok(Ok(_))) => {}
                 Ok(Ok(Err(err))) => {
                     return Err(internal_error(format!(
-                        "failed to apply pending turn context override: {err}"
+                        "failed to apply pending thread settings override: {err}"
                     )));
                 }
                 Ok(Err(_)) => {
                     return Err(internal_error(
-                        "pending turn context override waiter was cancelled".to_string(),
+                        "pending thread settings override waiter was cancelled".to_string(),
                     ));
                 }
                 Err(_) => {
                     return Err(internal_error(
-                        "timed out waiting for pending turn context overrides to apply".to_string(),
+                        "timed out waiting for pending thread settings overrides to apply"
+                            .to_string(),
                     ));
                 }
             }
@@ -625,7 +624,7 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
-        let turn_context_request = TurnContextOverrideRequest {
+        let thread_settings_request = ThreadSettingsOverrideRequest {
             cwd: params.cwd,
             runtime_workspace_roots: params.runtime_workspace_roots,
             approval_policy: params.approval_policy,
@@ -639,12 +638,12 @@ impl TurnRequestProcessor {
             collaboration_mode: params.collaboration_mode,
             personality: params.personality,
         };
-        if turn_context_request.has_any_overrides() {
-            self.wait_for_pending_turn_contexts(thread_id).await?;
+        if thread_settings_request.has_any_overrides() {
+            self.wait_for_pending_thread_settings(thread_id).await?;
         }
 
         let before_snapshot = thread.config_snapshot().await;
-        let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
+        let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
         let environment_selections = self.parse_environment_selections(params.environments)?;
 
         // Map v2 input items to core input items.
@@ -655,20 +654,22 @@ impl TurnRequestProcessor {
             .collect();
         let turn_has_input = !mapped_items.is_empty();
         let resolved_overrides = self
-            .resolve_turn_context_overrides(&before_snapshot, turn_context_request)
+            .resolve_thread_settings_overrides(&before_snapshot, thread_settings_request)
             .await?;
-        let has_turn_context_overrides = resolved_overrides.is_some();
+        let has_thread_settings_overrides = resolved_overrides.is_some();
         if let Some(overrides) = resolved_overrides.as_ref() {
             // Validate before accepting input so the request can fail without
             // queuing a user turn.
             thread
-                .preview_turn_context_overrides(overrides.clone())
+                .preview_thread_settings_overrides(overrides.clone())
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
         }
 
-        let turn_context = resolved_overrides
-            .map(op_turn_context_overrides)
+        let thread_settings = resolved_overrides
+            .map(op_thread_settings_overrides)
             .unwrap_or_default();
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
@@ -677,14 +678,14 @@ impl TurnRequestProcessor {
             environments: environment_selections,
             final_output_json_schema: params.output_schema,
             responsesapi_client_metadata: params.responsesapi_client_metadata,
-            turn_context,
+            thread_settings,
         };
         let turn_id = Uuid::now_v7().to_string();
-        let turn_context_applied = if has_turn_context_overrides {
+        let thread_settings_applied = if has_thread_settings_overrides {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             Some({
                 let mut thread_state = thread_state.lock().await;
-                thread_state.track_pending_turn_context(turn_id.clone())
+                thread_state.track_pending_thread_settings(turn_id.clone())
             })
         } else {
             None
@@ -697,48 +698,48 @@ impl TurnRequestProcessor {
             })
             .await
         {
-            if has_turn_context_overrides {
+            if has_thread_settings_overrides {
                 let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let mut thread_state = thread_state.lock().await;
-                thread_state.cancel_pending_turn_context(&turn_id);
+                thread_state.cancel_pending_thread_settings(&turn_id);
             }
             let error = internal_error(format!("failed to start turn: {err}"));
             self.track_error_response(&request_id, &error, /*error_type*/ None);
             return Err(error);
         }
 
-        if let Some(turn_context_applied) = turn_context_applied {
+        if let Some(thread_settings_applied) = thread_settings_applied {
             let processor = self.clone();
             let api_thread_id = params.thread_id.clone();
             let tracked_turn_id = turn_id.clone();
             tokio::spawn(async move {
-                match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
+                match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied)
                     .await
                 {
                     Ok(Ok(Ok(payload))) => {
-                        let after_turn_context = thread_turn_context_from_applied_event(&payload);
+                        let after_thread_settings = thread_settings_from_applied_event(&payload);
                         processor
-                            .maybe_emit_turn_context_updated(
+                            .maybe_emit_thread_settings_updated(
                                 thread_id,
                                 &api_thread_id,
-                                &before_turn_context,
-                                after_turn_context,
+                                &before_thread_settings,
+                                after_thread_settings,
                             )
                             .await;
                     }
                     Ok(Ok(Err(err))) => {
                         tracing::warn!(
-                            "failed to apply turn context overrides for turn {tracked_turn_id}: {err}"
+                            "failed to apply thread settings overrides for turn {tracked_turn_id}: {err}"
                         );
                     }
                     Ok(Err(_)) => {
                         tracing::warn!(
-                            "turn context override acknowledgement was cancelled for turn {tracked_turn_id}"
+                            "thread settings override acknowledgement was cancelled for turn {tracked_turn_id}"
                         );
                     }
                     Err(_) => {
                         tracing::warn!(
-                            "timed out waiting for turn context overrides to apply for turn {tracked_turn_id}"
+                            "timed out waiting for thread settings overrides to apply for turn {tracked_turn_id}"
                         );
                     }
                 }
@@ -774,24 +775,24 @@ impl TurnRequestProcessor {
         Ok(TurnStartResponse { turn })
     }
 
-    async fn thread_turn_context_update_inner(
+    async fn thread_settings_update_inner(
         &self,
         request_id: &ConnectionRequestId,
-        params: ThreadTurnContextUpdateParams,
-    ) -> Result<ThreadTurnContextUpdateResponse, JSONRPCErrorError> {
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
                 .inspect_err(|error| {
                     self.track_error_response(request_id, error, /*error_type*/ None);
                 })?;
-        self.wait_for_pending_turn_contexts(thread_id).await?;
+        self.wait_for_pending_thread_settings(thread_id).await?;
         let before_snapshot = thread.config_snapshot().await;
-        let before_turn_context = thread_turn_context_from_snapshot(&before_snapshot);
+        let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
         let resolved_overrides = self
-            .resolve_turn_context_overrides(
+            .resolve_thread_settings_overrides(
                 &before_snapshot,
-                TurnContextOverrideRequest {
+                ThreadSettingsOverrideRequest {
                     cwd: params.cwd,
                     runtime_workspace_roots: None,
                     approval_policy: params.approval_policy,
@@ -808,22 +809,24 @@ impl TurnRequestProcessor {
             )
             .await?;
 
-        let after_turn_context = if let Some(overrides) = resolved_overrides {
+        let after_thread_settings = if let Some(overrides) = resolved_overrides {
             thread
-                .preview_turn_context_overrides(overrides.clone())
+                .preview_thread_settings_overrides(overrides.clone())
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
             let update_id = Uuid::now_v7().to_string();
-            let turn_context_applied = {
+            let thread_settings_applied = {
                 let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let mut thread_state = thread_state.lock().await;
-                thread_state.track_pending_turn_context(update_id.clone())
+                thread_state.track_pending_thread_settings(update_id.clone())
             };
             if let Err(err) = thread
                 .submit_with_id(Submission {
                     id: update_id.clone(),
-                    op: Op::TurnContext {
-                        turn_context: op_turn_context_overrides(overrides),
+                    op: Op::ThreadSettings {
+                        thread_settings: op_thread_settings_overrides(overrides),
                     },
                     trace: self.request_trace_context(request_id).await,
                 })
@@ -831,40 +834,38 @@ impl TurnRequestProcessor {
             {
                 let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let mut thread_state = thread_state.lock().await;
-                thread_state.cancel_pending_turn_context(&update_id);
+                thread_state.cancel_pending_thread_settings(&update_id);
                 return Err(internal_error(format!(
-                    "failed to update turn context: {err}"
+                    "failed to update thread settings: {err}"
                 )));
             }
-            match tokio::time::timeout(TURN_CONTEXT_OVERRIDE_ACK_TIMEOUT, turn_context_applied)
-                .await
-            {
-                Ok(Ok(Ok(payload))) => thread_turn_context_from_applied_event(&payload),
+            match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied).await {
+                Ok(Ok(Ok(payload))) => thread_settings_from_applied_event(&payload),
                 Ok(Ok(Err(err))) => return Err(invalid_request(err)),
                 Ok(Err(_)) => {
                     return Err(internal_error(
-                        "turn context override waiter was cancelled".to_string(),
+                        "thread settings override waiter was cancelled".to_string(),
                     ));
                 }
                 Err(_) => {
                     return Err(internal_error(
-                        "timed out waiting for turn context overrides to apply".to_string(),
+                        "timed out waiting for thread settings overrides to apply".to_string(),
                     ));
                 }
             }
         } else {
-            before_turn_context.clone()
+            before_thread_settings.clone()
         };
-        self.maybe_emit_turn_context_updated(
+        self.maybe_emit_thread_settings_updated(
             thread_id,
             &params.thread_id,
-            &before_turn_context,
-            after_turn_context.clone(),
+            &before_thread_settings,
+            after_thread_settings.clone(),
         )
         .await;
 
-        Ok(ThreadTurnContextUpdateResponse {
-            turn_context: after_turn_context,
+        Ok(ThreadSettingsUpdateResponse {
+            thread_settings: after_thread_settings,
         })
     }
 
@@ -1462,8 +1463,8 @@ impl TurnRequestProcessor {
     }
 }
 
-fn thread_turn_context_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> ThreadTurnContext {
-    ThreadTurnContext {
+fn thread_settings_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> ThreadSettings {
+    ThreadSettings {
         model: config_snapshot.model.clone(),
         model_provider: config_snapshot.model_provider_id.clone(),
         service_tier: config_snapshot.service_tier.clone(),
@@ -1485,29 +1486,29 @@ fn thread_turn_context_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> 
     }
 }
 
-fn thread_turn_context_from_applied_event(
-    event: &codex_protocol::protocol::TurnContextAppliedEvent,
-) -> ThreadTurnContext {
-    let turn_context = &event.turn_context;
-    ThreadTurnContext {
-        model: turn_context.model.clone(),
-        model_provider: turn_context.model_provider_id.clone(),
-        service_tier: turn_context.service_tier.clone(),
-        cwd: turn_context.cwd.clone(),
-        approval_policy: turn_context.approval_policy.into(),
-        approvals_reviewer: turn_context.approvals_reviewer.into(),
+fn thread_settings_from_applied_event(
+    event: &codex_protocol::protocol::ThreadSettingsAppliedEvent,
+) -> ThreadSettings {
+    let thread_settings = &event.thread_settings;
+    ThreadSettings {
+        model: thread_settings.model.clone(),
+        model_provider: thread_settings.model_provider_id.clone(),
+        service_tier: thread_settings.service_tier.clone(),
+        cwd: thread_settings.cwd.clone(),
+        approval_policy: thread_settings.approval_policy.into(),
+        approvals_reviewer: thread_settings.approvals_reviewer.into(),
         sandbox_policy: thread_response_sandbox_policy(
-            &turn_context.permission_profile,
-            turn_context.cwd.as_path(),
+            &thread_settings.permission_profile,
+            thread_settings.cwd.as_path(),
         ),
-        permission_profile: turn_context.permission_profile.clone().into(),
+        permission_profile: thread_settings.permission_profile.clone().into(),
         active_permission_profile: thread_response_active_permission_profile(
-            turn_context.active_permission_profile.clone(),
+            thread_settings.active_permission_profile.clone(),
         ),
-        effort: turn_context.reasoning_effort,
-        summary: turn_context.reasoning_summary,
-        personality: turn_context.personality,
-        collaboration_mode: turn_context.collaboration_mode.clone(),
+        effort: thread_settings.reasoning_effort,
+        summary: thread_settings.reasoning_summary,
+        personality: thread_settings.personality,
+        collaboration_mode: thread_settings.collaboration_mode.clone(),
     }
 }
 

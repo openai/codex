@@ -82,9 +82,9 @@ impl ThreadConfigSnapshot {
     }
 }
 
-/// Turn context overrides that app-server validates before starting a turn.
+/// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
-pub struct CodexThreadTurnContextOverrides {
+pub struct CodexThreadSettingsOverrides {
     pub cwd: Option<PathBuf>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
@@ -257,28 +257,28 @@ impl CodexThread {
             .await
     }
 
-    /// Preview persistent turn context overrides without committing them.
-    pub async fn preview_turn_context_overrides(
+    /// Preview persistent thread settings overrides without committing them.
+    pub async fn preview_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let updates = self.turn_context_settings_update(overrides).await;
+        let updates = self.thread_settings_update(overrides).await;
         self.codex.session.preview_settings(&updates).await
     }
 
-    pub async fn validate_turn_context_overrides(
+    pub async fn validate_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        self.preview_turn_context_overrides(overrides).await?;
+        self.preview_thread_settings_overrides(overrides).await?;
         Ok(())
     }
 
-    async fn turn_context_settings_update(
+    async fn thread_settings_update(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
-        let CodexThreadTurnContextOverrides {
+        let CodexThreadSettingsOverrides {
             cwd,
             workspace_roots,
             profile_workspace_roots,
