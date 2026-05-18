@@ -102,11 +102,12 @@ fn missing_backend_message() -> String {
     "goal tools are not connected to host goal persistence yet".to_string()
 }
 
+#[async_trait]
 impl<C> ThreadLifecycleContributor<C> for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn on_thread_start(&self, input: ThreadStartInput<'_, C>) {
+    async fn on_thread_start(&self, input: ThreadStartInput<'_, C>) {
         input
             .thread_store
             .insert(GoalExtensionConfig::from_enabled((self.goals_enabled)(
@@ -135,11 +136,12 @@ where
     }
 }
 
+#[async_trait]
 impl<C> TurnLifecycleContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn on_turn_start(&self, input: TurnStartInput<'_>) {
+    async fn on_turn_start(&self, input: TurnStartInput<'_>) {
         if !goal_enabled(input.thread_store) {
             return;
         }
@@ -150,7 +152,7 @@ where
         accounting_state(input.thread_store).start_turn(input.turn_store.level_id());
     }
 
-    fn on_turn_stop(&self, input: TurnStopInput<'_>) {
+    async fn on_turn_stop(&self, input: TurnStopInput<'_>) {
         if !goal_enabled(input.thread_store) {
             return;
         }
@@ -164,7 +166,7 @@ where
         accounting_state(input.thread_store).stop_turn(input.turn_store.level_id());
     }
 
-    fn on_turn_abort(&self, input: TurnAbortInput<'_>) {
+    async fn on_turn_abort(&self, input: TurnAbortInput<'_>) {
         if !goal_enabled(input.thread_store) {
             return;
         }
