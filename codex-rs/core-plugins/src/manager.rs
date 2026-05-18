@@ -729,21 +729,6 @@ impl PluginsManager {
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         let scopes = config.remote_installed_plugin_scopes();
-        self.maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
-            config,
-            auth,
-            scopes,
-            on_effective_plugins_changed,
-        );
-    }
-
-    fn maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
-        self: &Arc<Self>,
-        config: &PluginsConfigInput,
-        auth: Option<CodexAuth>,
-        scopes: Vec<RemotePluginScope>,
-        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
-    ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
@@ -783,25 +768,22 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
-        scopes: Vec<RemotePluginScope>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
             return;
         }
-        if scopes.is_empty() {
+        if config.remote_installed_plugin_scopes().is_empty() {
             return;
         }
 
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
         let auth_for_refresh = auth.clone();
-        let scopes_for_refresh = scopes.clone();
         let on_local_cache_changed = Arc::new(move || {
-            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation_for_scopes(
+            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
                 &config_for_refresh,
                 auth_for_refresh.clone(),
-                scopes_for_refresh.clone(),
                 on_effective_plugins_changed.clone(),
             );
         });
@@ -810,7 +792,6 @@ impl PluginsManager {
             self.codex_home.clone(),
             remote_plugin_service_config(config),
             auth,
-            scopes,
             Some(on_local_cache_changed),
         );
     }
@@ -831,7 +812,6 @@ impl PluginsManager {
         self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
-            config.remote_installed_plugin_scopes(),
             on_effective_plugins_changed,
         );
     }
@@ -1624,7 +1604,6 @@ impl PluginsManager {
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
                     auth,
-                    config_for_remote_sync.remote_installed_plugin_scopes(),
                     on_effective_plugins_changed,
                 );
             });

@@ -699,7 +699,6 @@ impl PluginRequestProcessor {
         plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
             &plugins_input,
             auth.clone(),
-            remote_installed_plugin_scopes.clone(),
             Some(self.effective_plugins_changed_callback()),
         );
 

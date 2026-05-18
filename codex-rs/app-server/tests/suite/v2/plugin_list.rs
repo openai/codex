@@ -1888,7 +1888,7 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
         ]
     );
     wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    assert_no_remote_installed_scope_request(&server, "GLOBAL").await?;
+    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
     Ok(())
 }
 
@@ -1986,6 +1986,8 @@ plugin_sharing = false
     let global_installed_body =
         remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
@@ -2023,7 +2025,7 @@ plugin_sharing = false
         .join("plugins/cache/chatgpt-global/linear/1.2.3/.codex-plugin/plugin.json");
     wait_for_path_exists(&installed_path).await?;
     wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
-    assert_no_remote_installed_scope_request(&server, "WORKSPACE").await?;
+    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
     Ok(())
 }
 
@@ -2305,7 +2307,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some(PluginShareDiscoverability::Unlisted)
     );
     wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    assert_no_remote_installed_scope_request(&server, "GLOBAL").await?;
+    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }
@@ -2823,24 +2825,6 @@ async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &st
         }
     })
     .await??;
-    Ok(())
-}
-
-async fn assert_no_remote_installed_scope_request(server: &MockServer, scope: &str) -> Result<()> {
-    let Some(requests) = server.received_requests().await else {
-        bail!("wiremock did not record requests");
-    };
-    assert!(
-        !requests.iter().any(|request| {
-            request.method == "GET"
-                && request.url.path().ends_with("/ps/plugins/installed")
-                && request
-                    .url
-                    .query_pairs()
-                    .any(|(name, value)| name == "scope" && value == scope)
-        }),
-        "expected no /ps/plugins/installed requests for scope {scope}"
-    );
     Ok(())
 }
 
