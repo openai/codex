@@ -5,7 +5,6 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
-use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -19,14 +18,12 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::MessagePhase;
+#[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
@@ -95,56 +92,6 @@ fn agent_nickname_candidates(
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn keep_forked_response_item(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => match role.as_str() {
-            "system" => true,
-            "developer" => false,
-            "user" => !is_contextual_user_message_content(content),
-            "assistant" => *phase == Some(MessagePhase::FinalAnswer),
-            _ => false,
-        },
-        ResponseItem::Reasoning { .. }
-        | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::ToolSearchCall { .. }
-        | ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::ToolSearchOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. }
-        | ResponseItem::CompactionTrigger
-        | ResponseItem::ContextCompaction { .. }
-        | ResponseItem::Other => false,
-    }
-}
-
-fn sanitize_forked_rollout_item(item: &mut RolloutItem) -> bool {
-    match item {
-        RolloutItem::ResponseItem(response_item) => keep_forked_response_item(response_item),
-        // A forked child gets its own runtime config, including spawned-agent
-        // instructions, so it must establish a fresh context diff baseline.
-        RolloutItem::TurnContext(_) => false,
-        RolloutItem::Compacted(compacted) => {
-            if compacted.replacement_history.is_none() {
-                compacted.message =
-                    "Previous compacted history omitted for forked agent.".to_string();
-            }
-            let replacement_history = compacted.replacement_history.get_or_insert_with(Vec::new);
-            replacement_history.retain(keep_forked_response_item);
-            true
-        }
-        RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
-    }
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -416,40 +363,6 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        // MultiAgentV2 root/subagent usage hints are injected as standalone developer
-        // messages at thread start. When forking history, drop hints from the parent
-        // so the child gets a fresh hint that matches its own session source/config.
-        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
-            if let Some(parent_thread) = parent_thread.as_ref() {
-                parent_thread
-                    .codex
-                    .session
-                    .configured_multi_agent_v2_usage_hint_texts()
-                    .await
-            } else if config.features.enabled(Feature::MultiAgentV2) {
-                [
-                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
-                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                Vec::new()
-            };
-        forked_rollout_items.retain_mut(|item| {
-            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-                && role.as_str() == "developer"
-                && let [ContentItem::InputText { text }] = content.as_slice()
-                && multi_agent_v2_usage_hint_texts_to_filter
-                    .iter()
-                    .any(|usage_hint_text| usage_hint_text == text)
-            {
-                return false;
-            }
-
-            sanitize_forked_rollout_item(item)
-        });
 
         state
             .fork_thread_with_source(
