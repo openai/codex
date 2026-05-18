@@ -191,6 +191,47 @@ impl HistoryCell for UserHistoryCell {
         }
         lines
     }
+
+    fn transcript_lines_for_mode(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
+        match mode {
+            HistoryRenderMode::Rich => self.injected_context_summary().map_or_else(
+                || self.display_lines(width),
+                |summary| vec![Line::from(summary)],
+            ),
+            HistoryRenderMode::Raw => self.raw_lines(),
+        }
+    }
+
+    fn transcript_hyperlink_lines_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Vec<HyperlinkLine> {
+        plain_hyperlink_lines(self.transcript_lines_for_mode(width, mode))
+    }
+
+    fn is_user_prompt(&self) -> bool {
+        self.injected_context_summary().is_none()
+    }
+}
+
+impl UserHistoryCell {
+    fn injected_context_summary(&self) -> Option<String> {
+        let label = if self.message.starts_with("# AGENTS.md instructions for ") {
+            "AGENTS.md instructions"
+        } else if self.message.starts_with("<environment_context>") {
+            "environment context"
+        } else if self.message.starts_with("<permissions instructions>") {
+            "permissions instructions"
+        } else {
+            return None;
+        };
+        let line_count = self.message.lines().count().max(1);
+        let noun = if line_count == 1 { "line" } else { "lines" };
+        Some(format!(
+            "{label}: [collapsed in rich transcript; {line_count} {noun}]"
+        ))
+    }
 }
 
 #[derive(Debug)]

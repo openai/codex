@@ -980,6 +980,11 @@ impl PickerState {
         self.overlay = Some(Overlay::new_transcript(
             cells.clone(),
             self.pager_keymap.clone(),
+            Vec::new(),
+            Vec::new(),
+            crate::pager_overlay::TranscriptOverlayState::new(
+                crate::history_cell::HistoryRenderMode::Rich,
+            ),
         ));
         self.pending_transcript_open = None;
         self.transcript_loading_frame_shown = false;

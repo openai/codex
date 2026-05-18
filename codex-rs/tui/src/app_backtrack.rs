@@ -235,12 +235,18 @@ impl App {
         self.overlay = Some(Overlay::new_transcript(
             self.transcript_cells.clone(),
             self.keymap.pager.clone(),
+            self.keymap.app.copy.clone(),
+            self.keymap.app.toggle_raw_output.clone(),
+            self.transcript_overlay_state,
         ));
         tui.frame_requester().schedule_frame();
     }
 
     /// Close transcript overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
+        if let Some(Overlay::Transcript(transcript)) = &self.overlay {
+            self.transcript_overlay_state = transcript.state();
+        }
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
@@ -424,14 +430,49 @@ impl App {
             return Ok(());
         }
 
-        if let Some(overlay) = &mut self.overlay {
+        let (copy_selection, copy_latest, close_overlay) = if let Some(overlay) = &mut self.overlay
+        {
             overlay.handle_event(tui, event)?;
-            if overlay.is_done() {
-                self.close_transcript_overlay(tui);
-                tui.frame_requester().schedule_frame();
-            }
+            let (copy_selection, copy_latest) = match overlay {
+                Overlay::Transcript(transcript) => {
+                    if transcript.take_copy_requested() {
+                        match transcript.selected_user_cell() {
+                            Some(user_cell_idx) => (Some(user_cell_idx), false),
+                            None => (None, true),
+                        }
+                    } else {
+                        (None, false)
+                    }
+                }
+                Overlay::Static(_) => (None, false),
+            };
+            (copy_selection, copy_latest, overlay.is_done())
+        } else {
+            (None, false, false)
+        };
+        if let Some(user_cell_idx) = copy_selection {
+            self.copy_transcript_turn(user_cell_idx);
+        } else if copy_latest {
+            self.chat_widget.copy_last_agent_markdown();
+        }
+        if close_overlay {
+            self.close_transcript_overlay(tui);
+            tui.frame_requester().schedule_frame();
         }
         Ok(())
+    }
+
+    fn copy_transcript_turn(&mut self, user_cell_idx: usize) {
+        let Some(user_cell) = self.transcript_cells.get(user_cell_idx).and_then(|cell| {
+            cell.as_any()
+                .downcast_ref::<crate::history_cell::UserHistoryCell>()
+        }) else {
+            self.chat_widget.copy_last_agent_markdown();
+            return;
+        };
+        let user_turn_count = user_count(&self.transcript_cells[..=user_cell_idx]);
+        self.chat_widget
+            .copy_agent_turn_markdown(user_turn_count, &user_cell.message);
     }
 
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
@@ -664,7 +705,6 @@ fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
     let session_start_type = TypeId::of::<SessionInfoCell>();
-    let user_type = TypeId::of::<UserHistoryCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
     let start = cells
@@ -676,7 +716,7 @@ fn user_positions_iter(
         .iter()
         .enumerate()
         .skip(start)
-        .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
+        .filter_map(move |(idx, cell)| cell.is_user_prompt().then_some(idx))
 }
 
 #[cfg(test)]

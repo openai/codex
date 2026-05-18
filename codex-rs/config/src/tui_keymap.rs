@@ -335,6 +335,10 @@ pub struct TuiPagerKeymap {
     pub close: Option<KeybindingsSpec>,
     /// Close the transcript overlay via its dedicated toggle key.
     pub close_transcript: Option<KeybindingsSpec>,
+    /// Jump to the previous user prompt in the transcript overlay.
+    pub previous_user_prompt: Option<KeybindingsSpec>,
+    /// Jump to the next user prompt in the transcript overlay.
+    pub next_user_prompt: Option<KeybindingsSpec>,
 }
 
 /// List selection context keybindings for popup-style selectable lists.

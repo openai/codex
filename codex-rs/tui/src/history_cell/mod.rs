@@ -253,13 +253,38 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         plain_hyperlink_lines(self.transcript_lines(width))
     }
 
+    /// Returns transcript overlay lines for the selected render mode.
+    fn transcript_lines_for_mode(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
+        match mode {
+            HistoryRenderMode::Rich => self.transcript_lines(width),
+            HistoryRenderMode::Raw => self.raw_lines(),
+        }
+    }
+
+    /// Returns transcript-overlay lines plus terminal hyperlink metadata for the selected mode.
+    fn transcript_hyperlink_lines_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Vec<HyperlinkLine> {
+        match mode {
+            HistoryRenderMode::Rich => self.transcript_hyperlink_lines(width),
+            HistoryRenderMode::Raw => plain_hyperlink_lines(self.raw_lines()),
+        }
+    }
+
     /// Returns the number of viewport rows for the transcript overlay.
     ///
     /// Uses the same `Paragraph::line_count` measurement as
     /// `desired_height`. Contains a workaround for a ratatui bug where
     /// a single whitespace-only line reports 2 rows instead of 1.
+    #[allow(dead_code)]
     fn desired_transcript_height(&self, width: u16) -> u16 {
-        let lines = visible_lines(self.transcript_hyperlink_lines(width));
+        self.desired_transcript_height_for_mode(width, HistoryRenderMode::Rich)
+    }
+
+    fn desired_transcript_height_for_mode(&self, width: u16, mode: HistoryRenderMode) -> u16 {
+        let lines = visible_lines(self.transcript_hyperlink_lines_for_mode(width, mode));
         // Workaround: ratatui's line_count returns 2 for a single
         // whitespace-only line. Clamp to 1 in that case.
         if let [line] = &lines[..]
@@ -279,6 +304,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 
     fn is_stream_continuation(&self) -> bool {
+        false
+    }
+
+    fn is_user_prompt(&self) -> bool {
         false
     }
 

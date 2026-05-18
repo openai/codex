@@ -1473,6 +1473,30 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
 }
 
 #[tokio::test]
+async fn transcript_turn_copy_includes_user_prompt_and_agent_markdown() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.transcript.record_visible_user_turn();
+    chat.transcript
+        .record_agent_markdown("first response".to_string());
+
+    chat.copy_agent_turn_markdown_with(/*user_turn_count*/ 1, "first prompt", |markdown| {
+        assert_eq!(
+            markdown,
+            "## User\n\nfirst prompt\n\n## Assistant\n\nfirst response"
+        );
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied selected turn to clipboard"),
+        "expected success message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

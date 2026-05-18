@@ -2005,6 +2005,33 @@ fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
 }
 
 #[test]
+fn injected_context_collapses_only_in_rich_transcript_mode() {
+    let cell = UserHistoryCell {
+        message: "# AGENTS.md instructions for /tmp/example\nline one\nline two".to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    };
+
+    let rich = render_lines(&cell.transcript_lines_for_mode(/*width*/ 80, HistoryRenderMode::Rich));
+    let raw = render_lines(&cell.transcript_lines_for_mode(/*width*/ 80, HistoryRenderMode::Raw));
+
+    assert_eq!(
+        rich,
+        vec!["AGENTS.md instructions: [collapsed in rich transcript; 3 lines]"]
+    );
+    assert_eq!(
+        raw,
+        vec![
+            "# AGENTS.md instructions for /tmp/example",
+            "line one",
+            "line two",
+        ]
+    );
+    assert!(!cell.is_user_prompt());
+}
+
+#[test]
 fn user_history_cell_trims_trailing_blank_message_lines() {
     let cell = UserHistoryCell {
         message: "line one\n\n   \n\t \n".to_string(),

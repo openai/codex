@@ -83,6 +83,7 @@ impl App {
         } else {
             self.chat_widget.set_raw_output_mode(enabled);
         }
+        self.transcript_overlay_state.render_mode = self.chat_widget.history_render_mode();
         if let Err(err) = self.reflow_transcript_now(tui) {
             tracing::warn!(error = %err, "failed to reflow transcript after raw output mode toggle");
             self.chat_widget
@@ -166,14 +167,10 @@ impl App {
             return;
         }
 
-        if app_keymap_shortcuts_available && self.keymap.app.open_transcript.is_pressed(key_event) {
-            // Enter alternate screen and set viewport to full size.
-            let _ = tui.enter_alt_screen();
-            self.overlay = Some(Overlay::new_transcript(
-                self.transcript_cells.clone(),
-                self.keymap.pager.clone(),
-            ));
-            tui.frame_requester().schedule_frame();
+        if self.transcript_shortcut_available()
+            && self.keymap.app.open_transcript.is_pressed(key_event)
+        {
+            self.open_transcript_overlay(tui);
             return;
         }
 
@@ -280,6 +277,10 @@ impl App {
         self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
     }
 
+    fn transcript_shortcut_available(&self) -> bool {
+        self.overlay.is_none()
+    }
+
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
@@ -298,5 +299,6 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+        assert!(app.transcript_shortcut_available());
     }
 }

@@ -106,6 +106,13 @@ impl TranscriptState {
         self.saw_copy_source_this_turn = false;
     }
 
+    pub(super) fn agent_markdown_for_user_turn(&self, user_turn_count: usize) -> Option<&str> {
+        self.agent_turn_markdowns
+            .iter()
+            .find(|entry| entry.user_turn_count == user_turn_count)
+            .map(|entry| entry.markdown.as_str())
+    }
+
     pub(super) fn reset_turn_flags(&mut self) {
         self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;

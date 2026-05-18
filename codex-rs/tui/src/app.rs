@@ -62,6 +62,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::pager_overlay::TranscriptOverlayState;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -170,7 +171,6 @@ use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
@@ -498,6 +498,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    pub(crate) transcript_overlay_state: TranscriptOverlayState,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
@@ -982,6 +983,8 @@ Fix the config and retry.\n\
 See the Codex keymap documentation for supported actions and examples."
             )
         })?;
+        let transcript_overlay_state =
+            TranscriptOverlayState::new(chat_widget.history_render_mode());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -1003,6 +1006,7 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             transcript_cells: Vec::new(),
             overlay: None,
+            transcript_overlay_state,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),

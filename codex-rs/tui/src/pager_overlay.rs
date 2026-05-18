@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -55,9 +56,38 @@ pub(crate) enum Overlay {
     Static(StaticOverlay),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TranscriptOverlayState {
+    pub(crate) scroll_offset: usize,
+    pub(crate) highlight_cell: Option<usize>,
+    pub(crate) render_mode: HistoryRenderMode,
+}
+
+impl TranscriptOverlayState {
+    pub(crate) fn new(render_mode: HistoryRenderMode) -> Self {
+        Self {
+            scroll_offset: usize::MAX,
+            highlight_cell: None,
+            render_mode,
+        }
+    }
+}
+
 impl Overlay {
-    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
-        Self::Transcript(TranscriptOverlay::new(cells, keymap))
+    pub(crate) fn new_transcript(
+        cells: Vec<Arc<dyn HistoryCell>>,
+        keymap: PagerKeymap,
+        copy_keymap: Vec<KeyBinding>,
+        toggle_raw_output_keymap: Vec<KeyBinding>,
+        state: TranscriptOverlayState,
+    ) -> Self {
+        Self::Transcript(TranscriptOverlay::new(
+            cells,
+            keymap,
+            copy_keymap,
+            toggle_raw_output_keymap,
+            state,
+        ))
     }
 
     pub(crate) fn new_static_with_lines(
@@ -124,8 +154,17 @@ struct PagerView {
     keymap: PagerKeymap,
     last_content_height: Option<usize>,
     last_rendered_height: Option<usize>,
+    layout: Option<PagerLayout>,
     /// If set, on next render ensure this chunk is visible.
     pending_scroll_chunk: Option<usize>,
+}
+
+#[derive(Debug)]
+struct PagerLayout {
+    width: u16,
+    offsets: Arc<[usize]>,
+    heights: Arc<[usize]>,
+    total_height: usize,
 }
 
 impl PagerView {
@@ -142,15 +181,44 @@ impl PagerView {
             keymap,
             last_content_height: None,
             last_rendered_height: None,
+            layout: None,
             pending_scroll_chunk: None,
         }
     }
 
-    fn content_height(&self, width: u16) -> usize {
-        self.renderables
-            .iter()
-            .map(|c| c.desired_height(width) as usize)
-            .sum()
+    fn invalidate_layout(&mut self) {
+        self.layout = None;
+    }
+
+    fn content_height(&mut self, width: u16) -> usize {
+        self.layout(width).total_height
+    }
+
+    fn layout(&mut self, width: u16) -> &PagerLayout {
+        let needs_rebuild = self.layout.as_ref().is_none_or(|layout| {
+            layout.width != width || layout.heights.len() != self.renderables.len()
+        });
+        if needs_rebuild {
+            let mut offsets = Vec::with_capacity(self.renderables.len());
+            let mut heights = Vec::with_capacity(self.renderables.len());
+            let mut total_height = 0usize;
+            for renderable in &self.renderables {
+                offsets.push(total_height);
+                let height = renderable.desired_height(width) as usize;
+                heights.push(height);
+                total_height = total_height.saturating_add(height);
+            }
+            self.layout = Some(PagerLayout {
+                width,
+                offsets: offsets.into(),
+                heights: heights.into(),
+                total_height,
+            });
+        }
+        match self.layout.as_ref() {
+            Some(layout) => layout,
+            None => unreachable!("pager layout missing after rebuild"),
+        }
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -182,12 +250,31 @@ impl PagerView {
         header.dim().render_ref(area, buf);
     }
 
-    fn render_content(&self, area: Rect, buf: &mut Buffer) {
-        let mut y = -(self.scroll_offset as isize);
+    fn render_content(&mut self, area: Rect, buf: &mut Buffer) {
+        let (offsets, heights) = {
+            let layout = self.layout(area.width);
+            (layout.offsets.clone(), layout.heights.clone())
+        };
+        if offsets.is_empty() {
+            for y in area.y..area.bottom() {
+                if area.width == 0 {
+                    break;
+                }
+                buf[(area.x, y)] = Cell::from('~');
+                for x in area.x + 1..area.right() {
+                    buf[(x, y)] = Cell::from(' ');
+                }
+            }
+            return;
+        }
+        let first_visible = offsets
+            .partition_point(|offset| *offset <= self.scroll_offset)
+            .saturating_sub(1);
+        let mut y = offsets[first_visible] as isize - self.scroll_offset as isize;
         let mut drawn_bottom = area.y;
-        for renderable in &self.renderables {
+        for (idx, renderable) in self.renderables.iter().enumerate().skip(first_visible) {
             let top = y;
-            let height = renderable.desired_height(area.width) as isize;
+            let height = heights[idx] as isize;
             y += height;
             let bottom = y;
             if bottom < area.y as isize {
@@ -343,13 +430,9 @@ impl PagerView {
         if area.height == 0 || idx >= self.renderables.len() {
             return;
         }
-        let first = self
-            .renderables
-            .iter()
-            .take(idx)
-            .map(|r| r.desired_height(area.width) as usize)
-            .sum();
-        let last = first + self.renderables[idx].desired_height(area.width) as usize;
+        let layout = self.layout(area.width);
+        let first = layout.offsets[idx];
+        let last = first.saturating_add(layout.heights[idx]);
         let current_top = self.scroll_offset;
         let current_bottom = current_top.saturating_add(area.height.saturating_sub(1) as usize);
         if first < current_top {
@@ -394,11 +477,14 @@ impl Renderable for CachedRenderable {
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
     style: Style,
+    render_mode: HistoryRenderMode,
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let hyperlink_lines = self.cell.transcript_hyperlink_lines(area.width);
+        let hyperlink_lines = self
+            .cell
+            .transcript_hyperlink_lines_for_mode(area.width, self.render_mode);
         let p = Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
             .style(self.style)
             .wrap(Wrap { trim: false });
@@ -407,7 +493,8 @@ impl Renderable for CellRenderable {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.cell.desired_transcript_height(width)
+        self.cell
+            .desired_transcript_height_for_mode(width, self.render_mode)
     }
 }
 
@@ -441,6 +528,10 @@ pub(crate) struct TranscriptOverlay {
     /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
+    render_mode: HistoryRenderMode,
+    copy_keymap: Vec<KeyBinding>,
+    toggle_raw_output_keymap: Vec<KeyBinding>,
+    copy_requested: bool,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
     is_done: bool,
@@ -466,16 +557,26 @@ impl TranscriptOverlay {
     ///
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
-    pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
+    pub(crate) fn new(
+        transcript_cells: Vec<Arc<dyn HistoryCell>>,
+        keymap: PagerKeymap,
+        copy_keymap: Vec<KeyBinding>,
+        toggle_raw_output_keymap: Vec<KeyBinding>,
+        state: TranscriptOverlayState,
+    ) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, /*highlight_cell*/ None),
+                Self::render_cells(&transcript_cells, state.highlight_cell, state.render_mode),
                 "T R A N S C R I P T".to_string(),
-                usize::MAX,
+                state.scroll_offset,
                 keymap,
             ),
             cells: transcript_cells,
-            highlight_cell: None,
+            highlight_cell: state.highlight_cell,
+            render_mode: state.render_mode,
+            copy_keymap,
+            toggle_raw_output_keymap,
+            copy_requested: false,
             live_tail_key: None,
             is_done: false,
         }
@@ -484,6 +585,7 @@ impl TranscriptOverlay {
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
+        render_mode: HistoryRenderMode,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
@@ -498,11 +600,13 @@ impl TranscriptOverlay {
                         } else {
                             user_message_style()
                         },
+                        render_mode,
                     })) as Box<dyn Renderable>
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: Style::default(),
+                        render_mode,
                     })) as Box<dyn Renderable>
                 };
                 if !c.is_stream_continuation() && i > 0 {
@@ -534,7 +638,9 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables =
+            Self::render_cells(&self.cells, self.highlight_cell, self.render_mode);
+        self.view.invalidate_layout();
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
                 && self
@@ -663,6 +769,7 @@ impl TranscriptOverlay {
                     !self.cells.is_empty(),
                     key.is_stream_continuation,
                 ));
+                self.view.invalidate_layout();
             }
         }
         if follow_bottom {
@@ -686,12 +793,74 @@ impl TranscriptOverlay {
         self.view.is_scrolled_to_bottom()
     }
 
+    pub(crate) fn state(&self) -> TranscriptOverlayState {
+        TranscriptOverlayState {
+            scroll_offset: self.view.scroll_offset,
+            highlight_cell: self.highlight_cell,
+            render_mode: self.render_mode,
+        }
+    }
+
+    pub(crate) fn take_copy_requested(&mut self) -> bool {
+        std::mem::take(&mut self.copy_requested)
+    }
+
+    pub(crate) fn selected_user_cell(&self) -> Option<usize> {
+        self.highlight_cell.filter(|idx| {
+            self.cells
+                .get(*idx)
+                .is_some_and(|cell| cell.is_user_prompt())
+        })
+    }
+
+    fn toggle_render_mode(&mut self) {
+        self.render_mode = match self.render_mode {
+            HistoryRenderMode::Rich => HistoryRenderMode::Raw,
+            HistoryRenderMode::Raw => HistoryRenderMode::Rich,
+        };
+        self.rebuild_renderables();
+    }
+
+    fn move_prompt_selection(&mut self, direction: PromptSelectionDirection) {
+        let prompt_positions = self
+            .cells
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, cell)| cell.is_user_prompt().then_some(idx))
+            .collect::<Vec<_>>();
+        let Some(last_prompt) = prompt_positions.last().copied() else {
+            return;
+        };
+
+        let next_prompt = match self.highlight_cell {
+            Some(current) => {
+                let current_idx = prompt_positions
+                    .iter()
+                    .position(|idx| *idx == current)
+                    .unwrap_or(prompt_positions.len().saturating_sub(1));
+                match direction {
+                    PromptSelectionDirection::Previous => {
+                        prompt_positions[current_idx.saturating_sub(1)]
+                    }
+                    PromptSelectionDirection::Next => prompt_positions
+                        .get(current_idx.saturating_add(1))
+                        .copied()
+                        .unwrap_or(last_prompt),
+                }
+            }
+            None => last_prompt,
+        };
+        self.set_highlight_cell(Some(next_prompt));
+    }
+
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables =
+            Self::render_cells(&self.cells, self.highlight_cell, self.render_mode);
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
         }
+        self.view.invalidate_layout();
     }
 
     /// Removes and returns the cached live-tail renderable, if present.
@@ -700,7 +869,12 @@ impl TranscriptOverlay {
     /// cell renderables, so this relies on the live tail always being the final entry in
     /// `view.renderables` when present.
     fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
-        (self.view.renderables.len() > self.cells.len()).then(|| self.view.renderables.pop())?
+        let tail = (self.view.renderables.len() > self.cells.len())
+            .then(|| self.view.renderables.pop())?;
+        if tail.is_some() {
+            self.view.invalidate_layout();
+        }
+        tail
     }
 
     fn live_tail_renderable(
@@ -749,11 +923,24 @@ impl TranscriptOverlay {
                         .collect(),
                     "to jump",
                 ),
+                (
+                    first_or_empty(&self.view.keymap.previous_user_prompt)
+                        .into_iter()
+                        .chain(first_or_empty(&self.view.keymap.next_user_prompt))
+                        .collect(),
+                    "to prompts",
+                ),
             ],
         );
 
-        let mut pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
+        let mut pairs: Vec<(Vec<KeyBinding>, &str)> = Vec::new();
+        if !self.copy_keymap.is_empty() {
+            pairs.push((first_or_empty(&self.copy_keymap), "to copy"));
+        }
+        if !self.toggle_raw_output_keymap.is_empty() {
+            pairs.push((first_or_empty(&self.toggle_raw_output_keymap), "raw"));
+        }
+        pairs.push((first_or_empty(&self.view.keymap.close), "to quit"));
         if self.highlight_cell.is_some() {
             pairs.push((
                 vec![
@@ -789,6 +976,28 @@ impl TranscriptOverlay {
                     self.is_done = true;
                     Ok(())
                 }
+                e if self.view.keymap.previous_user_prompt.is_pressed(e) => {
+                    self.move_prompt_selection(PromptSelectionDirection::Previous);
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                e if self.view.keymap.next_user_prompt.is_pressed(e) => {
+                    self.move_prompt_selection(PromptSelectionDirection::Next);
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                e if self.toggle_raw_output_keymap.is_pressed(e) => {
+                    self.toggle_render_mode();
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                e if self.copy_keymap.is_pressed(e) => {
+                    self.copy_requested = true;
+                    Ok(())
+                }
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw | TuiEvent::Resize => {
@@ -808,6 +1017,11 @@ impl TranscriptOverlay {
     pub(crate) fn committed_cell_count(&self) -> usize {
         self.cells.len()
     }
+}
+
+enum PromptSelectionDirection {
+    Previous,
+    Next,
 }
 
 pub(crate) struct StaticOverlay {
@@ -990,7 +1204,23 @@ mod tests {
     }
 
     fn transcript_overlay(cells: Vec<Arc<dyn HistoryCell>>) -> TranscriptOverlay {
-        TranscriptOverlay::new(cells, default_pager_keymap())
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
+        TranscriptOverlay::new(
+            cells,
+            keymap.pager,
+            keymap.app.copy,
+            keymap.app.toggle_raw_output,
+            TranscriptOverlayState::new(HistoryRenderMode::Rich),
+        )
+    }
+
+    fn user_cell(message: &str) -> Arc<dyn HistoryCell> {
+        Arc::new(UserHistoryCell {
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        })
     }
 
     fn static_overlay(lines: Vec<Line<'static>>, title: &str) -> StaticOverlay {
@@ -1138,6 +1368,45 @@ mod tests {
                 .symbol()
                 .contains(&format!("\x1b]8;;{destination}\x07"))
         }));
+    }
+
+    #[test]
+    fn transcript_overlay_state_round_trips_scroll_selection_and_mode() {
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
+        let state = TranscriptOverlayState {
+            scroll_offset: 3,
+            highlight_cell: Some(0),
+            render_mode: HistoryRenderMode::Raw,
+        };
+        let overlay = TranscriptOverlay::new(
+            vec![user_cell("prompt")],
+            keymap.pager,
+            keymap.app.copy,
+            keymap.app.toggle_raw_output,
+            state,
+        );
+
+        assert_eq!(overlay.state(), state);
+    }
+
+    #[test]
+    fn prompt_navigation_moves_between_user_prompts() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(TestCell {
+                lines: vec![Line::from("assistant")],
+            }),
+            user_cell("second"),
+        ]);
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.selected_user_cell(), Some(2));
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.selected_user_cell(), Some(0));
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Next);
+        assert_eq!(overlay.selected_user_cell(), Some(2));
     }
 
     #[test]
@@ -1476,7 +1745,7 @@ mod tests {
 
     #[test]
     fn pager_view_content_height_counts_renderables() {
-        let pv = pager_view(
+        let mut pv = pager_view(
             vec![
                 paragraph_block("a", /*lines*/ 2),
                 paragraph_block("b", /*lines*/ 3),
