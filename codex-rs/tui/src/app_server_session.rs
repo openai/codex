@@ -30,6 +30,7 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
@@ -919,6 +920,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("config/batchWrite failed while reloading user config in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn reload_mcp_servers(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: McpServerRefreshResponse = self
+            .client
+            .request_typed(ClientRequest::McpServerRefresh {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("config/mcpServer/reload failed in TUI")?;
         Ok(())
     }
 

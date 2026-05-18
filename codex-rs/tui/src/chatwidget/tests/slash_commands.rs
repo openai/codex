@@ -1738,6 +1738,53 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
+async fn slash_reload_plugins_requests_reload_and_explains_thread_boundary() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::ReloadPlugins);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("slash_reload_plugins_info_message", rendered);
+    assert!(
+        rendered.contains("Plugins reload requested."),
+        "expected reload request message, got: {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::ReloadPlugins));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ListSkills {
+            force_reload: true,
+            ..
+        })
+    );
+}
+
+#[tokio::test]
+async fn slash_reload_plugins_is_disabled_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.dispatch_command(SlashCommand::ReloadPlugins);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("'/reload-plugins' is disabled while a task is in progress."),
+        "expected disabled-command message, got: {rendered:?}"
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

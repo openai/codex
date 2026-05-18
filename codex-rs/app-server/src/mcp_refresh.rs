@@ -9,10 +9,16 @@ use std::io;
 use std::sync::Arc;
 use tracing::warn;
 
+fn clear_plugin_related_caches(thread_manager: &ThreadManager) {
+    thread_manager.plugins_manager().clear_cache();
+    thread_manager.skills_manager().clear_cache();
+}
+
 pub(crate) async fn queue_strict_refresh(
     thread_manager: &Arc<ThreadManager>,
     config_manager: &ConfigManager,
 ) -> io::Result<()> {
+    clear_plugin_related_caches(thread_manager.as_ref());
     config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await?;
@@ -36,6 +42,7 @@ pub(crate) async fn queue_best_effort_refresh(
     thread_manager: &Arc<ThreadManager>,
     config_manager: &ConfigManager,
 ) {
+    clear_plugin_related_caches(thread_manager.as_ref());
     for thread_id in thread_manager.list_thread_ids().await {
         let thread = match thread_manager.get_thread(thread_id).await {
             Ok(thread) => thread,

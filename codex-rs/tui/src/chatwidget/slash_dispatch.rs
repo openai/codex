@@ -420,6 +420,16 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::ReloadPlugins => {
+                self.add_info_message(
+                    "Plugin reload requested.".to_string(),
+                    Some(
+                        "Active threads will refresh MCP tools on the next turn. Skills already loaded into existing threads are not reread.".to_string(),
+                    ),
+                );
+                self.submit_op(AppCommand::reload_plugins());
+                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -935,6 +945,7 @@ impl ChatWidget {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
+            | SlashCommand::ReloadPlugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw

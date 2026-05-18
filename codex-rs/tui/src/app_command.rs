@@ -88,6 +88,7 @@ pub(crate) enum AppCommand {
         response: RequestPermissionsResponse,
     },
     ReloadUserConfig,
+    ReloadPlugins,
     ListSkills {
         cwds: Vec<PathBuf>,
         force_reload: bool,
@@ -241,6 +242,10 @@ impl AppCommand {
 
     pub(crate) fn reload_user_config() -> Self {
         Self::ReloadUserConfig
+    }
+
+    pub(crate) fn reload_plugins() -> Self {
+        Self::ReloadPlugins
     }
 
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {

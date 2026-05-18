@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 1752
+expression: rendered
+---
+• Plugins reload requested. Loaded threads queue a best-effort MCP tools refresh on the next turn; plugin instructions and skills already loaded into an older thread stay as-is, so updated plugin context is visible in new threads.

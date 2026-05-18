@@ -52,6 +52,7 @@ pub enum SlashCommand {
     Mcp,
     Apps,
     Plugins,
+    ReloadPlugins,
     Logout,
     Quit,
     Exit,
@@ -128,6 +129,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
+            SlashCommand::ReloadPlugins => "reload plugins and configured MCP servers",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -193,6 +195,7 @@ impl SlashCommand {
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::ReloadPlugins
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
@@ -266,6 +269,17 @@ mod tests {
     fn pet_alias_parses_to_pets_command() {
         assert_eq!(SlashCommand::Pets.command(), "pets");
         assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
+    }
+
+    #[test]
+    fn reload_plugins_command_uses_expected_name() {
+        assert_eq!(SlashCommand::ReloadPlugins.command(), "reload-plugins");
+        assert_eq!(
+            SlashCommand::from_str("reload-plugins"),
+            Ok(SlashCommand::ReloadPlugins)
+        );
+        assert!(!SlashCommand::ReloadPlugins.available_during_task());
+        assert!(!SlashCommand::ReloadPlugins.supports_inline_args());
     }
 
     #[test]
