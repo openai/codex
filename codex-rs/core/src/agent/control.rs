@@ -223,14 +223,11 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
 
     let mut context_start = turn_context_idx;
     while context_start > 0 {
-        let is_startup_context_item = match &items[context_start - 1] {
+        let is_startup_context_item = matches!(
+            &items[context_start - 1],
             RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
-                if role == "developer" || role == "user" =>
-            {
-                true
-            }
-            _ => false,
-        };
+                if role == "developer" || role == "user"
+        );
         if !is_startup_context_item {
             break;
         }
