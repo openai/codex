@@ -62,18 +62,37 @@ impl<'a> AgentsMdManager<'a> {
     pub(crate) async fn load_global_instructions(
         fs: &dyn ExecutorFileSystem,
         codex_dir: Option<&AbsolutePathBuf>,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<LoadedAgentsMd> {
         let base = codex_dir?;
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
-            if let Ok(contents) = fs.read_file_text(&path, /*sandbox*/ None).await {
-                let trimmed = contents.trim();
-                if !trimmed.is_empty() {
-                    return Some(LoadedAgentsMd {
-                        contents: trimmed.to_string(),
-                        path,
-                    });
+            let data = match fs.read_file(&path, /*sandbox*/ None).await {
+                Ok(data) => data,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::IsADirectory
+                    ) =>
+                {
+                    continue;
                 }
+                Err(err) => {
+                    startup_warnings.push(format!(
+                        "Failed to read global AGENTS.md instructions from `{}`: {err}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            warn_invalid_utf8(&path, &data, "Global", startup_warnings);
+            let contents = String::from_utf8_lossy(&data);
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Some(LoadedAgentsMd {
+                    contents: trimmed.to_string(),
+                    path,
+                });
             }
         }
         None
@@ -130,11 +149,15 @@ impl<'a> AgentsMdManager<'a> {
 
     /// Returns all instruction source files included in the current config.
     pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        let mut paths =
-            Self::load_global_instructions(LOCAL_FS.as_ref(), Some(&self.config.codex_home))
-                .await
-                .map(|loaded| vec![loaded.path])
-                .unwrap_or_default();
+        let mut global_instruction_warnings = Vec::new();
+        let mut paths = Self::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&self.config.codex_home),
+            &mut global_instruction_warnings,
+        )
+        .await
+        .map(|loaded| vec![loaded.path])
+        .unwrap_or_default();
         match self.agents_md_paths(fs).await {
             Ok(agents_md_paths) => paths.extend(agents_md_paths),
             Err(err) => {
@@ -321,6 +344,20 @@ impl<'a> AgentsMdManager<'a> {
             }
         }
         names
+    }
+}
+
+fn warn_invalid_utf8(
+    path: &AbsolutePathBuf,
+    data: &[u8],
+    source: &str,
+    startup_warnings: &mut Vec<String>,
+) {
+    if let Err(err) = std::str::from_utf8(data) {
+        startup_warnings.push(format!(
+            "{source} AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
+            path.display()
+        ));
     }
 }
 

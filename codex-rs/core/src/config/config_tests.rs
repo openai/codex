@@ -238,6 +238,32 @@ async fn load_config_loads_global_agents_instructions() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn load_config_warns_when_global_agents_is_not_utf8() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
+    std::fs::write(&path, b"global instructions\xFF")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let path_display = path.display().to_string();
+    assert_eq!(config.user_instructions, None);
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains(&path_display) && warning.contains("valid UTF-8")),
+        "expected invalid UTF-8 warning for global AGENTS.md, got {:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_prefers_global_agents_override_instructions() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     std::fs::write(
