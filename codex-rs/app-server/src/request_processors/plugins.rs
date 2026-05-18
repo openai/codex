@@ -1081,7 +1081,17 @@ impl PluginRequestProcessor {
                             request_id = %request_id,
                             elapsed_ms = local_started_at.elapsed().as_millis(),
                             plugin_id = ?outcome.plugin.id,
+                            marketplace_name = %outcome.marketplace_name,
+                            installed = outcome.plugin.installed,
+                            enabled = outcome.plugin.enabled,
+                            availability = ?PluginAvailability::Available,
+                            install_policy = ?outcome.plugin.policy.installation,
+                            auth_policy = ?outcome.plugin.policy.authentication,
+                            has_description = outcome.plugin.description.is_some(),
+                            has_interface = outcome.plugin.interface.is_some(),
+                            keyword_count = outcome.plugin.keywords.len(),
                             skill_count = outcome.plugin.skills.len(),
+                            hook_count = outcome.plugin.hooks.len(),
                             app_count = outcome.plugin.apps.len(),
                             mcp_server_count = outcome.plugin.mcp_server_names.len(),
                             "plugin/read local marketplace read completed"
@@ -1196,6 +1206,7 @@ impl PluginRequestProcessor {
                     elapsed_ms = apps_started_at.elapsed().as_millis(),
                     requested_app_count = outcome.plugin.apps.len(),
                     resolved_app_count = app_summaries.len(),
+                    app_needs_auth_count = app_summaries.iter().filter(|app| app.needs_auth).count(),
                     "plugin/read loaded local plugin app summaries"
                 );
                 let visible_skills = outcome
@@ -1209,6 +1220,14 @@ impl PluginRequestProcessor {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
+                tracing::info!(
+                    request_id = %request_id,
+                    total_skill_count = outcome.plugin.skills.len(),
+                    visible_skill_count = visible_skills.len(),
+                    hidden_skill_count = outcome.plugin.skills.len().saturating_sub(visible_skills.len()),
+                    disabled_skill_count = outcome.plugin.disabled_skill_paths.len(),
+                    "plugin/read filtered local plugin skills for product"
+                );
                 PluginDetail {
                     marketplace_name: outcome.marketplace_name,
                     marketplace_path: outcome.marketplace_path,
@@ -1309,6 +1328,15 @@ impl PluginRequestProcessor {
                             elapsed_ms = remote_detail_started_at.elapsed().as_millis(),
                             remote_marketplace_name = %remote_marketplace_name,
                             remote_plugin_id = %remote_detail.summary.remote_plugin_id,
+                            installed = remote_detail.summary.installed,
+                            enabled = remote_detail.summary.enabled,
+                            availability = ?remote_detail.summary.availability,
+                            install_policy = ?remote_detail.summary.install_policy,
+                            auth_policy = ?remote_detail.summary.auth_policy,
+                            has_description = remote_detail.description.is_some(),
+                            has_share_context = remote_detail.summary.share_context.is_some(),
+                            has_interface = remote_detail.summary.interface.is_some(),
+                            keyword_count = remote_detail.summary.keywords.len(),
                             skill_count = remote_detail.skills.len(),
                             app_count = remote_detail.app_ids.len(),
                             has_bundle_download_url = remote_detail.bundle_download_url.is_some(),
@@ -1345,19 +1373,73 @@ impl PluginRequestProcessor {
                     elapsed_ms = apps_started_at.elapsed().as_millis(),
                     requested_app_count = plugin_apps.len(),
                     resolved_app_count = app_summaries.len(),
+                    app_needs_auth_count = app_summaries.iter().filter(|app| app.needs_auth).count(),
                     "plugin/read loaded remote plugin app summaries"
                 );
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
 
+        let interface = plugin.summary.interface.as_ref();
+        let enabled_skill_count = plugin.skills.iter().filter(|skill| skill.enabled).count();
+        let app_needs_auth_count = plugin.apps.iter().filter(|app| app.needs_auth).count();
         tracing::info!(
             request_id = %request_id,
             elapsed_ms = started_at.elapsed().as_millis(),
+            source_kind,
             marketplace_name = %plugin.marketplace_name,
+            marketplace_path = ?plugin.marketplace_path,
+            plugin_id = %plugin.summary.id,
+            remote_plugin_id = ?plugin.summary.remote_plugin_id,
             plugin_name = %plugin.summary.name,
+            source = ?plugin.summary.source,
+            installed = plugin.summary.installed,
+            enabled = plugin.summary.enabled,
+            availability = ?plugin.summary.availability,
+            install_policy = ?plugin.summary.install_policy,
+            auth_policy = ?plugin.summary.auth_policy,
+            has_description = plugin.description.is_some(),
+            has_share_context = plugin.summary.share_context.is_some(),
+            has_interface = interface.is_some(),
+            has_display_name = interface
+                .and_then(|interface| interface.display_name.as_ref())
+                .is_some(),
+            has_short_description = interface
+                .and_then(|interface| interface.short_description.as_ref())
+                .is_some(),
+            has_long_description = interface
+                .and_then(|interface| interface.long_description.as_ref())
+                .is_some(),
+            capability_count = interface
+                .map(|interface| interface.capabilities.len())
+                .unwrap_or_default(),
+            default_prompt_count = interface
+                .and_then(|interface| interface.default_prompt.as_ref())
+                .map(Vec::len)
+                .unwrap_or_default(),
+            has_composer_icon = interface
+                .and_then(|interface| interface.composer_icon.as_ref())
+                .is_some(),
+            has_composer_icon_url = interface
+                .and_then(|interface| interface.composer_icon_url.as_ref())
+                .is_some(),
+            has_logo = interface
+                .and_then(|interface| interface.logo.as_ref())
+                .is_some(),
+            has_logo_url = interface
+                .and_then(|interface| interface.logo_url.as_ref())
+                .is_some(),
+            screenshot_count = interface
+                .map(|interface| interface.screenshots.len())
+                .unwrap_or_default(),
+            screenshot_url_count = interface
+                .map(|interface| interface.screenshot_urls.len())
+                .unwrap_or_default(),
             skill_count = plugin.skills.len(),
+            enabled_skill_count,
+            hook_count = plugin.hooks.len(),
             app_count = plugin.apps.len(),
+            app_needs_auth_count,
             mcp_server_count = plugin.mcp_servers.len(),
             "plugin/read request completed"
         );
