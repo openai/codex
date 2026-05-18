@@ -910,6 +910,54 @@ fn parse_tool_input_schema_preserves_refs_and_prunes_unreachable_defs() {
 }
 
 #[test]
+fn parse_tool_input_schema_preserves_refs_from_properties_named_def_tables() {
+    // Example schema shape:
+    // {
+    //   "type": "object",
+    //   "properties": {
+    //     "$defs": { "$ref": "#/$defs/User" }
+    //   },
+    //   "$defs": { "User": { "type": "string" }, "Unused": { "type": "boolean" } }
+    // }
+    //
+    // Expected normalization behavior:
+    // - A property named like the `$defs` keyword is treated as a user field
+    //   while traversing `properties`.
+    // - Refs from that property schema still mark root definitions reachable.
+    // - Unreferenced root definitions are still pruned.
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "$defs": {"$ref": "#/$defs/User"}
+        },
+        "$defs": {
+            "User": {"type": "string"},
+            "Unused": {"type": "boolean"}
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema {
+            schema_type: Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object)),
+            properties: Some(BTreeMap::from([(
+                "$defs".to_string(),
+                JsonSchema {
+                    schema_ref: Some("#/$defs/User".to_string()),
+                    ..Default::default()
+                },
+            )])),
+            defs: Some(BTreeMap::from([(
+                "User".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )])),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_handles_cyclic_local_refs() {
     // Example schema shape:
     // {

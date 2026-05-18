@@ -364,22 +364,57 @@ fn collect_reachable_definitions(value: &JsonValue) -> BTreeSet<DefinitionPointe
     reachable
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefCollectionContext {
+    SchemaObject,
+    PropertiesMap,
+}
+
 fn collect_refs_outside_definitions(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
+    collect_refs_outside_definitions_in_context(value, refs, RefCollectionContext::SchemaObject);
+}
+
+fn collect_refs_outside_definitions_in_context(
+    value: &JsonValue,
+    refs: &mut Vec<DefinitionPointer>,
+    context: RefCollectionContext,
+) {
     match value {
         JsonValue::Array(values) => {
             for value in values {
-                collect_refs_outside_definitions(value, refs);
+                collect_refs_outside_definitions_in_context(
+                    value,
+                    refs,
+                    RefCollectionContext::SchemaObject,
+                );
             }
         }
-        JsonValue::Object(map) => {
-            collect_ref_from_map(map, refs);
-            for (key, value) in map {
-                if key == "$defs" || key == "definitions" {
-                    continue;
+        JsonValue::Object(map) => match context {
+            RefCollectionContext::SchemaObject => {
+                collect_ref_from_map(map, refs);
+                for (key, value) in map {
+                    if key == "$defs" || key == "definitions" {
+                        continue;
+                    }
+
+                    let child_context = if key == "properties" {
+                        RefCollectionContext::PropertiesMap
+                    } else {
+                        RefCollectionContext::SchemaObject
+                    };
+                    collect_refs_outside_definitions_in_context(value, refs, child_context);
                 }
-                collect_refs_outside_definitions(value, refs);
             }
-        }
+            RefCollectionContext::PropertiesMap => {
+                for value in map.values() {
+                    collect_refs_outside_definitions_in_context(
+                        value,
+                        refs,
+                        RefCollectionContext::SchemaObject,
+                    );
+                }
+            }
+        },
         _ => {}
     }
 }
