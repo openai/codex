@@ -258,10 +258,14 @@ mod tests {
             skill("slides", "Build presentation decks", "/tmp/slides/SKILL.md"),
             skill("sheets", "Analyze spreadsheet data", "/tmp/sheets/SKILL.md"),
         ]);
+        let expected_path = test_path_buf("/tmp/slides/SKILL.md")
+            .abs()
+            .to_string_lossy()
+            .replace('\\', "/");
 
         assert_eq!(
             output_text(&tool, json!({ "query": "presentation deck" })).await,
-            "- slides: Build presentation decks (file: /tmp/slides/SKILL.md)"
+            format!("- slides: Build presentation decks (file: {expected_path})")
         );
     }
 
