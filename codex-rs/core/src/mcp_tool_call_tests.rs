@@ -1236,7 +1236,12 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         .services
         .environment_manager
         .default_environment()
-        .unwrap_or_else(|| session.services.environment_manager.local_environment());
+        .unwrap_or_else(|| {
+            session
+                .services
+                .environment_manager
+                .require_local_environment()
+        });
     let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,

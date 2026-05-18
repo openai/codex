@@ -1055,7 +1055,7 @@ impl Session {
                     sess.services
                         .environment_manager
                         .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
+                        .unwrap_or_else(|| sess.services.environment_manager.require_local_environment()),
                     session_configuration.cwd.to_path_buf(),
                 ),
             };

@@ -464,7 +464,7 @@ impl MessageProcessor {
         let fs_processor = FsRequestProcessor::new(
             thread_manager
                 .environment_manager()
-                .local_environment()
+                .require_local_environment()
                 .get_filesystem(),
             fs_watch_manager,
         );

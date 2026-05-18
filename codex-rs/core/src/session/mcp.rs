@@ -298,7 +298,11 @@ impl Session {
                 self.services
                     .environment_manager
                     .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                    .unwrap_or_else(|| {
+                        self.services
+                            .environment_manager
+                            .require_local_environment()
+                    }),
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),

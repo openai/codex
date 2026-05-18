@@ -26,6 +26,20 @@ pub struct EnvironmentProviderSnapshot {
     pub include_local: bool,
 }
 
+impl EnvironmentProviderSnapshot {
+    pub fn without_local_environment(mut self) -> Self {
+        self.include_local = false;
+        if matches!(
+            &self.default,
+            EnvironmentDefault::EnvironmentId(environment_id)
+                if environment_id == LOCAL_ENVIRONMENT_ID
+        ) {
+            self.default = EnvironmentDefault::Disabled;
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnvironmentDefault {
     Disabled,

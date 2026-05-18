@@ -212,7 +212,7 @@ impl McpRequestProcessor {
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
             None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
+                environment_manager.require_local_environment(),
                 config.cwd.to_path_buf(),
             ),
         };
@@ -373,7 +373,7 @@ impl McpRequestProcessor {
             let environment_manager = self.thread_manager.environment_manager();
             let environment = environment_manager
                 .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
+                .unwrap_or_else(|| environment_manager.require_local_environment());
             // Resource reads without a thread have no turn cwd. This fallback
             // is used only by executor-backed stdio MCPs whose config omits `cwd`.
             McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())

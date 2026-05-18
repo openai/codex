@@ -198,7 +198,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager =
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?;
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
@@ -263,7 +264,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
 
     let environment = environment_manager
         .default_environment()
-        .unwrap_or_else(|| environment_manager.local_environment());
+        .unwrap_or_else(|| environment_manager.require_local_environment());
 
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,

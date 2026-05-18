@@ -106,7 +106,7 @@ mod tests {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
-            test_runtime_paths(),
+            Some(test_runtime_paths()),
         )
         .await;
 
@@ -132,9 +132,10 @@ url = "ws://127.0.0.1:8765"
         )
         .expect("write environments.toml");
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::from_codex_home(temp_dir.path(), test_runtime_paths())
-            .await
-            .expect("environment manager");
+        let manager =
+            EnvironmentManager::from_codex_home(temp_dir.path(), Some(test_runtime_paths()))
+                .await
+                .expect("environment manager");
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
@@ -154,7 +155,7 @@ url = "ws://127.0.0.1:8765"
     #[tokio::test]
     async fn default_thread_environment_selections_empty_when_default_disabled() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
+        let manager = EnvironmentManager::without_environments();
 
         assert_eq!(
             default_thread_environment_selections(&manager, &cwd),
