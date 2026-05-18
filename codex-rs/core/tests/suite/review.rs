@@ -684,7 +684,7 @@ async fn review_history_surfaces_in_parent_session() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -789,9 +789,9 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     })
     .await;
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(repo_path.to_path_buf()),
             ..Default::default()
         },

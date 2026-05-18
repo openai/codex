@@ -24,7 +24,8 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_context_update_without_user_turn_does_not_record_permissions_update() -> Result<()> {
+async fn thread_settings_update_without_user_turn_does_not_record_permissions_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -33,9 +34,9 @@ async fn turn_context_update_without_user_turn_does_not_record_permissions_updat
     });
     let test = builder.build(&server).await?;
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &test.codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
         },
@@ -55,16 +56,17 @@ async fn turn_context_update_without_user_turn_does_not_record_permissions_updat
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_context_update_without_user_turn_does_not_record_environment_update() -> Result<()> {
+async fn thread_settings_update_without_user_turn_does_not_record_environment_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let test = test_codex().build(&server).await?;
     let new_cwd = TempDir::new()?;
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &test.codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(new_cwd.path().to_path_buf()),
             ..Default::default()
         },
@@ -84,8 +86,8 @@ async fn turn_context_update_without_user_turn_does_not_record_environment_updat
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_context_update_without_user_turn_does_not_record_collaboration_update() -> Result<()>
-{
+async fn thread_settings_update_without_user_turn_does_not_record_collaboration_update()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -93,9 +95,9 @@ async fn turn_context_update_without_user_turn_does_not_record_collaboration_upd
     let collab_text = "override collaboration instructions";
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &test.codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
         },

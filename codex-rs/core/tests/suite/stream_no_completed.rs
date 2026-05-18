@@ -83,7 +83,7 @@ async fn retries_on_early_close() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();

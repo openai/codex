@@ -198,7 +198,7 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
-/// Returns the permission fields required by test turn-context overrides.
+/// Returns the permission fields required by test thread-settings overrides.
 pub fn turn_permission_fields(
     permission_profile: PermissionProfile,
     cwd: &Path,
@@ -769,7 +769,7 @@ impl TestCodex {
                 environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
-                turn_context: codex_protocol::protocol::TurnContextOverrides {
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                     cwd: Some(self.config.cwd.to_path_buf()),
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),

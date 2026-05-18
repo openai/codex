@@ -116,7 +116,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         },
         trace: None,
     };
@@ -166,7 +166,7 @@ pub async fn run_codex_tool_session_reply(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
     {
@@ -333,7 +333,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::AgentReasoningRawContent(_)
                     | EventMsg::TurnStarted(_)
-                    | EventMsg::TurnContextApplied(_)
+                    | EventMsg::ThreadSettingsApplied(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
