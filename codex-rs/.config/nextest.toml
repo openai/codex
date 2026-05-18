@@ -53,6 +53,7 @@ test-group = 'windows_sandbox_legacy_sessions'
 [[profile.default.overrides]]
 # These Windows-heavy tests spawn subprocesses, session files, or JSON-RPC
 # clients and have been the dominant source of 30s full-CI timeouts.
-filter = 'platform(target:windows) & (test(suite::resume::) | test(suite::cli_stream::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows))'
+platform = 'cfg(windows)'
+filter = 'test(suite::resume::) | test(suite::cli_stream::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows)'
 test-group = 'windows_process_heavy'
 slow-timeout = { period = "30s", terminate-after = 2 }
