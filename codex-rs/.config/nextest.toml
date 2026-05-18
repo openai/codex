@@ -1,7 +1,6 @@
 [profile.default]
-# Keep full-CI from failing on one transient slow run while still surfacing
-# repeated hangs quickly.
-slow-timeout = { period = "20s", terminate-after = 2 }
+# Retry once so one transient failure does not fail full-CI outright.
+slow-timeout = { period = "15s", terminate-after = 2 }
 retries = 1
 
 [test-groups.app_server_protocol_codegen]
