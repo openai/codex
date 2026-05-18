@@ -41,16 +41,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT: &[&str] = &[
-    "update_plan",
-    "request_user_input",
-    "apply_patch",
-    "view_image",
-    "tool_search",
-    "web_search",
-    "image_generation",
-];
-
 fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> rmcp::model::Tool {
     rmcp::model::Tool {
         name: name.to_string().into(),
@@ -389,7 +379,15 @@ async fn test_build_specs_gpt5_codex_default() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
@@ -402,7 +400,15 @@ async fn test_build_specs_gpt51_codex_default() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
@@ -461,7 +467,15 @@ async fn test_gpt_5_1_codex_max_defaults() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
@@ -474,7 +488,15 @@ async fn test_codex_5_1_mini_defaults() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
@@ -487,7 +509,15 @@ async fn test_gpt_5_defaults() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
@@ -500,7 +530,15 @@ async fn test_gpt_5_1_defaults() {
         &features,
         Some(WebSearchMode::Cached),
         "shell_command",
-        DEFAULT_TOOL_TAIL_WITH_DEFERRED_V1_MULTI_AGENT,
+        &[
+            "update_plan",
+            "request_user_input",
+            "apply_patch",
+            "view_image",
+            "tool_search",
+            "web_search",
+            "image_generation",
+        ],
     )
     .await;
 }
