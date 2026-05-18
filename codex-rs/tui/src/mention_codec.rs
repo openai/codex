@@ -38,7 +38,8 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
         if matches!(
             bytes[index],
             byte if byte == TOOL_MENTION_SIGIL as u8 || byte == PLUGIN_TEXT_MENTION_SIGIL as u8
-        ) {
+        ) && starts_plaintext_mention(bytes, index)
+        {
             let sigil = bytes[index] as char;
             let name_start = index + 1;
             if let Some(first) = bytes.get(name_start)
@@ -52,7 +53,9 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
                 }
 
                 let name = &text[name_start..name_end];
-                if let Some(path) = mentions_by_name.get_mut(name).and_then(VecDeque::pop_front) {
+                if ends_plaintext_mention(bytes, name_end)
+                    && let Some(path) = mentions_by_name.get_mut(name).and_then(VecDeque::pop_front)
+                {
                     out.push('[');
                     out.push(sigil);
                     out.push_str(name);
@@ -196,6 +199,23 @@ fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
+fn starts_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || text_bytes
+            .get(index.saturating_sub(1))
+            .is_none_or(|byte| byte.is_ascii_whitespace())
+}
+
+fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
+    text_bytes.get(index).is_none_or(|byte| {
+        byte.is_ascii_whitespace()
+            || !matches!(*byte, b'.' | b'/' | b'\\')
+                && !byte.is_ascii_alphanumeric()
+                && *byte != b'_'
+                && *byte != b'-'
+    })
+}
+
 fn is_common_env_var(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     matches!(
@@ -335,6 +355,22 @@ mod tests {
         assert_eq!(
             encoded,
             "[@figma](/tmp/figma/SKILL.md) then [@sample](plugin://sample@test) then $other"
+        );
+    }
+
+    #[test]
+    fn encode_history_mentions_skips_embedded_at_substrings() {
+        let text = "foo@sample.com npx @sample/pkg then @sample";
+        let encoded = encode_history_mentions(
+            text,
+            &[LinkedMention {
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+        assert_eq!(
+            encoded,
+            "foo@sample.com npx @sample/pkg then [@sample](plugin://sample@test)"
         );
     }
 }
