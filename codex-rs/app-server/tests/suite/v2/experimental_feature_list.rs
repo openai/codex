@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConfigReadParams;
@@ -16,6 +17,8 @@ use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
@@ -157,15 +160,29 @@ async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_
 }
 
 #[tokio::test]
-async fn experimental_feature_list_resolves_project_config_for_cwd() -> Result<()> {
+async fn experimental_feature_list_resolves_thread_project_config() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
+    let server_uri = server.uri();
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            r#"[projects."{workspace_key}"]
+            r#"model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_provider = "mock_provider"
+
+[projects."{workspace_key}"]
 trust_level = "trusted"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
 "#
         ),
     )?;
@@ -181,11 +198,20 @@ memories = true
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        read_response::<ThreadStartResponse>(&mut mcp, thread_start_id).await?;
+
     let request_id = mcp
         .send_experimental_feature_list_request(ExperimentalFeatureListParams {
             cursor: None,
             limit: None,
-            cwd: Some(workspace.path().display().to_string()),
+            thread_id: Some(thread.id),
         })
         .await?;
 
@@ -196,6 +222,37 @@ memories = true
         .find(|feature| feature.name == "memories")
         .expect("memories feature should be present");
     assert!(memories.enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_list_rejects_unknown_thread_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams {
+            cursor: None,
+            limit: None,
+            thread_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+        })
+        .await?;
+    let JSONRPCError { error, .. } = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.code, -32600);
+    assert!(
+        error
+            .message
+            .contains("thread not found: 00000000-0000-4000-8000-000000000001"),
+        "{}",
+        error.message
+    );
 
     Ok(())
 }

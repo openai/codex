@@ -14,13 +14,11 @@ pub struct ExperimentalFeatureListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
-    /// Working directory used to resolve project-local config when computing
-    /// feature enablement. Pass `cwd` when available so `enabled` is computed
-    /// with the same project-local config layers that apply to that workspace or
-    /// thread; if omitted, the server uses its default config resolution
-    /// context.
+    /// Optional loaded thread id. Pass this when showing feature state for an
+    /// existing thread so enablement is computed from that thread's refreshed
+    /// config, including project-local config for the thread's cwd.
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

@@ -2708,7 +2708,7 @@ mod tests {
                 "params": {
                     "cursor": null,
                     "limit": null,
-                    "cwd": null
+                    "threadId": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2717,13 +2717,13 @@ mod tests {
     }
 
     #[test]
-    fn serialize_list_experimental_features_with_cwd() -> Result<()> {
+    fn serialize_list_experimental_features_with_thread_id() -> Result<()> {
         let request = ClientRequest::ExperimentalFeatureList {
             request_id: RequestId::Integer(8),
             params: v2::ExperimentalFeatureListParams {
                 cursor: Some("3".to_string()),
                 limit: Some(2),
-                cwd: Some(absolute_path_string("tmp/project")),
+                thread_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
             },
         };
         assert_eq!(
@@ -2733,7 +2733,7 @@ mod tests {
                 "params": {
                     "cursor": "3",
                     "limit": 2,
-                    "cwd": absolute_path_string("tmp/project")
+                    "threadId": "00000000-0000-4000-8000-000000000001"
                 }
             }),
             serde_json::to_value(&request)?,
