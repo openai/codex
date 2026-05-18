@@ -97,7 +97,7 @@ mod tests {
             }
         );
 
-        window.set_estimated_prefill(150);
+        window.set_estimated_prefill(/*tokens*/ 150);
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {
@@ -124,7 +124,7 @@ mod tests {
             total_tokens: 180,
             ..Default::default()
         });
-        window.set_estimated_prefill(90);
+        window.set_estimated_prefill(/*tokens*/ 90);
         assert_eq!(
             window.snapshot(),
             AutoCompactWindowSnapshot {

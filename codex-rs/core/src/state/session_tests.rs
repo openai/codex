@@ -68,7 +68,7 @@ async fn replace_history_clears_auto_compact_window_prefill_without_advancing() 
     let mut state = SessionState::new(session_configuration);
 
     state.start_next_auto_compact_window();
-    state.set_auto_compact_window_estimated_prefill(100);
+    state.set_auto_compact_window_estimated_prefill(/*tokens*/ 100);
     state.replace_history(Vec::new(), /*reference_context_item*/ None);
 
     assert_eq!(
