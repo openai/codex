@@ -1534,11 +1534,8 @@ impl ChatComposer {
             return;
         }
 
-        match &mut self.popups.active {
-            ActivePopup::MentionV2(popup) => {
-                popup.set_file_matches(&query, matches);
-            }
-            _ => {}
+        if let ActivePopup::MentionV2(popup) = &mut self.popups.active {
+            popup.set_file_matches(&query, matches);
         }
     }
 
