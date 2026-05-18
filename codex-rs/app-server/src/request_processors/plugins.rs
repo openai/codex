@@ -23,11 +23,6 @@ pub(crate) struct PluginRequestProcessor {
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
 }
 
-type PluginMarketplaceEntriesAndErrors = (
-    Vec<PluginMarketplaceEntry>,
-    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
-);
-
 fn plugin_skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_skill_paths: &HashSet<AbsolutePathBuf>,
@@ -717,13 +712,25 @@ impl PluginRequestProcessor {
         plugins_input: &codex_core_plugins::PluginsConfigInput,
         roots: Vec<AbsolutePathBuf>,
         install_suggestion_plugin_names: HashSet<String>,
-    ) -> Result<PluginMarketplaceEntriesAndErrors, JSONRPCErrorError> {
+    ) -> Result<
+        (
+            Vec<PluginMarketplaceEntry>,
+            Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
+        ),
+        JSONRPCErrorError,
+    > {
         let config_for_marketplace_listing = plugins_input.clone();
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
         match tokio::task::spawn_blocking(move || {
             let outcome = plugins_manager
                 .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
-            Ok::<PluginMarketplaceEntriesAndErrors, MarketplaceError>((
+            Ok::<
+                (
+                    Vec<PluginMarketplaceEntry>,
+                    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
+                ),
+                MarketplaceError,
+            >((
                 outcome
                     .marketplaces
                     .into_iter()
