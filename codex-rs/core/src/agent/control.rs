@@ -96,35 +96,111 @@ fn agent_nickname_candidates(
         .collect()
 }
 
-fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
+fn keep_forked_response_item(
+    item: &ResponseItem,
+    multi_agent_v2_usage_hint_texts_to_filter: &[String],
+) -> bool {
+    let is_multi_agent_v2_usage_hint = match item {
+        ResponseItem::Message { role, content, .. } if role == "developer" => {
+            matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }]
+                    if multi_agent_v2_usage_hint_texts_to_filter
+                        .iter()
+                        .any(|usage_hint_text| usage_hint_text == text)
+            )
+        }
+        _ => false,
+    };
+    if is_multi_agent_v2_usage_hint {
+        return false;
+    }
+
     match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
-        {
+        ResponseItem::Message { role, phase, .. } => match role.as_str() {
             "system" | "developer" | "user" => true,
             "assistant" => *phase == Some(MessagePhase::FinalAnswer),
             _ => false,
         },
-        RolloutItem::ResponseItem(
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other,
-        ) => false,
-        // A forked child gets its own runtime config, including spawned-agent
-        // instructions, so it must establish a fresh context diff baseline.
-        RolloutItem::TurnContext(_) => false,
-        RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::Other => false,
     }
+}
+
+fn sanitize_forked_replacement_history(
+    items: &mut Vec<ResponseItem>,
+    multi_agent_v2_usage_hint_texts_to_filter: &[String],
+) {
+    let is_contextual_user_response_item = |item: &ResponseItem| {
+        matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && crate::event_mapping::is_contextual_user_message_content(content)
+        )
+    };
+    let is_non_contextual_user_response_item = |item: &ResponseItem| {
+        matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && !crate::event_mapping::is_contextual_user_message_content(content)
+        )
+    };
+
+    let source_items = std::mem::take(items);
+    let mut sanitized_items = Vec::with_capacity(source_items.len());
+    let mut index = 0;
+    while index < source_items.len() {
+        let mut skipped_developer_context = false;
+        while let Some(item) = source_items.get(index) {
+            if matches!(item, ResponseItem::Message { role, .. } if role == "developer") {
+                skipped_developer_context = true;
+                index += 1;
+            } else if is_contextual_user_response_item(item) {
+                index += 1;
+            } else {
+                break;
+            }
+        }
+
+        if skipped_developer_context
+            && source_items
+                .get(index)
+                .is_some_and(is_non_contextual_user_response_item)
+            && source_items
+                .get(index + 1)
+                .is_some_and(is_non_contextual_user_response_item)
+        {
+            // Extension-contributed PromptSlot::ContextualUser fragments do not carry the
+            // built-in contextual markers. In compacted histories, the remaining structural
+            // cue is that such a startup user item sits between developer setup and the
+            // first real user turn.
+            index += 1;
+        }
+
+        let Some(item) = source_items.get(index) else {
+            break;
+        };
+        if keep_forked_response_item(item, multi_agent_v2_usage_hint_texts_to_filter) {
+            sanitized_items.push(item.clone());
+        }
+        index += 1;
+    }
+
+    *items = sanitized_items;
 }
 
 fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<RolloutItem>) {
@@ -134,14 +210,14 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
     else {
         return;
     };
-    let first_turn_context_is_before_parent_turn = items[..turn_context_idx].iter().all(|item| {
-        !matches!(
+    let prefix = &items[..turn_context_idx];
+    if !prefix.iter().all(|item| {
+        matches!(
             item,
-            RolloutItem::ResponseItem(response_item)
-                if crate::context_manager::is_user_turn_boundary(response_item)
-        )
-    });
-    if !first_turn_context_is_before_parent_turn {
+            RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
+                if role == "developer" || role == "user"
+        ) || matches!(item, RolloutItem::SessionMeta(_))
+    }) {
         return;
     }
 
@@ -149,13 +225,7 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
     while context_start > 0 {
         let is_startup_context_item = match &items[context_start - 1] {
             RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
-                if role == "developer" =>
-            {
-                true
-            }
-            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                if role == "user"
-                    && crate::event_mapping::is_contextual_user_message_content(content) =>
+                if role == "developer" || role == "user" =>
             {
                 true
             }
@@ -170,6 +240,30 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
 
     if context_start < turn_context_idx {
         items.drain(context_start..=turn_context_idx);
+    }
+}
+
+fn sanitize_forked_rollout_item(
+    item: &mut RolloutItem,
+    multi_agent_v2_usage_hint_texts_to_filter: &[String],
+) -> bool {
+    match item {
+        RolloutItem::ResponseItem(response_item) => {
+            keep_forked_response_item(response_item, multi_agent_v2_usage_hint_texts_to_filter)
+        }
+        // A forked child gets its own runtime config, including spawned-agent
+        // instructions, so it must establish a fresh context diff baseline.
+        RolloutItem::TurnContext(_) => false,
+        RolloutItem::Compacted(compacted) => {
+            if let Some(replacement_history) = &mut compacted.replacement_history {
+                sanitize_forked_replacement_history(
+                    replacement_history,
+                    multi_agent_v2_usage_hint_texts_to_filter,
+                );
+            }
+            true
+        }
+        RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -464,18 +558,8 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
-        forked_rollout_items.retain(|item| {
-            if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-                && role == "developer"
-                && let [ContentItem::InputText { text }] = content.as_slice()
-                && multi_agent_v2_usage_hint_texts_to_filter
-                    .iter()
-                    .any(|usage_hint_text| usage_hint_text == text)
-            {
-                return false;
-            }
-
-            keep_forked_rollout_item(item)
+        forked_rollout_items.retain_mut(|item| {
+            sanitize_forked_rollout_item(item, &multi_agent_v2_usage_hint_texts_to_filter)
         });
 
         state
