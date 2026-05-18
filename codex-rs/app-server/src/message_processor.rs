@@ -354,6 +354,7 @@ impl MessageProcessor {
             arg0_paths.clone(),
             Arc::clone(&config),
             outgoing.clone(),
+            config_manager.clone(),
         );
         let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
@@ -896,6 +897,10 @@ impl MessageProcessor {
             ClientRequest::RemoteControlDisable { .. } => self
                 .remote_control_processor
                 .disable()
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlStatusRead { .. } => self
+                .remote_control_processor
+                .status_read()
                 .map(|response| Some(response.into())),
             ClientRequest::ConfigRequirementsRead { params: _, .. } => self
                 .config_processor

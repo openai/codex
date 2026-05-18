@@ -20,6 +20,7 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -659,6 +660,108 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_can_use_configured_tool_namespace() {
+    let namespaced = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+        });
+    })
+    .await;
+
+    namespaced.assert_visible_contains(&["agents"]);
+    for tool_name in [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ] {
+        namespaced.assert_visible_lacks(&[tool_name]);
+        assert!(
+            namespaced
+                .registered_names
+                .contains(&ToolName::namespaced("agents", tool_name).to_string()),
+            "expected namespaced runtime for {tool_name}"
+        );
+        assert!(
+            !namespaced
+                .registered_names
+                .contains(&ToolName::plain(tool_name).to_string()),
+            "expected no plain runtime for {tool_name}"
+        );
+        assert!(
+            namespaced
+                .namespace_function_names("agents")
+                .iter()
+                .any(|name| name == tool_name),
+            "expected {tool_name} in agents namespace"
+        );
+    }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+        });
+        use_bedrock_provider(turn);
+    })
+    .await;
+
+    plan.assert_visible_contains(&["spawn_agent", "send_message", "list_agents"]);
+    plan.assert_visible_lacks(&["agents"]);
+    assert!(
+        plan.registered_names
+            .contains(&ToolName::plain("spawn_agent").to_string())
+    );
+    assert!(
+        !plan
+            .registered_names
+            .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
+    );
+}
+
+#[tokio::test]
+async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
+    let plan = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::CodeMode,
+                Feature::CodeModeOnly,
+                Feature::MultiAgentV2,
+            ],
+        );
+        update_config(turn, |config| {
+            config.multi_agent_v2.non_code_mode_only = true;
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+        });
+    })
+    .await;
+
+    assert_eq!(plan.visible_names, vec!["exec", "wait", "agents"]);
+    for tool_name in [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ] {
+        assert!(
+            plan.namespace_function_names("agents")
+                .iter()
+                .any(|name| name == tool_name),
+            "expected {tool_name} in agents namespace"
+        );
+    }
 }
 
 #[tokio::test]

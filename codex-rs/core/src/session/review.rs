@@ -32,7 +32,7 @@ pub(super) async fn spawn_review_thread(
     let shell_command_backend = shell_command_backend_for_features(review_features.get());
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         shell_command_backend,
-        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
+        crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     );

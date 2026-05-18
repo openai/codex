@@ -288,6 +288,7 @@ impl ToolRegistry {
         names
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
         self.tools.get(name).map(|tool| tool.exposure())
     }

@@ -5,12 +5,7 @@ use codex_network_proxy::NetworkDomainPermission;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
-
-fn permission_profile_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> PermissionProfile {
-    PermissionProfile::from_legacy_sandbox_policy(sandbox_policy)
-}
 
 fn domain_permissions(
     entries: impl IntoIterator<Item = (&'static str, NetworkDomainPermissionToml)>,
@@ -62,7 +57,7 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_read_only_policy()),
+        &PermissionProfile::read_only(),
     )
     .expect("config should stay within the managed allowlist");
 
@@ -97,7 +92,7 @@ fn requirements_allowed_domains_do_not_override_user_denies_for_same_pattern() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed allowlist should not erase a user deny");
 
@@ -129,7 +124,7 @@ fn requirements_allowlist_expansion_keeps_user_entries_mutable() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed baseline should still allow user edits");
 
@@ -207,7 +202,7 @@ fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
+        &PermissionProfile::Disabled,
     )
     .expect("yolo mode should pin the effective policy to the managed baseline");
 
@@ -241,7 +236,7 @@ fn managed_allowed_domains_only_disables_default_mode_allowlist_expansion() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed baseline should still load");
 
@@ -270,7 +265,7 @@ fn managed_allowed_domains_only_ignores_user_allowlist_and_hard_denies_misses() 
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed-only allowlist should still load");
 
@@ -300,7 +295,7 @@ fn managed_allowed_domains_only_without_managed_allowlist_blocks_all_user_domain
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed-only mode should treat missing managed allowlist as empty");
 
@@ -324,7 +319,7 @@ fn managed_allowed_domains_only_blocks_all_user_domains_in_full_access_without_m
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
+        &PermissionProfile::Disabled,
     )
     .expect("managed-only mode should treat missing managed allowlist as empty");
 
@@ -351,7 +346,7 @@ fn deny_only_requirements_do_not_create_allow_constraints_in_full_access() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
+        &PermissionProfile::Disabled,
     )
     .expect("deny-only requirements should not constrain the allowlist");
 
@@ -384,7 +379,7 @@ fn allow_only_requirements_do_not_create_deny_constraints_in_full_access() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
+        &PermissionProfile::Disabled,
     )
     .expect("allow-only requirements should not constrain the denylist");
 
@@ -417,7 +412,7 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("default mode should merge managed and user deny entries");
 
@@ -452,7 +447,7 @@ fn requirements_denylist_expansion_keeps_user_entries_mutable() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         config,
         Some(requirements),
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("managed baseline should still allow user edits");
 

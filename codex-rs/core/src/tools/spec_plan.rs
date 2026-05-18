@@ -1,5 +1,6 @@
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
+use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
@@ -60,12 +61,14 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverableTool;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
@@ -77,6 +80,8 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::warn;
+
+const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 #[derive(Clone, Copy)]
 struct CoreToolPlanContext<'a> {
@@ -136,20 +141,27 @@ fn build_model_visible_specs_and_registry(
     let mut specs = Vec::new();
     let mut seen_tool_names = HashSet::new();
     for runtime in &runtimes {
-        if !seen_tool_names.insert(runtime.tool_name()) {
+        let tool_name = runtime.tool_name();
+        if !seen_tool_names.insert(tool_name.clone()) {
             continue;
         }
-        if runtime.exposure().is_direct()
+        let exposure = runtime.exposure();
+        if exposure.is_direct()
+            && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
             && let Some(spec) = runtime.spec()
         {
-            specs.push(spec_for_model_request(
-                turn_context,
-                runtime.exposure(),
-                spec,
-            ));
+            specs.push(spec_for_model_request(turn_context, exposure, spec));
         }
     }
-    specs.extend(hosted_specs);
+    for spec in hosted_specs {
+        if !is_hidden_by_code_mode_only(
+            turn_context,
+            &ToolName::plain(spec.name()),
+            ToolExposure::Direct,
+        ) {
+            specs.push(spec);
+        }
+    }
 
     let registry = ToolRegistry::from_tools(runtimes);
     let model_visible_specs = merge_into_namespaces(specs)
@@ -157,7 +169,6 @@ fn build_model_visible_specs_and_registry(
         .filter(|spec| {
             namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
         })
-        .filter(|spec| !is_hidden_by_code_mode_only(turn_context, &registry, spec))
         .collect();
 
     (model_visible_specs, registry)
@@ -303,19 +314,14 @@ fn agent_type_description(
 
 fn is_hidden_by_code_mode_only(
     turn_context: &TurnContext,
-    registry: &ToolRegistry,
-    spec: &ToolSpec,
+    tool_name: &ToolName,
+    exposure: ToolExposure,
 ) -> bool {
-    if !code_mode_only_enabled(turn_context)
-        || !codex_code_mode::is_code_mode_nested_tool(spec.name())
-    {
-        return false;
-    }
-
-    let exposure = registry
-        .tool_exposure(&ToolName::plain(spec.name()))
-        .unwrap_or(ToolExposure::Direct);
-    exposure != ToolExposure::DirectModelOnly
+    code_mode_only_enabled(turn_context)
+        && exposure != ToolExposure::DirectModelOnly
+        && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
+            tool_name,
+        ))
 }
 
 fn build_code_mode_executors(
@@ -521,6 +527,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, tool_set: &mut Too
             } else {
                 ToolExposure::Direct
             };
+            let tool_namespace = namespace_tools_enabled(turn_context)
+                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
+                .flatten();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             tool_set.add_runtime_arc(multi_agent_v2_handler(
@@ -538,15 +547,33 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, tool_set: &mut Too
                     ),
                 }),
                 exposure,
+                tool_namespace,
             ));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(SendMessageHandlerV2, exposure));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(FollowupTaskHandlerV2, exposure));
+            tool_set.add_runtime_arc(multi_agent_v2_handler(
+                SendMessageHandlerV2,
+                exposure,
+                tool_namespace,
+            ));
+            tool_set.add_runtime_arc(multi_agent_v2_handler(
+                FollowupTaskHandlerV2,
+                exposure,
+                tool_namespace,
+            ));
             tool_set.add_runtime_arc(multi_agent_v2_handler(
                 WaitAgentHandlerV2::new(context.wait_agent_timeouts),
                 exposure,
+                tool_namespace,
             ));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(CloseAgentHandlerV2, exposure));
-            tool_set.add_runtime_arc(multi_agent_v2_handler(ListAgentsHandlerV2, exposure));
+            tool_set.add_runtime_arc(multi_agent_v2_handler(
+                CloseAgentHandlerV2,
+                exposure,
+                tool_namespace,
+            ));
+            tool_set.add_runtime_arc(multi_agent_v2_handler(
+                ListAgentsHandlerV2,
+                exposure,
+                tool_namespace,
+            ));
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
@@ -691,8 +718,70 @@ fn append_extension_tool_executors(
 fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,
     exposure: ToolExposure,
+    namespace: Option<&str>,
 ) -> Arc<dyn CoreToolRuntime> {
-    override_tool_exposure(Arc::new(handler), exposure)
+    let handler: Arc<dyn CoreToolRuntime> = match namespace {
+        Some(namespace) => Arc::new(MultiAgentV2NamespaceOverride {
+            handler: Arc::new(handler),
+            namespace: namespace.to_string(),
+        }),
+        None => Arc::new(handler),
+    };
+    override_tool_exposure(handler, exposure)
+}
+
+struct MultiAgentV2NamespaceOverride {
+    handler: Arc<dyn CoreToolRuntime>,
+    namespace: String,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(self.namespace.clone(), self.handler.tool_name().name)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        match self.handler.spec()? {
+            ToolSpec::Function(tool) => Some(ToolSpec::Namespace(ResponsesApiNamespace {
+                name: self.namespace.clone(),
+                description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+            })),
+            spec => Some(spec),
+        }
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.handler.exposure()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        self.handler.handle(invocation).await
+    }
+}
+
+impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
+    fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn search_info(&self) -> Option<crate::tools::tool_search_entry::ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn create_diff_consumer(
+        &self,
+    ) -> Option<Box<dyn crate::tools::registry::ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
 }
 
 fn compare_code_mode_tools(

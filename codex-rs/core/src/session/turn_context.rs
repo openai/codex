@@ -472,7 +472,7 @@ impl Session {
             shell_command_backend_for_features(per_turn_config.features.get());
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
             shell_command_backend,
-            crate::tools::spec::tool_user_shell_type(user_shell),
+            crate::tools::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
         );

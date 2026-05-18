@@ -3272,6 +3272,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
+                    detail: None,
                 },
                 UserInput::Text {
                     text: "USER_THREE".to_string(),

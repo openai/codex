@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
@@ -62,11 +63,13 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -84,11 +87,117 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const TINY_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
+    122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     String::from_utf8(req.body.clone())
         .ok()
         .is_some_and(|body| body.contains(text))
+}
+
+async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>> {
+    // Two Codex turns hit the mock model (session start + turn/start).
+    let responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    // Use the unchecked variant because the strict matcher does not currently
+    // cover image-bearing request payloads.
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let image_path = codex_home.path().join("image.png");
+    std::fs::write(&image_path, TINY_PNG_BYTES)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::LocalImage {
+                path: image_path,
+                detail,
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    assert!(!turn.id.is_empty());
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    received_response_input_images(&server).await
+}
+
+async fn received_response_input_images(server: &wiremock::MockServer) -> Result<Vec<Value>> {
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let mut input_images = Vec::new();
+
+    for request in requests {
+        if !request.url.path().ends_with("/responses") {
+            continue;
+        }
+        let body = request
+            .body_json::<Value>()
+            .context("request body should be JSON")?;
+        let Some(input) = body.get("input").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for item in input {
+            if item.get("type").and_then(Value::as_str) != Some("message") {
+                continue;
+            }
+            let Some(content) = item.get("content").and_then(Value::as_array) else {
+                continue;
+            };
+            input_images.extend(
+                content
+                    .iter()
+                    .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
+                    .cloned(),
+            );
+        }
+    }
+
+    Ok(input_images)
 }
 
 #[tokio::test]
@@ -554,6 +663,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Image {
                 url: "https://example.com/a.png".to_string(),
+                detail: None,
             }],
             ..Default::default()
         })
@@ -1465,63 +1575,27 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
 }
 
 #[tokio::test]
-async fn turn_start_accepts_local_image_input() -> Result<()> {
-    // Two Codex turns hit the mock model (session start + turn/start).
-    let responses = vec![
-        create_final_assistant_message_sse_response("Done")?,
-        create_final_assistant_message_sse_response("Done")?,
-    ];
-    // Use the unchecked variant because the request payload includes a LocalImage
-    // which the strict matcher does not currently cover.
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+async fn turn_start_defaults_local_image_detail_to_high() -> Result<()> {
+    let input_images = run_local_image_turn(/*detail*/ None).await?;
 
-    let codex_home = TempDir::new()?;
-    create_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        "never",
-        &BTreeMap::default(),
-    )?;
+    assert_eq!(input_images.len(), 1);
+    assert_eq!(
+        input_images[0].get("detail").and_then(Value::as_str),
+        Some("high")
+    );
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    Ok(())
+}
 
-    let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+#[tokio::test]
+async fn turn_start_forwards_custom_local_image_detail() -> Result<()> {
+    let input_images = run_local_image_turn(Some(ImageDetail::Original)).await?;
 
-    let image_path = codex_home.path().join("image.png");
-    // No need to actually write the file; we just exercise the input path.
-
-    let turn_req = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![V2UserInput::LocalImage { path: image_path }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
-    assert!(!turn.id.is_empty());
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    assert_eq!(input_images.len(), 1);
+    assert_eq!(
+        input_images[0].get("detail").and_then(Value::as_str),
+        Some("original")
+    );
 
     Ok(())
 }

@@ -17,7 +17,16 @@ from ._version import __version__ as SDK_VERSION
 from .errors import AppServerError, TransportClosedError
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
+    AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
+    CancelLoginAccountResponse,
+    ChatgptDeviceCodeLoginAccountResponse,
+    ChatgptLoginAccountResponse,
+    GetAccountParams as V2GetAccountParams,
+    GetAccountResponse,
+    LoginAccountParams as V2LoginAccountParams,
+    LoginAccountResponse,
+    LogoutAccountResponse,
     ModelListResponse,
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
@@ -59,6 +68,8 @@ def _params_dict(
         | V2ThreadListParams
         | V2ThreadForkParams
         | V2TurnStartParams
+        | V2GetAccountParams
+        | V2LoginAccountParams
         | JsonObject
         | None
     ),
@@ -246,7 +257,10 @@ class AppServerClient:
         waiter = self._router.create_response_waiter(request_id)
 
         try:
-            self._write_message({"id": request_id, "method": method, "params": params or {}})
+            message: JsonObject = {"id": request_id, "method": method}
+            if params is not None:
+                message["params"] = params
+            self._write_message(message)
         except BaseException:
             self._router.discard_response_waiter(request_id)
             raise
@@ -258,11 +272,26 @@ class AppServerClient:
 
     def notify(self, method: str, params: JsonObject | None = None) -> None:
         """Send a JSON-RPC notification without waiting for a response."""
-        self._write_message({"method": method, "params": params or {}})
+        message: JsonObject = {"method": method}
+        if params is not None:
+            message["params"] = params
+        self._write_message(message)
 
     def next_notification(self) -> Notification:
         """Return the next notification that is not scoped to an active turn."""
         return self._router.next_global_notification()
+
+    def register_login_notifications(self, login_id: str) -> None:
+        """Start routing notifications for one interactive login attempt."""
+        self._router.register_login(login_id)
+
+    def unregister_login_notifications(self, login_id: str) -> None:
+        """Stop routing notifications for one interactive login attempt."""
+        self._router.unregister_login(login_id)
+
+    def next_login_notification(self, login_id: str) -> Notification:
+        """Return the next routed notification for the requested login id."""
+        return self._router.next_login_notification(login_id)
 
     def register_turn_notifications(self, turn_id: str) -> None:
         """Start routing notifications for one turn into its dedicated queue."""
@@ -275,6 +304,43 @@ class AppServerClient:
     def next_turn_notification(self, turn_id: str) -> Notification:
         """Return the next routed notification for the requested turn id."""
         return self._router.next_turn_notification(turn_id)
+
+    def account_login_start(
+        self,
+        params: V2LoginAccountParams | JsonObject,
+    ) -> LoginAccountResponse:
+        response = self.request(
+            "account/login/start",
+            _params_dict(params),
+            response_model=LoginAccountResponse,
+        )
+        response_root = response.root
+        if isinstance(
+            response_root,
+            ChatgptLoginAccountResponse | ChatgptDeviceCodeLoginAccountResponse,
+        ):
+            self.register_login_notifications(response_root.login_id)
+        return response
+
+    def account_login_cancel(self, login_id: str) -> CancelLoginAccountResponse:
+        return self.request(
+            "account/login/cancel",
+            {"loginId": login_id},
+            response_model=CancelLoginAccountResponse,
+        )
+
+    def account_read(
+        self,
+        params: V2GetAccountParams | JsonObject | None = None,
+    ) -> GetAccountResponse:
+        return self.request(
+            "account/read",
+            _params_dict(params),
+            response_model=GetAccountResponse,
+        )
+
+    def account_logout(self) -> LogoutAccountResponse:
+        return self.request("account/logout", None, response_model=LogoutAccountResponse)
 
     def thread_start(
         self, params: V2ThreadStartParams | JsonObject | None = None
@@ -416,6 +482,24 @@ class AppServerClient:
                     return notification.payload
         finally:
             self.unregister_turn_notifications(turn_id)
+
+    def wait_for_login_completed(
+        self,
+        login_id: str,
+    ) -> AccountLoginCompletedNotification:
+        """Block until the matching interactive login attempt completes."""
+        self.register_login_notifications(login_id)
+        try:
+            while True:
+                notification = self.next_login_notification(login_id)
+                if (
+                    notification.method == "account/login/completed"
+                    and isinstance(notification.payload, AccountLoginCompletedNotification)
+                    and notification.payload.login_id == login_id
+                ):
+                    return notification.payload
+        finally:
+            self.unregister_login_notifications(login_id)
 
     def stream_text(
         self,

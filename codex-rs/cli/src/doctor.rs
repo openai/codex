@@ -105,6 +105,10 @@ const COLOR_ENV_VARS: &[&str] = &[
 const TERMINAL_DIMENSION_ENV_VARS: &[&str] = &["COLUMNS", "LINES"];
 const TERMINFO_ENV_VARS: &[&str] = &["TERMINFO", "TERMINFO_DIRS"];
 const LOCALE_ENV_VARS: &[&str] = &["LC_ALL", "LC_CTYPE", "LANG"];
+#[cfg(windows)]
+const NPM_COMMAND: &str = "npm.cmd";
+#[cfg(not(windows))]
+const NPM_COMMAND: &str = "npm";
 const REMOTE_TERMINAL_ENV_VARS: &[&str] = &[
     "SSH_TTY",
     "SSH_CONNECTION",
@@ -884,7 +888,7 @@ fn npm_global_root_check() -> NpmRootCheck {
         return NpmRootCheck::MissingPackageRoot;
     };
 
-    let output = match run_command("npm", ["root", "-g"]) {
+    let output = match run_command(NPM_COMMAND, ["root", "-g"]) {
         Ok(output) => output,
         Err(err) => return NpmRootCheck::NpmUnavailable(err),
     };
