@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
+use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -822,6 +823,12 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             !tools
                 .iter()
                 .any(|tool| tool.name() == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+            "tool_suggest should be absent when {disabled_feature:?} is disabled"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.name() == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME),
             "tool_suggest should be absent when {disabled_feature:?} is disabled"
         );
     }

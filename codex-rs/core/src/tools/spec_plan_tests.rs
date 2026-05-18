@@ -50,6 +50,7 @@ use codex_tools::FreeformTool;
 use codex_tools::JsonSchema;
 use codex_tools::JsonSchemaPrimitiveType;
 use codex_tools::JsonSchemaType;
+use codex_tools::LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME;
 use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -1979,10 +1980,15 @@ fn request_plugin_install_is_not_registered_without_feature_flag() {
             .iter()
             .any(|tool| tool.name() == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name() == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
+    );
 }
 
 #[test]
-fn request_plugin_install_can_be_registered_without_search_tool() {
+fn install_suggestion_tools_can_be_registered_without_search_tool() {
     let model_info = ModelInfo {
         supports_search_tool: false,
         ..search_capable_model_info()
@@ -2015,23 +2021,40 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
         &[],
     );
 
-    assert_contains_tool_names(&tools, &[REQUEST_PLUGIN_INSTALL_TOOL_NAME]);
+    assert_contains_tool_names(
+        &tools,
+        &[
+            LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME,
+            REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+        ],
+    );
+    let list_available_plugins_to_install =
+        find_tool(&tools, LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME);
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        list_available_plugins_to_install
+    else {
+        panic!("expected function tool");
+    };
+    assert!(description.contains(
+        "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
+    ));
+    assert!(description.contains(
+        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+    ));
 
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = request_plugin_install else {
         panic!("expected function tool");
     };
     assert!(description.contains(
-        "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed."
-    ));
-    assert!(description.contains(
-        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
+        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
     ));
 }
 
 #[test]
-fn request_plugin_install_description_lists_discoverable_tools() {
+fn request_plugin_install_description_defers_discoverable_tools_to_list_tool() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -2079,9 +2102,22 @@ fn request_plugin_install_description_lists_discoverable_tools() {
         /*extension_tool_executors*/ &[],
         &[],
     );
+    assert!(registry.has_tool(&ToolName::plain(
+        LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME
+    )));
     assert!(registry.has_tool(&ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)));
 
+    let list_available_plugins_to_install =
+        find_tool(&tools, LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME);
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool {
+        description: list_description,
+        parameters: list_parameters,
+        ..
+    }) = list_available_plugins_to_install
+    else {
+        panic!("expected function tool");
+    };
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
@@ -2090,45 +2126,31 @@ fn request_plugin_install_description_lists_discoverable_tools() {
     else {
         panic!("expected function tool");
     };
-    assert!(description.contains(
-        "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed."
+    assert!(list_description.contains(
+        "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
     ));
-    assert!(description.contains("Google Calendar"));
-    assert!(description.contains("Gmail"));
-    assert!(description.contains("Sample Plugin"));
-    assert!(description.contains("Plan events and schedules."));
-    assert!(description.contains("Find and summarize email threads."));
-    assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
-    assert!(description.contains("`action_type`: `install`"));
-    assert!(
-        description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
-    );
-    assert!(
-        description.contains(
-            "The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list."
-        )
-    );
-    assert!(description.contains(
+    assert!(list_description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
-    assert!(description.contains(
-        "The plugin or connector is one of the known installable plugins or connectors listed below. Only ask to install plugins or connectors from this list."
+    assert!(list_description.contains(
+        "Returns known plugins and connectors that can be passed to `request_plugin_install`."
     ));
     assert!(description.contains(
-        "Do not use this tool for adjacent capabilities, broad recommendations, or tools that merely seem useful."
+        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
+    ));
+    assert!(description.contains(
+        "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful."
     ));
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
-    assert!(description.contains(
-        "If current active tools aren't relevant and `tool_search` is available, only call this tool after `tool_search` has already been tried and found no relevant tool."
-    ));
-    assert!(!description.contains("targeted lookup"));
-    assert!(!description.contains("broad or speculative searches"));
-    assert!(description.contains("Only proceed when one listed plugin or connector exactly fits."));
-    assert!(description.contains(
-        "If we found both connectors and plugins to install, use plugins first, only use connectors if the corresponding plugin is installed but the connector is not."
-    ));
-    assert!(!description.contains("{{discoverable_tools}}"));
+    assert!(!description.contains("Google Calendar"));
+    assert!(!description.contains("Gmail"));
+    assert!(!description.contains("Sample Plugin"));
+    assert!(!description.contains("Plan events and schedules."));
+    assert!(!description.contains("Find and summarize email threads."));
+    assert!(!description.contains("sample@test"));
     assert!(!description.contains("tool_search fails to find a good match"));
+    let (_, list_required) = expect_object_schema(list_parameters);
+    assert_eq!(list_required, Some(&Vec::new()));
     let (_, required) = expect_object_schema(parameters);
     assert_eq!(
         required,

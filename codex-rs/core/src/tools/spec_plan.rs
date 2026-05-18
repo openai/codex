@@ -11,6 +11,7 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
@@ -70,6 +71,7 @@ use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
+use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -416,9 +418,10 @@ fn collect_tool_executors(
         && let Some(discoverable_tools) =
             params.discoverable_tools.filter(|tools| !tools.is_empty())
     {
-        executors.push(Arc::new(RequestPluginInstallHandler::new(
-            discoverable_tools,
+        executors.push(Arc::new(ListAvailablePluginsToInstallHandler::new(
+            collect_request_plugin_install_entries(discoverable_tools),
         )));
+        executors.push(Arc::new(RequestPluginInstallHandler));
     }
 
     if config.environment_mode.has_environment() && config.apply_patch_tool_type.is_some() {
