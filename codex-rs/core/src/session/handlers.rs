@@ -134,6 +134,8 @@ async fn thread_settings_update(
         Some(collaboration_mode) => collaboration_mode,
         None => {
             let state = sess.state.lock().await;
+            // Model and reasoning effort live in CollaborationMode settings today, so
+            // partial thread-settings updates refresh those fields on the active mode.
             state
                 .session_configuration
                 .collaboration_mode
