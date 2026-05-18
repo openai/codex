@@ -46,14 +46,13 @@ use rmcp::service::RxJsonRpcMessage;
 use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
 use rmcp::transport::child_process::TokioChildProcess;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tracing::info;
 use tracing::warn;
 
 use crate::executor_process_transport::ExecutorProcessTransport;
 use crate::program_resolver;
+use crate::stderr_log::StderrLogBuffer;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::create_env_overlay_for_remote_mcp_server;
 use crate::utils::remote_mcp_env_var_names;
@@ -272,13 +271,16 @@ impl LocalStdioServerLauncher {
 
         if let Some(stderr) = stderr {
             tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr).lines();
+                let mut stderr = stderr;
+                let mut stderr_log = StderrLogBuffer::new(program_name.clone());
+                let mut buffer = [0_u8; 8192];
                 loop {
-                    match reader.next_line().await {
-                        Ok(Some(line)) => {
-                            info!("MCP server stderr ({program_name}): {line}");
+                    match stderr.read(&mut buffer).await {
+                        Ok(0) => {
+                            stderr_log.flush();
+                            break;
                         }
-                        Ok(None) => break,
+                        Ok(bytes_read) => stderr_log.push(&buffer[..bytes_read]),
                         Err(error) => {
                             warn!("Failed to read MCP server stderr ({program_name}): {error}");
                             break;

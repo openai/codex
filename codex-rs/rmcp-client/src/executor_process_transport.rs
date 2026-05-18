@@ -20,7 +20,6 @@
 
 use std::future::Future;
 use std::io;
-use std::mem::take;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -41,8 +40,9 @@ use serde_json::to_vec;
 use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 use tracing::debug;
-use tracing::info;
 use tracing::warn;
+
+use crate::stderr_log::StderrLogBuffer;
 
 static PROCESS_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -76,7 +76,7 @@ pub(super) struct ExecutorProcessTransport {
     stdout: Vec<u8>,
 
     /// Buffered stderr bytes for diagnostic logging.
-    stderr: Vec<u8>,
+    stderr: StderrLogBuffer,
 
     /// Whether the executor has reported process closure or a terminal
     /// subscription failure. Once closed, any remaining partial stdout line is
@@ -101,12 +101,13 @@ impl ExecutorProcessTransport {
         // process event log will replay anything that landed before this
         // subscriber was attached.
         let events = process.subscribe_events();
+        let stderr = StderrLogBuffer::new(program_name.clone());
         Self {
             process,
             events,
             program_name,
             stdout: Vec::new(),
-            stderr: Vec::new(),
+            stderr,
             closed: false,
             terminated: false,
             last_seq: 0,
@@ -312,33 +313,11 @@ impl ExecutorProcessTransport {
     }
 
     fn push_stderr(&mut self, bytes: &[u8]) {
-        // Keep stderr line-oriented in logs so a chatty MCP server does not
-        // produce one log record per byte chunk.
-        self.stderr.extend_from_slice(bytes);
-        while let Some(index) = self.stderr.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.stderr.drain(..=index).collect::<Vec<_>>();
-            line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            info!(
-                "MCP server stderr ({}): {}",
-                self.program_name,
-                String::from_utf8_lossy(&line)
-            );
-        }
+        self.stderr.push(bytes);
     }
 
     fn flush_stderr(&mut self) {
-        if self.stderr.is_empty() {
-            return;
-        }
-        let line = take(&mut self.stderr);
-        info!(
-            "MCP server stderr ({}): {}",
-            self.program_name,
-            String::from_utf8_lossy(&line)
-        );
+        self.stderr.flush();
     }
 
     fn trim_trailing_carriage_return(mut line: Vec<u8>) -> Vec<u8> {

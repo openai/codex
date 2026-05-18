@@ -8,6 +8,7 @@ mod oauth;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
+mod stderr_log;
 mod stdio_server_launcher;
 mod utils;
 
