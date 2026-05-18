@@ -88,9 +88,10 @@ pub trait ConfigContributor<C>: Send + Sync {
 /// Implementations should keep this callback cheap. The host calls it after
 /// updating cached token usage and before emitting the corresponding client
 /// token-count notification.
+#[async_trait::async_trait]
 pub trait TokenUsageContributor: Send + Sync {
     /// Called each time the host records token usage from a model response.
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,

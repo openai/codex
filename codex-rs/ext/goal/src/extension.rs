@@ -179,11 +179,12 @@ where
     }
 }
 
+#[async_trait]
 impl<C> TokenUsageContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
@@ -204,8 +205,6 @@ where
         // this recorded delta can be committed to the active persisted goal.
         // It also needs an event/input capability to emit ThreadGoalUpdated and
         // inject budget-limit steering when accounting changes goal status.
-        // TODO: if the storage/event path must await, TokenUsageContributor
-        // either needs to become async or receive a fire-and-forget host sink.
     }
 }
 
