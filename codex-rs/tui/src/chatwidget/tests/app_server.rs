@@ -4,13 +4,14 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
+    let visible_thread_id = ThreadId::new();
+    let request_thread_id = ThreadId::new();
+    chat.thread_id = Some(visible_thread_id);
 
     chat.handle_elicitation_request_now(
         codex_app_server_protocol::RequestId::Integer(9),
         codex_app_server_protocol::McpServerElicitationRequestParams {
-            thread_id: thread_id.to_string(),
+            thread_id: request_thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
             request: codex_app_server_protocol::McpServerElicitationRequest::Url {
@@ -33,7 +34,7 @@ async fn invalid_url_elicitation_is_declined() {
                 content: None,
                 meta: None,
             },
-        }) if op_thread_id == thread_id && server_name == "payments"
+        }) if op_thread_id == request_thread_id && server_name == "payments"
     );
 }
 
