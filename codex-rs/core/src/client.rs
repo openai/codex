@@ -147,6 +147,8 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+const INVALID_API_KEY_AUTH_MESSAGE: &str =
+    "The configured API key is invalid or unusable. Update your API key and try again.";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -188,6 +190,24 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
+}
+
+fn map_api_error_for_auth(err: ApiError, auth: Option<&CodexAuth>) -> CodexErr {
+    map_api_key_auth_failure(map_api_error(err), auth.map(CodexAuth::auth_mode))
+}
+
+fn map_api_key_auth_failure(err: CodexErr, auth_mode: Option<AuthMode>) -> CodexErr {
+    if auth_mode == Some(AuthMode::ApiKey)
+        && matches!(
+            err,
+            CodexErr::UnexpectedStatus(ref response)
+                if matches!(response.status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        )
+    {
+        CodexErr::InvalidRequest(INVALID_API_KEY_AUTH_MESSAGE.to_string())
+    } else {
+        err
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -509,7 +529,7 @@ impl ModelClient {
         let result = client
             .compact_input(&payload, extra_headers)
             .await
-            .map_err(map_api_error);
+            .map_err(|err| map_api_error_for_auth(err, client_setup.auth.as_ref()));
         trace_attempt.record_result(result.as_deref());
         result
     }
@@ -535,7 +555,7 @@ impl ModelClient {
             ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .create_with_session_and_headers(sdp, session_config, extra_headers)
                 .await
-                .map_err(map_api_error)?;
+                .map_err(|err| map_api_error_for_auth(err, client_setup.auth.as_ref()))?;
         Ok(RealtimeWebrtcCallStart {
             sdp: response.sdp,
             call_id: response.call_id,
@@ -588,7 +608,7 @@ impl ModelClient {
         client
             .summarize_input(&payload, self.build_subagent_headers())
             .await
-            .map_err(map_api_error)
+            .map_err(|err| map_api_error_for_auth(err, client_setup.auth.as_ref()))
     }
 
     fn build_subagent_headers(&self) -> ApiHeaderMap {
@@ -1285,6 +1305,7 @@ impl ModelClientSession {
                             unauthorized_transport,
                             &mut auth_recovery,
                             session_telemetry,
+                            client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                         )
                         .await?,
                     );
@@ -1293,7 +1314,7 @@ impl ModelClientSession {
                 Err(err) => {
                     let response_debug_context =
                         extract_response_debug_context_from_api_error(&err);
-                    let err = map_api_error(err);
+                    let err = map_api_error_for_auth(err, client_setup.auth.as_ref());
                     inference_trace_attempt.record_failed(
                         &err,
                         response_debug_context.request_id.as_deref(),
@@ -1398,12 +1419,13 @@ impl ModelClientSession {
                             unauthorized_transport,
                             &mut auth_recovery,
                             session_telemetry,
+                            client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                         )
                         .await?,
                     );
                     continue;
                 }
-                Err(err) => return Err(map_api_error(err)),
+                Err(err) => return Err(map_api_error_for_auth(err, client_setup.auth.as_ref())),
             }
 
             let mut ws_request = self.prepare_websocket_request(ws_payload, &request);
@@ -1429,7 +1451,7 @@ impl ModelClientSession {
                 .map_err(|err| {
                     let response_debug_context =
                         extract_response_debug_context_from_api_error(&err);
-                    let err = map_api_error(err);
+                    let err = map_api_error_for_auth(err, client_setup.auth.as_ref());
                     inference_trace_attempt.record_failed(
                         &err,
                         response_debug_context.request_id.as_deref(),
@@ -1954,6 +1976,7 @@ async fn handle_unauthorized(
     transport: TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,
+    auth_mode: Option<AuthMode>,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
     if let Some(recovery) = auth_recovery
@@ -2063,7 +2086,10 @@ async fn handle_unauthorized(
         debug.auth_error_code.as_deref(),
     );
 
-    Err(map_api_error(ApiError::Transport(transport)))
+    Err(map_api_key_auth_failure(
+        map_api_error(ApiError::Transport(transport)),
+        auth_mode,
+    ))
 }
 
 fn api_error_http_status(error: &ApiError) -> Option<u16> {

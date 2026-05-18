@@ -7,6 +7,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::map_api_key_auth_failure;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -23,6 +24,8 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::UnexpectedResponseError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -37,6 +40,7 @@ use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
 use futures::StreamExt;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -476,6 +480,46 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+fn api_key_unauthorized_error_points_to_recredentialing() {
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: r#"{"error":{"message":"Incorrect API key provided"}}"#.to_string(),
+        url: Some("https://api.openai.com/v1/responses".to_string()),
+        cf_ray: None,
+        request_id: Some("req-123".to_string()),
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+
+    let mapped = map_api_key_auth_failure(err, Some(AuthMode::ApiKey));
+
+    assert_eq!(
+        mapped.to_string(),
+        "The configured API key is invalid or unusable. Update your API key and try again."
+    );
+}
+
+#[test]
+fn chatgpt_unauthorized_error_keeps_original_status_context() {
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: StatusCode::UNAUTHORIZED,
+        body: r#"{"error":{"message":"Workspace is not authorized"}}"#.to_string(),
+        url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+        cf_ray: None,
+        request_id: Some("req-456".to_string()),
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+
+    let mapped = map_api_key_auth_failure(err, Some(AuthMode::Chatgpt));
+
+    assert_eq!(
+        mapped.to_string(),
+        "unexpected status 401 Unauthorized: Workspace is not authorized, url: https://chatgpt.com/backend-api/codex/responses, request id: req-456"
+    );
 }
 
 fn model_client_with_counting_attestation(

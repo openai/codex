@@ -12,6 +12,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use app_test_support::write_models_cache;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
@@ -36,6 +37,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::TextElement;
@@ -53,10 +55,12 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_core::test_support::all_model_presets;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_login::login_with_api_key;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -76,6 +80,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
@@ -87,6 +95,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const INVALID_API_KEY_MESSAGE: &str =
+    "The configured API key is invalid or unusable. Update your API key and try again.";
 const TINY_PNG_BYTES: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
     0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
@@ -97,6 +107,97 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     String::from_utf8(req.body.clone())
         .ok()
         .is_some_and(|body| body.contains(text))
+}
+
+#[tokio::test]
+async fn turn_start_with_invalid_api_key_auth_surfaces_recredential_message() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": { "message": "Incorrect API key provided" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ Some(true),
+        "mock_provider",
+        "compact",
+    )?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-invalid-key",
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let error: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("error"),
+    )
+    .await??;
+    let parsed: ServerNotification = error.try_into()?;
+    let ServerNotification::Error(error) = parsed else {
+        anyhow::bail!("unexpected notification variant");
+    };
+    assert_eq!(error.error.message, INVALID_API_KEY_MESSAGE);
+
+    let completed: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed
+            .params
+            .expect("turn/completed params should be present"),
+    )?;
+    assert_eq!(
+        completed
+            .turn
+            .error
+            .as_ref()
+            .map(|error| error.message.as_str()),
+        Some(INVALID_API_KEY_MESSAGE)
+    );
+
+    server.verify().await;
+    Ok(())
 }
 
 async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>> {
