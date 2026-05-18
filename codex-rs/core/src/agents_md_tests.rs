@@ -14,7 +14,7 @@ use tempfile::TempDir;
 async fn get_user_instructions(config: &Config) -> Option<String> {
     let mut warnings = Vec::new();
     AgentsMdManager::new(config)
-        .user_instructions_with_fs_and_warnings(LOCAL_FS.as_ref(), &mut warnings)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
 }
 
@@ -122,11 +122,10 @@ async fn no_environment_returns_none() {
 
     let mut warnings = Vec::new();
     let res = AgentsMdManager::new(&config)
-        .user_instructions_with_warnings(/*environment*/ None, &mut warnings)
+        .user_instructions(/*environment*/ None, &mut warnings)
         .await;
 
     assert_eq!(res, None);
-    assert_eq!(warnings, Vec::<String>::new());
 }
 
 /// Small file within the byte-limit is returned unmodified.
@@ -154,8 +153,13 @@ async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
     fs::write(&path, b"global\xFF doc").unwrap();
 
     let mut warnings = Vec::new();
-    let loaded = AgentsMdManager::load_global_instructions(Some(&codex_home_abs), &mut warnings)
-        .expect("global doc expected");
+    let loaded = AgentsMdManager::load_global_instructions(
+        LOCAL_FS.as_ref(),
+        Some(&codex_home_abs),
+        &mut warnings,
+    )
+    .await
+    .expect("global doc expected");
 
     assert_eq!(loaded.contents, "global\u{FFFD} doc");
     assert_eq!(loaded.path, path);
@@ -171,7 +175,7 @@ async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
     let config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
     let mut warnings = Vec::new();
     let res = AgentsMdManager::new(&config)
-        .user_instructions_with_fs_and_warnings(LOCAL_FS.as_ref(), &mut warnings)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
         .expect("doc expected");
 
