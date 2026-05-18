@@ -42,8 +42,8 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnContextOverrides;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -185,9 +185,9 @@ pub(super) async fn user_input_or_turn_inner(
             personality,
             environments,
         } => {
-            let mut updates = turn_context_settings_update(
+            let mut updates = thread_settings_update(
                 sess,
-                TurnContextOverrides {
+                ThreadSettingsOverrides {
                     cwd,
                     workspace_roots,
                     profile_workspace_roots,
@@ -215,12 +215,12 @@ pub(super) async fn user_input_or_turn_inner(
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
-            turn_context,
+            thread_settings,
         } => {
-            let mut updates = if turn_context == TurnContextOverrides::default() {
+            let mut updates = if thread_settings == ThreadSettingsOverrides::default() {
                 SessionSettingsUpdate::default()
             } else {
-                turn_context_settings_update(sess, turn_context).await
+                thread_settings_update(sess, thread_settings).await
             };
             updates.final_output_json_schema = Some(final_output_json_schema);
             updates.environments = environments;
@@ -282,11 +282,11 @@ pub(super) async fn user_input_or_turn_inner(
     }
 }
 
-async fn turn_context_settings_update(
+async fn thread_settings_update(
     sess: &Session,
-    turn_context: TurnContextOverrides,
+    thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
-    let TurnContextOverrides {
+    let ThreadSettingsOverrides {
         cwd,
         workspace_roots,
         profile_workspace_roots,
@@ -302,7 +302,7 @@ async fn turn_context_settings_update(
         service_tier,
         collaboration_mode,
         personality,
-    } = turn_context;
+    } = thread_settings;
     let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
         collaboration_mode
     } else {

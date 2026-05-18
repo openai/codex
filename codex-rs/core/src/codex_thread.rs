@@ -80,9 +80,9 @@ impl ThreadConfigSnapshot {
     }
 }
 
-/// Turn context overrides that app-server validates before starting a turn.
+/// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
-pub struct CodexThreadTurnContextOverrides {
+pub struct CodexThreadSettingsOverrides {
     pub cwd: Option<PathBuf>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
@@ -255,12 +255,12 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
-    pub async fn validate_turn_context_overrides(
+    /// Validate persistent thread settings overrides without committing them.
+    pub async fn validate_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let CodexThreadTurnContextOverrides {
+        let CodexThreadSettingsOverrides {
             cwd,
             workspace_roots,
             profile_workspace_roots,

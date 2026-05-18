@@ -396,9 +396,9 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
-/// Persistent turn-context overrides that can be applied before user input.
+/// Persistent thread-settings overrides that can be applied before user input.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
-pub struct TurnContextOverrides {
+pub struct ThreadSettingsOverrides {
     /// Updated `cwd` for sandbox/tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
@@ -499,7 +499,7 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
-    /// User input, optionally with turn-context overrides applied first.
+    /// User input, optionally with thread-settings overrides applied first.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -513,12 +513,12 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
 
-        /// Persistent turn-context overrides to apply before the input.
+        /// Persistent thread-settings overrides to apply before the input.
         #[serde(default, flatten)]
-        turn_context: TurnContextOverrides,
+        thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Similar to [`Op::UserInput`], but first applies persistent turn-context
+    /// Similar to [`Op::UserInput`], but first applies persistent thread-settings
     /// overrides in the same queued operation. This preserves submission order
     /// and prevents the input from starting if the overrides are rejected.
     UserInputWithTurnContext {
@@ -681,11 +681,11 @@ pub enum Op {
         communication: InterAgentCommunication,
     },
 
-    /// Override parts of the persistent turn context for subsequent turns.
+    /// Override parts of the persistent thread settings for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
     /// This does not enqueue any input – it only updates defaults used for
-    /// turns that rely on persistent session-level context (for example,
+    /// turns that rely on persistent session-level settings (for example,
     /// [`Op::UserInput`]).
     OverrideTurnContext {
         /// Updated `cwd` for sandbox/tool calls.
@@ -865,7 +865,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: TurnContextOverrides::default(),
+            thread_settings: ThreadSettingsOverrides::default(),
         }
     }
 }
@@ -5108,7 +5108,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5128,7 +5128,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
-                turn_context: Default::default(),
+                thread_settings: Default::default(),
             }
         );
 
@@ -5150,7 +5150,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5176,7 +5176,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(&op)?;

@@ -508,7 +508,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-/// Scenario: rolling back a turn that introduced persistent pre-turn context
+/// Scenario: rolling back a turn that introduced persistent thread settings
 /// diffs should trim those context updates so the next request includes them
 /// only once.
 async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
@@ -790,7 +790,7 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user turn");

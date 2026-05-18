@@ -121,7 +121,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
             items: vec![expected_input.clone()],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -180,7 +180,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -241,7 +241,7 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -303,7 +303,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -383,7 +383,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -470,7 +470,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -526,7 +526,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -1110,7 +1110,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -1165,7 +1165,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
