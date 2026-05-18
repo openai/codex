@@ -59,11 +59,11 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSettings;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
-use codex_app_server_protocol::ThreadTurnContext;
-use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -199,7 +199,7 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
 }
 
 #[tokio::test]
-async fn turn_context_updated_notification_reaches_active_thread_ui() -> Result<()> {
+async fn thread_settings_updated_notification_reaches_active_thread_ui() -> Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     let cwd = test_path_buf("/tmp/project").abs();
@@ -209,9 +209,9 @@ async fn turn_context_updated_notification_reaches_active_thread_ui() -> Result<
     )
     .await?;
 
-    app.handle_thread_turn_context_updated_notification(ThreadTurnContextUpdatedNotification {
+    app.handle_thread_settings_updated_notification(ThreadSettingsUpdatedNotification {
         thread_id: thread_id.to_string(),
-        turn_context: test_thread_turn_context("gpt-updated", cwd),
+        thread_settings: test_thread_settings("gpt-updated", cwd),
     })
     .await;
 
@@ -234,7 +234,7 @@ async fn turn_context_updated_notification_reaches_active_thread_ui() -> Result<
 }
 
 #[tokio::test]
-async fn turn_context_updated_notification_for_hidden_thread_updates_cache_only() -> Result<()> {
+async fn thread_settings_updated_notification_for_hidden_thread_updates_cache_only() -> Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let active_thread_id = ThreadId::new();
     let hidden_thread_id = ThreadId::new();
@@ -254,9 +254,9 @@ async fn turn_context_updated_notification_for_hidden_thread_updates_cache_only(
         ),
     );
 
-    app.handle_thread_turn_context_updated_notification(ThreadTurnContextUpdatedNotification {
+    app.handle_thread_settings_updated_notification(ThreadSettingsUpdatedNotification {
         thread_id: hidden_thread_id.to_string(),
-        turn_context: test_thread_turn_context("gpt-hidden", hidden_cwd),
+        thread_settings: test_thread_settings("gpt-hidden", hidden_cwd),
     })
     .await;
 
@@ -1768,7 +1768,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     );
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
@@ -1860,7 +1860,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -1938,7 +1938,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
@@ -1995,7 +1995,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
     );
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -2054,7 +2054,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     );
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
@@ -2141,7 +2141,7 @@ guardian_approval = true
     );
     assert_eq!(
         op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
+        Ok(Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -4080,8 +4080,8 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
     }
 }
 
-fn test_thread_turn_context(model: &str, cwd: AbsolutePathBuf) -> ThreadTurnContext {
-    ThreadTurnContext {
+fn test_thread_settings(model: &str, cwd: AbsolutePathBuf) -> ThreadSettings {
+    ThreadSettings {
         model: model.to_string(),
         model_provider: "test-provider".to_string(),
         service_tier: Some(ServiceTier::Fast.request_value().to_string()),
@@ -5341,7 +5341,7 @@ fn interrupt_without_active_turn_is_treated_as_handled() {
 }
 
 #[test]
-fn override_turn_context_updates_app_server_next_turn_state() {
+fn update_thread_settings_updates_app_server_next_turn_state() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_stack_size(16 * 1024 * 1024)
@@ -5364,7 +5364,7 @@ fn override_turn_context_updates_app_server_next_turn_state() {
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
-        let op = AppCommand::override_turn_context(
+        let op = AppCommand::update_thread_settings(
             /*cwd*/ None,
             /*approval_policy*/ None,
             /*approvals_reviewer*/ None,
@@ -5384,11 +5384,11 @@ fn override_turn_context_updates_app_server_next_turn_state() {
             &op,
         ))
         .await
-        .expect("override should update app-server turn context");
+        .expect("update should apply app-server thread settings");
         assert_eq!(handled, true);
 
         let response = app_server
-            .thread_turn_context_update(
+            .thread_settings_update(
                 thread_id, /*cwd*/ None, /*approval_policy*/ None,
                 /*approvals_reviewer*/ None, /*active_permission_profile*/ None,
                 /*model*/ None, /*effort*/ None, /*summary*/ None,
@@ -5396,10 +5396,10 @@ fn override_turn_context_updates_app_server_next_turn_state() {
                 /*personality*/ None,
             )
             .await
-            .expect("thread/turnContext/update should return current state");
-        assert_eq!(response.turn_context.model, "gpt-5.2");
+            .expect("thread/settings/update should return current state");
+        assert_eq!(response.thread_settings.model, "gpt-5.2");
         assert_eq!(
-            response.turn_context.effort,
+            response.thread_settings.effort,
             Some(codex_protocol::openai_models::ReasoningEffort::Low)
         );
         app_server

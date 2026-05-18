@@ -2,9 +2,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn turn_context_updated_notification_refreshes_active_ui_state_without_history() {
+async fn thread_settings_updated_notification_refreshes_active_ui_state_without_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    let cwd = test_path_buf("/tmp/turn-context").abs();
+    let cwd = test_path_buf("/tmp/thread-settings").abs();
     let permission_profile = PermissionProfile::workspace_write();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Plan,
@@ -16,10 +16,10 @@ async fn turn_context_updated_notification_refreshes_active_ui_state_without_his
     };
 
     chat.handle_server_notification(
-        ServerNotification::ThreadTurnContextUpdated(
-            codex_app_server_protocol::ThreadTurnContextUpdatedNotification {
+        ServerNotification::ThreadSettingsUpdated(
+            codex_app_server_protocol::ThreadSettingsUpdatedNotification {
                 thread_id: ThreadId::new().to_string(),
-                turn_context: codex_app_server_protocol::ThreadTurnContext {
+                thread_settings: codex_app_server_protocol::ThreadSettings {
                     model: "gpt-5.2".to_string(),
                     model_provider: "openai".to_string(),
                     service_tier: Some(ServiceTier::Fast.request_value().to_string()),

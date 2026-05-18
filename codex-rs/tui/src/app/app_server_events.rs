@@ -12,7 +12,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_protocol::ThreadId;
 
 impl App {
@@ -64,8 +64,8 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
-        if let ServerNotification::ThreadTurnContextUpdated(notification) = notification {
-            self.handle_thread_turn_context_updated_notification(notification)
+        if let ServerNotification::ThreadSettingsUpdated(notification) = notification {
+            self.handle_thread_settings_updated_notification(notification)
                 .await;
             return;
         }
@@ -147,33 +147,36 @@ impl App {
             .handle_server_notification(notification, /*replay_kind*/ None);
     }
 
-    pub(super) async fn handle_thread_turn_context_updated_notification(
+    pub(super) async fn handle_thread_settings_updated_notification(
         &mut self,
-        notification: ThreadTurnContextUpdatedNotification,
+        notification: ThreadSettingsUpdatedNotification,
     ) {
         let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
             tracing::warn!(
                 thread_id = notification.thread_id,
-                "ignoring turn context update with invalid thread_id"
+                "ignoring thread settings update with invalid thread_id"
             );
             return;
         };
 
         let update_session = |session: &mut crate::session_state::ThreadSessionState| {
-            session.model = notification.turn_context.model.clone();
-            session.model_provider_id = notification.turn_context.model_provider.clone();
-            session.service_tier = notification.turn_context.service_tier.clone();
-            session.cwd = notification.turn_context.cwd.clone();
-            session.approval_policy = notification.turn_context.approval_policy;
-            session.approvals_reviewer = notification.turn_context.approvals_reviewer.to_core();
-            session.permission_profile =
-                notification.turn_context.permission_profile.clone().into();
+            session.model = notification.thread_settings.model.clone();
+            session.model_provider_id = notification.thread_settings.model_provider.clone();
+            session.service_tier = notification.thread_settings.service_tier.clone();
+            session.cwd = notification.thread_settings.cwd.clone();
+            session.approval_policy = notification.thread_settings.approval_policy;
+            session.approvals_reviewer = notification.thread_settings.approvals_reviewer.to_core();
+            session.permission_profile = notification
+                .thread_settings
+                .permission_profile
+                .clone()
+                .into();
             session.active_permission_profile = notification
-                .turn_context
+                .thread_settings
                 .active_permission_profile
                 .clone()
                 .map(codex_protocol::models::ActivePermissionProfile::from);
-            session.reasoning_effort = notification.turn_context.effort;
+            session.reasoning_effort = notification.thread_settings.effort;
         };
 
         if self.primary_thread_id == Some(thread_id)
@@ -193,7 +196,7 @@ impl App {
         }
 
         self.chat_widget.handle_server_notification(
-            ServerNotification::ThreadTurnContextUpdated(notification),
+            ServerNotification::ThreadSettingsUpdated(notification),
             /*replay_kind*/ None,
         );
     }

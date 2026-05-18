@@ -49,7 +49,7 @@ impl ChatWidget {
                 let name = Self::personality_label(personality).to_string();
                 let description = Some(Self::personality_description(personality).to_string());
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                    tx.send(AppEvent::CodexOp(AppCommand::update_thread_settings(
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,

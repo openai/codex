@@ -685,7 +685,7 @@ impl App {
                 self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
-            AppCommand::OverrideTurnContext {
+            AppCommand::UpdateThreadSettings {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
@@ -699,7 +699,7 @@ impl App {
                 personality,
             } => {
                 app_server
-                    .thread_turn_context_update(
+                    .thread_settings_update(
                         thread_id,
                         cwd.clone(),
                         *approval_policy,

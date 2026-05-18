@@ -103,7 +103,7 @@ impl ChatWidget {
         }
         self.set_service_tier(service_tier.clone());
         self.app_event_tx
-            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
+            .send(AppEvent::CodexOp(AppCommand::update_thread_settings(
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,

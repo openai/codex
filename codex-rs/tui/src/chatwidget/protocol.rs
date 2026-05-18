@@ -51,8 +51,8 @@ impl ChatWidget {
             ServerNotification::ThreadGoalCleared(notification) => {
                 self.on_thread_goal_cleared(notification.thread_id.as_str());
             }
-            ServerNotification::ThreadTurnContextUpdated(notification) => {
-                self.apply_thread_turn_context(notification.turn_context);
+            ServerNotification::ThreadSettingsUpdated(notification) => {
+                self.apply_thread_settings(notification.thread_settings);
             }
             ServerNotification::TurnStarted(notification) => {
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
@@ -244,28 +244,28 @@ impl ChatWidget {
         }
     }
 
-    fn apply_thread_turn_context(
+    fn apply_thread_settings(
         &mut self,
-        turn_context: codex_app_server_protocol::ThreadTurnContext,
+        thread_settings: codex_app_server_protocol::ThreadSettings,
     ) {
-        self.current_cwd = Some(turn_context.cwd.to_path_buf());
-        self.config.cwd = turn_context.cwd;
-        self.config.model_reasoning_summary = turn_context.summary;
-        self.config.personality = turn_context.personality;
-        self.effective_service_tier = turn_context.service_tier.clone();
-        self.config.service_tier = turn_context.service_tier;
+        self.current_cwd = Some(thread_settings.cwd.to_path_buf());
+        self.config.cwd = thread_settings.cwd;
+        self.config.model_reasoning_summary = thread_settings.summary;
+        self.config.personality = thread_settings.personality;
+        self.effective_service_tier = thread_settings.service_tier.clone();
+        self.config.service_tier = thread_settings.service_tier;
         if let Err(err) = self
             .config
             .permissions
             .approval_policy
-            .set(turn_context.approval_policy.to_core())
+            .set(thread_settings.approval_policy.to_core())
         {
-            tracing::warn!(%err, "failed to sync approval_policy from turn context update");
+            tracing::warn!(%err, "failed to sync approval_policy from thread settings update");
             self.config.permissions.approval_policy =
-                Constrained::allow_only(turn_context.approval_policy.to_core());
+                Constrained::allow_only(thread_settings.approval_policy.to_core());
         }
-        let permission_profile: PermissionProfile = turn_context.permission_profile.into();
-        let active_permission_profile = turn_context
+        let permission_profile: PermissionProfile = thread_settings.permission_profile.into();
+        let active_permission_profile = thread_settings
             .active_permission_profile
             .map(codex_protocol::models::ActivePermissionProfile::from);
         let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
@@ -277,7 +277,7 @@ impl ChatWidget {
             .permissions
             .set_permission_profile_from_session_snapshot(permission_snapshot.clone())
         {
-            tracing::warn!(%err, "failed to sync permissions from turn context update");
+            tracing::warn!(%err, "failed to sync permissions from thread settings update");
             if let Err(replace_err) = self
                 .config
                 .permissions
@@ -285,12 +285,12 @@ impl ChatWidget {
             {
                 tracing::warn!(
                     %replace_err,
-                    "failed to replace permissions from turn context update"
+                    "failed to replace permissions from thread settings update"
                 );
             }
         }
-        self.config.approvals_reviewer = turn_context.approvals_reviewer.to_core();
-        self.current_collaboration_mode = turn_context.collaboration_mode;
+        self.config.approvals_reviewer = thread_settings.approvals_reviewer.to_core();
+        self.current_collaboration_mode = thread_settings.collaboration_mode;
         self.active_collaboration_mask = Some(CollaborationModeMask {
             name: self
                 .current_collaboration_mode
@@ -298,8 +298,8 @@ impl ChatWidget {
                 .display_name()
                 .to_string(),
             mode: Some(self.current_collaboration_mode.mode),
-            model: Some(turn_context.model),
-            reasoning_effort: Some(turn_context.effort),
+            model: Some(thread_settings.model),
+            reasoning_effort: Some(thread_settings.effort),
             developer_instructions: Some(
                 self.current_collaboration_mode
                     .settings

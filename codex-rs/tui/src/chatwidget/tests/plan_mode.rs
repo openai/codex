@@ -9,13 +9,13 @@ fn collaboration_override(events: &[AppEvent]) -> &CollaborationMode {
     events
         .iter()
         .find_map(|event| match event {
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(Op::UpdateThreadSettings {
                 collaboration_mode: Some(mode),
                 ..
             }) => Some(mode),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("expected next-turn state override; events: {events:?}"))
+        .unwrap_or_else(|| panic!("expected thread settings update; events: {events:?}"))
 }
 
 #[test]

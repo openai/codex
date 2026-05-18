@@ -227,7 +227,7 @@ impl ChatWidget {
                 return;
             }
 
-            tx.send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+            tx.send(AppEvent::CodexOp(AppCommand::update_model_and_effort(
                 model_for_action.clone(),
                 effort_for_action,
             )));
@@ -493,7 +493,7 @@ impl ChatWidget {
                         effort: choice_effort,
                     });
                 } else {
-                    tx.send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+                    tx.send(AppEvent::CodexOp(AppCommand::update_model_and_effort(
                         model_for_action.clone(),
                         choice_effort,
                     )));
@@ -548,7 +548,7 @@ impl ChatWidget {
         effort: Option<ReasoningEffortConfig>,
     ) {
         self.app_event_tx
-            .send(AppEvent::CodexOp(AppCommand::override_model_and_effort(
+            .send(AppEvent::CodexOp(AppCommand::update_model_and_effort(
                 model.clone(),
                 effort,
             )));

@@ -87,14 +87,14 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
-use codex_app_server_protocol::ThreadTurnContextUpdateParams;
-use codex_app_server_protocol::ThreadTurnContextUpdateResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -606,7 +606,7 @@ impl AppServerSession {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn thread_turn_context_update(
+    pub(crate) async fn thread_settings_update(
         &mut self,
         thread_id: ThreadId,
         cwd: Option<PathBuf>,
@@ -619,13 +619,13 @@ impl AppServerSession {
         service_tier: Option<Option<String>>,
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         personality: Option<codex_protocol::config_types::Personality>,
-    ) -> Result<ThreadTurnContextUpdateResponse> {
+    ) -> Result<ThreadSettingsUpdateResponse> {
         let request_id = self.next_request_id();
         let permissions = active_permission_profile.map(permissions_selection_from_active_profile);
         self.client
-            .request_typed(ClientRequest::ThreadTurnContextUpdate {
+            .request_typed(ClientRequest::ThreadSettingsUpdate {
                 request_id,
-                params: ThreadTurnContextUpdateParams {
+                params: ThreadSettingsUpdateParams {
                     thread_id: thread_id.to_string(),
                     cwd,
                     approval_policy,
@@ -641,7 +641,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/turnContext/update failed in TUI")
+            .wrap_err("thread/settings/update failed in TUI")
     }
 
     pub(crate) async fn turn_interrupt(

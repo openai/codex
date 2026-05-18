@@ -313,7 +313,7 @@ impl ChatWidget {
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+            tx.send(AppEvent::CodexOp(AppCommand::update_thread_settings(
                 /*cwd*/ None,
                 Some(approval),
                 Some(approvals_reviewer),

@@ -353,7 +353,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(Op::UpdateThreadSettings {
                 approval_policy: Some(AskForApproval::OnRequest),
                 personality: None,
                 ..
@@ -364,7 +364,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         !app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(Op::UpdateThreadSettings {
                 approval_policy: Some(AskForApproval::Never),
                 personality: None,
                 ..
@@ -687,7 +687,7 @@ async fn permissions_selection_can_disable_auto_review() {
 }
 
 #[tokio::test]
-async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context() {
+async fn permissions_selection_sends_approvals_reviewer_in_update_thread_settings() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -728,14 +728,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
-            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
+            AppEvent::CodexOp(op @ Op::UpdateThreadSettings { .. }) => Some(op),
             _ => None,
         })
-        .expect("expected OverrideTurnContext op");
+        .expect("expected UpdateThreadSettings op");
 
     assert_eq!(
         op,
-        Op::OverrideTurnContext {
+        Op::UpdateThreadSettings {
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),

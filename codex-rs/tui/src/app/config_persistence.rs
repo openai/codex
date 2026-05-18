@@ -351,12 +351,12 @@ impl App {
         {
             self.sync_active_thread_permission_settings_to_cached_session()
                 .await;
-            // This uses `OverrideTurnContext` intentionally: toggling the
+            // This uses `UpdateThreadSettings` intentionally: toggling the
             // experiment should update the active thread's effective approval
             // settings immediately, just like a `/permissions` selection. Without
             // this runtime patch, the config edit would only affect future
             // sessions or turns recreated from disk.
-            let op = AppCommand::override_turn_context(
+            let op = AppCommand::update_thread_settings(
                 /*cwd*/ None,
                 approval_policy_override,
                 approvals_reviewer_override,
@@ -383,7 +383,7 @@ impl App {
             {
                 let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
                 self.app_event_tx
-                    .send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                    .send(AppEvent::CodexOp(AppCommand::update_thread_settings(
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,

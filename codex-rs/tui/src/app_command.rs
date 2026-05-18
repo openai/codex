@@ -50,7 +50,7 @@ pub(crate) enum AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     },
-    OverrideTurnContext {
+    UpdateThreadSettings {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
@@ -168,7 +168,7 @@ impl AppCommand {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn override_turn_context(
+    pub(crate) fn update_thread_settings(
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
@@ -181,7 +181,7 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
-        Self::OverrideTurnContext {
+        Self::UpdateThreadSettings {
             cwd,
             approval_policy,
             approvals_reviewer,
@@ -196,11 +196,11 @@ impl AppCommand {
         }
     }
 
-    pub(crate) fn override_model_and_effort(
+    pub(crate) fn update_model_and_effort(
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) -> Self {
-        Self::override_turn_context(
+        Self::update_thread_settings(
             /*cwd*/ None,
             /*approval_policy*/ None,
             /*approvals_reviewer*/ None,
@@ -215,8 +215,8 @@ impl AppCommand {
         )
     }
 
-    pub(crate) fn override_collaboration_mode(collaboration_mode: CollaborationMode) -> Self {
-        Self::override_turn_context(
+    pub(crate) fn update_collaboration_mode(collaboration_mode: CollaborationMode) -> Self {
+        Self::update_thread_settings(
             /*cwd*/ None,
             /*approval_policy*/ None,
             /*approvals_reviewer*/ None,

@@ -16,14 +16,14 @@ fn assert_model_effort_override(
 ) {
     assert!(
         events.iter().any(|event| match event {
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::CodexOp(Op::UpdateThreadSettings {
                 model: Some(model),
                 effort: Some(Some(effort)),
                 ..
             }) => model == expected_model && effort == &expected_effort,
             _ => false,
         }),
-        "expected model/effort next-turn state override; events: {events:?}"
+        "expected model/effort thread settings update; events: {events:?}"
     );
 }
 
@@ -2408,7 +2408,7 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[test]
-fn quick_model_selection_emits_turn_context_override() {
+fn quick_model_selection_emits_thread_settings_override() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sender = AppEventSender::new(tx);
     let actions = ChatWidget::model_selection_actions(
@@ -2559,10 +2559,10 @@ async fn server_overloaded_error_does_not_switch_models() {
     }
 
     while let Ok(event) = op_rx.try_recv() {
-        if let Op::OverrideTurnContext { model, .. } = event {
+        if let Op::UpdateThreadSettings { model, .. } = event {
             assert!(
                 model.is_none(),
-                "did not expect OverrideTurnContext model update on server-overloaded error"
+                "did not expect UpdateThreadSettings model update on server-overloaded error"
             );
         }
     }

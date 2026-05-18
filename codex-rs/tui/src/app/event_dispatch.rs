@@ -1107,7 +1107,7 @@ impl App {
                                 self.chat_widget.world_writable_warning_details()
                             {
                                 self.app_event_tx.send(AppEvent::CodexOp(
-                                    AppCommand::override_turn_context(
+                                    AppCommand::update_thread_settings(
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
@@ -1132,7 +1132,7 @@ impl App {
                                 );
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
-                                    AppCommand::override_turn_context(
+                                    AppCommand::update_thread_settings(
                                         /*cwd*/ None,
                                         Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
