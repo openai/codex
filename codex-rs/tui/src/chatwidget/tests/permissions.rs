@@ -70,10 +70,10 @@ async fn profile_permissions_selection_popup_snapshot() {
     chat.config.explicit_permission_profile_mode = true;
     chat.config
         .permissions
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
-        )
+            ActivePermissionProfile::new(":workspace"),
+        ))
         .expect("set active profile");
 
     chat.open_permissions_popup();
@@ -92,10 +92,10 @@ async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
         vec!["locked-down".to_string(), "web-enabled".to_string()];
     chat.config
         .permissions
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new("locked-down")),
-        )
+            ActivePermissionProfile::new("locked-down"),
+        ))
         .expect("set active profile");
 
     chat.open_permissions_popup();
@@ -116,10 +116,10 @@ async fn profile_permissions_selection_emits_named_profile_event_only() {
     chat.config.explicit_permission_profile_mode = true;
     chat.config
         .permissions
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
-        )
+            ActivePermissionProfile::new(":workspace"),
+        ))
         .expect("set active profile");
 
     chat.open_permissions_popup();
@@ -145,10 +145,10 @@ async fn profile_permissions_selection_emits_active_custom_profile() {
     chat.config.custom_permission_profile_ids = vec!["locked-down".to_string()];
     chat.config
         .permissions
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new("locked-down")),
-        )
+            ActivePermissionProfile::new("locked-down"),
+        ))
         .expect("set active profile");
 
     chat.open_permissions_popup();
@@ -177,10 +177,10 @@ async fn profile_permissions_selection_emits_auto_review_mode_event() {
     chat.config.explicit_permission_profile_mode = true;
     chat.config
         .permissions
-        .set_permission_profile_from_session_snapshot(
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
-        )
+            ActivePermissionProfile::new(":workspace"),
+        ))
         .expect("set active profile");
 
     chat.open_permissions_popup();
