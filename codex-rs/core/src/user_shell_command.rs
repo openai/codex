@@ -4,15 +4,24 @@ use codex_protocol::models::ResponseItem;
 use crate::context::ContextualUserFragment;
 use crate::context::UserShellCommand;
 use crate::session::turn_context::TurnContext;
-use crate::tools::format_exec_output_str;
+use crate::tools::format_exec_output_str_with_original_token_count;
 
 fn user_shell_command_fragment(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> UserShellCommand {
-    let output = format_exec_output_str(exec_output, turn_context.truncation_policy);
-    UserShellCommand::new(command, exec_output.exit_code, exec_output.duration, output)
+    let (output, original_token_count) = format_exec_output_str_with_original_token_count(
+        exec_output,
+        turn_context.truncation_policy,
+    );
+    UserShellCommand::new(
+        command,
+        exec_output.exit_code,
+        exec_output.duration,
+        output,
+        original_token_count,
+    )
 }
 
 #[cfg(test)]

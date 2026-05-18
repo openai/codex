@@ -69,12 +69,11 @@ fn parse_unified_exec_output(raw: &str) -> Result<ParsedUnifiedExecOutput> {
     static OUTPUT_REGEX: OnceLock<Regex> = OnceLock::new();
     let regex = OUTPUT_REGEX.get_or_init(|| {
         Regex::new(concat!(
-            r#"(?s)^(?:Total output lines: \d+\n\n)?"#,
-            r#"(?:Chunk ID: (?P<chunk_id>[^\n]+)\n)?"#,
+            r#"(?s)^(?:Chunk ID: (?P<chunk_id>[^\n]+)\n)?"#,
             r#"Wall time: (?P<wall_time>-?\d+(?:\.\d+)?) seconds\n"#,
             r#"(?:Process exited with code (?P<exit_code>-?\d+)\n)?"#,
             r#"(?:Process running with session ID (?P<process_id>-?\d+)\n)?"#,
-            r#"(?:Original token count: (?P<original_token_count>\d+)\n)?"#,
+            r#"(?:Warning: truncated output \(original token count: (?P<original_token_count>\d+)\)\n)?"#,
             r#"Output:\n?(?P<output>.*)$"#,
         ))
         .expect("valid unified exec output regex")
@@ -166,6 +165,13 @@ async fn wait_for_raw_unified_exec_output(
     test: &TestCodex,
     call_id: &str,
 ) -> Result<ParsedUnifiedExecOutput> {
+    let content = wait_for_raw_unified_exec_output_text(test, call_id).await?;
+
+    parse_unified_exec_output(&content)
+        .with_context(|| format!("failed to parse raw unified exec output for {call_id}"))
+}
+
+async fn wait_for_raw_unified_exec_output_text(test: &TestCodex, call_id: &str) -> Result<String> {
     let content = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::RawResponseItem(raw) => match &raw.item {
             ResponseItem::FunctionCallOutput {
@@ -178,8 +184,7 @@ async fn wait_for_raw_unified_exec_output(
     })
     .await;
 
-    parse_unified_exec_output(&content)
-        .with_context(|| format!("failed to parse raw unified exec output for {call_id}"))
+    Ok(content)
 }
 
 async fn submit_unified_exec_turn(
@@ -1454,6 +1459,67 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_omits_truncation_warning_for_untruncated_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+
+    let call_id = "uexec-untruncated-output";
+    let args = serde_json::json!({
+        "cmd": "printf 'short output'",
+        "yield_time_ms": 500,
+        "max_output_tokens": 100,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(&test, "run short output", PermissionProfile::Disabled).await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let raw_output = request_log
+        .function_call_output_text(call_id)
+        .context("function_call_output present for exec_command call")?;
+    let raw_output = raw_output.replace("\r\n", "\n");
+    assert_regex_match(
+        concat!(
+            r"\AChunk ID: [0-9a-f]{6}\n",
+            r"Wall time: \d+\.\d{4} seconds\n",
+            r"Process exited with code 0\n",
+            r"Output:\n",
+            r"short output\z",
+        ),
+        &raw_output,
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -1499,12 +1565,26 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
     )
     .await?;
 
-    let output = wait_for_raw_unified_exec_output(&test, call_id).await?;
-    assert_eq!(output.original_token_count, Some(8_991));
-    let output_text = output.output.replace("\r\n", "\n");
+    let raw_output = wait_for_raw_unified_exec_output_text(&test, call_id)
+        .await?
+        .replace("\r\n", "\n");
     assert_regex_match(
-        r"^Total output lines: 999\n\nEXEC-LINE-0001 x{20}\nEXEC-LINE-0002 x{20}\nEXEC-LINE-0003 x{13}…8941 tokens truncated…E-0997 x{20}\nEXEC-LINE-0998 x{20}\nEXEC-LINE-0999 x{20}\n$",
-        &output_text,
+        concat!(
+            r"\AChunk ID: [0-9a-f]{6}\n",
+            r"Wall time: \d+\.\d{4} seconds\n",
+            r"Process exited with code 0\n",
+            r"Warning: truncated output \(original token count: 8991\)\n",
+            r"Output:\n",
+            r"EXEC-LINE-0001 x{20}\n",
+            r"EXEC-LINE-0002 x{20}\n",
+            r"EXEC-LINE-0003 x{13}",
+            r"…8941 tokens truncated…",
+            r"E-0997 x{20}\n",
+            r"EXEC-LINE-0998 x{20}\n",
+            r"EXEC-LINE-0999 x{20}\n",
+            r"\z",
+        ),
+        &raw_output,
     );
 
     wait_for_event(&test.codex, |event| {
@@ -1592,7 +1672,7 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
     assert_eq!(stdin_output.original_token_count, Some(9_492));
     let stdin_output_text = stdin_output.output.replace("\r\n", "\n");
     assert_regex_match(
-        r"^Total output lines: 1000\n\ngo\nSTDIN-LINE-0001 y{20}\nSTDIN-LINE-0002 y{20}\nSTDIN-LINE-0003 yyyy…9442 tokens truncated…7 y{20}\nSTDIN-LINE-0998 y{20}\nSTDIN-LINE-0999 y{20}\n$",
+        r"^go\nSTDIN-LINE-0001 y{20}\nSTDIN-LINE-0002 y{20}\nSTDIN-LINE-0003 yyyy…9442 tokens truncated…7 y{20}\nSTDIN-LINE-0998 y{20}\nSTDIN-LINE-0999 y{20}\n$",
         &stdin_output_text,
     );
 
@@ -2628,7 +2708,8 @@ PY
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
     let output_text = large_output.output.replace("\r\n", "\n");
-    let truncated_pattern = r"(?s)^Total output lines: \d+\n\n(token token \n){5,}.*…\d+ tokens truncated….*(token token \n){5,}$";
+    let truncated_pattern =
+        r"(?s)^(token token \n){5,}.*…\d+ tokens truncated….*(token token \n){5,}$";
     assert_regex_match(truncated_pattern, &output_text);
 
     let original_tokens = large_output

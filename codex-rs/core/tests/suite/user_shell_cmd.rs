@@ -435,12 +435,11 @@ async fn user_shell_command_output_is_truncated_in_history() -> anyhow::Result<(
 
     let head = (1..=69).map(|i| format!("{i}\n")).collect::<String>();
     let tail = (352..=400).map(|i| format!("{i}\n")).collect::<String>();
-    let truncated_body =
-        format!("Total output lines: 400\n\n{head}70…273 tokens truncated…351\n{tail}");
+    let truncated_body = format!("{head}70…273 tokens truncated…351\n{tail}");
     let escaped_command = escape(&command);
     let escaped_truncated_body = escape(&truncated_body);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+\.[0-9]{{4}} seconds\nWarning: truncated output \(original token count: 373\)\nOutput:\n{escaped_truncated_body}\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 
@@ -454,19 +453,19 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.tool_output_token_limit = Some(100);
+        config.tool_output_token_limit = Some(250);
     });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
     let args = if cfg!(windows) {
         serde_json::json!({
-            "command": "for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
+            "command": "Start-Sleep -Milliseconds 200; for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
             "timeout_ms": 5_000,
         })
     } else {
         serde_json::json!({
-            "command": "seq 1 2000",
+            "command": "sh -c 'sleep 0.2; seq 1 2000'",
             "timeout_ms": 5_000,
         })
     };
@@ -500,13 +499,16 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
         .single_request()
         .function_call_output_text(call_id)
         .context("function_call_output present for shell_command call")?;
+    let output = output.replace("\r\n", "\n");
 
-    let truncation_headers = output.matches("Total output lines:").count();
-
-    assert_eq!(
-        truncation_headers, 1,
-        "shell_command output should carry only one truncation header: {output}"
+    let head = (1..=152).map(|i| format!("{i}\n")).collect::<String>();
+    let tail = (1901..=2000).map(|i| format!("{i}\n")).collect::<String>();
+    let truncated_body = format!("{head}…1974 tokens truncated…{tail}");
+    let escaped_truncated_body = escape(&truncated_body);
+    let expected_pattern = format!(
+        r"\AExit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nWarning: truncated output \(original token count: 2224\)\nOutput:\n{escaped_truncated_body}\z"
     );
+    assert_regex_match(&expected_pattern, &output);
 
     Ok(())
 }

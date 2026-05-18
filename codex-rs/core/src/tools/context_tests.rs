@@ -450,7 +450,7 @@ fn exec_command_tool_output_formats_truncated_response() {
                     ^Chunk\ ID:\ abc123
                     \nWall\ time:\ \d+\.\d{4}\ seconds
                     \nProcess\ exited\ with\ code\ 0
-                    \nOriginal\ token\ count:\ 10
+                    \nWarning:\ truncated\ output\ \(original\ token\ count:\ 10\)
                     \nOutput:
                     \n.*tokens\ truncated.*
                     $"#,

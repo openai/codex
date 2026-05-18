@@ -10,13 +10,20 @@ use codex_utils_string::truncate_middle_with_token_budget;
 pub use codex_protocol::protocol::TruncationPolicy;
 
 pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
+    truncate_text_with_original_token_count(content, policy).0
+}
+
+pub fn truncate_text_with_original_token_count(
+    content: &str,
+    policy: TruncationPolicy,
+) -> (String, Option<usize>) {
     if content.len() <= policy.byte_budget() {
-        return content.to_string();
+        return (content.to_string(), None);
     }
 
-    let total_lines = content.lines().count();
     let result = truncate_text(content, policy);
-    format!("Total output lines: {total_lines}\n\n{result}")
+    let original_token_count = (result != content).then(|| approx_token_count(content));
+    (result, original_token_count)
 }
 
 pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
@@ -54,9 +61,8 @@ pub fn formatted_truncate_text_content_items_with_policy(
         return (items.to_vec(), None);
     }
 
-    let mut out = vec![FunctionCallOutputContentItem::InputText {
-        text: formatted_truncate_text(&combined, policy),
-    }];
+    let (text, original_token_count) = truncate_text_with_original_token_count(&combined, policy);
+    let mut out = vec![FunctionCallOutputContentItem::InputText { text }];
     out.extend(items.iter().filter_map(|item| match item {
         FunctionCallOutputContentItem::InputImage { image_url, detail } => {
             Some(FunctionCallOutputContentItem::InputImage {
@@ -67,25 +73,41 @@ pub fn formatted_truncate_text_content_items_with_policy(
         FunctionCallOutputContentItem::InputText { .. } => None,
     }));
 
-    (out, Some(approx_token_count(&combined)))
+    (out, original_token_count)
 }
 
 pub fn truncate_function_output_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
+    truncate_function_output_items_with_original_token_count(items, policy).0
+}
+
+pub fn truncate_function_output_items_with_original_token_count(
+    items: &[FunctionCallOutputContentItem],
+    policy: TruncationPolicy,
+) -> (Vec<FunctionCallOutputContentItem>, Option<usize>) {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_budget = match policy {
         TruncationPolicy::Bytes(_) => policy.byte_budget(),
         TruncationPolicy::Tokens(_) => policy.token_budget(),
     };
     let mut omitted_text_items = 0usize;
+    let mut truncated = false;
+    let original_token_count = items
+        .iter()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => Some(approx_token_count(text)),
+            FunctionCallOutputContentItem::InputImage { .. } => None,
+        })
+        .sum::<usize>();
 
     for item in items {
         match item {
             FunctionCallOutputContentItem::InputText { text } => {
                 if remaining_budget == 0 {
                     omitted_text_items += 1;
+                    truncated = true;
                     continue;
                 }
 
@@ -108,6 +130,7 @@ pub fn truncate_function_output_items_with_policy(
                     } else {
                         out.push(FunctionCallOutputContentItem::InputText { text: snippet });
                     }
+                    truncated = true;
                     remaining_budget = 0;
                 }
             }
@@ -126,7 +149,7 @@ pub fn truncate_function_output_items_with_policy(
         });
     }
 
-    out
+    (out, truncated.then_some(original_token_count))
 }
 
 pub fn approx_tokens_from_byte_count_i64(bytes: i64) -> i64 {

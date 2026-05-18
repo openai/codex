@@ -647,7 +647,6 @@ text(JSON.stringify(results));
     Ok(())
 }
 
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -655,12 +654,9 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use exec to truncate the final result",
+        "truncate the final code mode result",
         r#"// @exec: {"max_output_tokens": 6}
-text(JSON.stringify(await tools.exec_command({
-  cmd: "printf 'token one token two token three token four token five token six token seven'",
-  max_output_tokens: 100
-})));
+text("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu");
 "#,
     )
     .await?;
@@ -671,18 +667,16 @@ text(JSON.stringify(await tools.exec_command({
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script completed\nWall time \d+\.\d seconds\n",
+            r"Warning: truncated output \(original token count: 17\)\n",
+            r"Output:\n\z",
         ),
         text_item(&items, /*index*/ 0),
     );
-    let expected_pattern = r#"(?sx)
-\A
-Total\ output\ lines:\ 1\n
-\n
-.*…\d+\ tokens\ truncated….*
-\z
-"#;
-    assert_regex_match(expected_pattern, text_item(&items, /*index*/ 1));
+    assert_eq!(
+        text_item(&items, /*index*/ 1),
+        "alpha beta g…11 tokens truncated…pa lambda mu"
+    );
 
     Ok(())
 }

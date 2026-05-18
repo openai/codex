@@ -3,7 +3,7 @@ use crate::approx_token_count;
 use crate::approx_tokens_from_byte_count_i64;
 use crate::formatted_truncate_text;
 use crate::formatted_truncate_text_content_items_with_policy;
-use crate::truncate_function_output_items_with_policy;
+use crate::truncate_function_output_items_with_original_token_count;
 use crate::truncate_text;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -14,7 +14,7 @@ fn truncate_bytes_less_than_placeholder_returns_placeholder() {
     let content = "example output";
 
     assert_eq!(
-        "Total output lines: 1\n\n…13 chars truncated…t",
+        "…13 chars truncated…t",
         formatted_truncate_text(content, TruncationPolicy::Bytes(1)),
     );
 }
@@ -24,7 +24,7 @@ fn truncate_tokens_less_than_placeholder_returns_placeholder() {
     let content = "example output";
 
     assert_eq!(
-        "Total output lines: 1\n\nex…3 tokens truncated…ut",
+        "ex…3 tokens truncated…ut",
         formatted_truncate_text(content, TruncationPolicy::Tokens(1)),
     );
 }
@@ -54,7 +54,7 @@ fn truncate_tokens_over_limit_returns_truncated() {
     let content = "this is an example of a long output that should be truncated";
 
     assert_eq!(
-        "Total output lines: 1\n\nthis is an…10 tokens truncated… truncated",
+        "this is an…10 tokens truncated… truncated",
         formatted_truncate_text(content, TruncationPolicy::Tokens(5)),
     );
 }
@@ -64,29 +64,29 @@ fn truncate_bytes_over_limit_returns_truncated() {
     let content = "this is an example of a long output that should be truncated";
 
     assert_eq!(
-        "Total output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
+        "this is an exam…30 chars truncated…ld be truncated",
         formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
     );
 }
 
 #[test]
-fn truncate_bytes_reports_original_line_count_when_truncated() {
+fn truncate_bytes_over_multiple_lines_returns_truncated() {
     let content =
         "this is an example of a long output that should be truncated\nalso some other line";
 
     assert_eq!(
-        "Total output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
+        "this is an exam…51 chars truncated…some other line",
         formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
     );
 }
 
 #[test]
-fn truncate_tokens_reports_original_line_count_when_truncated() {
+fn truncate_tokens_over_multiple_lines_returns_truncated() {
     let content =
         "this is an example of a long output that should be truncated\nalso some other line";
 
     assert_eq!(
-        "Total output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
+        "this is an example o…11 tokens truncated…also some other line",
         formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
     );
 }
@@ -109,6 +109,10 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
     let t3 = chunk.repeat(10);
     let t4 = chunk.to_string();
     let t5 = chunk.to_string();
+    let total_original_token_count = [&t1, &t2, &t3, &t4, &t5]
+        .iter()
+        .map(|text| approx_token_count(text))
+        .sum::<usize>();
 
     let items = vec![
         FunctionCallOutputContentItem::InputText { text: t1.clone() },
@@ -122,10 +126,13 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
         FunctionCallOutputContentItem::InputText { text: t5 },
     ];
 
-    let output =
-        truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(limit));
+    let (output, original_token_count) = truncate_function_output_items_with_original_token_count(
+        &items,
+        TruncationPolicy::Tokens(limit),
+    );
 
     assert_eq!(output.len(), 5);
+    assert_eq!(original_token_count, Some(total_original_token_count));
 
     let first_text = match &output[0] {
         FunctionCallOutputContentItem::InputText { text } => text,
@@ -201,7 +208,7 @@ fn formatted_truncate_text_content_items_with_policy_preserves_empty_leading_tex
     assert_eq!(
         output,
         vec![FunctionCallOutputContentItem::InputText {
-            text: "Total output lines: 1\n\n…3 chars truncated…".to_string(),
+            text: "…3 chars truncated…".to_string(),
         }]
     );
     assert_eq!(original_token_count, Some(1));
@@ -236,7 +243,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         output,
         vec![
             FunctionCallOutputContentItem::InputText {
-                text: "Total output lines: 3\n\nabcd…6 chars truncated…ijkl".to_string(),
+                text: "abcd…6 chars truncated…ijkl".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:one".to_string(),
@@ -268,7 +275,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_all_text_for_token_b
     assert_eq!(
         output,
         vec![FunctionCallOutputContentItem::InputText {
-            text: "Total output lines: 2\n\nabcd…3 tokens truncated…mnop".to_string(),
+            text: "abcd…3 tokens truncated…mnop".to_string(),
         }]
     );
     assert_eq!(original_token_count, Some(5));

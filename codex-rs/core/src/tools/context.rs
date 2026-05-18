@@ -415,8 +415,20 @@ impl ExecCommandToolOutput {
             sections.push(format!("Process running with session ID {process_id}"));
         }
 
-        if let Some(original_token_count) = self.original_token_count {
-            sections.push(format!("Original token count: {original_token_count}"));
+        let computed_original_token_count = self.max_output_tokens.and_then(|max_tokens| {
+            let text = String::from_utf8_lossy(&self.raw_output);
+            let (_, original_token_count) =
+                codex_utils_output_truncation::truncate_text_with_original_token_count(
+                    text.as_ref(),
+                    TruncationPolicy::Tokens(max_tokens),
+                );
+            original_token_count
+        });
+
+        if let Some(original_token_count) = computed_original_token_count
+            .map(|computed| self.original_token_count.unwrap_or(computed))
+        {
+            sections.push(crate::tools::truncation_warning(original_token_count));
         }
 
         sections.push("Output:".to_string());

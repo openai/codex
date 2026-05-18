@@ -21,8 +21,7 @@ use std::borrow::Cow;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::formatted_truncate_text;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::truncate_text_with_original_token_count;
 pub use router::ToolRouter;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
@@ -58,6 +57,10 @@ pub(crate) fn tool_user_shell_type(
     }
 }
 
+pub(crate) fn truncation_warning(original_token_count: usize) -> String {
+    format!("Warning: truncated output (original token count: {original_token_count})")
+}
+
 /// Format the combined exec output for sending back to the model.
 /// Includes exit code and duration metadata; truncates large bodies safely.
 pub fn format_exec_output_for_model(
@@ -66,21 +69,17 @@ pub fn format_exec_output_for_model(
 ) -> String {
     // round to 1 decimal place
     let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
-
     let content = build_content_with_timeout(exec_output);
-
-    let total_lines = content.lines().count();
-
-    let formatted_output = truncate_text(&content, truncation_policy);
+    let (formatted_output, original_token_count) =
+        truncate_text_with_original_token_count(&content, truncation_policy);
 
     let mut sections = Vec::new();
 
     sections.push(format!("Exit code: {}", exec_output.exit_code));
     sections.push(format!("Wall time: {duration_seconds} seconds"));
-    if total_lines != formatted_output.lines().count() {
-        sections.push(format!("Total output lines: {total_lines}"));
+    if let Some(original_token_count) = original_token_count {
+        sections.push(truncation_warning(original_token_count));
     }
-
     sections.push("Output:".to_string());
     sections.push(formatted_output);
 
@@ -91,10 +90,17 @@ pub fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
 ) -> String {
+    format_exec_output_str_with_original_token_count(exec_output, truncation_policy).0
+}
+
+pub fn format_exec_output_str_with_original_token_count(
+    exec_output: &ExecToolCallOutput,
+    truncation_policy: TruncationPolicy,
+) -> (String, Option<usize>) {
     let content = build_content_with_timeout(exec_output);
 
     // Truncate for model consumption before serialization.
-    formatted_truncate_text(&content, truncation_policy)
+    truncate_text_with_original_token_count(&content, truncation_policy)
 }
 
 /// Extracts exec output content and prepends a timeout message if the command timed out.
