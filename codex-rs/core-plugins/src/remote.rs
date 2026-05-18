@@ -291,7 +291,7 @@ pub enum RemotePluginCatalogError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
-pub enum RemotePluginScope {
+enum RemotePluginScope {
     #[serde(rename = "GLOBAL")]
     Global,
     #[serde(rename = "WORKSPACE")]
@@ -330,14 +330,6 @@ impl RemotePluginScope {
             _ => None,
         }
     }
-}
-
-pub(crate) fn remote_installed_scope_allows_marketplace(
-    scopes: &[RemotePluginScope],
-    marketplace_name: &str,
-) -> bool {
-    RemotePluginScope::from_marketplace_name(marketplace_name)
-        .is_some_and(|scope| scopes.contains(&scope))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -654,18 +646,23 @@ fn build_remote_marketplace(
 pub(crate) async fn fetch_remote_installed_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-    scopes: &[RemotePluginScope],
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
-    if scopes.is_empty() {
-        return Ok(Vec::new());
-    }
     let auth = ensure_chatgpt_auth(auth)?;
-    let mut installed_plugins = Vec::new();
-    for scope in scopes {
-        installed_plugins.extend(fetch_installed_plugins_for_scope(config, auth, *scope).await?);
-    }
-    let mut installed_plugins = installed_plugins
+    let global = async {
+        let scope = RemotePluginScope::Global;
+        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+    let workspace = async {
+        let scope = RemotePluginScope::Workspace;
+        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
+    };
+
+    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    let mut installed_plugins = [global, workspace]
         .into_iter()
+        .flat_map(|(_scope, plugins)| plugins)
         .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
         .collect::<Result<Vec<_>, _>>()?;
     installed_plugins.sort_by(|left, right| {

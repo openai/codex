@@ -7,7 +7,6 @@ use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::RemoteInstalledPlugin;
-use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -350,25 +349,6 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn remote_installed_plugin_scopes_include_workspace_for_plugin_sharing() {
-    let codex_home = TempDir::new().unwrap();
-    write_file(
-        &codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-remote_plugin = false
-plugin_sharing = true
-"#,
-    );
-
-    let config = load_plugins_config_input(codex_home.path(), codex_home.path()).await;
-    assert_eq!(
-        config.remote_installed_plugin_scopes(),
-        vec![RemotePluginScope::Workspace]
-    );
-}
-
-#[tokio::test]
 async fn remote_installed_cache_ignores_plugins_missing_local_cache() {
     let codex_home = TempDir::new().unwrap();
     write_file(
@@ -381,51 +361,15 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(
-        &config.remote_installed_plugin_scopes(),
-        vec![remote_installed_linear_plugin()],
-    );
+    manager.write_remote_installed_plugins_cache(vec![remote_installed_linear_plugin()]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
 
 #[tokio::test]
-async fn build_remote_installed_plugin_marketplaces_from_cache_misses_uncached_scopes() {
-    let codex_home = TempDir::new().unwrap();
-    let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(
-        &[RemotePluginScope::Global],
-        vec![remote_installed_linear_plugin()],
-    );
-
-    assert!(
-        manager
-            .build_remote_installed_plugin_marketplaces_from_cache(&[
-                RemotePluginScope::Global,
-                RemotePluginScope::Workspace,
-            ])
-            .is_none()
-    );
-    assert!(
-        manager
-            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
-            .is_some()
-    );
-}
-
-#[tokio::test]
 async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metadata() {
     let codex_home = TempDir::new().unwrap();
-    write_file(
-        &codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-remote_plugin = true
-"#,
-    );
-    let config = load_plugins_config_input(codex_home.path(), codex_home.path()).await;
-
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
     let mut plugin = remote_installed_linear_plugin();
     plugin.install_policy = codex_app_server_protocol::PluginInstallPolicy::InstalledByDefault;
@@ -450,15 +394,10 @@ remote_plugin = true
         screenshot_urls: Vec::new(),
     });
     plugin.keywords = vec!["issues".to_string()];
-    manager.write_remote_installed_plugins_cache(
-        &config.remote_installed_plugin_scopes(),
-        vec![plugin],
-    );
+    manager.write_remote_installed_plugins_cache(vec![plugin]);
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache(
-            &config.remote_installed_plugin_scopes(),
-        )
+        .build_remote_installed_plugin_marketplaces_from_cache()
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "chatgpt-global");

@@ -122,11 +122,6 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         ),
         feature_enabled(
             &effective_config,
-            "plugin_sharing",
-            /*default_enabled*/ false,
-        ),
-        feature_enabled(
-            &effective_config,
             "plugin_hooks",
             /*default_enabled*/ false,
         ),

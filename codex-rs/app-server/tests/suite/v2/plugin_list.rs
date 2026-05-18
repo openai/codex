@@ -1893,65 +1893,6 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
 }
 
 #[tokio::test]
-async fn plugin_installed_skips_remote_when_remote_flags_are_disabled() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let server = MockServer::start().await;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        format!(
-            r#"chatgpt_base_url = "{}/backend-api/"
-
-[features]
-plugins = true
-plugin_sharing = false
-"#,
-            server.uri()
-        ),
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_installed_request(PluginInstalledParams {
-            cwds: None,
-            install_suggestion_plugin_names: None,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstalledResponse = to_response(response)?;
-
-    assert_eq!(
-        response,
-        PluginInstalledResponse {
-            marketplaces: Vec::new(),
-            marketplace_load_errors: Vec::new(),
-        }
-    );
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    wait_for_remote_plugin_request_count(
-        &server,
-        "/ps/plugins/installed",
-        /*expected_count*/ 0,
-    )
-    .await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

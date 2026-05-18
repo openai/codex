@@ -37,9 +37,7 @@ use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
-use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
-use crate::remote::remote_installed_scope_allows_marketplace;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
 use crate::startup_sync::curated_plugins_repo_path;
@@ -90,7 +88,6 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
-    pub plugin_sharing_enabled: bool,
     pub plugin_hooks_enabled: bool,
     pub chatgpt_base_url: String,
 }
@@ -100,7 +97,6 @@ impl PluginsConfigInput {
         config_layer_stack: ConfigLayerStack,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
-        plugin_sharing_enabled: bool,
         plugin_hooks_enabled: bool,
         chatgpt_base_url: String,
     ) -> Self {
@@ -108,21 +104,9 @@ impl PluginsConfigInput {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
-            plugin_sharing_enabled,
             plugin_hooks_enabled,
             chatgpt_base_url,
         }
-    }
-
-    pub(crate) fn remote_installed_plugin_scopes(&self) -> Vec<RemotePluginScope> {
-        let mut scopes = Vec::new();
-        if self.remote_plugin_enabled {
-            scopes.push(RemotePluginScope::Global);
-        }
-        if self.plugin_sharing_enabled {
-            scopes.push(RemotePluginScope::Workspace);
-        }
-        scopes
     }
 }
 
@@ -144,7 +128,6 @@ struct CachedFeaturedPluginIds {
 struct RemoteInstalledPluginsCacheRefreshRequest {
     service_config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
-    scopes: Vec<RemotePluginScope>,
     notify: RemoteInstalledPluginsCacheRefreshNotify,
     // App-server attaches side effects such as skills metadata invalidation and MCP refreshes when
     // remote installed state changes.
@@ -419,7 +402,7 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
-    remote_installed_plugins_cache: RwLock<Option<CachedRemoteInstalledPlugins>>,
+    remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
@@ -431,12 +414,6 @@ struct CachedPluginLoadOutcome {
     config_version: String,
     plugin_hooks_enabled: bool,
     outcome: PluginLoadOutcome,
-}
-
-#[derive(Clone, PartialEq)]
-struct CachedRemoteInstalledPlugins {
-    scopes: Vec<RemotePluginScope>,
-    plugins: Vec<RemoteInstalledPlugin>,
 }
 
 impl PluginsManager {
@@ -613,80 +590,52 @@ impl PluginsManager {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        let Some(cache) = cache.as_ref() else {
+        let Some(plugins) = cache.as_ref() else {
             return HashMap::new();
         };
 
-        remote_installed_plugins_to_config(&cache.plugins, &self.store)
+        remote_installed_plugins_to_config(plugins, &self.store)
     }
 
     pub fn build_remote_installed_plugin_marketplaces_from_cache(
         &self,
-        scopes: &[RemotePluginScope],
     ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
-        if scopes.is_empty() {
-            return None;
-        }
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        let cache = cache.as_ref()?;
-        if !scopes.iter().all(|scope| cache.scopes.contains(scope)) {
-            return None;
-        }
-        let plugins = cache
-            .plugins
-            .iter()
-            .filter(|plugin| {
-                remote_installed_scope_allows_marketplace(scopes, &plugin.marketplace_name)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins))
+        let plugins = cache.as_ref()?;
+        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins))
     }
 
     pub async fn build_and_cache_remote_installed_plugin_marketplaces(
         &self,
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
-        scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        if scopes.is_empty() {
-            return Ok(Vec::new());
-        }
         let plugins = crate::remote::fetch_remote_installed_plugins(
             &remote_plugin_service_config(config),
             auth,
-            scopes,
         )
         .await?;
         let marketplaces = crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins);
-        let changed = self.write_remote_installed_plugins_cache(scopes, plugins);
+        let changed = self.write_remote_installed_plugins_cache(plugins);
         if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
             on_effective_plugins_changed();
         }
         Ok(marketplaces)
     }
 
-    fn write_remote_installed_plugins_cache(
-        &self,
-        scopes: &[RemotePluginScope],
-        plugins: Vec<RemoteInstalledPlugin>,
-    ) -> bool {
-        let mut scopes = scopes.to_vec();
-        scopes.sort();
-        scopes.dedup();
-        let next = CachedRemoteInstalledPlugins { scopes, plugins };
+    fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
         let mut cache = match self.remote_installed_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        if cache.as_ref().is_some_and(|cache| cache.eq(&next)) {
+        if cache.as_ref().is_some_and(|cache| cache.eq(&plugins)) {
             return false;
         }
-        *cache = Some(next);
+        *cache = Some(plugins);
         drop(cache);
         self.clear_enabled_outcome_cache();
         true
@@ -712,11 +661,9 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        let scopes = config.remote_installed_plugin_scopes();
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
-            scopes,
             RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
             on_effective_plugins_changed,
         );
@@ -728,11 +675,9 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        let scopes = config.remote_installed_plugin_scopes();
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
-            scopes,
             RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
             on_effective_plugins_changed,
         );
@@ -742,14 +687,10 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
-        scopes: Vec<RemotePluginScope>,
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
-            return;
-        }
-        if scopes.is_empty() {
             return;
         }
 
@@ -757,7 +698,6 @@ impl PluginsManager {
             RemoteInstalledPluginsCacheRefreshRequest {
                 service_config: remote_plugin_service_config(config),
                 auth,
-                scopes,
                 notify,
                 on_effective_plugins_changed,
             },
@@ -771,9 +711,6 @@ impl PluginsManager {
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         if !config.plugins_enabled {
-            return;
-        }
-        if config.remote_installed_plugin_scopes().is_empty() {
             return;
         }
 
@@ -1691,9 +1628,6 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             if let Some(existing_request) = state.requested.as_ref() {
-                request.scopes.extend_from_slice(&existing_request.scopes);
-                request.scopes.sort_unstable();
-                request.scopes.dedup();
                 if matches!(
                     existing_request.notify,
                     RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh
@@ -1851,15 +1785,13 @@ impl PluginsManager {
             let installed_plugins = crate::remote::fetch_remote_installed_plugins(
                 &request.service_config,
                 request.auth.as_ref(),
-                &request.scopes,
             )
             .await;
             match installed_plugins {
                 Ok(installed_plugins) => {
                     // TODO(remote plugins): reconcile missing or stale local bundles before
                     // publishing remote installed state as effective local plugin config.
-                    let changed = self
-                        .write_remote_installed_plugins_cache(&request.scopes, installed_plugins);
+                    let changed = self.write_remote_installed_plugins_cache(installed_plugins);
                     let should_notify = changed
                         || matches!(
                             request.notify,

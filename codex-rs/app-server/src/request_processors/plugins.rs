@@ -6,7 +6,6 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
-use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
@@ -148,17 +147,6 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
         interface: plugin.interface.map(local_plugin_interface_to_info),
         keywords: plugin.keywords,
     }
-}
-
-fn remote_installed_plugin_scopes(config: &Config) -> Vec<RemotePluginScope> {
-    let mut scopes = Vec::new();
-    if config.features.enabled(Feature::RemotePlugin) {
-        scopes.push(RemotePluginScope::Global);
-    }
-    if config.features.enabled(Feature::PluginSharing) {
-        scopes.push(RemotePluginScope::Workspace);
-    }
-    scopes
 }
 
 fn remote_plugin_share_discoverability(
@@ -695,7 +683,6 @@ impl PluginRequestProcessor {
         }
 
         let plugins_input = config.plugins_config_input();
-        let remote_installed_plugin_scopes = remote_installed_plugin_scopes(&config);
         plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
             &plugins_input,
             auth.clone(),
@@ -713,13 +700,8 @@ impl PluginRequestProcessor {
             .await?;
 
         data.extend(
-            self.load_remote_installed_plugins(
-                plugins_manager,
-                &plugins_input,
-                &remote_installed_plugin_scopes,
-                auth.as_ref(),
-            )
-            .await,
+            self.load_remote_installed_plugins(plugins_manager, &plugins_input, auth.as_ref())
+                .await,
         );
 
         Ok(PluginInstalledResponse {
@@ -800,11 +782,10 @@ impl PluginRequestProcessor {
         &self,
         plugins_manager: Arc<codex_core_plugins::PluginsManager>,
         plugins_input: &codex_core_plugins::PluginsConfigInput,
-        scopes: &[RemotePluginScope],
         auth: Option<&CodexAuth>,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
-            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(scopes)
+            plugins_manager.build_remote_installed_plugin_marketplaces_from_cache()
         {
             Ok(remote_marketplaces)
         } else {
@@ -812,7 +793,6 @@ impl PluginRequestProcessor {
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     plugins_input,
                     auth,
-                    scopes,
                     Some(self.effective_plugins_changed_callback()),
                 )
                 .await
