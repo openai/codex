@@ -223,6 +223,7 @@ macro_rules! client_request_definitions {
 
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
@@ -624,6 +625,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::PluginListResponse,
     },
+    PluginInstalled => "plugin/installed" {
+        params: v2::PluginInstalledParams,
+        serialization: None,
+        response: v2::PluginInstalledResponse,
+    },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
         serialization: None,
@@ -810,6 +816,12 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
+    },
+    #[experimental("remoteControl/status/read")]
+    RemoteControlStatusRead => "remoteControl/status/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("remote-control"),
+        response: v2::RemoteControlStatusReadResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -1712,6 +1724,15 @@ mod tests {
         };
         assert_eq!(plugin_read.serialization_scope(), None);
 
+        let plugin_installed = ClientRequest::PluginInstalled {
+            request_id: request_id(),
+            params: v2::PluginInstalledParams {
+                cwds: None,
+                install_suggestion_plugin_names: None,
+            },
+        };
+        assert_eq!(plugin_installed.serialization_scope(), None);
+
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),
             params: v2::PluginUninstallParams {
@@ -2296,11 +2317,11 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd,
+                runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
             },
@@ -2340,13 +2361,13 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": absolute_path_string("tmp"),
+                    "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
                     },
-                    "permissionProfile": null,
                     "activePermissionProfile": null,
                     "reasoningEffort": null
                 }
@@ -2947,7 +2968,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
-                permission_profile: Some(v2::PermissionProfile::Disabled),
+                permission_profile: Some(v2::ActivePermissionProfile::read_only()),
             },
         };
 

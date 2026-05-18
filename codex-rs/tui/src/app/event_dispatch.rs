@@ -296,10 +296,14 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
+                if mode == ExitMode::ShutdownFirst {
+                    self.show_shutdown_feedback(tui)?;
+                }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
+                    self.show_shutdown_feedback(tui)?;
                     return Ok(self
                         .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
                         .await);
@@ -1111,7 +1115,7 @@ impl App {
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
-                                        /*permission_profile*/ None,
+                                        /*active_permission_profile*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -1136,7 +1140,7 @@ impl App {
                                         /*cwd*/ None,
                                         Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
-                                        Some(preset.permission_profile.clone()),
+                                        Some(preset.active_permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -1150,9 +1154,10 @@ impl App {
                                 self.app_event_tx.send(AppEvent::UpdateAskForApprovalPolicy(
                                     AskForApproval::from(preset.approval),
                                 ));
-                                self.app_event_tx.send(AppEvent::UpdatePermissionProfile(
-                                    preset.permission_profile.clone(),
-                                ));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateActivePermissionProfile(
+                                        preset.active_permission_profile.clone(),
+                                    ));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -1182,11 +1187,15 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort)
-                    .apply()
-                    .await
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    crate::config_update::build_model_selection_edits(
+                        profile,
+                        model.as_str(),
+                        effort,
+                    ),
+                )
+                .await
                 {
                     Ok(()) => {
                         let effort_label = effort
@@ -1260,11 +1269,14 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_personality(Some(personality))
-                    .apply()
-                    .await
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        crate::config_update::profile_scoped_key_path(profile, "personality"),
+                        serde_json::json!(personality.to_string()),
+                    )],
+                )
+                .await
                 {
                     Ok(()) => {
                         let label = Self::personality_label(personality);
@@ -1295,16 +1307,20 @@ impl App {
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
-                let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
-                let mut edits = ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .set_service_tier(service_tier.clone());
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
+                let profile = self.active_profile.as_deref();
+                let edits = crate::config_update::build_service_tier_selection_edits(
+                    profile,
+                    service_tier.as_deref(),
+                );
                 if service_tier.is_none() {
                     self.config.notices.fast_default_opt_out = Some(true);
-                    edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
                 }
-                match edits.apply().await {
+                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
+                    .await
+                {
                     Ok(()) => {
                         let mut message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
@@ -1400,25 +1416,32 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }
-            AppEvent::UpdatePermissionProfile(permission_profile) => {
+            AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
+                let mut config = self.config.clone();
+                let Some(permission_profile) = self
+                    .try_set_builtin_active_permission_profile_on_config(
+                        &mut config,
+                        active_permission_profile.clone(),
+                        "Failed to set permission profile",
+                        "failed to set active permission profile on app config",
+                    )
+                else {
+                    return Ok(AppRunControl::Continue);
+                };
                 #[cfg(target_os = "windows")]
                 let permission_profile_is_managed_restricted =
                     managed_filesystem_sandbox_is_restricted(&permission_profile);
                 let permission_profile_for_chat = permission_profile.clone();
 
-                let mut config = self.config.clone();
-                if !self.try_set_permission_profile_on_config(
-                    &mut config,
-                    permission_profile,
-                    "Failed to set permission profile",
-                    "failed to set permission profile on app config",
-                ) {
-                    return Ok(AppRunControl::Continue);
-                }
                 self.config = config;
                 if let Err(err) = self
                     .chat_widget
-                    .set_permission_profile(permission_profile_for_chat)
+                    .set_permission_profile_from_session_snapshot(
+                        PermissionProfileSnapshot::active(
+                            permission_profile_for_chat,
+                            active_permission_profile,
+                        ),
+                    )
                 {
                     tracing::warn!(%err, "failed to set permission profile on chat config");
                     self.chat_widget
@@ -1426,7 +1449,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_permission_profile_override =
-                    Some(self.config.permissions.permission_profile());
+                    Some(self.config.permissions.permission_profile().clone());
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
@@ -1450,7 +1473,8 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let permission_profile = self.config.permissions.permission_profile();
+                        let permission_profile =
+                            self.config.permissions.effective_permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -1467,23 +1491,17 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "approvals_reviewer".to_string(),
-                    ]
-                } else {
-                    vec!["approvals_reviewer".to_string()]
-                };
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments,
-                        value: policy.to_string().into(),
-                    }])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        crate::config_update::profile_scoped_key_path(
+                            profile,
+                            "approvals_reviewer",
+                        ),
+                        serde_json::json!(policy.to_string()),
+                    )],
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1574,27 +1592,23 @@ impl App {
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "plan_mode_reasoning_effort".to_string(),
-                    ]
-                } else {
-                    vec!["plan_mode_reasoning_effort".to_string()]
-                };
+                let key_path = crate::config_update::profile_scoped_key_path(
+                    profile,
+                    "plan_mode_reasoning_effort",
+                );
                 let edit = if let Some(effort) = effort {
-                    ConfigEdit::SetPath {
-                        segments,
-                        value: effort.to_string().into(),
-                    }
+                    crate::config_update::replace_config_value(
+                        key_path,
+                        serde_json::json!(effort.to_string()),
+                    )
                 } else {
-                    ConfigEdit::ClearPath { segments }
+                    crate::config_update::clear_config_value(key_path)
                 };
-                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
-                    .with_edits([edit])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![edit],
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,

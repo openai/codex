@@ -61,6 +61,7 @@ use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
+use crate::legacy_core::config::PermissionProfileSnapshot;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
@@ -442,6 +443,7 @@ use crate::workspace_command::WorkspaceCommandRunner;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
 use codex_file_search::FileMatch;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
@@ -1273,6 +1275,10 @@ impl ChatWidget {
     fn request_quit_without_confirmation(&self) {
         self.app_event_tx
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+    }
+
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.bottom_pane.show_shutdown_in_progress();
     }
 
     fn request_redraw(&mut self) {

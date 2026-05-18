@@ -2005,6 +2005,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::WebSearchCall { .. }
                     | ResponseItem::ImageGenerationCall { .. }
                     | ResponseItem::Compaction { .. }
+                    | ResponseItem::CompactionTrigger
                     | ResponseItem::ContextCompaction { .. }
                     | ResponseItem::Other => false,
                 };

@@ -1,14 +1,14 @@
 use crate::function_tool::FunctionCallError;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -22,8 +22,6 @@ pub struct UpdateGoalHandler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain(UPDATE_GOAL_TOOL_NAME)
     }
@@ -32,7 +30,10 @@ impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
         Some(create_update_goal_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -73,8 +74,8 @@ impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
             )
             .await
             .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        goal_response(Some(goal), CompletionBudgetReport::Include)
+        goal_response(Some(goal), CompletionBudgetReport::Include).map(boxed_tool_output)
     }
 }
 
-impl ToolHandler for UpdateGoalHandler {}
+impl CoreToolRuntime for UpdateGoalHandler {}

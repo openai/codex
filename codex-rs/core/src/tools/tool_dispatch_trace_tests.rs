@@ -21,8 +21,8 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistry;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
@@ -32,18 +32,22 @@ struct TestHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for TestHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> codex_tools::ToolName {
         self.tool_name.clone()
     }
 
-    async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        Ok(Box::new(FunctionToolOutput::from_text(
+            "ok".to_string(),
+            Some(true),
+        )))
     }
 }
 
-impl ToolHandler for TestHandler {}
+impl CoreToolRuntime for TestHandler {}
 
 #[tokio::test]
 async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> anyhow::Result<()> {

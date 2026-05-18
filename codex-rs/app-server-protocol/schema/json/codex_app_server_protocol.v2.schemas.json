@@ -143,45 +143,12 @@
         "id": {
           "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
           "type": "string"
-        },
-        "modifications": {
-          "default": [],
-          "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
-          "items": {
-            "$ref": "#/definitions/ActivePermissionProfileModification"
-          },
-          "type": "array"
         }
       },
       "required": [
         "id"
       ],
       "type": "object"
-    },
-    "ActivePermissionProfileModification": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootActivePermissionProfileModificationType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootActivePermissionProfileModification",
-          "type": "object"
-        }
-      ]
     },
     "AddCreditsNudgeCreditType": {
       "enum": [
@@ -1495,6 +1462,30 @@
             "params"
           ],
           "title": "Plugin/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/installed"
+              ],
+              "title": "Plugin/installedRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginInstalledParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installedRequest",
           "type": "object"
         },
         {
@@ -3505,6 +3496,13 @@
         "compact_prompt": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "desktop": {
+          "additionalProperties": true,
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -6446,8 +6444,6 @@
     },
     "ImageDetail": {
       "enum": [
-        "auto",
-        "low",
         "high",
         "original"
       ],
@@ -8196,194 +8192,6 @@
         }
       ]
     },
-    "PermissionProfile": {
-      "oneOf": [
-        {
-          "description": "Codex owns sandbox construction for this profile.",
-          "properties": {
-            "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
-            },
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "managed"
-              ],
-              "title": "ManagedPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "fileSystem",
-            "network",
-            "type"
-          ],
-          "title": "ManagedPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Do not apply an outer sandbox.",
-          "properties": {
-            "type": {
-              "enum": [
-                "disabled"
-              ],
-              "title": "DisabledPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "DisabledPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Filesystem isolation is enforced by an external caller.",
-          "properties": {
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "external"
-              ],
-              "title": "ExternalPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "network",
-            "type"
-          ],
-          "title": "ExternalPermissionProfile",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileFileSystemPermissions": {
-      "oneOf": [
-        {
-          "properties": {
-            "entries": {
-              "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
-              },
-              "type": "array"
-            },
-            "globScanMaxDepth": {
-              "format": "uint",
-              "minimum": 1.0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "restricted"
-              ],
-              "title": "RestrictedPermissionProfileFileSystemPermissionsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "entries",
-            "type"
-          ],
-          "title": "RestrictedPermissionProfileFileSystemPermissions",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "unrestricted"
-              ],
-              "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UnrestrictedPermissionProfileFileSystemPermissions",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileModificationParams": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootPermissionProfileModificationParams",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileNetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "enabled"
-      ],
-      "type": "object"
-    },
-    "PermissionProfileSelectionParams": {
-      "oneOf": [
-        {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "modifications": {
-              "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "profile"
-              ],
-              "title": "ProfilePermissionProfileSelectionParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "type"
-          ],
-          "title": "ProfilePermissionProfileSelectionParams",
-          "type": "object"
-        }
-      ]
-    },
     "Personality": {
       "enum": [
         "none",
@@ -8588,6 +8396,56 @@
         "authPolicy"
       ],
       "title": "PluginInstallResponse",
+      "type": "object"
+    },
+    "PluginInstalledParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "installSuggestionPluginNames": {
+          "description": "Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "PluginInstalledParams",
+      "type": "object"
+    },
+    "PluginInstalledResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceLoadErrors": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MarketplaceLoadErrorInfo"
+          },
+          "type": "array"
+        },
+        "marketplaces": {
+          "items": {
+            "$ref": "#/definitions/PluginMarketplaceEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "marketplaces"
+      ],
+      "title": "PluginInstalledResponse",
       "type": "object"
     },
     "PluginInterface": {
@@ -10080,12 +9938,16 @@
         "installationId": {
           "type": "string"
         },
+        "serverName": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/definitions/RemoteControlConnectionStatus"
         }
       },
       "required": [
         "installationId",
+        "serverName",
         "status"
       ],
       "title": "RemoteControlStatusChangedNotification",
@@ -10697,6 +10559,22 @@
             "type"
           ],
           "title": "CompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "compaction_trigger"
+              ],
+              "title": "CompactionTriggerResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompactionTriggerResponseItem",
           "type": "object"
         },
         {
@@ -13420,7 +13298,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         },
         "serviceTier": {
           "type": [
@@ -14912,7 +14790,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         },
         "serviceTier": {
           "type": [
@@ -15220,7 +15098,7 @@
               "$ref": "#/definitions/SandboxPolicy"
             }
           ],
-          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+          "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         },
         "serviceTier": {
           "type": [
@@ -16023,6 +15901,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "type": {
               "enum": [
                 "image"
@@ -16043,6 +15932,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "path": {
               "type": "string"
             },

@@ -5,6 +5,9 @@
 
 use super::*;
 
+const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
+    "Editing previous prompts is unavailable in side conversations.";
+
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
         let editor_cmd = match external_editor::resolve_editor_command() {
@@ -197,6 +200,8 @@ impl App {
             // handles it.
             if self.should_handle_backtrack_esc(key_event) {
                 self.handle_backtrack_esc_key(tui);
+            } else if self.should_reject_side_backtrack_esc(key_event) {
+                self.reject_side_backtrack_esc();
             } else {
                 self.chat_widget.handle_key_event(key_event);
             }
@@ -252,9 +257,23 @@ impl App {
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
-        self.chat_widget.is_normal_backtrack_mode()
+        !self.chat_widget.side_conversation_active()
+            && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    pub(super) fn should_reject_side_backtrack_esc(&self, key_event: KeyEvent) -> bool {
+        self.chat_widget.side_conversation_active()
+            && self.chat_widget.is_normal_backtrack_mode()
+            && self.chat_widget.composer_is_empty()
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    pub(super) fn reject_side_backtrack_esc(&mut self) {
+        self.reset_backtrack_state();
+        self.chat_widget
+            .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
     }
 
     fn app_keymap_shortcuts_available(&self) -> bool {

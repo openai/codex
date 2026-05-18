@@ -121,6 +121,7 @@ pub struct ToolsConfig {
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
+    pub multi_agent_v2_tool_namespace: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
     pub wait_agent_max_timeout_ms: Option<i64>,
@@ -260,6 +261,7 @@ impl ToolsConfig {
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
+            multi_agent_v2_tool_namespace: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
             wait_agent_max_timeout_ms: None,
@@ -313,6 +315,14 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_multi_agent_v2_tool_namespace(
+        mut self,
+        multi_agent_v2_tool_namespace: Option<String>,
+    ) -> Self {
+        self.multi_agent_v2_tool_namespace = multi_agent_v2_tool_namespace;
         self
     }
 

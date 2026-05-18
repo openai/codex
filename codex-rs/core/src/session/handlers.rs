@@ -146,6 +146,8 @@ pub(super) async fn user_input_or_turn_inner(
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
+                    workspace_roots: None,
+                    profile_workspace_roots: None,
                     permission_profile,
                     active_permission_profile: None,
                     windows_sandbox_level: None,
@@ -163,6 +165,8 @@ pub(super) async fn user_input_or_turn_inner(
         }
         Op::UserInputWithTurnContext {
             cwd,
+            workspace_roots,
+            profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -195,6 +199,8 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 SessionSettingsUpdate {
                     cwd,
+                    workspace_roots,
+                    profile_workspace_roots,
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,
@@ -634,12 +640,14 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.guardian_review_session.shutdown().await;
 }
 
-fn emit_thread_stop_lifecycle(sess: &Session) {
+async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
-        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
-            session_store: &sess.services.session_extension_data,
-            thread_store: &sess.services.thread_extension_data,
-        });
+        contributor
+            .on_thread_stop(codex_extension_api::ThreadStopInput {
+                session_store: &sess.services.session_extension_data,
+                thread_store: &sess.services.thread_extension_data,
+            })
+            .await;
     }
 }
 
@@ -658,7 +666,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
-    emit_thread_stop_lifecycle(sess.as_ref());
+    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -913,7 +921,7 @@ pub(super) async fn submission_loop(
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref());
+        emit_thread_stop_lifecycle(sess.as_ref()).await;
     }
     debug!("Agent loop exited");
 }

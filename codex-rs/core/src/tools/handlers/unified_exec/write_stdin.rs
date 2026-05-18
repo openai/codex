@@ -1,11 +1,11 @@
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -33,8 +33,6 @@ pub struct WriteStdinHandler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
-    type Output = ExecCommandToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
     }
@@ -43,7 +41,10 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         Some(create_write_stdin_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -86,11 +87,11 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
             .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
             .await;
 
-        Ok(response)
+        Ok(boxed_tool_output(response))
     }
 }
 
-impl ToolHandler for WriteStdinHandler {
+impl CoreToolRuntime for WriteStdinHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -98,7 +99,7 @@ impl ToolHandler for WriteStdinHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         post_unified_exec_tool_use_payload(invocation, result)
     }

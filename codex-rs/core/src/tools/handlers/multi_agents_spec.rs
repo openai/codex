@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Optional model override for the new agent. Leave unset to inherit the same model as the parent, which is the preferred default. Only set this when the user explicitly asks for a different model or the task clearly requires one.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str = "Optional service tier override for the new agent. Leave unset unless the user explicitly asks for one.";
+const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -711,8 +712,11 @@ The new agent's canonical task name will be provided to it along with the messag
 }
 
 fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
-    let visible_models: Vec<&ModelPreset> =
-        models.iter().filter(|model| model.show_in_picker).collect();
+    let visible_models: Vec<&ModelPreset> = models
+        .iter()
+        .filter(|model| model.show_in_picker)
+        .take(MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION)
+        .collect();
     if visible_models.is_empty() {
         return "No picker-visible model overrides are currently loaded.".to_string();
     }
@@ -720,30 +724,40 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
+            let default_reasoning_effort = model.default_reasoning_effort;
             let efforts = model
                 .supported_reasoning_efforts
                 .iter()
-                .map(|preset| format!("{} ({})", preset.effort, preset.description))
+                .map(|preset| {
+                    let effort = preset.effort;
+                    if effort == default_reasoning_effort {
+                        format!("{effort} (default)")
+                    } else {
+                        effort.to_string()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let service_tiers = if model.service_tiers.is_empty() {
-                "none".to_string()
+            let reasoning_efforts_suffix = if efforts.is_empty() {
+                String::new()
             } else {
-                model
-                    .service_tiers
-                    .iter()
-                    .map(|tier| format!("{} ({}: {})", tier.id, tier.name, tier.description))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                format!(" Reasoning efforts: {efforts}.")
             };
+            let service_tiers = model
+                .service_tiers
+                .iter()
+                .map(|tier| tier.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let service_tiers_suffix = if service_tiers.is_empty() {
+                String::new()
+            } else {
+                format!(" Service tiers: {service_tiers}.")
+            };
+            let model_slug = &model.model;
+            let description = &model.description;
             format!(
-                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}. Supported service tiers: {}.",
-                model.display_name,
-                model.model,
-                model.description,
-                model.default_reasoning_effort,
-                efforts,
-                service_tiers
+                "- `{model_slug}`: {description}{reasoning_efforts_suffix}{service_tiers_suffix}"
             )
         })
         .collect::<Vec<_>>()

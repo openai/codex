@@ -71,14 +71,10 @@ pub(super) fn normalize_output_image(
             Some(detail) => {
                 let normalized = detail.to_ascii_lowercase();
                 Some(match normalized.as_str() {
-                    "auto" => ImageDetail::Auto,
-                    "low" => ImageDetail::Low,
                     "high" => ImageDetail::High,
                     "original" => ImageDetail::Original,
                     _ => {
-                        return Err(
-                            "image detail must be one of: auto, low, high, original".to_string()
-                        );
+                        return Err("image detail must be one of: high, original".to_string());
                     }
                 })
             }
@@ -160,7 +156,7 @@ fn parse_mcp_output_image(
         .and_then(JsonValue::as_object)
         .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
         .and_then(JsonValue::as_str)
-        .filter(|detail| matches!(*detail, "auto" | "low" | "high" | "original"))
+        .filter(|detail| matches!(*detail, "high" | "original"))
         .map(str::to_string);
     Ok((image_url, detail))
 }

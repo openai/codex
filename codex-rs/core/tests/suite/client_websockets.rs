@@ -253,7 +253,7 @@ async fn responses_websocket_sends_response_processed_after_remote_compaction_v2
             json!({
                 "type": "response.output_item.done",
                 "item": {
-                    "type": "context_compaction",
+                    "type": "compaction",
                     "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
                 }
             }),

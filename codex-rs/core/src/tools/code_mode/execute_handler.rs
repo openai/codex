@@ -2,8 +2,9 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -89,8 +90,6 @@ impl CodeModeExecuteHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain(PUBLIC_TOOL_NAME)
     }
@@ -99,7 +98,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         Some(self.spec.clone())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -110,9 +112,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => {
-                self.execute(session, turn, call_id, input).await
-            }
+            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
+                .execute(session, turn, call_id, input)
+                .await
+                .map(boxed_tool_output),
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
             ))),
@@ -120,7 +123,7 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
     }
 }
 
-impl ToolHandler for CodeModeExecuteHandler {
+impl CoreToolRuntime for CodeModeExecuteHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }
