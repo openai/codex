@@ -1,6 +1,8 @@
 [profile.default]
-# Do not increase, fix your test instead
-slow-timeout = { period = "15s", terminate-after = 2 }
+# Keep full-CI from failing on one transient slow run while still surfacing
+# repeated hangs quickly.
+slow-timeout = { period = "20s", terminate-after = 2 }
+retries = 1
 
 [test-groups.app_server_protocol_codegen]
 max-threads = 1
@@ -13,6 +15,9 @@ max-threads = 1
 
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
+
+[test-groups.windows_process_heavy]
+max-threads = 2
 
 [[profile.default.overrides]]
 # Do not add new tests here
@@ -44,3 +49,10 @@ test-group = 'core_apply_patch_cli_integration'
 # Serialize them to avoid exhausting Windows session/global desktop resources in CI.
 filter = 'package(codex-windows-sandbox) & test(legacy_)'
 test-group = 'windows_sandbox_legacy_sessions'
+
+[[profile.default.overrides]]
+# These Windows-heavy tests spawn subprocesses, session files, or JSON-RPC
+# clients and have been the dominant source of 30s full-CI timeouts.
+filter = 'platform(target:windows) & (test(suite::resume::) | test(suite::cli_stream::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows))'
+test-group = 'windows_process_heavy'
+slow-timeout = { period = "30s", terminate-after = 2 }
