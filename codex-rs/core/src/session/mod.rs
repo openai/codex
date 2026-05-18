@@ -888,22 +888,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn configured_multi_agent_v2_usage_hint_texts(&self) -> Vec<String> {
-        if !self.features.enabled(Feature::MultiAgentV2) {
-            return Vec::new();
-        }
-
-        let state = self.state.lock().await;
-        let config = &state.session_configuration.original_config_do_not_use;
-        [
-            config.multi_agent_v2.root_agent_usage_hint_text.clone(),
-            config.multi_agent_v2.subagent_usage_hint_text.clone(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    }
-
     fn managed_network_proxy_active_for_permission_profile(
         permission_profile: &PermissionProfile,
     ) -> bool {

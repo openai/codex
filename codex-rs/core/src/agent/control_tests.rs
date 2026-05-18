@@ -669,6 +669,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             ],
         )
         .await;
+    let parent_reference_context_item = turn_context.to_turn_context_item();
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(
+            parent_reference_context_item.clone(),
+        )])
+        .await;
     parent_thread
         .codex
         .session
@@ -719,12 +727,35 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             }],
             phase: None,
         },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Parent root guidance.".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Parent subagent guidance.".to_string(),
+            }],
+            phase: None,
+        },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
     ];
     assert_eq!(
         history.raw_items(),
         &expected_history,
-        "forked child history should keep only parent user messages and assistant final answers"
+        "full-history forked child history should preserve the cached developer prefix while filtering non-final assistant/tool chatter"
+    );
+    assert_eq!(
+        serde_json::to_value(child_thread.codex.session.reference_context_item().await)
+            .expect("serialize child reference context item"),
+        serde_json::to_value(Some(parent_reference_context_item))
+            .expect("serialize expected reference context item"),
+        "full-history forked child should preserve the parent diff baseline"
     );
 
     let expected = (
@@ -876,6 +907,13 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     parent_thread
         .codex
         .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(
+            spawn_turn_context.to_turn_context_item(),
+        )])
+        .await;
+    parent_thread
+        .codex
+        .session
         .ensure_rollout_materialized()
         .await;
     parent_thread
@@ -929,6 +967,15 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     assert!(
         history_contains_text(history.raw_items(), "current parent task"),
         "forked child history should keep the parent user message from the requested last-N turn window"
+    );
+    assert!(
+        child_thread
+            .codex
+            .session
+            .reference_context_item()
+            .await
+            .is_none(),
+        "last-N forked child should rebuild context after truncating the cached prefix"
     );
 
     let _ = harness

@@ -22,7 +22,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
 
 use codex_features::Feature;
-use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
@@ -6862,40 +6861,6 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
         }),
         "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
     );
-}
-
-#[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_use_effective_enabled_feature_state() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
-    let mut effective_features = Features::with_defaults();
-    effective_features.enable(Feature::MultiAgentV2);
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = effective_features.into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(
-        hint_texts,
-        vec![
-            "Root guidance.".to_string(),
-            "Subagent guidance.".to_string()
-        ]
-    );
-}
-
-#[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_omit_effectively_disabled_feature() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = Features::with_defaults().into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(hint_texts, Vec::<String>::new());
 }
 
 #[tokio::test]
