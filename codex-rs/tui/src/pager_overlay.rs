@@ -15,6 +15,7 @@
 //! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
 //! mutates in place or when its transcript output is time-dependent.
 
+use std::any::TypeId;
 use std::cell::Cell as StdCell;
 use std::io::Result;
 use std::rc::Rc;
@@ -31,6 +32,7 @@ use crate::footer_hints::render_footer_line_with_optional_right;
 use crate::footer_hints::render_footer_separator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -657,9 +659,11 @@ impl TranscriptOverlay {
     }
 
     fn user_prompt_positions(cells: &[Arc<dyn HistoryCell>]) -> Vec<usize> {
+        let start = session_start_index(cells);
         cells
             .iter()
             .enumerate()
+            .skip(start)
             .filter_map(|(idx, cell)| cell.is_user_prompt().then_some(idx))
             .collect()
     }
@@ -679,10 +683,7 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        if self.cells.last().is_some_and(|cell| cell.is_user_prompt()) {
-            self.user_prompt_positions
-                .push(self.cells.len().saturating_sub(1));
-        }
+        self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
         self.view.renderables = Self::render_cells(
             &self.cells,
             Rc::clone(&self.highlight_cell),
@@ -1416,11 +1417,28 @@ fn render_offset_content(
     copy_height
 }
 
+fn session_start_index(cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let session_start_type = TypeId::of::<SessionInfoCell>();
+    let type_of = |cell: &Arc<dyn HistoryCell>| cell.as_any().type_id();
+
+    cells
+        .iter()
+        .rposition(|cell| type_of(cell) == session_start_type)
+        .map_or(0, |idx| idx + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::history_cell::ReviewDecision;
+    use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
+    use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -1429,6 +1447,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
+    use tempfile::TempDir;
 
     use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
@@ -1436,6 +1455,9 @@ mod tests {
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
+    use crate::history_cell::new_session_info;
+    use crate::legacy_core::config::ConfigBuilder;
+    use crate::session_state::ThreadSessionState;
     use codex_protocol::parse_command::ParsedCommand;
     use ratatui::Terminal as RatatuiTerminal;
     use ratatui::backend::TestBackend;
@@ -1509,6 +1531,46 @@ mod tests {
             )) as Arc<dyn HistoryCell>);
         }
         cells
+    }
+
+    fn session_info_cell(cwd: &str) -> Arc<dyn HistoryCell> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = runtime
+            .block_on(
+                ConfigBuilder::default()
+                    .codex_home(temp_dir.path().to_path_buf())
+                    .build(),
+            )
+            .expect("config");
+        let session = ThreadSessionState {
+            thread_id: ThreadId::new(),
+            forked_from_id: None,
+            fork_parent_title: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            cwd: test_path_buf(cwd).abs(),
+            runtime_workspace_roots: Vec::new(),
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: Some(ReasoningEffortConfig::High),
+            message_history: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        };
+        Arc::new(new_session_info(
+            &config, "gpt-test", &session, /*is_first_event*/ false,
+            /*tooltip_override*/ None, /*auth_plan*/ None,
+            /*show_fast_status*/ false,
+        )) as Arc<dyn HistoryCell>
     }
 
     fn static_overlay(lines: Vec<Line<'static>>, title: &str) -> StaticOverlay {
@@ -1918,6 +1980,53 @@ mod tests {
             "explicit_prompt_selection_anchors_prompt_in_upper_third",
             buffer_to_text(&buf, area)
         );
+    }
+
+    #[test]
+    fn transcript_prompt_selection_ignores_prompts_before_latest_session_header() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("old prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("old assistant")],
+                /*is_first_line*/ true,
+            )),
+            session_info_cell("/tmp/project"),
+            user_cell("current first"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("current assistant")],
+                /*is_first_line*/ true,
+            )),
+            user_cell("current second"),
+        ]);
+
+        assert_eq!(overlay.user_prompt_count(), 2);
+        assert_eq!(overlay.header_title(), "Transcript");
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 2 / 2 · 100% "
+        );
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.selected_user_cell(), Some(5));
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 2 / 2 · 100% "
+        );
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.selected_user_cell(), Some(3));
+        assert_eq!(
+            overlay.footer_progress_label(
+                /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
+            ),
+            " 1 / 2 · 100% "
+        );
+
+        assert_eq!(overlay.set_highlighted_user_prompt(2), None);
     }
 
     #[test]
