@@ -5683,8 +5683,9 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
         expected_thread_id: ThreadId,
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
-        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()
@@ -5728,8 +5729,9 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
         expected_turn_id: String,
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
-        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()
@@ -5741,8 +5743,9 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
         }
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
-        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+        async fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()

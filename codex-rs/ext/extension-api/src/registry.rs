@@ -12,7 +12,7 @@ use crate::TurnItemContributor;
 use crate::TurnLifecycleContributor;
 
 /// Mutable registry used while hosts register typed runtime contributions.
-pub struct ExtensionRegistryBuilder<C> {
+pub struct ExtensionRegistryBuilder<C: Sync> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -23,7 +23,7 @@ pub struct ExtensionRegistryBuilder<C> {
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
-impl<C> Default for ExtensionRegistryBuilder<C> {
+impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             thread_lifecycle_contributors: Vec::new(),
@@ -38,7 +38,7 @@ impl<C> Default for ExtensionRegistryBuilder<C> {
     }
 }
 
-impl<C> ExtensionRegistryBuilder<C> {
+impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Creates an empty registry builder.
     pub fn new() -> Self {
         Self::default()
@@ -103,7 +103,7 @@ impl<C> ExtensionRegistryBuilder<C> {
 }
 
 /// Immutable typed registry produced after extensions are installed.
-pub struct ExtensionRegistry<C> {
+pub struct ExtensionRegistry<C: Sync> {
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -114,7 +114,7 @@ pub struct ExtensionRegistry<C> {
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
-impl<C> ExtensionRegistry<C> {
+impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
@@ -165,6 +165,6 @@ impl<C> ExtensionRegistry<C> {
 }
 
 /// Creates an empty shared registry for hosts that do not register contributions.
-pub fn empty_extension_registry<C>() -> Arc<ExtensionRegistry<C>> {
+pub fn empty_extension_registry<C: Sync>() -> Arc<ExtensionRegistry<C>> {
     Arc::new(ExtensionRegistryBuilder::new().build())
 }
