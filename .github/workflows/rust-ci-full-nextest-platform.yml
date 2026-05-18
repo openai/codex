@@ -293,9 +293,11 @@ jobs:
         run: |
           set -euo pipefail
           archive_file="${RUNNER_TEMP}/nextest-archive/${NEXTEST_ARCHIVE_FILE}"
+          workspace_root="$(pwd)"
 
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             archive_file="$(cygpath -w "${archive_file}")"
+            workspace_root="$(cygpath -w "${workspace_root}")"
           fi
 
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
@@ -316,6 +318,7 @@ jobs:
             run
             --no-fail-fast
             --archive-file "${archive_file}"
+            --workspace-remap "${workspace_root}"
             --partition "hash:${{ matrix.shard }}/4"
             --target ${{ inputs.target }}
             --cargo-profile ${{ inputs.profile }}
