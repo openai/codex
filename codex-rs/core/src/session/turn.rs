@@ -20,6 +20,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
@@ -71,6 +72,7 @@ use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::get_git_repo_root_with_fs;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -161,7 +163,16 @@ pub(crate) async fn run_turn(
     let pre_sampling_compact =
         match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
             Ok(pre_sampling_compact) => pre_sampling_compact,
-            Err(_) => {
+            Err(err) => {
+                if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
                 error!("Failed to run pre-sampling compact");
                 return None;
             }
@@ -370,8 +381,17 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     #[allow(deprecated)]
-    let display_root = get_git_repo_root(turn_context.cwd.as_path())
-        .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
+    let display_root = match turn_context.environments.primary() {
+        Some(turn_environment) => get_git_repo_root_with_fs(
+            turn_environment.environment.get_filesystem().as_ref(),
+            &turn_environment.cwd,
+        )
+        .await
+        .unwrap_or_else(|| turn_environment.cwd.clone())
+        .into_path_buf(),
+        None => get_git_repo_root(turn_context.cwd.as_path())
+            .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf()),
+    };
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
         display_root,
     )));
@@ -507,7 +527,20 @@ pub(crate) async fn run_turn(
                     .await
                     {
                         Ok(reset_client_session) => reset_client_session,
-                        Err(_) => return None,
+                        Err(err) => {
+                            if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                                && let Err(err) = sess
+                                    .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                                        turn_context: turn_context.as_ref(),
+                                    })
+                                    .await
+                            {
+                                warn!(
+                                    "failed to usage-limit active goal after usage-limit error: {err}"
+                                );
+                            }
+                            return None;
+                        }
                     };
                     if reset_client_session {
                         client_session.reset_websocket_session();
@@ -663,6 +696,15 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
+                if e.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation

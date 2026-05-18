@@ -3561,6 +3561,8 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
 pub enum ThreadGoalStatus {
     Active,
     Paused,
+    Blocked,
+    UsageLimited,
     BudgetLimited,
     Complete,
 }
