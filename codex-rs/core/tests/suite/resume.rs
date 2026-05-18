@@ -423,13 +423,14 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
         config.model = Some("gpt-5.3-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
-    resumed
-        .codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &resumed.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some("gpt-5.4".to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
     resumed
         .codex
         .submit(Op::UserInput {

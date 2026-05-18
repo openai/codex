@@ -3279,13 +3279,15 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             .expect("submit user input");
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
-    codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &codex,
+        codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
             ..Default::default()
-        })
-        .await
-        .expect("override turn context");
+        },
+    )
+    .await
+    .expect("override turn context");
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
     codex

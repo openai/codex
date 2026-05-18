@@ -33,12 +33,14 @@ async fn turn_context_update_without_user_turn_does_not_record_permissions_updat
     });
     let test = builder.build(&server).await?;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -60,12 +62,14 @@ async fn turn_context_update_without_user_turn_does_not_record_environment_updat
     let test = test_codex().build(&server).await?;
     let new_cwd = TempDir::new()?;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             cwd: Some(new_cwd.path().to_path_buf()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -89,12 +93,14 @@ async fn turn_context_update_without_user_turn_does_not_record_collaboration_upd
     let collab_text = "override collaboration instructions";
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
