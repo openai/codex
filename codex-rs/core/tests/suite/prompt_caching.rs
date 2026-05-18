@@ -726,15 +726,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
+                model: Some("o3".to_string()),
+                effort: Some(Some(ReasoningEffort::High)),
                 summary: Some(ReasoningSummary::Detailed),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: "o3".to_string(),
-                        reasoning_effort: Some(ReasoningEffort::High),
-                        developer_instructions: None,
-                    },
-                }),
                 ..Default::default()
             },
         })
