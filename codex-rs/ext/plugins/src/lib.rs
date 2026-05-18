@@ -17,64 +17,32 @@ use codex_extension_api::ToolSpec;
 use codex_tools::JsonSchema;
 use codex_tools::LIST_INSTALLABLE_PLUGINS_TOOL_NAME;
 use codex_tools::RequestPluginInstallEntry;
-use serde::Serialize;
 use serde_json::json;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct PluginsExtension;
-
-#[async_trait::async_trait]
-pub trait InstallablePluginsProvider: Send + Sync {
-    async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String>;
-}
-
-#[derive(Clone)]
-pub struct InstallablePluginsProviderHandle {
-    provider: Arc<dyn InstallablePluginsProvider>,
-}
 
 pub type InstallablePluginsFuture =
     Pin<Box<dyn Future<Output = Result<Vec<RequestPluginInstallEntry>, String>> + Send>>;
 
-struct FnInstallablePluginsProvider<F>
-where
-    F: Fn() -> InstallablePluginsFuture + Send + Sync,
-{
-    list_installable_plugins: F,
-}
-
-#[async_trait::async_trait]
-impl<F> InstallablePluginsProvider for FnInstallablePluginsProvider<F>
-where
-    F: Fn() -> InstallablePluginsFuture + Send + Sync,
-{
-    async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String> {
-        (self.list_installable_plugins)().await
-    }
+#[derive(Clone)]
+pub struct InstallablePluginsProviderHandle {
+    list_installable_plugins: Arc<dyn Fn() -> InstallablePluginsFuture + Send + Sync + 'static>,
 }
 
 impl InstallablePluginsProviderHandle {
-    pub fn new(provider: Arc<dyn InstallablePluginsProvider>) -> Self {
-        Self { provider }
-    }
-
     pub fn from_fn<F>(list_installable_plugins: F) -> Self
     where
         F: Fn() -> InstallablePluginsFuture + Send + Sync + 'static,
     {
-        Self::new(Arc::new(FnInstallablePluginsProvider {
-            list_installable_plugins,
-        }))
+        Self {
+            list_installable_plugins: Arc::new(list_installable_plugins),
+        }
     }
 
     async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String> {
-        self.provider.list_installable_plugins().await
+        (self.list_installable_plugins)().await
     }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-struct ListInstallablePluginsResponse {
-    entries: Vec<RequestPluginInstallEntry>,
 }
 
 impl ToolContributor for PluginsExtension {
@@ -128,15 +96,18 @@ impl ToolExecutor<ToolCall> for ListInstallablePluginsTool {
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        Ok(Box::new(JsonToolOutput::new(json!(
-            ListInstallablePluginsResponse { entries }
-        ))))
+        Ok(Box::new(JsonToolOutput::new(json!({ "entries": entries }))))
     }
 }
 
 /// Installs plugins extension contributors into the supplied extension registry.
-pub fn install<C>(registry: &mut ExtensionRegistryBuilder<C>) {
-    registry.tool_contributor(Arc::new(PluginsExtension));
+pub fn install<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    list_installable_plugins_enabled: bool,
+) {
+    if list_installable_plugins_enabled {
+        registry.tool_contributor(Arc::new(PluginsExtension));
+    }
 }
 
 #[cfg(test)]
@@ -144,18 +115,6 @@ mod tests {
     use super::*;
     use codex_tools::DiscoverableToolType;
     use pretty_assertions::assert_eq;
-
-    #[derive(Clone)]
-    struct StaticInstallablePluginsProvider {
-        entries: Vec<RequestPluginInstallEntry>,
-    }
-
-    #[async_trait::async_trait]
-    impl InstallablePluginsProvider for StaticInstallablePluginsProvider {
-        async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String> {
-            Ok(self.entries.clone())
-        }
-    }
 
     #[test]
     fn tools_are_not_contributed_without_provider() {
@@ -175,19 +134,19 @@ mod tests {
     async fn list_tool_returns_provider_installable_entries() {
         let extension = PluginsExtension;
         let session_store = ExtensionData::new("session");
-        session_store.insert(InstallablePluginsProviderHandle::new(Arc::new(
-            StaticInstallablePluginsProvider {
-                entries: vec![RequestPluginInstallEntry {
-                    id: "sample@openai-curated".to_string(),
-                    name: "Sample Plugin".to_string(),
-                    description: Some("Adds sample capabilities.".to_string()),
-                    tool_type: DiscoverableToolType::Plugin,
-                    has_skills: true,
-                    mcp_server_names: vec!["sample-docs".to_string()],
-                    app_connector_ids: vec!["connector_sample".to_string()],
-                }],
-            },
-        )));
+        let entries = vec![RequestPluginInstallEntry {
+            id: "sample@openai-curated".to_string(),
+            name: "Sample Plugin".to_string(),
+            description: Some("Adds sample capabilities.".to_string()),
+            tool_type: DiscoverableToolType::Plugin,
+            has_skills: true,
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: vec!["connector_sample".to_string()],
+        }];
+        session_store.insert(InstallablePluginsProviderHandle::from_fn(move || {
+            let entries = entries.clone();
+            Box::pin(async move { Ok(entries) })
+        }));
 
         let tools = extension.tools(&session_store, &ExtensionData::new("thread"));
         assert_eq!(tools.len(), 1);

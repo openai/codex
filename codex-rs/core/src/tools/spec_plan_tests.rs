@@ -1970,7 +1970,10 @@ fn request_plugin_install_is_not_registered_without_feature_flag() {
             "Google Calendar",
             "Plan events and schedules.",
         )]),
-        /*extension_tool_executors*/ &[],
+        &[extension_tool_executor(
+            LIST_INSTALLABLE_PLUGINS_TOOL_NAME,
+            "List installable plugins.",
+        )],
         &[],
     );
 
@@ -2011,7 +2014,10 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
             "Google Calendar",
             "Plan events and schedules.",
         )]),
-        /*extension_tool_executors*/ &[],
+        &[extension_tool_executor(
+            LIST_INSTALLABLE_PLUGINS_TOOL_NAME,
+            "List installable plugins.",
+        )],
         &[],
     );
 
@@ -2039,14 +2045,13 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
 }
 
 #[test]
-fn request_plugin_install_description_lists_discoverable_tools() {
+fn request_plugin_install_description_lists_discoverable_tools_without_list_tool() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
     features.enable(Feature::ToolSearch);
     features.enable(Feature::ToolSuggest);
-    features.disable(Feature::PluginInstallListTool);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2509,6 +2514,9 @@ fn build_specs_with_inputs_for_test(
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
         discoverable_tools: discoverable_tools.as_deref(),
         extension_tool_executors,
+        list_installable_plugins_registered: extension_tool_executors.iter().any(|executor| {
+            executor.tool_name() == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
+        }),
         dynamic_tools,
         default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
         wait_agent_timeouts: wait_agent_timeout_options(),

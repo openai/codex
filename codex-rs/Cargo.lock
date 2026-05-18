@@ -3402,7 +3402,6 @@ dependencies = [
  "codex-extension-api",
  "codex-tools",
  "pretty_assertions",
- "serde",
  "serde_json",
  "tokio",
 ]

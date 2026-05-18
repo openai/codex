@@ -40,7 +40,6 @@ use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_i
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 
-#[derive(Default)]
 pub struct RequestPluginInstallHandler {
     discoverable_tools: Vec<RequestPluginInstallEntry>,
     plugin_install_list_tool: bool,

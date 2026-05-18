@@ -85,6 +85,7 @@ struct ToolRegistryBuildParams<'a> {
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
     discoverable_tools: Option<&'a [DiscoverableTool]>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    list_installable_plugins_registered: bool,
     dynamic_tools: &'a [DynamicToolSpec],
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
@@ -106,6 +107,9 @@ fn build_tool_specs_and_registry(
         extension_tool_executors,
         dynamic_tools,
     } = params;
+    let list_installable_plugins_registered = extension_tool_executors.iter().any(|executor| {
+        executor.tool_name() == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
+    });
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let mut executors = collect_tool_executors(
@@ -115,6 +119,7 @@ fn build_tool_specs_and_registry(
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             extension_tool_executors: &extension_tool_executors,
+            list_installable_plugins_registered,
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: wait_agent_timeout_options(config),
@@ -419,7 +424,7 @@ fn collect_tool_executors(
     {
         executors.push(Arc::new(RequestPluginInstallHandler::new(
             discoverable_tools,
-            config.plugin_install_list_tool,
+            params.list_installable_plugins_registered,
         )));
     }
 
@@ -614,11 +619,6 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
-        if tool_name == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
-            && !config.plugin_install_list_tool
-        {
-            continue;
-        }
         if !reserved_tool_names.insert(tool_name.clone()) {
             warn!("Skipping extension tool `{tool_name}`: tool already registered");
             continue;

@@ -12,14 +12,17 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 
-pub(crate) fn thread_extensions<S>(guardian_agent_spawner: S) -> Arc<ExtensionRegistry<Config>>
+pub(crate) fn thread_extensions<S>(
+    guardian_agent_spawner: S,
+    plugin_install_list_tool_enabled: bool,
+) -> Arc<ExtensionRegistry<Config>>
 where
     S: AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> + 'static,
 {
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     codex_memories_extension::install(&mut builder);
-    codex_plugins_extension::install(&mut builder);
+    codex_plugins_extension::install(&mut builder, plugin_install_list_tool_enabled);
     Arc::new(builder.build())
 }
 
