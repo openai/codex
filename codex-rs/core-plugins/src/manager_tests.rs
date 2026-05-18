@@ -7,6 +7,7 @@ use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -331,6 +332,25 @@ approval_mode = "approve"
         Some(&McpServerToolConfig {
             approval_mode: Some(AppToolApproval::Approve),
         })
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_plugin_scopes_include_workspace_for_plugin_sharing() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = false
+plugin_sharing = true
+"#,
+    );
+
+    let config = load_plugins_config_input(codex_home.path(), codex_home.path()).await;
+    assert_eq!(
+        config.remote_installed_plugin_scopes(),
+        vec![RemotePluginScope::Workspace]
     );
 }
 

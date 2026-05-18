@@ -90,6 +90,7 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
+    pub plugin_sharing_enabled: bool,
     pub plugin_hooks_enabled: bool,
     pub chatgpt_base_url: String,
 }
@@ -99,6 +100,7 @@ impl PluginsConfigInput {
         config_layer_stack: ConfigLayerStack,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
+        plugin_sharing_enabled: bool,
         plugin_hooks_enabled: bool,
         chatgpt_base_url: String,
     ) -> Self {
@@ -106,6 +108,7 @@ impl PluginsConfigInput {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
+            plugin_sharing_enabled,
             plugin_hooks_enabled,
             chatgpt_base_url,
         }
@@ -115,6 +118,9 @@ impl PluginsConfigInput {
         let mut scopes = Vec::new();
         if self.remote_plugin_enabled {
             scopes.push(RemotePluginScope::Global);
+        }
+        if self.plugin_sharing_enabled {
+            scopes.push(RemotePluginScope::Workspace);
         }
         scopes
     }
