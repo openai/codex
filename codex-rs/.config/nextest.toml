@@ -57,3 +57,10 @@ platform = 'cfg(windows)'
 filter = 'test(suite::resume::) | test(suite::cli_stream::) | test(suite::auth_env::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows)'
 test-group = 'windows_process_heavy'
 slow-timeout = { period = "45s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+# This Codex-home startup path still exceeded the broader Windows-heavy ceiling
+# in both Windows full-CI lanes after contention was reduced.
+platform = 'cfg(windows)'
+filter = 'test(start_thread_uses_all_default_environments_from_codex_home)'
+slow-timeout = { period = "1m", terminate-after = 2 }
