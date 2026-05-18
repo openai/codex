@@ -42,6 +42,7 @@ use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::process::Stdio;
 use supports_color::Stream;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -558,6 +559,10 @@ struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+
+    /// Start the default app-server Unix socket listener if it is not already running.
+    #[arg(long = "ensure-listener")]
+    ensure_listener: bool,
 }
 
 #[derive(Debug, Args)]
@@ -610,6 +615,42 @@ struct StdioToUdsCommand {
 fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
     AbsolutePathBuf::relative_to_current_dir(raw)
         .map_err(|err| format!("failed to resolve socket path `{raw}`: {err}"))
+}
+
+async fn start_detached_app_server_listener(
+    socket_path: AbsolutePathBuf,
+    log_path: PathBuf,
+    cli_config_overrides: CliConfigOverrides,
+    analytics_default_enabled: bool,
+) -> std::io::Result<codex_app_server::AppServerListenerStartup> {
+    let log_file = std::fs::File::create(&log_path)?;
+    let log_file_stderr = log_file.try_clone()?;
+    let current_exe = std::env::current_exe()?;
+
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = std::process::Command::new("nohup");
+        command.arg(current_exe);
+        command
+    };
+    #[cfg(not(unix))]
+    let mut command = std::process::Command::new(current_exe);
+
+    for raw_override in cli_config_overrides.raw_overrides {
+        command.arg("-c").arg(raw_override);
+    }
+    command.arg("app-server");
+    if analytics_default_enabled {
+        command.arg("--analytics-default-enabled");
+    }
+    let child = command
+        .arg("--listen")
+        .arg(format!("unix://{}", socket_path.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_stderr))
+        .spawn()?;
+    Ok(codex_app_server::AppServerListenerStartup::Child(child))
 }
 
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
@@ -1025,6 +1066,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
+                    reject_config_overrides_for_ensure_listener(
+                        &proxy_cli,
+                        &root_config_overrides,
+                    )?;
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
                         None => {
@@ -1032,6 +1077,42 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
+                    if proxy_cli.ensure_listener {
+                        let codex_home = find_codex_home()?;
+                        let startup_lock_path =
+                            codex_app_server::app_server_startup_lock_path(&codex_home)?;
+                        let startup_log_path = startup_lock_path
+                            .as_path()
+                            .parent()
+                            .ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,
+                                    format!(
+                                        "app-server startup lock path has no parent: {}",
+                                        startup_lock_path.display()
+                                    ),
+                                )
+                            })?
+                            .join("app-server.log");
+                        codex_app_server::ensure_control_socket_listener(
+                            socket_path.clone(),
+                            startup_lock_path,
+                            {
+                                let socket_path = socket_path.clone();
+                                let startup_log_path = startup_log_path.clone();
+                                let cli_config_overrides = root_config_overrides.clone();
+                                move || {
+                                    start_detached_app_server_listener(
+                                        socket_path,
+                                        startup_log_path,
+                                        cli_config_overrides,
+                                        analytics_default_enabled,
+                                    )
+                                }
+                            },
+                        )
+                        .await?;
+                    }
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
@@ -1963,6 +2044,18 @@ async fn print_app_server_remote_control_output(
 ) -> anyhow::Result<()> {
     let output = codex_app_server_daemon::set_remote_control(mode).await?;
     println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+fn reject_config_overrides_for_ensure_listener(
+    proxy_cli: &AppServerProxyCommand,
+    root_config_overrides: &CliConfigOverrides,
+) -> anyhow::Result<()> {
+    if proxy_cli.ensure_listener && !root_config_overrides.raw_overrides.is_empty() {
+        anyhow::bail!(
+            "`codex app-server proxy --ensure-listener` cannot use root `-c`/`--config` overrides because it may reuse an existing app-server listener; start a dedicated listener or pass per-thread settings through the app-server protocol instead"
+        );
+    }
     Ok(())
 }
 
@@ -3135,7 +3228,21 @@ mod tests {
         assert!(matches!(
             app_server.subcommand,
             Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
-                socket_path: None
+                socket_path: None,
+                ensure_listener: false,
+            }))
+        ));
+    }
+
+    #[test]
+    fn app_server_proxy_ensure_listener_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "proxy", "--ensure-listener"].as_ref());
+        assert!(matches!(
+            app_server.subcommand,
+            Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
+                socket_path: None,
+                ensure_listener: true,
             }))
         ));
     }
@@ -3222,7 +3329,10 @@ mod tests {
 
     #[test]
     fn reject_remote_auth_token_env_for_app_server_proxy() {
-        let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand { socket_path: None });
+        let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand {
+            socket_path: None,
+            ensure_listener: false,
+        });
         let err = reject_remote_mode_for_app_server_subcommand(
             /*remote*/ None,
             Some("CODEX_REMOTE_AUTH_TOKEN"),
@@ -3244,6 +3354,33 @@ mod tests {
         )
         .expect_err("app-server daemon version should reject --remote-auth-token-env");
         assert!(err.to_string().contains("app-server daemon version"));
+    }
+
+    #[test]
+    fn app_server_proxy_ensure_listener_rejects_root_config_overrides() {
+        let proxy_cli = AppServerProxyCommand {
+            socket_path: None,
+            ensure_listener: true,
+        };
+        let overrides = CliConfigOverrides {
+            raw_overrides: vec!["model=o3".to_string()],
+        };
+        let err = reject_config_overrides_for_ensure_listener(&proxy_cli, &overrides)
+            .expect_err("ensure-listener should reject process-scoped root overrides");
+        assert!(err.to_string().contains("--ensure-listener"));
+    }
+
+    #[test]
+    fn app_server_proxy_attach_only_accepts_root_config_overrides() {
+        let proxy_cli = AppServerProxyCommand {
+            socket_path: None,
+            ensure_listener: false,
+        };
+        let overrides = CliConfigOverrides {
+            raw_overrides: vec!["model=o3".to_string()],
+        };
+        reject_config_overrides_for_ensure_listener(&proxy_cli, &overrides)
+            .expect("attach-only proxy should preserve existing override behavior");
     }
 
     #[test]

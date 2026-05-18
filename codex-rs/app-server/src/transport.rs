@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+pub use codex_app_server_transport::AppServerListenerStartup;
 pub use codex_app_server_transport::AppServerTransport;
 pub(crate) use codex_app_server_transport::CHANNEL_CAPACITY;
 pub(crate) use codex_app_server_transport::ConnectionId;
@@ -23,7 +24,9 @@ pub(crate) use codex_app_server_transport::RemoteControlStartConfig;
 pub(crate) use codex_app_server_transport::RemoteControlUnavailable;
 pub(crate) use codex_app_server_transport::TransportEvent;
 pub use codex_app_server_transport::app_server_control_socket_path;
+pub use codex_app_server_transport::app_server_startup_lock_path;
 pub use codex_app_server_transport::auth;
+pub use codex_app_server_transport::ensure_control_socket_listener;
 pub(crate) use codex_app_server_transport::start_control_socket_acceptor;
 pub(crate) use codex_app_server_transport::start_remote_control;
 pub(crate) use codex_app_server_transport::start_stdio_connection;

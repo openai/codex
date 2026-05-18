@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::Path;
@@ -11,6 +13,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use tokio::time::sleep;
 use tokio_tungstenite::accept_async;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -19,6 +22,18 @@ use tracing::warn;
 
 #[cfg(unix)]
 const CONTROL_SOCKET_MODE: u32 = 0o600;
+const CONTROL_SOCKET_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnsuredAppServerListener {
+    ReusedExisting,
+    StartedNew,
+}
+
+pub enum AppServerListenerStartup {
+    Untracked,
+    Child(std::process::Child),
+}
 
 pub async fn start_control_socket_acceptor(
     socket_path: AbsolutePathBuf,
@@ -40,6 +55,33 @@ pub async fn start_control_socket_acceptor(
         shutdown_token,
         socket_guard,
     )))
+}
+
+pub async fn ensure_control_socket_listener<F, Fut>(
+    socket_path: AbsolutePathBuf,
+    startup_lock_path: AbsolutePathBuf,
+    start_listener: F,
+) -> IoResult<EnsuredAppServerListener>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = IoResult<AppServerListenerStartup>>,
+{
+    if probe_existing_control_socket(socket_path.as_path()).await? {
+        return Ok(EnsuredAppServerListener::ReusedExisting);
+    }
+
+    if let Some(parent) = startup_lock_path.as_path().parent() {
+        codex_uds::prepare_private_socket_directory(parent).await?;
+    }
+    let _startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+
+    if probe_existing_control_socket(socket_path.as_path()).await? {
+        return Ok(EnsuredAppServerListener::ReusedExisting);
+    }
+
+    let startup = start_listener().await?;
+    wait_for_control_socket_listener(socket_path.as_path(), startup).await?;
+    Ok(EnsuredAppServerListener::StartedNew)
 }
 
 async fn run_control_socket_acceptor(
@@ -128,6 +170,67 @@ async fn prepare_control_socket_path(socket_path: &Path) -> IoResult<()> {
         ));
     }
     tokio::fs::remove_file(socket_path).await
+}
+
+async fn probe_existing_control_socket(socket_path: &Path) -> IoResult<bool> {
+    match UnixStream::connect(socket_path).await {
+        Ok(_stream) => Ok(true),
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::ConnectionRefused | ErrorKind::NotFound
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => {
+            if !socket_path.exists() {
+                return Ok(false);
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn wait_for_control_socket_listener(
+    socket_path: &Path,
+    mut startup: AppServerListenerStartup,
+) -> IoResult<()> {
+    loop {
+        if probe_existing_control_socket(socket_path).await? {
+            return Ok(());
+        }
+        if let AppServerListenerStartup::Child(child) = &mut startup
+            && let Some(status) = child.try_wait()?
+        {
+            return Err(std::io::Error::other(format!(
+                "detached app-server listener exited before opening {} with status {status}",
+                socket_path.display()
+            )));
+        }
+        sleep(CONTROL_SOCKET_READY_POLL_INTERVAL).await;
+    }
+}
+
+struct AppServerStartupLock {
+    _file: std::fs::File,
+}
+
+async fn acquire_app_server_startup_lock(
+    startup_lock_path: AbsolutePathBuf,
+) -> IoResult<AppServerStartupLock> {
+    tokio::task::spawn_blocking(move || {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(startup_lock_path.as_path())?;
+        file.lock()?;
+        Ok(AppServerStartupLock { _file: file })
+    })
+    .await
+    .map_err(|err| std::io::Error::other(format!("startup lock task failed: {err}")))?
 }
 
 #[cfg(unix)]
