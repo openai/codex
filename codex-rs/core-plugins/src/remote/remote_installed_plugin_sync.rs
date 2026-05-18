@@ -305,11 +305,21 @@ fn remove_stale_remote_plugin_caches(
     installed_plugin_names_by_marketplace: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<Vec<String>, String> {
     let mut removed_cache_plugin_ids = Vec::new();
-    for (marketplace_name, installed_plugin_names) in installed_plugin_names_by_marketplace {
+    for marketplace_name in [
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+    ] {
         let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
         if !marketplace_root.exists() {
             continue;
         }
+        let installed_plugin_names = installed_plugin_names_by_marketplace
+            .get(marketplace_name)
+            .cloned()
+            .unwrap_or_default();
         for entry in fs::read_dir(&marketplace_root).map_err(|err| {
             format!(
                 "failed to read remote plugin cache directory {}: {err}",
