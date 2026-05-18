@@ -2929,12 +2929,12 @@ fn render_expanded_session_details(
     width: u16,
 ) -> Vec<Line<'static>> {
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
-    let session = row
-        .thread_name
-        .as_deref()
-        .map(str::to_string)
-        .or_else(|| row.thread_id.map(|thread_id| thread_id.to_string()))
-        .unwrap_or_else(|| "-".to_string());
+    let session = match (row.thread_name.as_deref(), row.thread_id) {
+        (Some(thread_name), Some(thread_id)) => format!("{thread_name} ({thread_id})"),
+        (Some(thread_name), None) => thread_name.to_string(),
+        (None, Some(thread_id)) => thread_id.to_string(),
+        (None, None) => "-".to_string(),
+    };
     let directory = row
         .cwd
         .as_ref()
@@ -3387,7 +3387,9 @@ mod tests {
         let expected_directory =
             format_directory_display(row.cwd.as_deref().expect("cwd"), /*max_width*/ None);
 
-        assert!(rendered.contains("Session:    feat(tui): add raw scrollback mode"));
+        assert!(rendered.contains(
+            "Session:    feat(tui): add raw scrollback mode (019dabc1-0ef5-7431-b81c-03037f51f62c)"
+        ));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
         assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
