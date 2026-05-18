@@ -157,7 +157,7 @@ def test_async_lifecycle_methods_round_trip(tmp_path) -> None:
 
             async with AsyncCodex(config=harness.app_server_config()) as codex:
                 thread = await codex.thread_start()
-                run_result = await thread.run("materialize async thread")
+                turn_result = await thread.run("materialize async thread")
                 await thread.set_name("async lifecycle")
                 named = await thread.read()
                 resumed = await codex.thread_resume(thread.id)
@@ -166,14 +166,14 @@ def test_async_lifecycle_methods_round_trip(tmp_path) -> None:
                 unarchived = await codex.thread_unarchive(thread.id)
 
         assert {
-            "run_final_response": run_result.final_response,
+            "turn_final_response": turn_result.final_response,
             "named_thread": named.thread.name,
             "resumed_id": resumed.id,
             "forked_is_distinct": forked.id != thread.id,
             "archive_response": archive_response.model_dump(by_alias=True, mode="json"),
             "unarchived_id": unarchived.id,
         } == {
-            "run_final_response": "async materialized",
+            "turn_final_response": "async materialized",
             "named_thread": "async lifecycle",
             "resumed_id": thread.id,
             "forked_is_distinct": True,
@@ -253,19 +253,19 @@ def test_compact_rpc_hits_mock_responses(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            run_result = thread.run("create history")
+            turn_result = thread.run("create history")
             compact_response = thread.compact()
             requests = harness.responses.wait_for_requests(2)
 
     assert {
-        "run_final_response": run_result.final_response,
+        "turn_final_response": turn_result.final_response,
         "compact_response": compact_response.model_dump(
             by_alias=True,
             mode="json",
         ),
         "request_kinds": [request_kind(request.path) for request in requests],
     } == {
-        "run_final_response": "history",
+        "turn_final_response": "history",
         "compact_response": {},
         "request_kinds": ["responses", "responses"],
     }

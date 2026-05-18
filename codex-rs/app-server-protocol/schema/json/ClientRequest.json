@@ -1589,6 +1589,31 @@
       ],
       "type": "object"
     },
+    "PluginInstalledParams": {
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "installSuggestionPluginNames": {
+          "description": "Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "PluginListMarketplaceKind": {
       "enum": [
         "local",
@@ -4636,6 +4661,30 @@
         "params"
       ],
       "title": "Plugin/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/installed"
+          ],
+          "title": "Plugin/installedRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginInstalledParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/installedRequest",
       "type": "object"
     },
     {

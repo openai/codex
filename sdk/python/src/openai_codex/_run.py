@@ -12,13 +12,20 @@ from .generated.v2_all import (
     ThreadTokenUsageUpdatedNotification,
     Turn as AppServerTurn,
     TurnCompletedNotification,
+    TurnError,
     TurnStatus,
 )
 from .models import Notification
 
 
 @dataclass(slots=True)
-class RunResult:
+class TurnResult:
+    id: str
+    status: TurnStatus
+    error: TurnError | None
+    started_at: int | None
+    completed_at: int | None
+    duration_ms: int | None
     final_response: str | None
     items: list[ThreadItem]
     usage: ThreadTokenUsage | None
@@ -56,7 +63,7 @@ def _raise_for_failed_turn(turn: AppServerTurn) -> None:
     raise RuntimeError(f"turn failed with status {turn.status.value}")
 
 
-def _collect_run_result(stream: Iterator[Notification], *, turn_id: str) -> RunResult:
+def _collect_turn_result(stream: Iterator[Notification], *, turn_id: str) -> TurnResult:
     completed: TurnCompletedNotification | None = None
     items: list[ThreadItem] = []
     usage: ThreadTokenUsage | None = None
@@ -76,16 +83,23 @@ def _collect_run_result(stream: Iterator[Notification], *, turn_id: str) -> RunR
         raise RuntimeError("turn completed event not received")
 
     _raise_for_failed_turn(completed.turn)
-    return RunResult(
+    turn = completed.turn
+    return TurnResult(
+        id=turn.id,
+        status=turn.status,
+        error=turn.error,
+        started_at=turn.started_at,
+        completed_at=turn.completed_at,
+        duration_ms=turn.duration_ms,
         final_response=_final_assistant_response_from_items(items),
         items=items,
         usage=usage,
     )
 
 
-async def _collect_async_run_result(
+async def _collect_async_turn_result(
     stream: AsyncIterator[Notification], *, turn_id: str
-) -> RunResult:
+) -> TurnResult:
     completed: TurnCompletedNotification | None = None
     items: list[ThreadItem] = []
     usage: ThreadTokenUsage | None = None
@@ -105,7 +119,14 @@ async def _collect_async_run_result(
         raise RuntimeError("turn completed event not received")
 
     _raise_for_failed_turn(completed.turn)
-    return RunResult(
+    turn = completed.turn
+    return TurnResult(
+        id=turn.id,
+        status=turn.status,
+        error=turn.error,
+        started_at=turn.started_at,
+        completed_at=turn.completed_at,
+        duration_ms=turn.duration_ms,
         final_response=_final_assistant_response_from_items(items),
         items=items,
         usage=usage,

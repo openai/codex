@@ -1874,8 +1874,9 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         records: Arc<std::sync::Mutex<Vec<RecordedTokenUsage>>>,
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::TokenUsageContributor for TokenUsageRecorder {
-        fn on_token_usage(
+        async fn on_token_usage(
             &self,
             session_store: &codex_extension_api::ExtensionData,
             thread_store: &codex_extension_api::ExtensionData,
@@ -5683,8 +5684,9 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
         expected_thread_id: ThreadId,
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadStopRecorder {
-        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()
@@ -5728,8 +5730,9 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
         expected_turn_id: String,
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for LifecycleRecorder {
-        fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
+        async fn on_thread_stop(&self, input: codex_extension_api::ThreadStopInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()
@@ -5741,8 +5744,9 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
         }
     }
 
+    #[async_trait::async_trait]
     impl codex_extension_api::TurnLifecycleContributor for LifecycleRecorder {
-        fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
+        async fn on_turn_abort(&self, input: codex_extension_api::TurnAbortInput<'_>) {
             assert_eq!(
                 self.expected_thread_id.to_string(),
                 input.thread_store.level_id()
@@ -8589,6 +8593,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after accounting");
@@ -8612,6 +8617,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     .await?;
 
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after follow-up accounting");
@@ -8651,6 +8657,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8659,6 +8666,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     let previous_goal = goal.clone();
     let goal_id = goal.goal_id.clone();
     let updated_goal = state_db
+        .thread_goals()
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
@@ -8680,6 +8688,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
     assert!(sess.active_turn.lock().await.is_some());
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8706,6 +8715,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let old_goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -8714,6 +8724,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
         )
         .await?;
     let new_goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Write a concise benchmark summary",
@@ -8771,6 +8782,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -8804,6 +8816,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     .await?;
 
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8902,6 +8915,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
     )
     .await?;
     let persisted_goal = state_db
+        .thread_goals()
         .get_thread_goal(test.session_configured.thread_id)
         .await?
         .expect("goal should be persisted");

@@ -112,6 +112,7 @@ mod clipboard_copy;
 mod clipboard_paste;
 mod collaboration_modes;
 mod color;
+mod config_update;
 pub(crate) mod custom_terminal;
 mod pets;
 pub use custom_terminal::Terminal;
@@ -1218,10 +1219,13 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut terminal = tui::init()?;
-    terminal.clear()?;
+    let mut initialized_terminal = tui::init()?;
+    initialized_terminal.terminal.clear()?;
 
-    let mut tui = Tui::new(terminal);
+    let mut tui = Tui::new(
+        initialized_terminal.terminal,
+        initialized_terminal.enhanced_keys_supported,
+    );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]

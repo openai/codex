@@ -2946,12 +2946,14 @@ impl Session {
             };
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
-                    contributor.on_token_usage(
-                        &self.services.session_extension_data,
-                        &self.services.thread_extension_data,
-                        turn_context.extension_data.as_ref(),
-                        token_info,
-                    );
+                    contributor
+                        .on_token_usage(
+                            &self.services.session_extension_data,
+                            &self.services.thread_extension_data,
+                            turn_context.extension_data.as_ref(),
+                            token_info,
+                        )
+                        .await;
                 }
             }
         }
@@ -3353,7 +3355,6 @@ impl Session {
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         let had_active_turn = self.active_turn.lock().await.is_some();
-        // Even without an active task, interrupt handling pauses any active goal.
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
         if !had_active_turn {
             self.cancel_mcp_startup().await;
