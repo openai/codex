@@ -194,8 +194,11 @@ impl GoalToolExecutor {
         // TODO: ToolCall should expose the current turn submission id so goal
         // tool events can set ThreadGoalUpdatedEvent.turn_id exactly as core
         // does today. Until then, correlate the event with the tool call id.
-        self.event_emitter
-            .thread_goal_updated(invocation.call_id.clone(), None, goal);
+        self.event_emitter.thread_goal_updated(
+            invocation.call_id.clone(),
+            /*turn_id*/ None,
+            goal,
+        );
     }
 }
 
