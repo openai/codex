@@ -1214,6 +1214,7 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
         if terminal_resize_reflow_enabled {
