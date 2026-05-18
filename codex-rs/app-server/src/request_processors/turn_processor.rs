@@ -425,7 +425,7 @@ impl TurnRequestProcessor {
                         "turn/start permission selection missing thread snapshot",
                     ));
                 };
-                let mut overrides = ConfigOverrides {
+                let overrides = ConfigOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
                         || {
@@ -436,14 +436,11 @@ impl TurnRequestProcessor {
                                 .collect()
                         },
                     )),
+                    default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
                 let config = self
                     .config_manager
                     .load_for_cwd(

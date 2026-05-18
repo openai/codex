@@ -1,6 +1,5 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
-use super::PermissionProfileSelectionParams;
 use super::SandboxPolicy;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -85,10 +84,8 @@ pub struct TurnStartParams {
     /// Select a named permissions profile id for this turn and subsequent
     /// turns. Cannot be combined with `sandboxPolicy`.
     #[experimental("turn/start.permissions")]
-    #[schemars(with = "Option<String>")]
-    #[ts(type = "string | null")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
