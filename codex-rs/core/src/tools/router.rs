@@ -142,14 +142,14 @@ impl ToolRouter {
             tracker,
             call,
             source,
-            /*handler_finished*/ None,
+            /*terminal_outcome_reached*/ None,
         )
         .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn dispatch_tool_call_with_handler_finished(
+    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
@@ -157,7 +157,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
-        handler_finished: Arc<AtomicBool>,
+        terminal_outcome_reached: Arc<AtomicBool>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
@@ -166,7 +166,7 @@ impl ToolRouter {
             tracker,
             call,
             source,
-            Some(handler_finished),
+            Some(terminal_outcome_reached),
         )
         .await
     }
@@ -180,7 +180,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
-        handler_finished: Option<Arc<AtomicBool>>,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -200,7 +200,7 @@ impl ToolRouter {
         };
 
         self.registry
-            .dispatch_any_with_handler_finished(invocation, handler_finished)
+            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
             .await
     }
 }

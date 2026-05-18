@@ -308,7 +308,7 @@ impl ToolRegistry {
         &self,
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
-        self.dispatch_any_with_handler_finished(invocation, /*handler_finished*/ None)
+        self.dispatch_any_with_terminal_outcome(invocation, /*terminal_outcome_reached*/ None)
             .await
     }
 
@@ -316,10 +316,10 @@ impl ToolRegistry {
         clippy::await_holding_invalid_type,
         reason = "tool dispatch must keep active-turn accounting atomic"
     )]
-    pub(crate) async fn dispatch_any_with_handler_finished(
+    pub(crate) async fn dispatch_any_with_terminal_outcome(
         &self,
         mut invocation: ToolInvocation,
-        handler_finished: Option<Arc<AtomicBool>>,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let tool_name_flat = flat_tool_name(&tool_name);
@@ -419,6 +419,9 @@ impl ToolRegistry {
                 PreToolUseHookResult::Blocked(message) => {
                     let err = FunctionCallError::RespondToModel(message);
                     dispatch_trace.record_failed(&err);
+                    if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
+                        terminal_outcome_reached.store(true, Ordering::Release);
+                    }
                     notify_tool_finish(&invocation, ToolCallOutcome::Blocked).await;
                     return Err(err);
                 }
@@ -430,6 +433,9 @@ impl ToolRegistry {
                     }
                     Err(err) => {
                         dispatch_trace.record_failed(&err);
+                        if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
+                            terminal_outcome_reached.store(true, Ordering::Release);
+                        }
                         notify_tool_finish(
                             &invocation,
                             ToolCallOutcome::Failed {
@@ -461,9 +467,7 @@ impl ToolRegistry {
                     let tool = tool.clone();
                     let response_cell = &response_cell;
                     async move {
-                        match handle_any_tool(tool.as_ref(), invocation_for_tool, handler_finished)
-                            .await
-                        {
+                        match handle_any_tool(tool.as_ref(), invocation_for_tool).await {
                             Ok(result) => {
                                 let preview = result.result.log_preview();
                                 let success = result.result.success_for_logging();
@@ -552,6 +556,9 @@ impl ToolRegistry {
                 handler_executed: true,
             },
         };
+        if let Some(terminal_outcome_reached) = &terminal_outcome_reached {
+            terminal_outcome_reached.store(true, Ordering::Release);
+        }
         notify_tool_finish(&invocation, lifecycle_outcome).await;
 
         if let Err(err) = invocation
@@ -590,15 +597,10 @@ impl ToolRegistry {
 async fn handle_any_tool(
     tool: &dyn CoreToolRuntime,
     invocation: ToolInvocation,
-    handler_finished: Option<Arc<AtomicBool>>,
 ) -> Result<AnyToolResult, FunctionCallError> {
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
-    let output = tool.handle(invocation.clone()).await;
-    if let Some(handler_finished) = handler_finished {
-        handler_finished.store(true, Ordering::Release);
-    }
-    let output = output?;
+    let output = tool.handle(invocation.clone()).await?;
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {

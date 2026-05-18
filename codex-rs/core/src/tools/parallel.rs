@@ -96,8 +96,8 @@ impl ToolCallRuntime {
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
-        let handler_finished = Arc::new(AtomicBool::new(false));
-        let dispatch_handler_finished = Arc::clone(&handler_finished);
+        let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
+        let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
         let dispatch_call = call.clone();
 
         let dispatch_span = trace_span!(
@@ -118,14 +118,14 @@ impl ToolCallRuntime {
                 };
 
                 router
-                    .dispatch_tool_call_with_handler_finished(
+                    .dispatch_tool_call_with_terminal_outcome(
                         session,
                         turn,
                         invocation_cancellation_token,
                         tracker,
                         dispatch_call,
                         source,
-                        dispatch_handler_finished,
+                        dispatch_terminal_outcome_reached,
                     )
                     .instrument(dispatch_span.clone())
                     .await
@@ -135,23 +135,28 @@ impl ToolCallRuntime {
             tokio::select! {
                 res = &mut handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
-                    if handler_finished.load(Ordering::Acquire) || handle.is_finished() {
+                    if terminal_outcome_reached.load(Ordering::Acquire) || handle.is_finished() {
                         handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
                         handle.abort();
-                        let _ = handle.await;
-                        let response = Self::aborted_response(&call, secs);
-                        notify_tool_aborted(
-                            abort_session.as_ref(),
-                            abort_turn.as_ref(),
-                            call.call_id.as_str(),
-                            &call.tool_name,
-                            abort_source,
-                        )
-                        .await;
-                        Ok(response)
+                        match handle.await {
+                            Ok(result) => result,
+                            Err(err) if err.is_cancelled() => {
+                                let response = Self::aborted_response(&call, secs);
+                                notify_tool_aborted(
+                                    abort_session.as_ref(),
+                                    abort_turn.as_ref(),
+                                    call.call_id.as_str(),
+                                    &call.tool_name,
+                                    abort_source,
+                                )
+                                .await;
+                                Ok(response)
+                            }
+                            Err(err) => Err(Self::tool_task_join_error(err)),
+                        }
                     }
                 },
             }
