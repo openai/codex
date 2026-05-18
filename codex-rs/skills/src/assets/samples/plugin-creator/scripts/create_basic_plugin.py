@@ -16,7 +16,8 @@ DEFAULT_MARKETPLACE_PATH = Path.home() / ".agents" / "plugins" / "marketplace.js
 DEFAULT_INSTALL_POLICY = "AVAILABLE"
 DEFAULT_AUTH_POLICY = "ON_INSTALL"
 DEFAULT_CATEGORY = "Productivity"
-DEFAULT_MARKETPLACE_DISPLAY_NAME = "[TODO: Marketplace Display Name]"
+DEFAULT_MARKETPLACE_NAME = "personal"
+DEFAULT_MARKETPLACE_DISPLAY_NAME = "Personal"
 VALID_INSTALL_POLICIES = {"NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"}
 VALID_AUTH_POLICIES = {"ON_INSTALL", "ON_USE"}
 
@@ -40,49 +41,35 @@ def validate_plugin_name(plugin_name: str) -> None:
         )
 
 
-def build_plugin_json(plugin_name: str) -> dict:
-    return {
+def display_name_from_plugin_name(plugin_name: str) -> str:
+    return " ".join(part.capitalize() for part in plugin_name.split("-"))
+
+
+def build_plugin_json(plugin_name: str, *, with_mcp: bool, with_apps: bool) -> dict[str, Any]:
+    display_name = display_name_from_plugin_name(plugin_name)
+    payload: dict[str, Any] = {
         "name": plugin_name,
-        "version": "[TODO: 1.2.0]",
-        "description": "[TODO: Brief plugin description]",
+        "version": "0.1.0",
+        "description": f"{display_name} plugin",
         "author": {
-            "name": "[TODO: Author Name]",
-            "email": "[TODO: author@example.com]",
-            "url": "[TODO: https://github.com/author]",
+            "name": "Local developer",
         },
-        "homepage": "[TODO: https://docs.example.com/plugin]",
-        "repository": "[TODO: https://github.com/author/plugin]",
-        "license": "[TODO: MIT]",
-        "keywords": ["[TODO: keyword1]", "[TODO: keyword2]"],
-        "skills": "[TODO: ./skills/]",
-        "hooks": "[TODO: ./hooks.json]",
-        "mcpServers": "[TODO: ./.mcp.json]",
-        "apps": "[TODO: ./.app.json]",
+        "skills": "./skills/",
         "interface": {
-            "displayName": "[TODO: Plugin Display Name]",
-            "shortDescription": "[TODO: Short description for subtitle]",
-            "longDescription": "[TODO: Long description for details page]",
-            "developerName": "[TODO: OpenAI]",
-            "category": "[TODO: Productivity]",
-            "capabilities": ["[TODO: Interactive]", "[TODO: Write]"],
-            "websiteURL": "[TODO: https://openai.com/]",
-            "privacyPolicyURL": "[TODO: https://openai.com/policies/row-privacy-policy/]",
-            "termsOfServiceURL": "[TODO: https://openai.com/policies/row-terms-of-use/]",
-            "defaultPrompt": [
-                "[TODO: Summarize my inbox and draft replies for me.]",
-                "[TODO: Find open bugs and turn them into tickets.]",
-                "[TODO: Review today's meetings and flag gaps.]",
-            ],
-            "brandColor": "[TODO: #3B82F6]",
-            "composerIcon": "[TODO: ./assets/icon.png]",
-            "logo": "[TODO: ./assets/logo.png]",
-            "screenshots": [
-                "[TODO: ./assets/screenshot1.png]",
-                "[TODO: ./assets/screenshot2.png]",
-                "[TODO: ./assets/screenshot3.png]",
-            ],
+            "displayName": display_name,
+            "shortDescription": f"Use {display_name} in Codex.",
+            "longDescription": f"{display_name} adds a local Codex plugin scaffold.",
+            "developerName": "Local developer",
+            "category": DEFAULT_CATEGORY,
+            "capabilities": [],
+            "defaultPrompt": f"Help me use {display_name}.",
         },
     }
+    if with_mcp:
+        payload["mcpServers"] = "./.mcp.json"
+    if with_apps:
+        payload["apps"] = "./.app.json"
+    return payload
 
 
 def build_marketplace_entry(
@@ -112,7 +99,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def build_default_marketplace() -> dict[str, Any]:
     return {
-        "name": "[TODO: marketplace-name]",
+        "name": DEFAULT_MARKETPLACE_NAME,
         "interface": {
             "displayName": DEFAULT_MARKETPLACE_DISPLAY_NAME,
         },
@@ -185,7 +172,7 @@ def create_stub_file(path: Path, payload: dict, force: bool) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a plugin skeleton with placeholder plugin.json."
+        description="Create a plugin skeleton with a validation-ready plugin.json."
     )
     parser.add_argument("plugin_name")
     parser.add_argument(
@@ -193,7 +180,7 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_PLUGIN_PARENT),
         help=(
             "Parent directory for plugin creation (defaults to <home>/plugins). "
-            "Use <repo>/plugins when creating a repo/team plugin."
+            "Pass an explicit repo path only when a repo/team plugin is intended."
         ),
     )
     parser.add_argument("--with-skills", action="store_true", help="Create skills/ directory")
@@ -216,7 +203,7 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_MARKETPLACE_PATH),
         help=(
             "Path to marketplace.json (defaults to <home>/.agents/plugins/marketplace.json). "
-            "Use <repo>/.agents/plugins/marketplace.json for a repo/team plugin."
+            "Pass a repo-rooted marketplace path only when a repo/team plugin is intended."
         ),
     )
     parser.add_argument(
@@ -252,7 +239,11 @@ def main() -> None:
     plugin_root.mkdir(parents=True, exist_ok=True)
 
     plugin_json_path = plugin_root / ".codex-plugin" / "plugin.json"
-    write_json(plugin_json_path, build_plugin_json(plugin_name), args.force)
+    write_json(
+        plugin_json_path,
+        build_plugin_json(plugin_name, with_mcp=args.with_mcp, with_apps=args.with_apps),
+        args.force,
+    )
 
     optional_directories = {
         "skills": args.with_skills,

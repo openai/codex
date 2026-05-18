@@ -2791,6 +2791,27 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
 }
 
 #[test]
+fn plugin_installed_params_serializes_install_suggestion_names() {
+    assert_eq!(
+        serde_json::to_value(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: Some(vec![
+                "computer-use".to_string(),
+                "chrome".to_string(),
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "installSuggestionPluginNames": [
+                "computer-use",
+                "chrome",
+            ],
+        }),
+    );
+}
+
+#[test]
 fn plugin_read_params_serialization_uses_install_source_fields() {
     let marketplace_path = if cfg!(windows) {
         r"C:\plugins\marketplace.json"

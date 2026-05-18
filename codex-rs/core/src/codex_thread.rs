@@ -144,7 +144,7 @@ impl CodexThread {
         self.codex.session_loop_termination.clone().await;
     }
 
-    pub(crate) fn emit_thread_resume_lifecycle(&self) {
+    pub(crate) async fn emit_thread_resume_lifecycle(&self) {
         for contributor in self
             .codex
             .session
@@ -152,10 +152,12 @@ impl CodexThread {
             .extensions
             .thread_lifecycle_contributors()
         {
-            contributor.on_thread_resume(codex_extension_api::ThreadResumeInput {
-                session_store: &self.codex.session.services.session_extension_data,
-                thread_store: &self.codex.session.services.thread_extension_data,
-            });
+            contributor
+                .on_thread_resume(codex_extension_api::ThreadResumeInput {
+                    session_store: &self.codex.session.services.session_extension_data,
+                    thread_store: &self.codex.session.services.thread_extension_data,
+                })
+                .await;
         }
     }
 
