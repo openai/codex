@@ -68,7 +68,6 @@ use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_login::auth::ExternalAuth;
@@ -308,10 +307,7 @@ impl MessageProcessor {
                 auth_manager.clone(),
                 session_source,
                 environment_manager,
-                thread_extensions(
-                    guardian_agent_spawner(thread_manager.clone()),
-                    config.features.enabled(Feature::PluginInstallListTool),
-                ),
+                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 state_db.clone(),

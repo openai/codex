@@ -477,7 +477,7 @@ impl TestCodexBuilder {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let extensions = if self.plugins_extension_enabled {
             let mut builder = ExtensionRegistryBuilder::new();
-            codex_plugins_extension::install(&mut builder, true);
+            codex_plugins_extension::install(&mut builder);
             Arc::new(builder.build())
         } else {
             empty_extension_registry()

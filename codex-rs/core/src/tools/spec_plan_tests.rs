@@ -1982,6 +1982,7 @@ fn request_plugin_install_is_not_registered_without_feature_flag() {
             .iter()
             .any(|tool| tool.name() == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     );
+    assert_lacks_tool_name(&tools, LIST_INSTALLABLE_PLUGINS_TOOL_NAME);
 }
 
 #[test]
@@ -2042,6 +2043,50 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
         required,
         Some(&vec!["tool_id".to_string(), "suggest_reason".to_string()])
     );
+}
+
+#[test]
+fn request_plugin_install_description_lists_discoverable_tools_when_list_feature_disabled() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Apps);
+    features.enable(Feature::Plugins);
+    features.enable(Feature::ToolSuggest);
+    features.disable(Feature::PluginInstallListTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs_with_inputs_for_test(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        Some(vec![discoverable_connector(
+            "connector_2128aebfecb84f64a069897515042a44",
+            "Google Calendar",
+            "Plan events and schedules.",
+        )]),
+        &[extension_tool_executor(
+            LIST_INSTALLABLE_PLUGINS_TOOL_NAME,
+            "List installable plugins.",
+        )],
+        &[],
+    );
+
+    assert_lacks_tool_name(&tools, LIST_INSTALLABLE_PLUGINS_TOOL_NAME);
+    let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = request_plugin_install else {
+        panic!("expected function tool");
+    };
+    assert!(description.contains("Known plugins/connectors available to install:"));
+    assert!(!description.contains("Only call this tool with a result from"));
 }
 
 #[test]
@@ -2514,9 +2559,13 @@ fn build_specs_with_inputs_for_test(
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
         discoverable_tools: discoverable_tools.as_deref(),
         extension_tool_executors,
-        list_installable_plugins_registered: extension_tool_executors.iter().any(|executor| {
-            executor.tool_name() == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
-        }),
+        plugin_install_list_tool_enabled: config.plugin_install_list_tool
+            && discoverable_tools
+                .as_ref()
+                .is_some_and(|tools| !tools.is_empty())
+            && extension_tool_executors.iter().any(|executor| {
+                executor.tool_name() == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
+            }),
         dynamic_tools,
         default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
         wait_agent_timeouts: wait_agent_timeout_options(),

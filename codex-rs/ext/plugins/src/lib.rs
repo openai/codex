@@ -101,13 +101,8 @@ impl ToolExecutor<ToolCall> for ListInstallablePluginsTool {
 }
 
 /// Installs plugins extension contributors into the supplied extension registry.
-pub fn install<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    list_installable_plugins_enabled: bool,
-) {
-    if list_installable_plugins_enabled {
-        registry.tool_contributor(Arc::new(PluginsExtension));
-    }
+pub fn install<C>(registry: &mut ExtensionRegistryBuilder<C>) {
+    registry.tool_contributor(Arc::new(PluginsExtension));
 }
 
 #[cfg(test)]

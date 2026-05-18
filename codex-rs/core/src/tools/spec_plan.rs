@@ -85,7 +85,7 @@ struct ToolRegistryBuildParams<'a> {
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
     discoverable_tools: Option<&'a [DiscoverableTool]>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
-    list_installable_plugins_registered: bool,
+    plugin_install_list_tool_enabled: bool,
     dynamic_tools: &'a [DynamicToolSpec],
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
@@ -110,6 +110,11 @@ fn build_tool_specs_and_registry(
     let list_installable_plugins_registered = extension_tool_executors.iter().any(|executor| {
         executor.tool_name() == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
     });
+    let plugin_install_list_tool_enabled = config.plugin_install_list_tool
+        && discoverable_tools
+            .as_ref()
+            .is_some_and(|tools| !tools.is_empty())
+        && list_installable_plugins_registered;
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let mut executors = collect_tool_executors(
@@ -119,7 +124,7 @@ fn build_tool_specs_and_registry(
             deferred_mcp_tools: deferred_mcp_tools.as_deref(),
             discoverable_tools: discoverable_tools.as_deref(),
             extension_tool_executors: &extension_tool_executors,
-            list_installable_plugins_registered,
+            plugin_install_list_tool_enabled,
             dynamic_tools,
             default_agent_type_description: &default_agent_type_description,
             wait_agent_timeouts: wait_agent_timeout_options(config),
@@ -424,7 +429,7 @@ fn collect_tool_executors(
     {
         executors.push(Arc::new(RequestPluginInstallHandler::new(
             discoverable_tools,
-            params.list_installable_plugins_registered,
+            params.plugin_install_list_tool_enabled,
         )));
     }
 
@@ -553,7 +558,12 @@ fn collect_tool_executors(
         executors.push(handler);
     }
 
-    append_extension_tool_executors(config, params.extension_tool_executors, &mut executors);
+    append_extension_tool_executors(
+        config,
+        params.extension_tool_executors,
+        params.plugin_install_list_tool_enabled,
+        &mut executors,
+    );
 
     executors
 }
@@ -594,6 +604,7 @@ fn prepend_code_mode_executors(
 fn append_extension_tool_executors(
     config: &ToolsConfig,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    plugin_install_list_tool_enabled: bool,
     registered_executors: &mut Vec<Arc<dyn CoreToolRuntime>>,
 ) {
     if executors.is_empty() {
@@ -619,6 +630,11 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if tool_name == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
+            && !plugin_install_list_tool_enabled
+        {
+            continue;
+        }
         if !reserved_tool_names.insert(tool_name.clone()) {
             warn!("Skipping extension tool `{tool_name}`: tool already registered");
             continue;

@@ -2,7 +2,6 @@ use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -187,10 +186,7 @@ mod tests {
                 auth_manager,
                 SessionSource::Exec,
                 Arc::new(EnvironmentManager::default_for_tests()),
-                thread_extensions(
-                    guardian_agent_spawner(thread_manager.clone()),
-                    good_config.features.enabled(Feature::PluginInstallListTool),
-                ),
+                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
                 /*analytics_events_client*/ None,
                 thread_store,
                 Some(state_db.clone()),
