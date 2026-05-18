@@ -19,6 +19,7 @@ use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
 use codex_otel::GOAL_COMPLETED_METRIC;
 use codex_otel::GOAL_CREATED_METRIC;
 use codex_otel::GOAL_DURATION_SECONDS_METRIC;
+use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
@@ -734,6 +735,12 @@ impl Session {
             .counter(GOAL_CREATED_METRIC, /*inc*/ 1, &[]);
     }
 
+    fn emit_goal_resumed_metric(&self) {
+        self.services
+            .session_telemetry
+            .counter(GOAL_RESUMED_METRIC, /*inc*/ 1, &[]);
+    }
+
     fn emit_goal_terminal_metrics_if_status_changed(
         &self,
         previous_status: Option<codex_state::ThreadGoalStatus>,
@@ -1229,6 +1236,7 @@ impl Session {
                     .await
                     .wall_clock
                     .mark_active_goal(goal.goal_id);
+                self.emit_goal_resumed_metric();
             }
             codex_state::ThreadGoalStatus::Paused
             | codex_state::ThreadGoalStatus::BudgetLimited
