@@ -7,6 +7,7 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -21,6 +22,19 @@ async fn agents_md_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf
     AgentsMdManager::new(config)
         .agents_md_paths(LOCAL_FS.as_ref())
         .await
+}
+
+fn assert_invalid_utf8_warning(warnings: &[String], source: &str, path: &Path) {
+    let path_display = path.display().to_string();
+    assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+    let warning = &warnings[0];
+    assert!(
+        warning.contains(&format!("{source} AGENTS.md instructions"))
+            && warning.contains(&path_display)
+            && warning.contains("invalid UTF-8")
+            && warning.contains("Invalid byte sequences were replaced."),
+        "unexpected invalid UTF-8 warning: {warning:?}"
+    );
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -133,6 +147,22 @@ async fn doc_smaller_than_limit_is_returned() {
 }
 
 #[tokio::test]
+async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let codex_home_abs = codex_home.abs();
+    let path = codex_home_abs.join(DEFAULT_AGENTS_MD_FILENAME);
+    fs::write(&path, b"global\xFF doc").unwrap();
+
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::load_global_instructions(Some(&codex_home_abs), &mut warnings)
+        .expect("global doc expected");
+
+    assert_eq!(loaded.contents, "global\u{FFFD} doc");
+    assert_eq!(loaded.path, path);
+    assert_invalid_utf8_warning(&warnings, "Global", path.as_path());
+}
+
+#[tokio::test]
 async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("AGENTS.md");
@@ -147,13 +177,7 @@ async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
 
     assert_eq!(res, "project\u{FFFD} doc");
     let canonical_path = dunce::canonicalize(&path).expect("canonical doc path");
-    assert_eq!(
-        warnings,
-        vec![format!(
-            "Project AGENTS.md instructions from `{}` contain invalid UTF-8: invalid utf-8 sequence of 1 bytes from index 7. Invalid byte sequences were replaced.",
-            canonical_path.display()
-        )]
-    );
+    assert_invalid_utf8_warning(&warnings, "Project", &canonical_path);
 }
 
 /// Oversize file is truncated to `project_doc_max_bytes`.

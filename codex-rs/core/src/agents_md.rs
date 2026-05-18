@@ -210,12 +210,7 @@ impl<'a> AgentsMdManager<'a> {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             };
-            if let Err(err) = std::str::from_utf8(&data) {
-                startup_warnings.push(format!(
-                    "Project AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
-                    p.display()
-                ));
-            }
+            warn_invalid_utf8(&p, &data, "Project", startup_warnings);
 
             let size = data.len() as u64;
             if size > remaining {
