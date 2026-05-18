@@ -269,6 +269,44 @@ fn active_plugin_version_returns_last_sorted_version_when_default_is_missing() {
 }
 
 #[test]
+fn install_with_new_version_keeps_existing_plugin_root_and_prunes_old_versions() {
+    let tmp = tempdir().unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    write_plugin_with_version(tmp.path(), "v1", "sample-plugin", Some("1.0.0"));
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("v1")).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    write_plugin_with_version(tmp.path(), "v2", "sample-plugin", Some("2.0.0"));
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("v2")).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("2.0.0".to_string())
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/2.0.0")
+            .is_dir()
+    );
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/debug/sample-plugin/1.0.0")
+            .exists()
+    );
+}
+
+#[test]
 fn plugin_root_rejects_path_separators_in_key_segments() {
     let err = PluginId::parse("../../etc@debug").unwrap_err();
     assert_eq!(

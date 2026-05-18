@@ -286,6 +286,15 @@ fn replace_plugin_root_atomically(
     let staged_version_root = staged_root.join(plugin_version);
     copy_dir_recursive(source, &staged_version_root)?;
 
+    let target_version_root = target_root.join(plugin_version);
+    if target_root.exists() && !target_version_root.exists() {
+        fs::rename(&staged_version_root, &target_version_root).map_err(|err| {
+            PluginStoreError::io("failed to activate updated plugin cache version", err)
+        })?;
+        remove_old_plugin_versions(target_root, plugin_version);
+        return Ok(());
+    }
+
     if target_root.exists() {
         let backup_dir = tempfile::Builder::new()
             .prefix("plugin-backup-")
@@ -320,6 +329,29 @@ fn replace_plugin_root_atomically(
     }
 
     Ok(())
+}
+
+fn remove_old_plugin_versions(target_root: &Path, plugin_version: &str) {
+    let Ok(entries) = fs::read_dir(target_root) else {
+        return;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Ok(version) = entry.file_name().into_string() else {
+            continue;
+        };
+        if version == plugin_version || validate_plugin_version_segment(&version).is_err() {
+            continue;
+        }
+
+        let _ = fs::remove_dir_all(entry.path());
+    }
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
