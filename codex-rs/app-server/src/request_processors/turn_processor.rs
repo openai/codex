@@ -440,10 +440,7 @@ impl TurnRequestProcessor {
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
+                apply_permission_profile_id_to_config_overrides(&mut overrides, Some(permissions));
                 let config = self
                     .config_manager
                     .load_for_cwd(

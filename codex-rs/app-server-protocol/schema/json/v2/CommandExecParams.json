@@ -5,26 +5,6 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "ActivePermissionProfile": {
-      "properties": {
-        "extends": {
-          "default": null,
-          "description": "Parent profile identifier once permissions profiles support inheritance. This is currently always `null`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "id": {
-          "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
     "CommandExecTerminalSize": {
       "description": "PTY size in character cells for `command/exec` PTY sessions.",
       "properties": {
