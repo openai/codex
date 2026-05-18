@@ -162,7 +162,16 @@ pub(crate) async fn run_turn(
     let pre_sampling_compact =
         match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
             Ok(pre_sampling_compact) => pre_sampling_compact,
-            Err(_) => {
+            Err(err) => {
+                if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
                 error!("Failed to run pre-sampling compact");
                 return None;
             }
@@ -508,7 +517,20 @@ pub(crate) async fn run_turn(
                     .await
                     {
                         Ok(reset_client_session) => reset_client_session,
-                        Err(_) => return None,
+                        Err(err) => {
+                            if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                                && let Err(err) = sess
+                                    .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                                        turn_context: turn_context.as_ref(),
+                                    })
+                                    .await
+                            {
+                                warn!(
+                                    "failed to usage-limit active goal after usage-limit error: {err}"
+                                );
+                            }
+                            return None;
+                        }
                     };
                     if reset_client_session {
                         client_session.reset_websocket_session();
