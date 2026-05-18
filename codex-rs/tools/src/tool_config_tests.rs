@@ -32,7 +32,7 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         default_verbosity: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
-        truncation_policy: TruncationPolicyConfig::tokens(1024),
+        truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 1024),
         supports_parallel_tool_calls: true,
         supports_image_detail_original: false,
         context_window: None,
