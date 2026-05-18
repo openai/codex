@@ -66,9 +66,7 @@ impl<'a> AgentsMdManager<'a> {
         let base = codex_dir?;
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
-            if let Ok(contents) = fs.read_file(&path, /*sandbox*/ None).await
-                && let Ok(contents) = String::from_utf8(contents)
-            {
+            if let Ok(contents) = fs.read_file_text(&path, /*sandbox*/ None).await {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
                     return Some(LoadedAgentsMd {
