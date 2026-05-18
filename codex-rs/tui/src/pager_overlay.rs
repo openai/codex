@@ -1459,6 +1459,23 @@ mod tests {
         })
     }
 
+    fn synthetic_transcript(prompt_count: usize) -> Vec<Arc<dyn HistoryCell>> {
+        let mut cells = Vec::with_capacity(prompt_count.saturating_mul(2));
+        for i in 0..prompt_count {
+            cells.push(user_cell(&format!("prompt {i}")));
+            cells.push(Arc::new(AgentMessageCell::new(
+                vec![
+                    Line::from(format!("assistant response {i}")),
+                    Line::from(
+                        "additional detail to make wrapping and height measurement realistic",
+                    ),
+                ],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>);
+        }
+        cells
+    }
+
     fn static_overlay(lines: Vec<Line<'static>>, title: &str) -> StaticOverlay {
         StaticOverlay::with_title(lines, title.to_string(), default_pager_keymap())
     }
@@ -1552,6 +1569,51 @@ mod tests {
                 .symbol()
                 .contains(&format!("\x1b]8;;{destination}\x07"))
         }));
+    }
+
+    #[test]
+    #[ignore = "local performance probe for transcript prompt selection"]
+    fn transcript_prompt_selection_perf() {
+        const PROMPTS: usize = 1_500;
+        const STEPS: usize = 300;
+        const WIDTH: u16 = 120;
+        const HEIGHT: u16 = 40;
+
+        let cells = synthetic_transcript(PROMPTS);
+        let cell_count = cells.len();
+        let mut selection_only = transcript_overlay(cells.clone());
+        selection_only.set_highlight_cell(Some(cell_count.saturating_sub(2)));
+
+        let selection_start = Instant::now();
+        for _ in 0..STEPS {
+            selection_only.move_prompt_selection(PromptSelectionDirection::Previous);
+            selection_only.move_prompt_selection(PromptSelectionDirection::Next);
+        }
+        let selection_elapsed = selection_start.elapsed();
+
+        let mut selection_plus_render = transcript_overlay(cells);
+        selection_plus_render.set_highlight_cell(Some(cell_count.saturating_sub(2)));
+        let mut term = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("term");
+
+        let render_start = Instant::now();
+        for _ in 0..STEPS {
+            selection_plus_render.move_prompt_selection(PromptSelectionDirection::Previous);
+            term.draw(|f| selection_plus_render.render(f.area(), f.buffer_mut()))
+                .expect("draw previous");
+            selection_plus_render.move_prompt_selection(PromptSelectionDirection::Next);
+            term.draw(|f| selection_plus_render.render(f.area(), f.buffer_mut()))
+                .expect("draw next");
+        }
+        let render_elapsed = render_start.elapsed();
+
+        let operations = STEPS.saturating_mul(2);
+        println!(
+            "transcript_prompt_selection_perf prompts={PROMPTS} cells={cell_count} steps={operations} selection_only_ms={:.3} selection_only_avg_us={:.3} selection_plus_render_ms={:.3} selection_plus_render_avg_us={:.3}",
+            selection_elapsed.as_secs_f64() * 1_000.0,
+            selection_elapsed.as_secs_f64() * 1_000_000.0 / operations as f64,
+            render_elapsed.as_secs_f64() * 1_000.0,
+            render_elapsed.as_secs_f64() * 1_000_000.0 / operations as f64,
+        );
     }
 
     #[test]
