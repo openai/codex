@@ -71,6 +71,7 @@ use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::get_git_repo_root_with_fs;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -370,8 +371,17 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     #[allow(deprecated)]
-    let display_root = get_git_repo_root(turn_context.cwd.as_path())
-        .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf());
+    let display_root = match turn_context.environments.primary() {
+        Some(turn_environment) => get_git_repo_root_with_fs(
+            turn_environment.environment.get_filesystem().as_ref(),
+            &turn_environment.cwd,
+        )
+        .await
+        .unwrap_or_else(|| turn_environment.cwd.clone())
+        .into_path_buf(),
+        None => get_git_repo_root(turn_context.cwd.as_path())
+            .unwrap_or_else(|| turn_context.cwd.clone().into_path_buf()),
+    };
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::with_display_root(
         display_root,
     )));
