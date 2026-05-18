@@ -943,10 +943,12 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
     let thread_id = ThreadId::from_string(&thread_id)?;
     let persisted_goal = state_db
+        .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .expect("goal should exist");
     state_db
+        .thread_goals()
         .account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 12,
@@ -974,6 +976,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
     .await??;
     let edit: ThreadGoalSetResponse = to_response(edit_resp)?;
     let updated_goal = state_db
+        .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .expect("goal should still exist");

@@ -8592,6 +8592,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after accounting");
@@ -8615,6 +8616,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     .await?;
 
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after follow-up accounting");
@@ -8654,6 +8656,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8662,6 +8665,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     let previous_goal = goal.clone();
     let goal_id = goal.goal_id.clone();
     let updated_goal = state_db
+        .thread_goals()
         .update_thread_goal(
             sess.conversation_id,
             codex_state::ThreadGoalUpdate {
@@ -8683,6 +8687,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 
     assert!(sess.active_turn.lock().await.is_some());
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8709,6 +8714,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let old_goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -8717,6 +8723,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
         )
         .await?;
     let new_goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Write a concise benchmark summary",
@@ -8774,6 +8781,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .replace_thread_goal(
             sess.conversation_id,
             "Keep improving the benchmark",
@@ -8807,6 +8815,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     .await?;
 
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted");
@@ -8905,6 +8914,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
     )
     .await?;
     let persisted_goal = state_db
+        .thread_goals()
         .get_thread_goal(test.session_configured.thread_id)
         .await?
         .expect("goal should be persisted");
