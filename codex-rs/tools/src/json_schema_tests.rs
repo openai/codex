@@ -926,6 +926,7 @@ fn parse_tool_input_schema_handles_cyclic_local_refs() {
     // Expected normalization behavior:
     // - Recursive refs are preserved.
     // - Pruning traversal terminates after visiting each local target once.
+    // - Responses API handles this recursive local-ref shape correctly.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "properties": {
@@ -973,23 +974,21 @@ fn parse_tool_input_schema_handles_cyclic_local_refs() {
 }
 
 #[test]
-fn parse_tool_input_schema_drops_legacy_definitions() {
+fn parse_tool_input_schema_preserves_legacy_definitions() {
     // Example schema shape:
     // {
     //   "type": "object",
     //   "properties": { "user": { "$ref": "#/definitions/User" } },
     //   "definitions": {
-    //     "User": { "type": "object", "properties": { "profile": { "$ref": "#/$defs/Profile" } } }
-    //   },
-    //   "$defs": {
+    //     "User": { "type": "object", "properties": { "profile": { "$ref": "#/definitions/Profile" } } },
     //     "Profile": { "type": "object", "properties": { "name": { "type": "string" } } }
     //   }
     // }
     //
     // Expected normalization behavior:
-    // - Codex only preserves `$defs`, not legacy `definitions`.
-    // - The `$ref` string stays visible, but the unsupported definition table is dropped.
-    // - Refs inside unsupported `definitions` do not keep `$defs` entries alive.
+    // - Codex preserves legacy `definitions`.
+    // - Reachability follows refs through the legacy definition table.
+    // - Unreachable legacy definition entries are pruned.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "properties": {
@@ -999,17 +998,16 @@ fn parse_tool_input_schema_drops_legacy_definitions() {
             "User": {
                 "type": "object",
                 "properties": {
-                    "profile": {"$ref": "#/$defs/Profile"}
+                    "profile": {"$ref": "#/definitions/Profile"}
                 }
-            }
-        },
-        "$defs": {
+            },
             "Profile": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"}
                 }
-            }
+            },
+            "Unused": {"type": "string"}
         }
     }))
     .expect("parse schema");
@@ -1025,6 +1023,33 @@ fn parse_tool_input_schema_drops_legacy_definitions() {
                     ..Default::default()
                 },
             )])),
+            definitions: Some(BTreeMap::from([
+                (
+                    "Profile".to_string(),
+                    JsonSchema::object(
+                        BTreeMap::from([(
+                            "name".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        )]),
+                        /*required*/ None,
+                        /*additional_properties*/ None,
+                    ),
+                ),
+                (
+                    "User".to_string(),
+                    JsonSchema::object(
+                        BTreeMap::from([(
+                            "profile".to_string(),
+                            JsonSchema {
+                                schema_ref: Some("#/definitions/Profile".to_string()),
+                                ..Default::default()
+                            },
+                        )]),
+                        /*required*/ None,
+                        /*additional_properties*/ None,
+                    ),
+                ),
+            ])),
             ..Default::default()
         }
     );
@@ -1045,6 +1070,7 @@ fn parse_tool_input_schema_preserves_unresolved_and_external_refs() {
     // Expected normalization behavior:
     // - Unresolved local refs and external refs are preserved.
     // - Unreachable local definitions are still pruned.
+    // - Responses API handles these refs correctly during downstream validation.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "properties": {

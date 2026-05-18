@@ -57,6 +57,8 @@ pub struct JsonSchema {
     pub any_of: Option<Vec<JsonSchema>>,
     #[serde(rename = "$defs", skip_serializing_if = "Option::is_none")]
     pub defs: Option<BTreeMap<String, JsonSchema>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub definitions: Option<BTreeMap<String, JsonSchema>>,
 }
 
 impl JsonSchema {
@@ -169,7 +171,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// schema representation. This function:
 /// - Ensures every typed schema object has a `"type"` when required.
 /// - Preserves explicit `anyOf`.
-/// - Preserves `$ref` and reachable local `$defs`.
+/// - Preserves `$ref` and reachable local `$defs` / `definitions`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
@@ -208,6 +210,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
                 sanitize_json_schema(value);
             }
             sanitize_schema_table(map, "$defs");
+            sanitize_schema_table(map, "definitions");
 
             if let Some(const_value) = map.remove("const") {
                 map.insert("enum".to_string(), JsonValue::Array(vec![const_value]));
@@ -251,11 +254,10 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
 /// Sanitize a schema definition table before deserializing into `JsonSchema`.
 ///
-/// Responses requires `$defs`, when present, to be an object. Codex keeps valid
-/// definition tables and recursively applies the same compatibility lowering
-/// used for inline schemas, but drops malformed tables so `strict: false` tool
-/// registration degrades gracefully instead of failing on an unreachable or
-/// invalid definition table.
+/// Definition tables must be objects. Codex keeps valid definition tables and
+/// recursively applies the same compatibility lowering used for inline schemas,
+/// but drops malformed tables so `strict: false` tool registration degrades
+/// gracefully instead of failing on an unreachable or invalid definition table.
 fn sanitize_schema_table(map: &mut serde_json::Map<String, JsonValue>, key: &str) {
     let should_remove = match map.get_mut(key) {
         Some(JsonValue::Object(definitions)) => {
@@ -290,34 +292,56 @@ fn ensure_default_children_for_schema_types(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum DefinitionTable {
+    Defs,
+    Definitions,
+}
+
+impl DefinitionTable {
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Defs => "$defs",
+            Self::Definitions => "definitions",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct DefinitionPointer {
+    table: DefinitionTable,
     name: String,
 }
 
-/// Prune unused root `$defs` entries to avoid sending tokens for definitions
-/// Responses will parse but the tool schema never references.
+/// Prune unused root definition entries to avoid sending tokens for definitions
+/// the tool schema never references.
 fn prune_unreachable_definitions(value: &mut JsonValue) {
     let reachable = collect_reachable_definitions(value);
     let JsonValue::Object(map) = value else {
         return;
     };
 
-    prune_schema_table(map, "$defs", &reachable);
+    prune_schema_table(map, DefinitionTable::Defs, &reachable);
+    prune_schema_table(map, DefinitionTable::Definitions, &reachable);
 }
 
 fn prune_schema_table(
     map: &mut serde_json::Map<String, JsonValue>,
-    key: &str,
+    table: DefinitionTable,
     reachable: &BTreeSet<DefinitionPointer>,
 ) {
-    let Some(JsonValue::Object(definitions)) = map.get_mut(key) else {
+    let Some(JsonValue::Object(definitions)) = map.get_mut(table.key()) else {
         return;
     };
 
-    definitions.retain(|name, _| reachable.contains(&DefinitionPointer { name: name.clone() }));
+    definitions.retain(|name, _| {
+        reachable.contains(&DefinitionPointer {
+            table: table.clone(),
+            name: name.clone(),
+        })
+    });
 
     if definitions.is_empty() {
-        map.remove(key);
+        map.remove(table.key());
     }
 }
 
@@ -396,17 +420,24 @@ fn definition_for_pointer<'a>(
         return None;
     };
 
-    map.get("$defs")
+    map.get(pointer.table.key())
         .and_then(JsonValue::as_object)
         .and_then(|definitions| definitions.get(&pointer.name))
 }
 
 fn parse_local_definition_ref(schema_ref: &str) -> Option<DefinitionPointer> {
-    let name = schema_ref.strip_prefix("#/$defs/")?;
+    let (table, name) = if let Some(name) = schema_ref.strip_prefix("#/$defs/") {
+        (DefinitionTable::Defs, name)
+    } else if let Some(name) = schema_ref.strip_prefix("#/definitions/") {
+        (DefinitionTable::Definitions, name)
+    } else {
+        return None;
+    };
+
     if name.contains('/') {
         return None;
     }
-    decode_json_pointer_segment(name).map(|name| DefinitionPointer { name })
+    decode_json_pointer_segment(name).map(|name| DefinitionPointer { table, name })
 }
 
 fn decode_json_pointer_segment(segment: &str) -> Option<String> {
