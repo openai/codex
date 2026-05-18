@@ -5,6 +5,7 @@
 //! accounting that can be represented with today's extension API.
 
 mod accounting;
+mod events;
 mod extension;
 mod spec;
 mod tool;

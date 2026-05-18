@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::NoopExtensionEventSink;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
@@ -18,6 +20,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 
 use crate::accounting::GoalAccountingState;
+use crate::events::GoalEventEmitter;
 use crate::tool::CreateGoalRequest;
 use crate::tool::GoalToolExecutor;
 
@@ -35,6 +38,7 @@ impl GoalExtensionConfig {
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     backend: Arc<dyn GoalToolBackend>,
+    event_emitter: GoalEventEmitter,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -49,8 +53,17 @@ impl<C> GoalExtension<C> {
         backend: Arc<dyn GoalToolBackend>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
+        Self::new_with_event_sink(backend, Arc::new(NoopExtensionEventSink), goals_enabled)
+    }
+
+    pub fn new_with_event_sink(
+        backend: Arc<dyn GoalToolBackend>,
+        event_sink: Arc<dyn ExtensionEventSink>,
+        goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
+    ) -> Self {
         Self {
             backend,
+            event_emitter: GoalEventEmitter::new(event_sink),
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -232,14 +245,20 @@ where
             return Vec::new();
         };
         vec![
-            Arc::new(GoalToolExecutor::get(thread_id, Arc::clone(&self.backend))),
+            Arc::new(GoalToolExecutor::get(
+                thread_id,
+                Arc::clone(&self.backend),
+                self.event_emitter.clone(),
+            )),
             Arc::new(GoalToolExecutor::create(
                 thread_id,
                 Arc::clone(&self.backend),
+                self.event_emitter.clone(),
             )),
             Arc::new(GoalToolExecutor::update(
                 thread_id,
                 Arc::clone(&self.backend),
+                self.event_emitter.clone(),
             )),
         ]
     }
@@ -261,7 +280,11 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    let extension = Arc::new(GoalExtension::new(backend, goals_enabled));
+    let extension = Arc::new(GoalExtension::new_with_event_sink(
+        backend,
+        registry.event_sink(),
+        goals_enabled,
+    ));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
