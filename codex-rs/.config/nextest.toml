@@ -14,6 +14,9 @@ max-threads = 1
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
+[test-groups.windows_process_heavy]
+max-threads = 2
+
 [[profile.default.overrides]]
 # Do not add new tests here
 filter = 'test(rmcp_client) | test(humanlike_typing_1000_chars_appears_live_no_placeholder)'
@@ -44,3 +47,14 @@ test-group = 'core_apply_patch_cli_integration'
 # Serialize them to avoid exhausting Windows session/global desktop resources in CI.
 filter = 'package(codex-windows-sandbox) & test(legacy_)'
 test-group = 'windows_sandbox_legacy_sessions'
+
+[[profile.default.overrides]]
+# These cases spawn CLI, thread-manager, or stdio subprocesses and are the main
+# Windows rust-ci-full timeout cluster when too many process-heavy tests launch
+# together. Limit only this observed Windows-only family instead of widening the
+# default timeout or reducing concurrency for unrelated tests.
+platform = 'cfg(windows)'
+filter = 'test(suite::resume::) | test(suite::cli_stream::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows)'
+test-group = 'windows_process_heavy'
+slow-timeout = { period = "30s", terminate-after = 2 }
+retries = 1
