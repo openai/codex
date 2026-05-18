@@ -335,16 +335,12 @@ async fn evaluate_mitm_policy(
         return Ok(MitmPolicyDecision::Block(blocked_text_response(reason)));
     }
 
-    match policy
+    let hook_actions = match policy
         .app_state
         .evaluate_mitm_hook_request(&policy.target_host, req)
         .await?
     {
-        HookEvaluation::Matched { actions } => {
-            return Ok(MitmPolicyDecision::Allow {
-                hook_actions: Some(actions),
-            });
-        }
+        HookEvaluation::Matched { actions } => Some(actions),
         HookEvaluation::HookedHostNoMatch => {
             let _ = policy
                 .app_state
@@ -368,8 +364,8 @@ async fn evaluate_mitm_policy(
                 REASON_MITM_HOOK_DENIED,
             )));
         }
-        HookEvaluation::NoHooksForHost => {}
-    }
+        HookEvaluation::NoHooksForHost => None,
+    };
 
     if !policy.mode.allows_method(&method) {
         let _ = policy
@@ -395,7 +391,7 @@ async fn evaluate_mitm_policy(
         )));
     }
 
-    Ok(MitmPolicyDecision::Allow { hook_actions: None })
+    Ok(MitmPolicyDecision::Allow { hook_actions })
 }
 
 fn apply_mitm_hook_actions(headers: &mut HeaderMap, actions: Option<&MitmHookActions>) {
