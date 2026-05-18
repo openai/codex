@@ -142,9 +142,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
     )
     .await;
 
-    let TestCodex {
-        codex, cwd, config, ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
@@ -162,20 +160,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: requested_model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -224,9 +209,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
     )
     .await;
 
-    let TestCodex {
-        codex, cwd, config, ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
@@ -244,20 +227,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: requested_model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -306,9 +276,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
     )
     .await;
 
-    let TestCodex {
-        codex, cwd, config, ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
@@ -325,20 +293,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: requested_model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -400,9 +355,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
     )
     .await;
 
-    let TestCodex {
-        codex, cwd, config, ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
@@ -419,20 +372,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: requested_model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -468,9 +408,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
     )
     .await;
 
-    let TestCodex {
-        codex, cwd, config, ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_model(requested_model)
         .build(&server)
         .await?;
@@ -484,25 +422,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
-                summary: Some(
-                    config
-                        .model_reasoning_summary
-                        .unwrap_or(ReasoningSummary::Auto),
-                ),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: requested_model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -668,14 +588,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: REMOTE_MODEL_SLUG.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
                 ..Default::default()
             },
         })
@@ -906,14 +818,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
-                        model: model.to_string(),
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
                 ..Default::default()
             },
         })
