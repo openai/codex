@@ -267,7 +267,7 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
-    config.cwd = turn_cwd;
+    config.set_cwd_retargeting_implicit_workspace_root(turn_cwd);
     config
         .permissions
         .set_permission_profile(turn.permission_profile())

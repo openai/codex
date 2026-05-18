@@ -2993,8 +2993,12 @@ impl Session {
                 .agent_control
                 .format_environment_context_subagents(self.thread_id)
                 .await;
-            let approved_command_prefixes =
-                format_allow_prefixes(self.services.exec_policy.current().get_allowed_prefixes());
+            let approved_command_prefixes = if turn_context.config.include_permissions_instructions
+            {
+                format_allow_prefixes(self.services.exec_policy.current().get_allowed_prefixes())
+            } else {
+                None
+            };
             contextual_user_sections.push(
                 crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)

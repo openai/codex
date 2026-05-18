@@ -61,6 +61,22 @@ fn test_writable_roots_constraint() {
 }
 
 #[test]
+fn workspace_permission_profile_allows_absolute_patch_inside_cwd() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().abs();
+    let inside_path = cwd.join("inside.txt");
+    let action = ApplyPatchAction::new_add_for_test(&inside_path, "".to_string());
+    let permission_profile = PermissionProfile::workspace_write();
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+
+    assert!(is_write_patch_constrained_to_writable_paths(
+        &action,
+        &file_system_sandbox_policy,
+        &cwd,
+    ));
+}
+
+#[test]
 fn external_sandbox_auto_approves_in_on_request() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().abs();

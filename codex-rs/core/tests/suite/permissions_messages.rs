@@ -389,6 +389,13 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
     let mut builder = test_codex().with_config(move |config| {
         config.include_permissions_instructions = false;
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        let rules_dir = config.codex_home.join("rules");
+        fs::create_dir_all(&rules_dir).expect("create rules dir");
+        fs::write(
+            rules_dir.join("default.rules"),
+            r#"prefix_rule(pattern=["git", "pull"], decision="allow")"#,
+        )
+        .expect("write policy");
     });
     let test = builder.build(&server).await?;
 
@@ -436,6 +443,12 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
     assert_eq!(
         permissions_texts(&req2.single_request()),
         Vec::<String>::new()
+    );
+    let environment_contexts = environment_context_texts(&req1.single_request());
+    assert_eq!(environment_contexts.len(), 1);
+    assert!(
+        !environment_contexts[0].contains("<approved_command_prefixes>"),
+        "did not expect approved prefixes when include_permissions_instructions = false: {environment_contexts:?}"
     );
 
     Ok(())

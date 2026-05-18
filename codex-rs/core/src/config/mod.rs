@@ -1344,6 +1344,25 @@ impl Config {
         }
     }
 
+    /// Update the effective cwd while keeping the implicit runtime workspace
+    /// root attached to it. Explicit runtime roots remain stable.
+    pub fn set_cwd_retargeting_implicit_workspace_root(&mut self, cwd: AbsolutePathBuf) {
+        let previous_cwd = std::mem::replace(&mut self.cwd, cwd.clone());
+        if self.workspace_roots_explicit || !self.workspace_roots.contains(&previous_cwd) {
+            return;
+        }
+
+        let previous_workspace_roots = std::mem::take(&mut self.workspace_roots);
+        self.workspace_roots.push(cwd);
+        for root in previous_workspace_roots {
+            if root != previous_cwd && !self.workspace_roots.contains(&root) {
+                self.workspace_roots.push(root);
+            }
+        }
+        self.permissions
+            .set_workspace_roots(self.workspace_roots.clone());
+    }
+
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }

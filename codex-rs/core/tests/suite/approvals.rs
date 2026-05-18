@@ -2177,6 +2177,109 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
+async fn same_cwd_apply_patch_with_auto_review_skips_guardian_review() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let permission_profile = restrictive_workspace_write_profile();
+    let permission_profile_for_config = permission_profile.clone();
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .permissions
+                .set_permission_profile(permission_profile_for_config)
+                .expect("set permission profile");
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        });
+    let test = builder.build(&server).await?;
+    assert_eq!(test.config.workspace_roots, vec![test.config.cwd.clone()]);
+
+    let path = test
+        .config
+        .cwd
+        .join("apply_patch_auto_review_inside_workspace.txt")
+        .into_path_buf();
+    let patch_path = path.display().to_string();
+    let _ = fs::remove_file(&path);
+    let patch = build_add_file_patch(&patch_path, "same-cwd-auto-review");
+    let call_id = "apply_patch_auto_review_inside_workspace";
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_apply_patch_custom_tool_call(call_id, &patch),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "apply same-cwd patch without guardian review".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy,
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            sandbox_policy,
+            permission_profile: Some(permission_profile),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::GuardianAssessment(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::GuardianAssessment(event) => {
+            panic!("unexpected guardian review for same-cwd apply_patch: {event:?}")
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let output_request = results_mock.single_request();
+    let output_item = output_request.custom_tool_call_output(call_id);
+    let result = parse_result(&output_item);
+    assert_eq!(result.exit_code, Some(0));
+    assert!(fs::read_to_string(&path)?.contains("same-cwd-auto-review"));
+    let _ = fs::remove_file(path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
 async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;

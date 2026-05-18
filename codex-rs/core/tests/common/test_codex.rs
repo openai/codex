@@ -640,7 +640,7 @@ impl TestCodexBuilder {
         } else {
             load_default_config_for_test(home).await
         };
-        config.cwd = cwd_override;
+        config.set_cwd_retargeting_implicit_workspace_root(cwd_override);
         config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
