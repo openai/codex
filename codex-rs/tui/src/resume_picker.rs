@@ -492,7 +492,6 @@ async fn run_session_picker_with_loader(
                             state.open_pending_transcript_if_ready();
                         }
                     }
-                    _ => {}
                 }
             }
             Some(event) = background_events.next() => {
