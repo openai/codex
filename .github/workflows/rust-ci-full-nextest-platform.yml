@@ -316,3 +316,4 @@ jobs:
           if [[ "${{ needs.shard.result }}" != "success" ]]; then
             echo "Nextest shards finished with result: ${{ needs.shard.result }}" >&2
             exit 1
+          fi
