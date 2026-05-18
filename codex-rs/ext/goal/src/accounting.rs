@@ -29,11 +29,7 @@ pub(crate) struct RecordedTokenDelta {
 impl GoalAccountingState {
     pub(crate) fn start_turn(&self, turn_id: impl Into<String>) {
         let turn_id = turn_id.into();
-        self.inner()
-            .turns
-            .entry(turn_id)
-            .or_insert_with(GoalTurnAccounting::default)
-            .stopped = false;
+        self.inner().turns.entry(turn_id).or_default().stopped = false;
     }
 
     pub(crate) fn record_token_usage(
@@ -48,10 +44,7 @@ impl GoalAccountingState {
 
         let turn_id = turn_id.into();
         let mut inner = self.inner();
-        let turn = inner
-            .turns
-            .entry(turn_id)
-            .or_insert_with(GoalTurnAccounting::default);
+        let turn = inner.turns.entry(turn_id).or_default();
         turn.token_delta = turn.token_delta.saturating_add(delta);
         let turn_delta = turn.token_delta;
         inner.unflushed_token_delta = inner.unflushed_token_delta.saturating_add(delta);
