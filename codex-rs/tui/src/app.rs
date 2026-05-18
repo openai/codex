@@ -410,17 +410,18 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
-    let thread_id =
-        resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
-    let resume_command = codex_utils_cli::resume_command(/*thread_name*/ None, thread_id);
+    let resumable_thread = resumable_thread(thread_id, thread_name, rollout_path);
+    let resume_hint = resumable_thread.as_ref().and_then(|thread| {
+        codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
+    });
 
-    if usage_line.is_none() && resume_command.is_none() {
+    if usage_line.is_none() && resume_hint.is_none() {
         return None;
     }
 
     Some(SessionSummary {
         usage_line,
-        resume_command,
+        resume_hint,
     })
 }
 
@@ -459,7 +460,7 @@ fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorIn
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: Option<String>,
-    resume_command: Option<String>,
+    resume_hint: Option<String>,
 }
 
 #[derive(Debug, Default)]

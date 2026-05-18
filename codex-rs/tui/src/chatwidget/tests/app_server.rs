@@ -827,7 +827,8 @@ async fn live_app_server_invalid_thread_name_update_is_ignored() {
 #[tokio::test]
 async fn live_app_server_thread_name_update_shows_resume_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
+    let thread_id =
+        ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
     chat.thread_id = Some(thread_id);
 
     chat.handle_server_notification(
@@ -844,8 +845,7 @@ async fn live_app_server_thread_name_update_shows_resume_hint() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("Thread renamed to review-fix"));
-    assert!(rendered.contains("codex resume review-fix"));
+    assert_chatwidget_snapshot!("thread_name_update_resume_hint", rendered);
 }
 
 #[tokio::test]
