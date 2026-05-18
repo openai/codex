@@ -93,7 +93,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -179,7 +179,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -269,7 +269,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -312,7 +312,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -330,7 +330,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -403,7 +403,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -450,7 +450,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
