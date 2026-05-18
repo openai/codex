@@ -19,12 +19,12 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
 
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
+    plugins_manager: &PluginsManager,
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
     }
 
-    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
     let plugins_input = config.plugins_config_input();
     let configured_plugin_ids = config
         .tool_suggest

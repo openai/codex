@@ -16,6 +16,7 @@ use codex_config::types::AppsDefaultConfig;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
+use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1253,8 +1254,9 @@ discoverables = [
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
     let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &plugins_manager)
             .await
             .expect("discoverable tools should load");
 

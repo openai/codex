@@ -1914,6 +1914,7 @@ dependencies = [
  "codex-models-manager",
  "codex-otel",
  "codex-plugin",
+ "codex-plugins-extension",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-rollout",
@@ -2514,6 +2515,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-plugins-extension",
  "codex-protocol",
  "codex-response-debug-context",
  "codex-rmcp-client",
@@ -2607,6 +2609,7 @@ dependencies = [
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
+ "codex-plugins-extension",
  "codex-protocol",
  "codex-utils-absolute-path",
 ]
@@ -3117,6 +3120,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-login",
+ "codex-plugins-extension",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -3390,6 +3394,19 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-plugins-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-extension-api",
+ "codex-tools",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4361,6 +4378,7 @@ dependencies = [
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
+ "codex-plugins-extension",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

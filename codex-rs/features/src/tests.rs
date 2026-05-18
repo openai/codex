@@ -175,6 +175,12 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn plugin_install_list_tool_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::PluginInstallListTool.stage(), Stage::Stable);
+    assert_eq!(Feature::PluginInstallListTool.default_enabled(), true);
+}
+
+#[test]
 fn network_proxy_is_experimental_and_disabled_by_default() {
     assert_eq!(
         feature_for_key("network_proxy"),

@@ -971,6 +971,13 @@ impl Session {
                 services,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            sess.services.session_extension_data.insert(
+                codex_plugins_extension::InstallablePluginsProviderHandle::new(Arc::new(
+                    crate::tools::installable_plugins::SessionInstallablePluginsProvider::new(
+                        Arc::downgrade(&sess),
+                    ),
+                )),
+            );
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);

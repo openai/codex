@@ -22,6 +22,7 @@ use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+const LIST_INSTALLABLE_PLUGINS_TOOL_NAME: &str = "list_installable_plugins";
 const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 
@@ -107,6 +108,7 @@ async fn request_plugin_install_is_available_without_search_tool_after_discovery
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_plugins_extension()
         .with_config(move |config| {
             configure_apps_without_search_tool(config, apps_server.chatgpt_base_url.as_str())
         });
@@ -128,23 +130,23 @@ async fn request_plugin_install_is_available_without_search_tool_after_discovery
     assert!(
         tools
             .iter()
+            .any(|name| name == LIST_INSTALLABLE_PLUGINS_TOOL_NAME),
+        "tools list should include {LIST_INSTALLABLE_PLUGINS_TOOL_NAME}: {tools:?}"
+    );
+    assert!(
+        tools
+            .iter()
             .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
         "tools list should include {REQUEST_PLUGIN_INSTALL_TOOL_NAME}: {tools:?}"
     );
 
     let description =
         function_tool_description(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("description");
-    assert!(description.contains(
-        "Use this tool only to ask the user to install one known plugin or connector from the list below"
-    ));
-    assert!(description.contains(
-        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
-    ));
-    assert!(description.contains(
-        "Only use when the user explicitly asks to use that exact listed plugin or connector."
-    ));
+    assert!(
+        description.contains("Only call this tool with a result from `list_installable_plugins()`")
+    );
     assert!(description.contains("IMPORTANT: DO NOT call this tool in parallel with other tools."));
-    assert!(!description.contains("tool_search fails to find a good match"));
+    assert!(!description.contains("Known plugins/connectors available to install:"));
 
     Ok(())
 }

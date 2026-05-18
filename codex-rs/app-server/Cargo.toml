@@ -47,6 +47,7 @@ codex-file-watcher = { workspace = true }
 codex-hooks = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
+codex-plugins-extension = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-pty = { workspace = true }

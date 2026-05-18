@@ -59,6 +59,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::DiscoverableTool;
+use codex_tools::LIST_INSTALLABLE_PLUGINS_TOOL_NAME;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -418,6 +419,7 @@ fn collect_tool_executors(
     {
         executors.push(Arc::new(RequestPluginInstallHandler::new(
             discoverable_tools,
+            config.plugin_install_list_tool,
         )));
     }
 
@@ -612,6 +614,11 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if tool_name == ToolName::plain(LIST_INSTALLABLE_PLUGINS_TOOL_NAME)
+            && !config.plugin_install_list_tool
+        {
+            continue;
+        }
         if !reserved_tool_names.insert(tool_name.clone()) {
             warn!("Skipping extension tool `{tool_name}`: tool already registered");
             continue;

@@ -19,7 +19,6 @@ use codex_tools::ToolSpec;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::collect_request_plugin_install_entries;
-use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
 use serde_json::Value;
@@ -35,18 +34,24 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
+use crate::tools::installable_plugins::discoverable_request_plugin_install_tools;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 
 #[derive(Default)]
 pub struct RequestPluginInstallHandler {
     discoverable_tools: Vec<RequestPluginInstallEntry>,
+    plugin_install_list_tool: bool,
 }
 
 impl RequestPluginInstallHandler {
-    pub(crate) fn new(discoverable_tools: &[DiscoverableTool]) -> Self {
+    pub(crate) fn new(
+        discoverable_tools: &[DiscoverableTool],
+        plugin_install_list_tool: bool,
+    ) -> Self {
         Self {
             discoverable_tools: collect_request_plugin_install_entries(discoverable_tools),
+            plugin_install_list_tool,
         }
     }
 }
@@ -58,17 +63,16 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(create_request_plugin_install_tool(&self.discoverable_tools))
+        Some(create_request_plugin_install_tool(
+            &self.discoverable_tools,
+            self.plugin_install_list_tool,
+        ))
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "plugin install discovery reads through the session-owned manager guard"
-    )]
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -97,13 +101,16 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
                 "suggest_reason must not be empty".to_string(),
             ));
         }
-        if args.action_type != DiscoverableToolAction::Install {
+        if args
+            .action_type
+            .is_some_and(|action| action != DiscoverableToolAction::Install)
+        {
             return Err(FunctionCallError::RespondToModel(
                 "plugin install requests currently support only action_type=\"install\""
                     .to_string(),
             ));
         }
-        if args.tool_type == DiscoverableToolType::Plugin
+        if args.tool_type == Some(DiscoverableToolType::Plugin)
             && turn.app_server_client_name.as_deref() == Some("codex-tui")
         {
             return Err(FunctionCallError::RespondToModel(
@@ -112,46 +119,37 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         }
 
         let auth = session.services.auth_manager.auth().await;
-        let manager = session.services.mcp_connection_manager.read().await;
-        let mcp_tools = manager.list_all_tools().await;
-        drop(manager);
-        let accessible_connectors = connectors::with_app_enabled_state(
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        let discoverable_tools = discoverable_request_plugin_install_tools(
+            session.as_ref(),
             &turn.config,
-        );
-        let discoverable_tools = connectors::list_tool_suggest_discoverable_tools_with_auth(
-            &turn.config,
-            auth.as_ref(),
-            &accessible_connectors,
+            turn.app_server_client_name.as_deref(),
         )
         .await
-        .map(|discoverable_tools| {
-            filter_request_plugin_install_discoverable_tools_for_client(
-                discoverable_tools,
-                turn.app_server_client_name.as_deref(),
-            )
-        })
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "plugin install requests are unavailable right now: {err}"
             ))
         })?;
 
-        let tool = discoverable_tools
+        let mut matching_tools = discoverable_tools
             .into_iter()
-            .find(|tool| tool.tool_type() == args.tool_type && tool.id() == args.tool_id)
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(format!(
-                    "tool_id must match one of the discoverable tools exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
-                ))
-            })?;
+            .filter(|tool| tool.id() == args.tool_id);
+        let tool = matching_tools.next().ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "tool_id must match one of the discoverable tools exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
+            ))
+        })?;
+        if matching_tools.next().is_some() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "tool_id matched more than one discoverable tool exposed by {REQUEST_PLUGIN_INSTALL_TOOL_NAME}"
+            )));
+        }
 
         let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
         let params = build_request_plugin_install_elicitation_request(
             CODEX_APPS_MCP_SERVER_NAME,
             session.conversation_id.to_string(),
             turn.sub_id.clone(),
-            &args,
             suggest_reason,
             &tool,
         );
@@ -180,8 +178,8 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,
             user_confirmed,
-            tool_type: args.tool_type,
-            action_type: args.action_type,
+            tool_type: tool.tool_type(),
+            action_type: DiscoverableToolAction::Install,
             tool_id: tool.id().to_string(),
             tool_name: tool.name().to_string(),
             suggest_reason: suggest_reason.to_string(),

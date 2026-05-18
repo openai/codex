@@ -138,6 +138,8 @@ pub enum Feature {
     ToolSearchAlwaysDeferMcpTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
+    /// Expose installable plugin discovery through a dedicated list tool.
+    PluginInstallListTool,
     /// Enable plugins.
     Plugins,
     /// Enable plugin-bundled lifecycle hooks.
@@ -961,6 +963,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSuggest,
         key: "tool_suggest",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PluginInstallListTool,
+        key: "plugin_install_list_tool",
         stage: Stage::Stable,
         default_enabled: true,
     },

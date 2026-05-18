@@ -19,10 +19,12 @@ pub const REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE: &str = "always";
 
 #[derive(Debug, Deserialize)]
 pub struct RequestPluginInstallArgs {
-    pub tool_type: DiscoverableToolType,
-    pub action_type: DiscoverableToolAction,
     pub tool_id: String,
     pub suggest_reason: String,
+    #[serde(default)]
+    pub tool_type: Option<DiscoverableToolType>,
+    #[serde(default)]
+    pub action_type: Option<DiscoverableToolAction>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -53,7 +55,6 @@ pub fn build_request_plugin_install_elicitation_request(
     server_name: &str,
     thread_id: String,
     turn_id: String,
-    args: &RequestPluginInstallArgs,
     suggest_reason: &str,
     tool: &DiscoverableTool,
 ) -> McpServerElicitationRequestParams {
@@ -67,8 +68,8 @@ pub fn build_request_plugin_install_elicitation_request(
         server_name: server_name.to_string(),
         request: McpServerElicitationRequest::Form {
             meta: Some(json!(build_request_plugin_install_meta(
-                args.tool_type,
-                args.action_type,
+                tool.tool_type(),
+                DiscoverableToolAction::Install,
                 suggest_reason,
                 tool.id(),
                 tool_name.as_str(),

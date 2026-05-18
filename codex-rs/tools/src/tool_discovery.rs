@@ -5,6 +5,7 @@ use serde::Serialize;
 const TUI_CLIENT_NAME: &str = "codex-tui";
 pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
+pub const LIST_INSTALLABLE_PLUGINS_TOOL_NAME: &str = "list_installable_plugins";
 pub const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,7 +100,7 @@ pub struct DiscoverablePluginInfo {
     pub app_connector_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RequestPluginInstallEntry {
     pub id: String,
     pub name: String,

@@ -5,12 +5,6 @@ use serde_json::json;
 
 #[test]
 fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
-    let args = RequestPluginInstallArgs {
-        tool_type: DiscoverableToolType::Connector,
-        action_type: DiscoverableToolAction::Install,
-        tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
-        suggest_reason: "Plan and reference events from your calendar".to_string(),
-    };
     let connector = DiscoverableTool::Connector(Box::new(AppInfo {
         id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
         name: "Google Calendar".to_string(),
@@ -34,7 +28,6 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
-        &args,
         "Plan and reference events from your calendar",
         &connector,
     );
@@ -72,12 +65,6 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
 
 #[test]
 fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url() {
-    let args = RequestPluginInstallArgs {
-        tool_type: DiscoverableToolType::Plugin,
-        action_type: DiscoverableToolAction::Install,
-        tool_id: "sample@openai-curated".to_string(),
-        suggest_reason: "Use the sample plugin's skills and MCP server".to_string(),
-    };
     let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "sample@openai-curated".to_string(),
         name: "Sample Plugin".to_string(),
@@ -91,7 +78,6 @@ fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url
         "codex-apps",
         "thread-1".to_string(),
         "turn-1".to_string(),
-        &args,
         "Use the sample plugin's skills and MCP server",
         &plugin,
     );

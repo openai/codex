@@ -2019,15 +2019,23 @@ fn request_plugin_install_can_be_registered_without_search_tool() {
     let request_plugin_install = find_tool(&tools, REQUEST_PLUGIN_INSTALL_TOOL_NAME);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let ToolSpec::Function(ResponsesApiTool { description, .. }) = request_plugin_install else {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = request_plugin_install
+    else {
         panic!("expected function tool");
     };
-    assert!(description.contains(
-        "Use this tool only to ask the user to install one known plugin or connector from the list below. The list contains known candidates that are not currently installed."
-    ));
-    assert!(description.contains(
-        "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
-    ));
+    assert!(
+        description.contains("Only call this tool with a result from `list_installable_plugins()`")
+    );
+    assert!(!description.contains("Known plugins/connectors available to install:"));
+    let (_, required) = expect_object_schema(parameters);
+    assert_eq!(
+        required,
+        Some(&vec!["tool_id".to_string(), "suggest_reason".to_string()])
+    );
 }
 
 #[test]
@@ -2038,6 +2046,7 @@ fn request_plugin_install_description_lists_discoverable_tools() {
     features.enable(Feature::Plugins);
     features.enable(Feature::ToolSearch);
     features.enable(Feature::ToolSuggest);
+    features.disable(Feature::PluginInstallListTool);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
