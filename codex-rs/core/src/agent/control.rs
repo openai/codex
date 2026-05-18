@@ -21,6 +21,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -210,17 +211,6 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
     else {
         return;
     };
-    let prefix = &items[..turn_context_idx];
-    if !prefix.iter().all(|item| {
-        matches!(
-            item,
-            RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
-                if role == "developer" || role == "user"
-        ) || matches!(item, RolloutItem::SessionMeta(_))
-    }) {
-        return;
-    }
-
     let mut context_start = turn_context_idx;
     while context_start > 0 {
         let is_startup_context_item = matches!(
@@ -235,9 +225,42 @@ fn strip_parent_startup_context_bundle_from_forked_rollout(items: &mut Vec<Rollo
         context_start -= 1;
     }
 
-    if context_start < turn_context_idx {
-        items.drain(context_start..=turn_context_idx);
+    if context_start == turn_context_idx {
+        return;
     }
+
+    let RolloutItem::TurnContext(turn_context) = &items[turn_context_idx] else {
+        return;
+    };
+    let turn_context_turn_id = turn_context.turn_id.as_deref();
+    let started_immediately_before_context = context_start
+        .checked_sub(1)
+        .and_then(|idx| items.get(idx))
+        .is_some_and(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(started))
+                    if Some(started.turn_id.as_str()) == turn_context_turn_id
+            )
+        });
+    let starts_at_rollout_front = items[..context_start]
+        .iter()
+        .all(|item| matches!(item, RolloutItem::SessionMeta(_)));
+    if !started_immediately_before_context && !starts_at_rollout_front {
+        return;
+    }
+
+    for item in &items[context_start..turn_context_idx] {
+        if !matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::Message { role, .. })
+                if role == "developer" || role == "user"
+        ) {
+            return;
+        }
+    }
+
+    items.drain(context_start..=turn_context_idx);
 }
 
 fn sanitize_forked_rollout_item(

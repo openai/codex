@@ -31,6 +31,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
@@ -133,7 +134,26 @@ fn strips_only_parent_startup_context_bundle() {
         }],
         phase: None,
     };
+    let inherited_user_message = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "inherited parent task".to_string(),
+        }],
+        phase: None,
+    };
     let mut structural_rollout = vec![
+        RolloutItem::ResponseItem(inherited_user_message.clone()),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "inherited parent task".to_string(),
+            ..Default::default()
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "startup".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        })),
         RolloutItem::ResponseItem(ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -158,15 +178,33 @@ fn strips_only_parent_startup_context_bundle() {
 
     strip_parent_startup_context_bundle_from_forked_rollout(&mut structural_rollout);
 
-    assert_eq!(structural_rollout.len(), 3);
+    assert_eq!(structural_rollout.len(), 6);
     assert!(
-        matches!(&structural_rollout[0], RolloutItem::ResponseItem(item) if item == &parent_user_message)
+        matches!(&structural_rollout[0], RolloutItem::ResponseItem(item) if item == &inherited_user_message),
+        "inherited fork history before the parent startup should survive"
     );
     assert!(
-        matches!(&structural_rollout[1], RolloutItem::ResponseItem(item) if item == &parent_later_context_update)
+        matches!(
+            &structural_rollout[1],
+            RolloutItem::EventMsg(EventMsg::UserMessage(_))
+        ),
+        "inherited fork events before the parent startup should survive"
     );
     assert!(
-        matches!(&structural_rollout[2], RolloutItem::TurnContext(_)),
+        matches!(
+            &structural_rollout[2],
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_))
+        ),
+        "parent turn lifecycle events should not block startup-bundle stripping"
+    );
+    assert!(
+        matches!(&structural_rollout[3], RolloutItem::ResponseItem(item) if item == &parent_user_message)
+    );
+    assert!(
+        matches!(&structural_rollout[4], RolloutItem::ResponseItem(item) if item == &parent_later_context_update)
+    );
+    assert!(
+        matches!(&structural_rollout[5], RolloutItem::TurnContext(_)),
         "later parent context updates should survive startup-bundle stripping"
     );
 }
