@@ -320,8 +320,6 @@ jobs:
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
             --partition "hash:${{ matrix.shard }}/4"
-            --target ${{ inputs.target }}
-            --cargo-profile ${{ inputs.profile }}
           )
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
