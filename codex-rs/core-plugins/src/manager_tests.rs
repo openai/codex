@@ -7,6 +7,7 @@ use crate::loader::refresh_non_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use crate::marketplace::MarketplacePluginInstallPolicy;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemotePluginScope;
 use crate::startup_sync::curated_plugins_repo_path;
 use crate::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -397,7 +398,7 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     manager.write_remote_installed_plugins_cache(vec![plugin]);
 
     let marketplaces = manager
-        .build_remote_installed_plugin_marketplaces_from_cache()
+        .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
     assert_eq!(marketplaces[0].name, "chatgpt-global");
@@ -431,6 +432,12 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
             .as_ref()
             .and_then(|interface| interface.short_description.as_deref()),
         Some("Track remote work")
+    );
+    assert_eq!(
+        manager
+            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Workspace])
+            .expect("remote installed cache should be present"),
+        Vec::new()
     );
 }
 

@@ -291,7 +291,7 @@ pub enum RemotePluginCatalogError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
-enum RemotePluginScope {
+pub enum RemotePluginScope {
     #[serde(rename = "GLOBAL")]
     Global,
     #[serde(rename = "WORKSPACE")]
@@ -675,10 +675,16 @@ pub(crate) async fn fetch_remote_installed_plugins(
 
 pub fn group_remote_installed_plugins_by_marketplaces(
     plugins: &[RemoteInstalledPlugin],
+    visible_scopes: &[RemotePluginScope],
 ) -> Vec<RemoteMarketplace> {
     let mut plugins_by_marketplace = BTreeMap::<String, Vec<RemotePluginSummary>>::new();
 
     for plugin in plugins {
+        if !RemotePluginScope::from_marketplace_name(&plugin.marketplace_name)
+            .is_some_and(|scope| visible_scopes.contains(&scope))
+        {
+            continue;
+        }
         let Ok(plugin_id) = PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
         else {
             continue;

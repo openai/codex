@@ -1805,9 +1805,18 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
-        codex_home.path(),
-        &format!("{}/backend-api/", server.uri()),
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = true
+remote_plugin = false
+plugin_sharing = true
+"#,
+            server.uri()
+        ),
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -1838,7 +1847,8 @@ async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()>
         .expect("installed plugins should be an array")
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
+    let global_installed_body = remote_installed_plugin_body("", "1.2.3", /*enabled*/ true);
+    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;

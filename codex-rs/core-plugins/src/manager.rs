@@ -37,6 +37,7 @@ use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -599,19 +600,21 @@ impl PluginsManager {
 
     pub fn build_remote_installed_plugin_marketplaces_from_cache(
         &self,
+        visible_scopes: &[RemotePluginScope],
     ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         let plugins = cache.as_ref()?;
-        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins))
+        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
     }
 
     pub async fn build_and_cache_remote_installed_plugin_marketplaces(
         &self,
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
         let plugins = crate::remote::fetch_remote_installed_plugins(
@@ -619,7 +622,8 @@ impl PluginsManager {
             auth,
         )
         .await?;
-        let marketplaces = crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins);
+        let marketplaces =
+            crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
         let changed = self.write_remote_installed_plugins_cache(plugins);
         if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
             on_effective_plugins_changed();
