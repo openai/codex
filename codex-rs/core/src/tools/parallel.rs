@@ -15,6 +15,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
@@ -89,6 +90,9 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
+        let abort_session = Arc::clone(&session);
+        let abort_source = source.clone();
+        let abort_turn = Arc::clone(&turn);
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
@@ -104,7 +108,16 @@ impl ToolCallRuntime {
                     _ = cancellation_token.cancelled() => {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         dispatch_span.record("aborted", true);
-                        Ok(Self::aborted_response(&call, secs))
+                        let response = Self::aborted_response(&call, secs);
+                        notify_tool_aborted(
+                            abort_session.as_ref(),
+                            abort_turn.as_ref(),
+                            call.call_id.as_str(),
+                            &call.tool_name,
+                            abort_source,
+                        )
+                        .await;
+                        Ok(response)
                     },
                     res = async {
                         let _guard = if supports_parallel {

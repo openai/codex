@@ -18,9 +18,12 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::lifecycle::notify_tool_finish;
+use crate::tools::lifecycle::notify_tool_start;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
+use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ToolName;
@@ -389,6 +392,8 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        notify_tool_start(&invocation).await;
+
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             match run_pre_tool_use_hooks(
                 &invocation.session,
@@ -402,13 +407,27 @@ impl ToolRegistry {
                 PreToolUseHookResult::Blocked(message) => {
                     let err = FunctionCallError::RespondToModel(message);
                     dispatch_trace.record_failed(&err);
+                    notify_tool_finish(&invocation, ToolCallOutcome::Blocked).await;
                     return Err(err);
                 }
                 PreToolUseHookResult::Continue {
                     updated_input: Some(updated_input),
-                } => {
-                    invocation = tool.with_updated_hook_input(invocation, updated_input)?;
-                }
+                } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
+                    Ok(updated_invocation) => {
+                        invocation = updated_invocation;
+                    }
+                    Err(err) => {
+                        dispatch_trace.record_failed(&err);
+                        notify_tool_finish(
+                            &invocation,
+                            ToolCallOutcome::Failed {
+                                handler_executed: false,
+                            },
+                        )
+                        .await;
+                        return Err(err);
+                    }
+                },
                 PreToolUseHookResult::Continue {
                     updated_input: None,
                 } => {}
@@ -502,6 +521,24 @@ impl ToolRegistry {
                 }
             }
         }
+
+        let lifecycle_outcome = match &result {
+            Ok(_) => {
+                let guard = response_cell.lock().await;
+                match guard.as_ref() {
+                    Some(result) => ToolCallOutcome::Completed {
+                        success: result.result.success_for_logging(),
+                    },
+                    None => ToolCallOutcome::Failed {
+                        handler_executed: true,
+                    },
+                }
+            }
+            Err(_) => ToolCallOutcome::Failed {
+                handler_executed: true,
+            },
+        };
+        notify_tool_finish(&invocation, lifecycle_outcome).await;
 
         if let Err(err) = invocation
             .session
