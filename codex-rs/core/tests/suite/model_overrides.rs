@@ -25,7 +25,7 @@ async fn turn_context_update_does_not_persist_when_config_exists() {
     let config_path = test.home.path().join(CONFIG_TOML);
 
     codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             ..Default::default()
@@ -55,7 +55,7 @@ async fn turn_context_update_does_not_create_config_file() {
     );
 
     codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
             ..Default::default()

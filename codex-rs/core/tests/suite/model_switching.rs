@@ -47,7 +47,7 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
-        turn_context: codex_protocol::protocol::TurnContextOverrides {
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.cwd_path().to_path_buf()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
@@ -162,7 +162,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             model: Some(next_model.to_string()),
             ..Default::default()
         })
@@ -232,7 +232,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             model: Some(next_model.to_string()),
             personality: Some(Personality::Pragmatic),
             ..Default::default()
@@ -970,7 +970,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             model: Some(smaller_model_slug.to_string()),
             ..Default::default()
         })

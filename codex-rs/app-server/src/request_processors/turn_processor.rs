@@ -460,7 +460,7 @@ impl TurnRequestProcessor {
                     warning.contains("Configured value for `permission_profile` is disallowed")
                 }) {
                     return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
+                        "invalid thread settings override: {warning}"
                     )));
                 }
                 (
@@ -482,7 +482,7 @@ impl TurnRequestProcessor {
         // still queued together with the input below to preserve submission order.
         if has_any_overrides {
             thread
-                .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
+                .validate_thread_settings_overrides(CodexThreadSettingsOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
@@ -500,10 +500,12 @@ impl TurnRequestProcessor {
                     personality,
                 })
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
         }
 
-        let turn_context = codex_protocol::protocol::TurnContextOverrides {
+        let thread_settings = codex_protocol::protocol::ThreadSettingsOverrides {
             cwd,
             workspace_roots: runtime_workspace_roots,
             profile_workspace_roots,
@@ -527,7 +529,7 @@ impl TurnRequestProcessor {
             environments: environment_selections,
             final_output_json_schema: params.output_schema,
             responsesapi_client_metadata: params.responsesapi_client_metadata,
-            turn_context,
+            thread_settings,
         };
         let turn_id = self
             .submit_core_op(&request_id, thread.as_ref(), turn_op)

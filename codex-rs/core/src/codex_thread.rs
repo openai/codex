@@ -80,9 +80,9 @@ impl ThreadConfigSnapshot {
     }
 }
 
-/// Turn context overrides that app-server validates before starting a turn.
+/// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
-pub struct CodexThreadTurnContextOverrides {
+pub struct CodexThreadSettingsOverrides {
     pub cwd: Option<PathBuf>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
@@ -255,32 +255,32 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
-    pub async fn validate_turn_context_overrides(
+    /// Validate persistent thread settings overrides without committing them.
+    pub async fn validate_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let updates = self.turn_context_settings_update(overrides).await;
+        let updates = self.thread_settings_update(overrides).await;
         self.codex.session.validate_settings(&updates).await
     }
 
-    /// Apply persistent turn context overrides directly.
+    /// Apply persistent thread settings overrides directly.
     ///
     /// This bypasses the submission queue; callers that need ordering relative
-    /// to turns should use the queued turn-context op.
-    pub async fn update_turn_context_overrides(
+    /// to turns should use the queued thread-settings op.
+    pub async fn update_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let updates = self.turn_context_settings_update(overrides).await;
+        let updates = self.thread_settings_update(overrides).await;
         self.codex.session.update_settings(updates).await
     }
 
-    async fn turn_context_settings_update(
+    async fn thread_settings_update(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
+        overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
-        let CodexThreadTurnContextOverrides {
+        let CodexThreadSettingsOverrides {
             cwd,
             workspace_roots,
             profile_workspace_roots,

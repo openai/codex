@@ -125,7 +125,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(first_turn_cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
@@ -160,7 +160,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(preturn_context_diff_cwd),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
@@ -249,7 +249,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_one.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
@@ -282,7 +282,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_two),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(second_sandbox_policy),
@@ -365,7 +365,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -406,7 +406,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(resume_override_cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -479,7 +479,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -503,7 +503,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             cwd: Some(resume_override_cwd),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
@@ -519,7 +519,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

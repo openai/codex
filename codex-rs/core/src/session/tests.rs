@@ -118,12 +118,12 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
-use codex_protocol::protocol::TurnContextOverrides;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -2221,7 +2221,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2267,7 +2267,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: TurnContextOverrides {
+            thread_settings: ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::Never),
                 collaboration_mode: Some(collaboration_mode),
                 ..Default::default()
@@ -5199,7 +5199,7 @@ fn op_kind_for_input_and_context_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         }
         .kind(),
         "user_input"
@@ -5222,7 +5222,7 @@ async fn user_turn_updates_approvals_reviewer() {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
@@ -8289,7 +8289,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -8394,7 +8394,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -8819,7 +8819,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 

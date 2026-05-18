@@ -192,7 +192,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
-        turn_context: Default::default(),
+        thread_settings: Default::default(),
     })
     .await?;
 

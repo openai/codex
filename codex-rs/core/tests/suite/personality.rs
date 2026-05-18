@@ -68,7 +68,7 @@ fn read_only_text_turn_with_personality(
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
-        turn_context: codex_protocol::protocol::TurnContextOverrides {
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.cwd_path().to_path_buf()),
             approval_policy: Some(approval_policy),
             sandbox_policy: Some(sandbox_policy),
@@ -334,7 +334,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
@@ -408,7 +408,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             personality: Some(Personality::Pragmatic),
             ..Default::default()
         })
@@ -495,7 +495,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             personality: Some(Personality::Pragmatic),
             ..Default::default()
         })
@@ -734,7 +734,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             personality: Some(Personality::Friendly),
             ..Default::default()
         })

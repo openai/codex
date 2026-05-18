@@ -243,7 +243,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     assert_eq!(test.config.service_tier, None);
 
     test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+        .update_thread_settings_overrides(codex_core::CodexThreadSettingsOverrides {
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
             ..Default::default()
         })
