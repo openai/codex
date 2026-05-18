@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::NoopExtensionEventSink;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
@@ -22,6 +24,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 
 use crate::accounting::GoalAccountingState;
+use crate::events::GoalEventEmitter;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::tool::CreateGoalRequest;
 use crate::tool::GoalToolExecutor;
@@ -40,6 +43,7 @@ impl GoalExtensionConfig {
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     backend: Arc<dyn GoalToolBackend>,
+    event_emitter: GoalEventEmitter,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -54,8 +58,17 @@ impl<C> GoalExtension<C> {
         backend: Arc<dyn GoalToolBackend>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
+        Self::new_with_event_sink(backend, Arc::new(NoopExtensionEventSink), goals_enabled)
+    }
+
+    pub fn new_with_event_sink(
+        backend: Arc<dyn GoalToolBackend>,
+        event_sink: Arc<dyn ExtensionEventSink>,
+        goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
+    ) -> Self {
         Self {
             backend,
+            event_emitter: GoalEventEmitter::new(event_sink),
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -184,11 +197,12 @@ where
     }
 }
 
+#[async_trait]
 impl<C> TokenUsageContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
@@ -209,8 +223,6 @@ where
         // this recorded delta can be committed to the active persisted goal.
         // It also needs an event/input capability to emit ThreadGoalUpdated and
         // inject budget-limit steering when accounting changes goal status.
-        // TODO: if the storage/event path must await, TokenUsageContributor
-        // either needs to become async or receive a fire-and-forget host sink.
     }
 }
 
@@ -264,14 +276,20 @@ where
             return Vec::new();
         };
         vec![
-            Arc::new(GoalToolExecutor::get(thread_id, Arc::clone(&self.backend))),
+            Arc::new(GoalToolExecutor::get(
+                thread_id,
+                Arc::clone(&self.backend),
+                self.event_emitter.clone(),
+            )),
             Arc::new(GoalToolExecutor::create(
                 thread_id,
                 Arc::clone(&self.backend),
+                self.event_emitter.clone(),
             )),
             Arc::new(GoalToolExecutor::update(
                 thread_id,
                 Arc::clone(&self.backend),
+                self.event_emitter.clone(),
             )),
         ]
     }
@@ -293,7 +311,11 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    let extension = Arc::new(GoalExtension::new(backend, goals_enabled));
+    let extension = Arc::new(GoalExtension::new_with_event_sink(
+        backend,
+        registry.event_sink(),
+        goals_enabled,
+    ));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
