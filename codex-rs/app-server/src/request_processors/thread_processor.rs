@@ -1738,6 +1738,14 @@ impl ThreadRequestProcessor {
         if command.is_empty() {
             return Err(invalid_request("command must not be empty"));
         }
+        if self
+            .thread_manager
+            .environment_manager()
+            .try_local_environment()
+            .is_none()
+        {
+            return Err(internal_error("local environment is not configured"));
+        }
 
         let (_, thread) = self.load_thread(&thread_id).await?;
         self.submit_core_op(

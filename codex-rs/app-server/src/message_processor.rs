@@ -362,8 +362,12 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
+            thread_manager.environment_manager(),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
+        let process_exec_processor = ProcessExecRequestProcessor::new(
+            outgoing.clone(),
+            thread_manager.environment_manager(),
+        );
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
