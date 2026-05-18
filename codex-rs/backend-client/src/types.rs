@@ -49,6 +49,43 @@ impl CodexWorkspaceMessagesResponse {
     }
 }
 
+#[cfg(test)]
+mod workspace_message_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn workspace_messages_response_deserializes_headlines_and_announcements() {
+        let response: CodexWorkspaceMessagesResponse = serde_json::from_value(serde_json::json!({
+            "messages": [
+                {
+                    "message_id": "headline-id",
+                    "message_type": "headline",
+                    "message_body": "Headline body"
+                },
+                {
+                    "message_id": "announcement-id",
+                    "message_type": "announcement",
+                    "message_body": "Announcement body"
+                }
+            ]
+        }))
+        .expect("workspace messages response should deserialize");
+
+        let headlines = response
+            .headlines()
+            .map(|message| message.message_id.as_str())
+            .collect::<Vec<_>>();
+        let announcements = response
+            .announcements()
+            .map(|message| message.message_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(headlines, vec!["headline-id"]);
+        assert_eq!(announcements, vec!["announcement-id"]);
+    }
+}
+
 /// Hand-rolled models for the Cloud Tasks task-details response.
 /// The generated OpenAPI models are pretty bad. This is a half-step
 /// towards hand-rolling them.
