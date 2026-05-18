@@ -175,27 +175,14 @@ pub(super) fn thread_response_active_permission_profile(
     active_permission_profile.map(Into::into)
 }
 
-pub(super) fn apply_permission_profile_selection_to_config_overrides(
+pub(super) fn apply_permission_profile_id_to_config_overrides(
     overrides: &mut ConfigOverrides,
-    permissions: Option<PermissionProfileSelectionParams>,
+    permissions: Option<String>,
 ) {
-    let Some(selection) = permissions else {
+    let Some(id) = permissions else {
         return;
     };
-    overrides.default_permissions = Some(selection.id().to_string());
-    if selection.legacy_additional_writable_roots().is_empty() {
-        return;
-    }
-
-    let legacy_roots = selection
-        .legacy_additional_writable_roots()
-        .iter()
-        .map(AbsolutePathBuf::to_path_buf);
-    if let Some(workspace_roots) = overrides.workspace_roots.as_mut() {
-        workspace_roots.extend(legacy_roots);
-    } else {
-        overrides.additional_writable_roots.extend(legacy_roots);
-    }
+    overrides.default_permissions = Some(id);
 }
 
 pub(super) fn thread_response_sandbox_policy(

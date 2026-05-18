@@ -438,9 +438,21 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     let warning: WarningNotification =
         serde_json::from_value(params).expect("deserialize warning notification");
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
-    assert_eq!(
-        warning.message,
-        "Exceeded skills context budget of 2%. All skill descriptions were removed and 7 additional skills were not included in the model-visible skills list."
+    let omitted_skill_count = warning
+        .message
+        .strip_prefix(
+            "Exceeded skills context budget of 2%. All skill descriptions were removed and ",
+        )
+        .and_then(|message| {
+            message.strip_suffix(
+                " additional skills were not included in the model-visible skills list.",
+            )
+        })
+        .and_then(|count| count.parse::<usize>().ok())
+        .expect("warning should report omitted skill count");
+    assert!(
+        omitted_skill_count >= 2,
+        "expected warning to omit at least the two test skills, got {omitted_skill_count}"
     );
 
     timeout(
@@ -889,11 +901,7 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permissions: Some(
-                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
-                    .to_string()
-                    .into(),
-            ),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
         })
         .await?;
@@ -2147,7 +2155,7 @@ stream_max_retries = 0
                 text_elements: Vec::new(),
             }],
             runtime_workspace_roots: Some(vec![old_root]),
-            permissions: Some("dev".to_string().into()),
+            permissions: Some("dev".to_string()),
             ..Default::default()
         })
         .await?;

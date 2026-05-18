@@ -1239,7 +1239,7 @@ impl ThreadRequestProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -1262,7 +1262,7 @@ impl ThreadRequestProcessor {
             personality,
             ..Default::default()
         };
-        apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
+        apply_permission_profile_id_to_config_overrides(&mut overrides, permissions);
         overrides
     }
 

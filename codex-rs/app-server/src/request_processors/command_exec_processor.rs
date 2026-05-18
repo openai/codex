@@ -117,13 +117,6 @@ impl CommandExecRequestProcessor {
                 "`permissionProfile` cannot be combined with `sandboxPolicy`",
             ));
         }
-        let permission_profile = if let Some(active_permission_profile) = permission_profile {
-            Some(PermissionProfileSelectionParams::new(
-                active_permission_profile.id,
-            ))
-        } else {
-            None
-        };
 
         if size.is_some() && !tty {
             return Err(invalid_params("command/exec size requires tty: true"));
@@ -203,7 +196,7 @@ impl CommandExecRequestProcessor {
                 cwd: Some(cwd.to_path_buf()),
                 ..Default::default()
             };
-            apply_permission_profile_selection_to_config_overrides(
+            apply_permission_profile_id_to_config_overrides(
                 &mut overrides,
                 Some(permission_profile),
             );

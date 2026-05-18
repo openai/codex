@@ -5,7 +5,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::CommandExecOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecOutputStream;
 use codex_app_server_protocol::CommandExecParams;
@@ -219,7 +218,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(ActivePermissionProfile::read_only()),
+            permission_profile: Some(":read-only".to_string()),
         })
         .await?;
 
@@ -270,7 +269,7 @@ async fn command_exec_permission_profile_starts_selected_network_proxy() -> Resu
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(ActivePermissionProfile::new("networked")),
+            permission_profile: Some("networked".to_string()),
         })
         .await?;
 
@@ -318,7 +317,7 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(ActivePermissionProfile::read_only()),
+            permission_profile: Some(":read-only".to_string()),
         })
         .await?;
 
@@ -376,7 +375,7 @@ async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Resu
             env: None,
             size: None,
             sandbox_policy: None,
-            permission_profile: Some(ActivePermissionProfile::new("command-cwd")),
+            permission_profile: Some("command-cwd".to_string()),
         })
         .await?;
 
@@ -423,7 +422,7 @@ async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result
             env: None,
             size: None,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-            permission_profile: Some(ActivePermissionProfile::read_only()),
+            permission_profile: Some(":read-only".to_string()),
         })
         .await?;
 

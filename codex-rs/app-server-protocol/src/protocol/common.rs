@@ -2994,7 +2994,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
-                permission_profile: Some(v2::ActivePermissionProfile::read_only()),
+                permission_profile: Some(":read-only".to_string()),
             },
         };
 

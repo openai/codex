@@ -614,58 +614,69 @@ fn permissions_request_approval_response_accepts_strict_auto_review() {
 }
 
 #[test]
-fn permission_profile_selection_accepts_legacy_object_shape() {
-    let additional_root = absolute_path("additional-root");
-    let params = json!({
-        "permissions": {
-            "type": "profile",
-            "id": ":workspace",
-            "modifications": [
-                {
-                    "type": "additionalWritableRoot",
-                    "path": additional_root,
-                }
-            ],
-        },
-    });
-
-    let start: ThreadStartParams =
-        serde_json::from_value(params.clone()).expect("thread/start params deserialize");
-    assert_legacy_permission_profile_selection(start.permissions, &additional_root);
-
-    let resume: ThreadResumeParams = serde_json::from_value(json!({
-        "threadId": "thread-1",
-        "permissions": params["permissions"].clone(),
+fn permission_profile_selection_uses_id_string() {
+    let start: ThreadStartParams = serde_json::from_value(json!({
+        "permissions": ":workspace",
     }))
-    .expect("thread/resume params deserialize");
-    assert_legacy_permission_profile_selection(resume.permissions, &additional_root);
-
-    let fork: ThreadForkParams = serde_json::from_value(json!({
-        "threadId": "thread-1",
-        "permissions": params["permissions"].clone(),
-    }))
-    .expect("thread/fork params deserialize");
-    assert_legacy_permission_profile_selection(fork.permissions, &additional_root);
+    .expect("thread/start params deserialize");
+    assert_eq!(start.permissions, Some(":workspace".to_string()));
 
     let turn: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread-1",
         "input": [],
-        "permissions": params["permissions"].clone(),
+        "permissions": "dev",
     }))
     .expect("turn/start params deserialize");
-    assert_legacy_permission_profile_selection(turn.permissions, &additional_root);
+    assert_eq!(turn.permissions, Some("dev".to_string()));
+
+    let command: CommandExecParams = serde_json::from_value(json!({
+        "command": ["echo", "hello"],
+        "permissionProfile": "dev",
+    }))
+    .expect("command/exec params deserialize");
+    assert_eq!(command.permission_profile, Some("dev".to_string()));
 }
 
-fn assert_legacy_permission_profile_selection(
-    selection: Option<PermissionProfileSelectionParams>,
-    additional_root: &AbsolutePathBuf,
-) {
-    let selection = selection.expect("permissions should be present");
-    assert_eq!(selection.id(), ":workspace");
-    assert_eq!(
-        selection.legacy_additional_writable_roots(),
-        std::slice::from_ref(additional_root)
-    );
+#[test]
+fn permission_profile_selection_rejects_legacy_object_shape() {
+    let legacy_permissions = json!({
+        "type": "profile",
+        "id": ":workspace",
+        "modifications": [
+            {
+                "type": "additionalWritableRoot",
+                "path": absolute_path("additional-root"),
+            }
+        ],
+    });
+
+    serde_json::from_value::<ThreadStartParams>(json!({
+        "permissions": legacy_permissions,
+    }))
+    .expect_err("thread/start params should reject legacy permissions object");
+
+    serde_json::from_value::<CommandExecParams>(json!({
+        "command": ["echo", "hello"],
+        "permissionProfile": {
+            "id": "dev",
+            "extends": null,
+        },
+    }))
+    .expect_err("command/exec params should reject active permission profile object");
+
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": ":workspace",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(resume.permissions, Some(":workspace".to_string()));
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": ":workspace",
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(fork.permissions, Some(":workspace".to_string()));
 }
 
 #[test]

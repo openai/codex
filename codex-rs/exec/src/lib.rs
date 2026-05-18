@@ -24,7 +24,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
@@ -1007,17 +1006,15 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
     }
 }
 
-fn permissions_selection_from_config(config: &Config) -> Option<PermissionProfileSelectionParams> {
+fn permissions_selection_from_config(config: &Config) -> Option<String> {
     config
         .permissions
         .active_permission_profile()
-        .map(permissions_selection_from_active_profile)
+        .map(permission_profile_id_from_active_profile)
 }
 
-fn permissions_selection_from_active_profile(
-    active: ActivePermissionProfile,
-) -> PermissionProfileSelectionParams {
-    PermissionProfileSelectionParams::new(active.id)
+fn permission_profile_id_from_active_profile(active: ActivePermissionProfile) -> String {
+    active.id
 }
 
 fn sandbox_mode_from_permission_profile(
