@@ -8665,6 +8665,7 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
+        .thread_goals()
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after usage limiting");

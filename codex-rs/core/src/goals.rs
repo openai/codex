@@ -15,12 +15,14 @@ use crate::tasks::RegularTask;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_features::Feature;
+use codex_otel::GOAL_BLOCKED_METRIC;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
 use codex_otel::GOAL_COMPLETED_METRIC;
 use codex_otel::GOAL_CREATED_METRIC;
 use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
+use codex_otel::GOAL_USAGE_LIMITED_METRIC;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -545,6 +547,7 @@ impl Session {
         if replacing_goal {
             self.emit_goal_created_metric();
         }
+        self.emit_goal_resumed_metric_if_status_changed(previous_status_for_goal, goal_status);
         self.emit_goal_terminal_metrics_if_status_changed(previous_status_for_goal, &goal);
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
@@ -661,6 +664,7 @@ impl Session {
         let previous_status = previous_goal
             .as_ref()
             .and_then(|previous_goal| (!replaced_existing_goal).then_some(previous_goal.status));
+        self.emit_goal_resumed_metric_if_status_changed(previous_status, goal.status);
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
         let goal_for_steering = objective_changed.then(|| protocol_goal_from_state(goal.clone()));
         let goal_id = goal.goal_id;
@@ -752,6 +756,25 @@ impl Session {
             .counter(GOAL_RESUMED_METRIC, /*inc*/ 1, &[]);
     }
 
+    fn emit_goal_resumed_metric_if_status_changed(
+        &self,
+        previous_status: Option<codex_state::ThreadGoalStatus>,
+        goal_status: codex_state::ThreadGoalStatus,
+    ) {
+        if goal_status == codex_state::ThreadGoalStatus::Active
+            && matches!(
+                previous_status,
+                Some(
+                    codex_state::ThreadGoalStatus::Paused
+                        | codex_state::ThreadGoalStatus::Blocked
+                        | codex_state::ThreadGoalStatus::UsageLimited
+                )
+            )
+        {
+            self.emit_goal_resumed_metric();
+        }
+    }
+
     fn emit_goal_terminal_metrics_if_status_changed(
         &self,
         previous_status: Option<codex_state::ThreadGoalStatus>,
@@ -762,12 +785,11 @@ impl Session {
         }
 
         let counter = match goal.status {
+            codex_state::ThreadGoalStatus::Blocked => GOAL_BLOCKED_METRIC,
+            codex_state::ThreadGoalStatus::UsageLimited => GOAL_USAGE_LIMITED_METRIC,
             codex_state::ThreadGoalStatus::BudgetLimited => GOAL_BUDGET_LIMITED_METRIC,
             codex_state::ThreadGoalStatus::Complete => GOAL_COMPLETED_METRIC,
-            codex_state::ThreadGoalStatus::Active
-            | codex_state::ThreadGoalStatus::Paused
-            | codex_state::ThreadGoalStatus::Blocked
-            | codex_state::ThreadGoalStatus::UsageLimited => {
+            codex_state::ThreadGoalStatus::Active | codex_state::ThreadGoalStatus::Paused => {
                 return;
             }
         };
@@ -1243,12 +1265,17 @@ impl Session {
             TerminalMetricEmission::Emit,
         )
         .await?;
+        let previous_status = self
+            .current_goal_status_for_metrics(&state_db, /*expected_goal_id*/ None)
+            .await?;
         let Some(goal) = state_db
+            .thread_goals()
             .usage_limit_active_thread_goal(self.conversation_id)
             .await?
         else {
             return Ok(());
         };
+        self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         self.clear_active_goal_accounting(turn_context).await;
