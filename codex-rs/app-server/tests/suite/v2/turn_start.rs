@@ -889,11 +889,7 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permissions: Some(
-                BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
-                    .to_string()
-                    .into(),
-            ),
+            permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
         })
         .await?;
@@ -2147,7 +2143,7 @@ stream_max_retries = 0
                 text_elements: Vec::new(),
             }],
             runtime_workspace_roots: Some(vec![old_root]),
-            permissions: Some("dev".to_string().into()),
+            permissions: Some("dev".to_string()),
             ..Default::default()
         })
         .await?;
