@@ -1628,7 +1628,7 @@ mod tests {
 
         let mut selection_plus_render = transcript_overlay(cells);
         selection_plus_render.set_highlight_cell(Some(cell_count.saturating_sub(2)));
-        let mut term = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("term");
 
         let render_start = Instant::now();
         for _ in 0..STEPS {
