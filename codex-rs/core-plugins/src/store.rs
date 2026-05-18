@@ -291,7 +291,7 @@ fn replace_plugin_root_atomically(
         fs::rename(&staged_version_root, &target_version_root).map_err(|err| {
             PluginStoreError::io("failed to activate updated plugin cache version", err)
         })?;
-        remove_old_plugin_versions(target_root, plugin_version);
+        remove_old_plugin_versions(target_root, plugin_version)?;
         return Ok(());
     }
 
@@ -331,9 +331,25 @@ fn replace_plugin_root_atomically(
     Ok(())
 }
 
-fn remove_old_plugin_versions(target_root: &Path, plugin_version: &str) {
+fn remove_old_plugin_versions(
+    target_root: &Path,
+    plugin_version: &str,
+) -> Result<(), PluginStoreError> {
+    remove_old_plugin_versions_with_remover(target_root, plugin_version, |path| {
+        fs::remove_dir_all(path)
+    })
+}
+
+fn remove_old_plugin_versions_with_remover<F>(
+    target_root: &Path,
+    plugin_version: &str,
+    mut remove_dir_all: F,
+) -> Result<(), PluginStoreError>
+where
+    F: FnMut(&Path) -> io::Result<()>,
+{
     let Ok(entries) = fs::read_dir(target_root) else {
-        return;
+        return Ok(());
     };
 
     for entry in entries.filter_map(Result::ok) {
@@ -350,8 +366,16 @@ fn remove_old_plugin_versions(target_root: &Path, plugin_version: &str) {
             continue;
         }
 
-        let _ = fs::remove_dir_all(entry.path());
+        if remove_dir_all(&entry.path()).is_err()
+            && (version == DEFAULT_PLUGIN_VERSION || version.as_str() > plugin_version)
+        {
+            return Err(PluginStoreError::Invalid(format!(
+                "failed to activate updated plugin cache version `{plugin_version}` while `{version}` remains active"
+            )));
+        }
     }
+
+    Ok(())
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
