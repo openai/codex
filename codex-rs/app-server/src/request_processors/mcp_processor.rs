@@ -205,17 +205,24 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.require_local_environment(),
-                config.cwd.to_path_buf(),
-            ),
+        let Some(environment) = environment_manager.default_or_local_environment() else {
+            warn!("skipping MCP status listing because no runtime environment is configured");
+            outgoing
+                .send_result(
+                    request,
+                    Ok::<ListMcpServerStatusResponse, JSONRPCErrorError>(
+                        ListMcpServerStatusResponse {
+                            data: Vec::new(),
+                            next_cursor: None,
+                        },
+                    ),
+                )
+                .await;
+            return Ok(());
         };
+        // Status listing has no turn cwd. This fallback is used only by
+        // executor-backed stdio MCPs whose config omits `cwd`.
+        let runtime_environment = McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf());
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -369,15 +376,20 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = {
-            let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
-                .default_environment()
-                .unwrap_or_else(|| environment_manager.require_local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+        let environment_manager = self.thread_manager.environment_manager();
+        let Some(environment) = environment_manager.default_or_local_environment() else {
+            warn!("skipping MCP resource read because no runtime environment is configured");
+            Self::send_mcp_resource_read_response(
+                outgoing,
+                request_id.clone(),
+                Err(anyhow::anyhow!("MCP runtime environment is not configured")),
+            )
+            .await;
+            return Ok(());
         };
+        // Resource reads without a thread have no turn cwd. This fallback is
+        // used only by executor-backed stdio MCPs whose config omits `cwd`.
+        let runtime_environment = McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
         tokio::spawn(async move {

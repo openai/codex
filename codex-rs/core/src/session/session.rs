@@ -1046,75 +1046,81 @@ impl Session {
             })?
             .primary()
             .cloned();
-            let mcp_runtime_environment = match turn_environment {
-                Some(turn_environment) => McpRuntimeEnvironment::new(
+            if let Some(mcp_runtime_environment) = match turn_environment {
+                Some(turn_environment) => Some(McpRuntimeEnvironment::new(
                     Arc::clone(&turn_environment.environment),
                     turn_environment.cwd.to_path_buf(),
-                ),
-                None => McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.require_local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
-            };
-            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                session_configuration.permission_profile(),
-                mcp_runtime_environment,
-                config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-                session_init.required_mcp_server_count = required_mcp_server_count,
-            ))
-            .await;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                if cancel_guard.is_cancelled() {
-                    cancel_token.cancel();
-                }
-                *cancel_guard = cancel_token;
-            }
-            if !required_mcp_servers.is_empty() {
-                let failures = sess
+                )),
+                None => sess
                     .services
-                    .mcp_connection_manager
-                    .read()
-                    .await
-                    .required_startup_failures(&required_mcp_servers)
-                    .instrument(info_span!(
-                        "session_init.required_mcp_wait",
-                        otel.name = "session_init.required_mcp_wait",
-                        session_init.required_mcp_server_count = required_mcp_server_count,
-                    ))
-                    .await;
-                if !failures.is_empty() {
-                    let details = failures
-                        .iter()
-                        .map(|failure| format!("{}: {}", failure.server, failure.error))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("required MCP servers failed to initialize: {details}");
+                    .environment_manager
+                    .default_or_local_environment()
+                    .map(|environment| {
+                        McpRuntimeEnvironment::new(
+                            environment,
+                            session_configuration.cwd.to_path_buf(),
+                        )
+                    }),
+            } {
+                let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+                    &mcp_servers,
+                    config.mcp_oauth_credentials_store_mode,
+                    auth_statuses.clone(),
+                    &session_configuration.approval_policy,
+                    INITIAL_SUBMIT_ID.to_owned(),
+                    tx_event.clone(),
+                    session_configuration.permission_profile(),
+                    mcp_runtime_environment,
+                    config.codex_home.to_path_buf(),
+                    codex_apps_tools_cache_key(auth),
+                    host_owned_codex_apps_enabled,
+                    client_elicitation_capability,
+                    tool_plugin_provenance,
+                    auth,
+                    Some(sess.mcp_elicitation_reviewer()),
+                )
+                .instrument(info_span!(
+                    "session_init.mcp_manager_init",
+                    otel.name = "session_init.mcp_manager_init",
+                    session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+                    session_init.required_mcp_server_count = required_mcp_server_count,
+                ))
+                .await;
+                {
+                    let mut manager_guard = sess.services.mcp_connection_manager.write().await;
+                    *manager_guard = mcp_connection_manager;
                 }
+                {
+                    let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+                    if cancel_guard.is_cancelled() {
+                        cancel_token.cancel();
+                    }
+                    *cancel_guard = cancel_token;
+                }
+                if !required_mcp_servers.is_empty() {
+                    let failures = sess
+                        .services
+                        .mcp_connection_manager
+                        .read()
+                        .await
+                        .required_startup_failures(&required_mcp_servers)
+                        .instrument(info_span!(
+                            "session_init.required_mcp_wait",
+                            otel.name = "session_init.required_mcp_wait",
+                            session_init.required_mcp_server_count = required_mcp_server_count,
+                        ))
+                        .await;
+                    if !failures.is_empty() {
+                        let details = failures
+                            .iter()
+                            .map(|failure| format!("{}: {}", failure.server, failure.error))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        anyhow::bail!("required MCP servers failed to initialize: {details}");
+                    }
+                }
+            } else {
+                warn!("skipping MCP startup because no runtime environment is configured");
             }
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;

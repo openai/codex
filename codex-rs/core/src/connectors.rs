@@ -262,9 +262,13 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let environment = environment_manager
-        .default_environment()
-        .unwrap_or_else(|| environment_manager.require_local_environment());
+    let Some(environment) = environment_manager.default_or_local_environment() else {
+        warn!("skipping connector discovery because no MCP runtime environment is configured");
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: false,
+        });
+    };
 
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,

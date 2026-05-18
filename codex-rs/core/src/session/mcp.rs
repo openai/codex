@@ -289,23 +289,25 @@ impl Session {
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeEnvironment::new(
+        let Some(mcp_runtime_environment) = (match turn_context.environments.primary() {
+            Some(turn_environment) => Some(McpRuntimeEnvironment::new(
                 Arc::clone(&turn_environment.environment),
                 turn_environment.cwd.to_path_buf(),
-            ),
-            None => McpRuntimeEnvironment::new(
-                self.services
-                    .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| {
-                        self.services
-                            .environment_manager
-                            .require_local_environment()
-                    }),
-                #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
+            )),
+            None => self
+                .services
+                .environment_manager
+                .default_or_local_environment()
+                .map(|environment| {
+                    McpRuntimeEnvironment::new(
+                        environment,
+                        #[allow(deprecated)]
+                        turn_context.cwd.to_path_buf(),
+                    )
+                }),
+        }) else {
+            warn!("skipping MCP refresh because no runtime environment is configured");
+            return;
         };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
