@@ -610,6 +610,8 @@ fn serialize_jsonrpc_message(message: &JSONRPCMessage) -> Result<String, serde_j
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::JSONRPCRequest;
+    use codex_app_server_protocol::RequestId;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
     use tokio_tungstenite::accept_async;
@@ -647,6 +649,62 @@ mod tests {
             .await?
             .expect("websocket should stay open")?;
         assert!(matches!(message, Message::Ping(_)));
+
+        drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_connection_ignores_server_pong() -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let mut connection = JsonRpcConnection::from_websocket(client_websocket, "test".into());
+
+        server_websocket
+            .send(Message::Pong(b"check".to_vec().into()))
+            .await?;
+        assert!(
+            timeout(Duration::from_millis(50), connection.incoming_rx.recv())
+                .await
+                .is_err()
+        );
+
+        drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_connection_reports_server_close() -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let mut connection = JsonRpcConnection::from_websocket(client_websocket, "test".into());
+
+        server_websocket.close(None).await?;
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::Disconnected { reason: None })
+        ));
+
+        drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn websocket_connection_accepts_binary_jsonrpc_message() -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let mut connection = JsonRpcConnection::from_websocket(client_websocket, "test".into());
+        let message = JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(1),
+            method: "test".to_string(),
+            params: None,
+            trace: None,
+        });
+
+        server_websocket
+            .send(Message::Binary(serde_json::to_vec(&message)?.into()))
+            .await?;
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::Message(actual)) if actual == message
+        ));
 
         drop(connection);
         Ok(())
