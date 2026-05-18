@@ -347,9 +347,8 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
-        if let Some(nth_user_message) =
-            initial_overlay_backtrack_selection(user_count(&self.transcript_cells), start)
-        {
+        let count = self.current_transcript_user_count();
+        if let Some(nth_user_message) = initial_overlay_backtrack_selection(count, start) {
             self.apply_backtrack_selection_internal(nth_user_message);
         }
         tui.frame_requester().schedule_frame();
@@ -357,7 +356,7 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = self.current_transcript_user_count();
         if count == 0 {
             return;
         }
@@ -380,7 +379,7 @@ impl App {
 
     /// Step selection to the next newer user message and update overlay.
     fn step_forward_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = self.current_transcript_user_count();
         if count == 0 {
             return;
         }
@@ -401,16 +400,27 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
-            self.backtrack.nth_user_message = nth_user_message;
-            if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.set_highlight_cell(Some(cell_idx));
-            }
-        } else {
-            self.backtrack.nth_user_message = usize::MAX;
-            if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            if t.set_highlighted_user_prompt(nth_user_message).is_some() {
+                self.backtrack.nth_user_message = nth_user_message;
+            } else {
+                self.backtrack.nth_user_message = usize::MAX;
                 t.set_highlight_cell(/*cell*/ None);
             }
+            return;
+        }
+
+        if nth_user_position(&self.transcript_cells, nth_user_message).is_some() {
+            self.backtrack.nth_user_message = nth_user_message;
+        } else {
+            self.backtrack.nth_user_message = usize::MAX;
+        }
+    }
+
+    fn current_transcript_user_count(&self) -> usize {
+        match &self.overlay {
+            Some(Overlay::Transcript(t)) => t.user_prompt_count(),
+            _ => user_count(&self.transcript_cells),
         }
     }
 

@@ -15,7 +15,9 @@
 //! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
 //! mutates in place or when its transcript output is time-dependent.
 
+use std::cell::Cell as StdCell;
 use std::io::Result;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -473,17 +475,25 @@ impl Renderable for CachedRenderable {
 
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
+    cell_index: usize,
     style: Style,
+    selected_style: Option<Style>,
+    highlight_cell: Rc<StdCell<Option<usize>>>,
     render_mode: HistoryRenderMode,
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        let style = if self.highlight_cell.get() == Some(self.cell_index) {
+            self.selected_style.unwrap_or(self.style)
+        } else {
+            self.style
+        };
         let hyperlink_lines = self
             .cell
             .transcript_hyperlink_lines_for_mode(area.width, self.render_mode);
         let p = Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
-            .style(self.style)
+            .style(style)
             .wrap(Wrap { trim: false });
         p.render(area, buf);
         mark_buffer_hyperlinks(buf, area, &hyperlink_lines, /*scroll_rows*/ 0);
@@ -524,7 +534,8 @@ pub(crate) struct TranscriptOverlay {
     view: PagerView,
     /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
-    highlight_cell: Option<usize>,
+    highlight_cell: Rc<StdCell<Option<usize>>>,
+    user_prompt_positions: Vec<usize>,
     render_mode: HistoryRenderMode,
     copy_keymap: Vec<KeyBinding>,
     toggle_raw_output_keymap: Vec<KeyBinding>,
@@ -571,10 +582,15 @@ impl TranscriptOverlay {
         toggle_raw_output_keymap: Vec<KeyBinding>,
         state: TranscriptOverlayState,
     ) -> Self {
+        let highlight_cell = Rc::new(StdCell::new(state.highlight_cell));
         Self {
             view: {
                 let mut view = PagerView::new(
-                    Self::render_cells(&transcript_cells, state.highlight_cell, state.render_mode),
+                    Self::render_cells(
+                        &transcript_cells,
+                        Rc::clone(&highlight_cell),
+                        state.render_mode,
+                    ),
                     "Transcript".to_string(),
                     state.scroll_offset,
                     keymap,
@@ -582,8 +598,9 @@ impl TranscriptOverlay {
                 view.show_header_progress = false;
                 view
             },
+            user_prompt_positions: Self::user_prompt_positions(&transcript_cells),
             cells: transcript_cells,
-            highlight_cell: state.highlight_cell,
+            highlight_cell,
             render_mode: state.render_mode,
             copy_keymap,
             toggle_raw_output_keymap,
@@ -597,7 +614,7 @@ impl TranscriptOverlay {
 
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
-        highlight_cell: Option<usize>,
+        highlight_cell: Rc<StdCell<Option<usize>>>,
         render_mode: HistoryRenderMode,
     ) -> Vec<Box<dyn Renderable>> {
         cells
@@ -608,17 +625,19 @@ impl TranscriptOverlay {
                 let base_renderable = if c.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        style: if highlight_cell == Some(i) {
-                            user_message_style().reversed()
-                        } else {
-                            user_message_style()
-                        },
+                        cell_index: i,
+                        style: user_message_style(),
+                        selected_style: Some(user_message_style().reversed()),
+                        highlight_cell: Rc::clone(&highlight_cell),
                         render_mode,
                     })) as Box<dyn Renderable>
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
+                        cell_index: i,
                         style: Style::default(),
+                        selected_style: None,
+                        highlight_cell: Rc::clone(&highlight_cell),
                         render_mode,
                     })) as Box<dyn Renderable>
                 };
@@ -637,6 +656,14 @@ impl TranscriptOverlay {
             .collect()
     }
 
+    fn user_prompt_positions(cells: &[Arc<dyn HistoryCell>]) -> Vec<usize> {
+        cells
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, cell)| cell.is_user_prompt().then_some(idx))
+            .collect()
+    }
+
     /// Insert a committed history cell while keeping any cached live tail.
     ///
     /// The live tail is temporarily removed, the committed cells are rebuilt,
@@ -652,8 +679,15 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        self.view.renderables =
-            Self::render_cells(&self.cells, self.highlight_cell, self.render_mode);
+        if self.cells.last().is_some_and(|cell| cell.is_user_prompt()) {
+            self.user_prompt_positions
+                .push(self.cells.len().saturating_sub(1));
+        }
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            Rc::clone(&self.highlight_cell),
+            self.render_mode,
+        );
         self.view.invalidate_layout();
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
@@ -687,11 +721,13 @@ impl TranscriptOverlay {
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells = cells;
+        self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
         if self
             .highlight_cell
+            .get()
             .is_some_and(|idx| idx >= self.cells.len())
         {
-            self.highlight_cell = None;
+            self.highlight_cell.set(None);
         }
         self.rebuild_renderables();
         if follow_bottom {
@@ -718,22 +754,25 @@ impl TranscriptOverlay {
         let clamped_start = range.start.min(clamped_end);
         if clamped_start < clamped_end {
             let removed = clamped_end - clamped_start;
-            if let Some(highlight_cell) = self.highlight_cell.as_mut()
-                && *highlight_cell >= clamped_start
+            if let Some(mut highlight_cell) = self.highlight_cell.get()
+                && highlight_cell >= clamped_start
             {
-                if *highlight_cell < clamped_end {
-                    *highlight_cell = clamped_start;
+                if highlight_cell < clamped_end {
+                    highlight_cell = clamped_start;
                 } else {
-                    *highlight_cell = highlight_cell.saturating_sub(removed.saturating_sub(1));
+                    highlight_cell = highlight_cell.saturating_sub(removed.saturating_sub(1));
                 }
+                self.highlight_cell.set(Some(highlight_cell));
             }
             self.cells
                 .splice(clamped_start..clamped_end, std::iter::once(consolidated));
+            self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
             if self
                 .highlight_cell
+                .get()
                 .is_some_and(|highlight_cell| highlight_cell >= self.cells.len())
             {
-                self.highlight_cell = None;
+                self.highlight_cell.set(None);
             }
             self.rebuild_renderables();
         }
@@ -805,15 +844,22 @@ impl TranscriptOverlay {
         placement: PromptSelectionPlacement,
     ) {
         let prompt_row_offset = cell.map(|idx| self.prompt_first_text_row_offset(idx));
-        if self.highlight_cell != cell {
-            self.highlight_cell = cell;
-            self.rebuild_renderables();
-        }
+        self.highlight_cell.set(cell);
         if let (Some(idx), Some(row_offset), PromptSelectionPlacement::AnchorUpperThird) =
             (cell, prompt_row_offset, placement)
         {
             self.view.scroll_chunk_to_upper_third(idx, row_offset);
         }
+    }
+
+    pub(crate) fn user_prompt_count(&self) -> usize {
+        self.user_prompt_positions.len()
+    }
+
+    pub(crate) fn set_highlighted_user_prompt(&mut self, nth_user_message: usize) -> Option<usize> {
+        let cell_idx = self.user_prompt_positions.get(nth_user_message).copied()?;
+        self.set_highlight_cell(Some(cell_idx));
+        Some(cell_idx)
     }
 
     /// Returns whether the underlying pager view is currently pinned to the bottom.
@@ -827,7 +873,7 @@ impl TranscriptOverlay {
     pub(crate) fn state(&self) -> TranscriptOverlayState {
         TranscriptOverlayState {
             scroll_offset: self.view.scroll_offset,
-            highlight_cell: self.highlight_cell,
+            highlight_cell: self.highlight_cell.get(),
             render_mode: self.render_mode,
         }
     }
@@ -847,7 +893,7 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn selected_user_cell(&self) -> Option<usize> {
-        self.highlight_cell.filter(|idx| {
+        self.highlight_cell.get().filter(|idx| {
             self.cells
                 .get(*idx)
                 .is_some_and(|cell| cell.is_user_prompt())
@@ -863,27 +909,23 @@ impl TranscriptOverlay {
     }
 
     fn move_prompt_selection(&mut self, direction: PromptSelectionDirection) {
-        let prompt_positions = self
-            .cells
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, cell)| cell.is_user_prompt().then_some(idx))
-            .collect::<Vec<_>>();
-        let Some(last_prompt) = prompt_positions.last().copied() else {
+        let Some(last_prompt) = self.user_prompt_positions.last().copied() else {
             return;
         };
 
-        let next_prompt = match self.highlight_cell {
+        let next_prompt = match self.highlight_cell.get() {
             Some(current) => {
-                let current_idx = prompt_positions
+                let current_idx = self
+                    .user_prompt_positions
                     .iter()
                     .position(|idx| *idx == current)
-                    .unwrap_or(prompt_positions.len().saturating_sub(1));
+                    .unwrap_or(self.user_prompt_positions.len().saturating_sub(1));
                 match direction {
                     PromptSelectionDirection::Previous => {
-                        prompt_positions[current_idx.saturating_sub(1)]
+                        self.user_prompt_positions[current_idx.saturating_sub(1)]
                     }
-                    PromptSelectionDirection::Next => prompt_positions
+                    PromptSelectionDirection::Next => self
+                        .user_prompt_positions
                         .get(current_idx.saturating_add(1))
                         .copied()
                         .unwrap_or(last_prompt),
@@ -917,17 +959,12 @@ impl TranscriptOverlay {
             return None;
         }
         let offsets = self.view.layout(width).offsets.clone();
-        let prompts = self
-            .cells
-            .iter()
-            .enumerate()
-            .filter(|(_, cell)| cell.is_user_prompt())
-            .map(|(idx, _)| {
-                (
-                    idx,
-                    offsets[idx].saturating_add(self.prompt_first_text_row_offset(idx)),
-                )
-            });
+        let prompts = self.user_prompt_positions.iter().copied().map(|idx| {
+            (
+                idx,
+                offsets[idx].saturating_add(self.prompt_first_text_row_offset(idx)),
+            )
+        });
         if after > before {
             let previous_bottom = before.saturating_add(height as usize);
             let current_bottom = after.saturating_add(height as usize);
@@ -971,20 +1008,14 @@ impl TranscriptOverlay {
     }
 
     fn footer_progress_label(&self, content_height: u16, total_len: usize, width: u16) -> String {
-        let total = self
-            .cells
-            .iter()
-            .filter(|cell| cell.is_user_prompt())
-            .count();
+        let total = self.user_prompt_positions.len();
         let selected = self
             .highlight_cell
+            .get()
             .and_then(|highlight_cell| {
                 let selected = self
-                    .cells
-                    .iter()
-                    .take(highlight_cell.saturating_add(1))
-                    .filter(|cell| cell.is_user_prompt())
-                    .count();
+                    .user_prompt_positions
+                    .partition_point(|idx| *idx <= highlight_cell);
                 (selected > 0).then_some(selected)
             })
             .unwrap_or(total);
@@ -999,8 +1030,11 @@ impl TranscriptOverlay {
 
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.view.renderables =
-            Self::render_cells(&self.cells, self.highlight_cell, self.render_mode);
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            Rc::clone(&self.highlight_cell),
+            self.render_mode,
+        );
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
         }
@@ -1137,7 +1171,7 @@ impl TranscriptOverlay {
                 /*priority*/ 4,
             ));
         }
-        if self.highlight_cell.is_some() {
+        if self.highlight_cell.get().is_some() {
             let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
                 .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
                 .collect::<Vec<_>>();
@@ -1390,6 +1424,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1607,13 +1642,16 @@ mod tests {
         let render_elapsed = render_start.elapsed();
 
         let operations = STEPS.saturating_mul(2);
-        println!(
+        let mut stdout = std::io::stdout().lock();
+        writeln!(
+            stdout,
             "transcript_prompt_selection_perf prompts={PROMPTS} cells={cell_count} steps={operations} selection_only_ms={:.3} selection_only_avg_us={:.3} selection_plus_render_ms={:.3} selection_plus_render_avg_us={:.3}",
             selection_elapsed.as_secs_f64() * 1_000.0,
             selection_elapsed.as_secs_f64() * 1_000_000.0 / operations as f64,
             render_elapsed.as_secs_f64() * 1_000.0,
             render_elapsed.as_secs_f64() * 1_000_000.0 / operations as f64,
-        );
+        )
+        .expect("write perf output");
     }
 
     #[test]
@@ -1909,6 +1947,57 @@ mod tests {
     }
 
     #[test]
+    fn prompt_selection_updates_style_without_rebuilding_layout() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )),
+            user_cell("second prompt"),
+        ]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 14,
+        );
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+        assert!(overlay.view.layout.is_some());
+        let renderable_count = overlay.view.renderables.len();
+
+        overlay.set_highlight_cell(Some(0));
+        assert!(overlay.view.layout.is_some());
+        assert_eq!(overlay.view.renderables.len(), renderable_count);
+        overlay.render(area, &mut buf);
+        let first_selection = prompt_marker_reversed_states(&buf, area);
+        assert_eq!(first_selection, vec![true, false]);
+
+        overlay.set_highlight_cell(Some(2));
+        assert!(overlay.view.layout.is_some());
+        assert_eq!(overlay.view.renderables.len(), renderable_count);
+        overlay.render(area, &mut buf);
+        let second_selection = prompt_marker_reversed_states(&buf, area);
+        assert_eq!(second_selection, vec![false, true]);
+    }
+
+    fn prompt_marker_reversed_states(buf: &Buffer, area: Rect) -> Vec<bool> {
+        let mut states = Vec::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if buf[(x, y)].symbol() == "›" {
+                    states.push(
+                        buf[(x, y)]
+                            .style()
+                            .add_modifier
+                            .contains(Modifier::REVERSED),
+                    );
+                }
+            }
+        }
+        states
+    }
+
+    #[test]
     fn transcript_overlay_sync_live_tail_is_noop_for_identical_key() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
@@ -2184,7 +2273,7 @@ mod tests {
         );
 
         assert_eq!(
-            overlay.highlight_cell,
+            overlay.highlight_cell.get(),
             Some(2),
             "highlight inside consolidated range should point to replacement cell",
         );
@@ -2211,7 +2300,7 @@ mod tests {
         );
 
         assert_eq!(
-            overlay.highlight_cell,
+            overlay.highlight_cell.get(),
             Some(4),
             "highlight after consolidated range should shift left by removed cells",
         );
