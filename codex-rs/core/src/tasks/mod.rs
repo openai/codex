@@ -466,7 +466,10 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_queued_response_items_for_next_turn().await
+        if !self
+            .input_queue
+            .has_queued_response_items_for_next_turn()
+            .await
             && !self.input_queue.has_trigger_turn_mailbox_items().await
         {
             return;

@@ -146,12 +146,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty()
-        && !sess
-            .input_queue
-            .has_pending_input(&sess.active_turn)
-            .await
-    {
+    if input.is_empty() && !sess.input_queue.has_pending_input(&sess.active_turn).await {
         return None;
     }
 
@@ -482,10 +477,7 @@ pub(crate) async fn run_turn(
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
                 can_drain_pending_input = true;
-                let has_pending_input = sess
-                    .input_queue
-                    .has_pending_input(&sess.active_turn)
-                    .await;
+                let has_pending_input = sess.input_queue.has_pending_input(&sess.active_turn).await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;

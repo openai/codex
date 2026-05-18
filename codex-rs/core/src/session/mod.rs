@@ -203,8 +203,8 @@ use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
-use self::review::spawn_review_thread;
 pub(crate) use self::input_queue::TurnInputQueue;
+use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
@@ -3166,10 +3166,6 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,

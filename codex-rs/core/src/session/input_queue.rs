@@ -64,14 +64,10 @@ impl InputQueue {
     }
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> Vec<ResponseInputItem> {
-        let mails = self
-            .mailbox_pending_mails
+        self.mailbox_pending_mails
             .lock()
             .await
             .drain(..)
-            .collect::<Vec<_>>();
-        mails
-            .into_iter()
             .map(|mail| mail.to_response_input_item())
             .collect()
     }

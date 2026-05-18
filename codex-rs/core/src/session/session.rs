@@ -1,5 +1,5 @@
-use super::*;
 use super::input_queue::InputQueue;
+use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
