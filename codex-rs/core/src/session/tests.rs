@@ -8283,6 +8283,34 @@ async fn interrupt_accounts_active_goal_without_pausing() -> anyhow::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn shutdown_without_active_turn_keeps_active_goal_active() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    assert!(sess.active_turn.lock().await.is_none());
+    assert!(handlers::shutdown(&sess, "shutdown".to_string()).await);
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after shutdown");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Active,
+        goal.status
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Result<()> {
     let server = start_mock_server().await;
