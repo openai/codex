@@ -1319,4 +1319,50 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[tokio::test]
+    async fn thread_scoped_notifications_fan_out_to_all_subscribed_connections() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let thread_id = ThreadId::new();
+        let notification = ServerNotification::GuardianWarning(GuardianWarningNotification {
+            thread_id: thread_id.to_string(),
+            message: "warn".to_string(),
+        });
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(2), ConnectionId(1)],
+            thread_id,
+        );
+
+        thread_outgoing
+            .send_server_notification(notification.clone())
+            .await;
+
+        let mut deliveries = Vec::new();
+        for _ in 0..2 {
+            let envelope = rx.recv().await.expect("notification should be delivered");
+            let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(sent_notification),
+                ..
+            } = envelope
+            else {
+                panic!("expected thread-scoped notification delivery");
+            };
+            match sent_notification {
+                ServerNotification::GuardianWarning(sent) => {
+                    assert_eq!(sent.thread_id, thread_id.to_string());
+                    assert_eq!(sent.message, "warn");
+                }
+                other => panic!("unexpected notification: {other:?}"),
+            }
+            deliveries.push(connection_id);
+        }
+        deliveries.sort_by_key(|connection_id| connection_id.0);
+        assert_eq!(deliveries, vec![ConnectionId(1), ConnectionId(2)]);
+    }
 }

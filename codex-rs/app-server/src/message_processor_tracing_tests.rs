@@ -179,6 +179,7 @@ impl TracingHarness {
         self.processor
             .process_request(
                 TEST_CONNECTION_ID,
+                crate::transport::ConnectionOrigin::Stdio,
                 request,
                 &AppServerTransport::Stdio,
                 Arc::clone(&self.session),

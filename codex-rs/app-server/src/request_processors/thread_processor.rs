@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use crate::transport::ConnectionOrigin;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -1159,6 +1160,28 @@ impl ThreadRequestProcessor {
             request_id.connection_id,
             "thread",
         );
+        for connection_id in listener_task_context
+            .thread_state_manager
+            .local_stdio_connection_ids_for_remote_control_thread_start(request_id.connection_id)
+            .await
+        {
+            log_listener_attach_result(
+                super::thread_lifecycle::ensure_conversation_listener(
+                    listener_task_context.clone(),
+                    thread_id,
+                    connection_id,
+                    /*raw_events_enabled*/ false,
+                )
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.attach_stdio_listener",
+                    otel.name = "app_server.thread_start.attach_stdio_listener",
+                ))
+                .await,
+                thread_id,
+                connection_id,
+                "thread",
+            );
+        }
 
         listener_task_context
             .thread_watch_manager
@@ -2244,9 +2267,10 @@ impl ThreadRequestProcessor {
         &self,
         connection_id: ConnectionId,
         capabilities: ConnectionCapabilities,
+        origin: ConnectionOrigin,
     ) {
         self.thread_state_manager
-            .connection_initialized(connection_id, capabilities)
+            .connection_initialized(connection_id, capabilities, origin)
             .await;
     }
 
