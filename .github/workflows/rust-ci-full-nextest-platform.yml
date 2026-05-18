@@ -272,7 +272,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME="codex-remote-test-env-${{ github.run_id }}-${{ matrix.shard }}"
           source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
           echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
           echo "CODEX_TEST_REMOTE_EXEC_SERVER_URL=${CODEX_TEST_REMOTE_EXEC_SERVER_URL}" >> "$GITHUB_ENV"
@@ -293,25 +293,20 @@ jobs:
         run: |
           set -euo pipefail
           archive_file="${RUNNER_TEMP}/nextest-archive/${NEXTEST_ARCHIVE_FILE}"
-          extract_dir="${RUNNER_TEMP}/nextest-extract-${{ inputs.artifact_id }}-${{ matrix.shard }}-of-4"
-          mkdir -p "${extract_dir}"
-          workspace_root="$(pwd)"
 
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             archive_file="$(cygpath -w "${archive_file}")"
-            extract_dir="$(cygpath -w "${extract_dir}")"
-            workspace_root="$(cygpath -w "${workspace_root}")"
           fi
 
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
-            helper_target_dir="target/${{ inputs.target }}/${{ inputs.profile }}"
+            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
             mkdir -p "${helper_target_dir}"
             cp "${helper_dir}/codex-linux-sandbox" "${helper_target_dir}/"
             chmod +x "${helper_target_dir}/codex-linux-sandbox"
           elif [[ "${RUNNER_OS}" == "Windows" ]]; then
             helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
-            helper_target_dir="target/${{ inputs.target }}/${{ inputs.profile }}"
+            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
             mkdir -p "${helper_target_dir}"
             cp "${helper_dir}/codex-windows-sandbox-setup.exe" "${helper_target_dir}/"
             cp "${helper_dir}/codex-command-runner.exe" "${helper_target_dir}/"
@@ -321,10 +316,9 @@ jobs:
             run
             --no-fail-fast
             --archive-file "${archive_file}"
-            --workspace-remap "${workspace_root}"
-            --extract-to "${extract_dir}"
-            --extract-overwrite
             --partition "hash:${{ matrix.shard }}/4"
+            --target ${{ inputs.target }}
+            --cargo-profile ${{ inputs.profile }}
           )
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
@@ -368,9 +362,9 @@ jobs:
         run: |
           set +e
           if [[ "${STEPS_TEST_OUTCOME}" != "success" ]]; then
-            docker logs codex-remote-test-env || true
+            docker logs "${CODEX_TEST_REMOTE_ENV}" || true
           fi
-          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
+          docker rm -f "${CODEX_TEST_REMOTE_ENV}" >/dev/null 2>&1 || true
         env:
           STEPS_TEST_OUTCOME: ${{ steps.test.outcome }}
       - name: verify tests passed
