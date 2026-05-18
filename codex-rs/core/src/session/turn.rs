@@ -485,14 +485,14 @@ pub(crate) async fn run_turn(
                 trace!(
                     turn_id = %turn_context.sub_id,
                     total_usage_tokens = token_status.active_context_tokens,
-                    budgeted_tokens = token_status.budgeted_tokens,
+                    auto_compact_scope_tokens = token_status.auto_compact_scope_tokens,
                     estimated_token_count = ?estimated_token_count,
-                    auto_compact_limit = token_status.auto_compact_limit,
+                    auto_compact_scope_limit = token_status.auto_compact_scope_limit,
                     auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
                     auto_compact_window_ordinal = ?token_status.auto_compact_window_ordinal,
                     auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
-                    context_window_limit = ?token_status.context_window_limit,
-                    context_window_limit_reached = token_status.context_window_limit_reached,
+                    full_context_window_limit = ?token_status.full_context_window_limit,
+                    full_context_window_limit_reached = token_status.full_context_window_limit_reached,
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
@@ -734,13 +734,15 @@ struct PreSamplingCompactResult {
 
 #[derive(Debug)]
 struct AutoCompactTokenStatus {
+    // Full active context usage, independent of the configured auto-compact scope.
     active_context_tokens: i64,
-    budgeted_tokens: i64,
-    auto_compact_limit: i64,
-    context_window_limit: Option<i64>,
+    // Usage counted against `model_auto_compact_token_limit` for the current scope.
+    auto_compact_scope_tokens: i64,
+    auto_compact_scope_limit: i64,
+    full_context_window_limit: Option<i64>,
     auto_compact_window_ordinal: Option<u64>,
     auto_compact_window_prefill_tokens: Option<i64>,
-    context_window_limit_reached: bool,
+    full_context_window_limit_reached: bool,
     token_limit_reached: bool,
 }
 
@@ -751,7 +753,7 @@ async fn auto_compact_token_status(
     let active_context_tokens = sess.get_total_token_usage().await;
     let mut auto_compact_window_ordinal = None;
     let mut auto_compact_window_prefill_tokens = None;
-    let (budgeted_tokens, auto_compact_limit, context_window_limit) =
+    let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
         match turn_context.config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
                 active_context_tokens,
@@ -777,18 +779,21 @@ async fn auto_compact_token_status(
                 )
             }
         };
-    let context_window_limit_reached = context_window_limit
-        .is_some_and(|context_window_limit| active_context_tokens >= context_window_limit);
-    let token_limit_reached = budgeted_tokens >= auto_compact_limit || context_window_limit_reached;
+    let full_context_window_limit_reached =
+        full_context_window_limit.is_some_and(|full_context_window_limit| {
+            active_context_tokens >= full_context_window_limit
+        });
+    let token_limit_reached =
+        auto_compact_scope_tokens >= auto_compact_scope_limit || full_context_window_limit_reached;
 
     AutoCompactTokenStatus {
         active_context_tokens,
-        budgeted_tokens,
-        auto_compact_limit,
-        context_window_limit,
+        auto_compact_scope_tokens,
+        auto_compact_scope_limit,
+        full_context_window_limit,
         auto_compact_window_ordinal,
         auto_compact_window_prefill_tokens,
-        context_window_limit_reached,
+        full_context_window_limit_reached,
         token_limit_reached,
     }
 }
