@@ -166,6 +166,7 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
     }
 
     let default_install_root = marketplace_install_root(config.codex_home.as_path());
+    println!("NAME\tSOURCE\tPATH");
     for (marketplace_name, marketplace) in configured_marketplaces {
         if !marketplace.is_table() {
             eprintln!("Ignoring invalid marketplace `{marketplace_name}`: expected table.");
@@ -182,7 +183,11 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
         )
         .map(|root| root.display().to_string())
         .unwrap_or_else(|| "<invalid source>".to_string());
-        println!("{marketplace_name}\t{root}");
+        let source = marketplace
+            .get("source")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("-");
+        println!("{marketplace_name}\t{source}\t{root}");
     }
 
     Ok(())

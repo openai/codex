@@ -193,6 +193,14 @@
       ],
       "type": "object"
     },
+    "PluginListRemoteRoute": {
+      "enum": [
+        "global",
+        "workspace-directory",
+        "shared-with-me"
+      ],
+      "type": "string"
+    },
     "PluginMarketplaceEntry": {
       "properties": {
         "interface": {
@@ -520,6 +528,13 @@
     "marketplaces": {
       "items": {
         "$ref": "#/definitions/PluginMarketplaceEntry"
+      },
+      "type": "array"
+    },
+    "remoteRoutes": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/PluginListRemoteRoute"
       },
       "type": "array"
     }

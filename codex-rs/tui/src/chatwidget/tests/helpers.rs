@@ -1365,6 +1365,7 @@ pub(super) fn plugins_test_response(
         marketplaces,
         marketplace_load_errors: Vec::new(),
         featured_plugin_ids: Vec::new(),
+        remote_routes: Vec::new(),
     }
 }
 

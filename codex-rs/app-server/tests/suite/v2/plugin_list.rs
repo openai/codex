@@ -13,6 +13,7 @@ use codex_app_server_protocol::PluginInstalledParams;
 use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListRemoteRoute;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginShareDiscoverability;
@@ -443,6 +444,7 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
             featured_plugin_ids: Vec::new(),
+            remote_routes: Vec::new(),
         }
     );
     Ok(())
@@ -1710,6 +1712,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     )
     .await??;
     let response: PluginListResponse = to_response(response)?;
+    assert_eq!(response.remote_routes, vec![PluginListRemoteRoute::Global]);
 
     let remote_marketplace = response
         .marketplaces
@@ -2031,6 +2034,10 @@ async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag
     .await??;
     let response: PluginListResponse = to_response(response)?;
 
+    assert_eq!(
+        response.remote_routes,
+        vec![PluginListRemoteRoute::WorkspaceDirectory]
+    );
     assert_eq!(response.marketplaces.len(), 1);
     let marketplace = &response.marketplaces[0];
     assert_eq!(marketplace.name, "workspace-directory");
@@ -2148,6 +2155,10 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
     .await??;
     let response: PluginListResponse = to_response(response)?;
 
+    assert_eq!(
+        response.remote_routes,
+        vec![PluginListRemoteRoute::SharedWithMe]
+    );
     assert_eq!(response.marketplaces.len(), 2);
     let marketplace = response
         .marketplaces
@@ -2311,6 +2322,7 @@ plugin_sharing = false
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
             featured_plugin_ids: Vec::new(),
+            remote_routes: Vec::new(),
         }
     );
     wait_for_remote_plugin_request_count(

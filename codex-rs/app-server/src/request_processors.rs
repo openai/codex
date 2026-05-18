@@ -111,6 +111,7 @@ use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListRemoteRoute;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;

@@ -152,6 +152,20 @@ pub enum PluginListMarketplaceKind {
     SharedWithMe,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginListRemoteRoute {
+    #[serde(rename = "global")]
+    #[ts(rename = "global")]
+    Global,
+    #[serde(rename = "workspace-directory")]
+    #[ts(rename = "workspace-directory")]
+    WorkspaceDirectory,
+    #[serde(rename = "shared-with-me")]
+    #[ts(rename = "shared-with-me")]
+    SharedWithMe,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -161,6 +175,8 @@ pub struct PluginListResponse {
     pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
+    #[serde(default)]
+    pub remote_routes: Vec<PluginListRemoteRoute>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

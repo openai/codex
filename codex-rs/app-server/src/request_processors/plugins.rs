@@ -481,6 +481,7 @@ impl PluginRequestProcessor {
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
             featured_plugin_ids: Vec::new(),
+            remote_routes: Vec::new(),
         };
         if !config.features.enabled(Feature::Plugins) {
             return Ok(empty_response());
@@ -576,6 +577,7 @@ impl PluginRequestProcessor {
         {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
+        let mut remote_routes = Vec::new();
         if !remote_sources.is_empty() {
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
@@ -588,6 +590,18 @@ impl PluginRequestProcessor {
             .await
             {
                 Ok(remote_marketplaces) => {
+                    remote_routes = remote_sources
+                        .iter()
+                        .map(|source| match source {
+                            RemoteMarketplaceSource::Global => PluginListRemoteRoute::Global,
+                            RemoteMarketplaceSource::WorkspaceDirectory => {
+                                PluginListRemoteRoute::WorkspaceDirectory
+                            }
+                            RemoteMarketplaceSource::SharedWithMe => {
+                                PluginListRemoteRoute::SharedWithMe
+                            }
+                        })
+                        .collect();
                     for remote_marketplace in remote_marketplaces
                         .into_iter()
                         .map(remote_marketplace_to_info)
@@ -655,6 +669,7 @@ impl PluginRequestProcessor {
             marketplaces: data,
             marketplace_load_errors,
             featured_plugin_ids,
+            remote_routes,
         })
     }
 

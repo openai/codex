@@ -2696,6 +2696,29 @@ fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
 }
 
 #[test]
+fn plugin_list_response_serializes_remote_routes() {
+    assert_eq!(
+        serde_json::to_value(PluginListResponse {
+            marketplaces: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+            remote_routes: vec![
+                PluginListRemoteRoute::Global,
+                PluginListRemoteRoute::WorkspaceDirectory,
+                PluginListRemoteRoute::SharedWithMe,
+            ],
+        })
+        .unwrap(),
+        json!({
+            "marketplaces": [],
+            "marketplaceLoadErrors": [],
+            "featuredPluginIds": [],
+            "remoteRoutes": ["global", "workspace-directory", "shared-with-me"],
+        }),
+    );
+}
+
+#[test]
 fn plugin_interface_serializes_local_paths_and_remote_urls_separately() {
     let composer_icon = if cfg!(windows) {
         r"C:\plugins\linear\icon.png"

@@ -126,6 +126,7 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
         .args(["plugin", "marketplace", "list"])
         .assert()
         .success()
+        .stdout(contains("NAME\tSOURCE\tPATH"))
         .stdout(contains("debug"))
         .stdout(contains(source.path().display().to_string()));
 

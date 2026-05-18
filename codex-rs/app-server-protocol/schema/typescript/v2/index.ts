@@ -270,6 +270,7 @@ export type { PluginInstalledResponse } from "./PluginInstalledResponse";
 export type { PluginInterface } from "./PluginInterface";
 export type { PluginListMarketplaceKind } from "./PluginListMarketplaceKind";
 export type { PluginListParams } from "./PluginListParams";
+export type { PluginListRemoteRoute } from "./PluginListRemoteRoute";
 export type { PluginListResponse } from "./PluginListResponse";
 export type { PluginMarketplaceEntry } from "./PluginMarketplaceEntry";
 export type { PluginReadParams } from "./PluginReadParams";
