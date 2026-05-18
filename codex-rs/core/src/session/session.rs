@@ -1046,22 +1046,24 @@ impl Session {
             })?
             .primary()
             .cloned();
-            if let Some(mcp_runtime_environment) = match turn_environment {
-                Some(turn_environment) => Some(McpRuntimeEnvironment::new(
-                    Arc::clone(&turn_environment.environment),
+            let local_environment_available = sess
+                .services
+                .environment_manager
+                .try_local_environment()
+                .is_some();
+            let mcp_runtime_environment = match turn_environment {
+                Some(turn_environment) => McpRuntimeEnvironment::new(
+                    Some(Arc::clone(&turn_environment.environment)),
+                    local_environment_available,
                     turn_environment.cwd.to_path_buf(),
-                )),
-                None => sess
-                    .services
-                    .environment_manager
-                    .default_or_local_environment()
-                    .map(|environment| {
-                        McpRuntimeEnvironment::new(
-                            environment,
-                            session_configuration.cwd.to_path_buf(),
-                        )
-                    }),
-            } {
+                ),
+                None => McpRuntimeEnvironment::new(
+                    sess.services.environment_manager.default_or_local_environment(),
+                    local_environment_available,
+                    session_configuration.cwd.to_path_buf(),
+                ),
+            };
+            {
                 let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                     &mcp_servers,
                     config.mcp_oauth_credentials_store_mode,
@@ -1119,8 +1121,6 @@ impl Session {
                         anyhow::bail!("required MCP servers failed to initialize: {details}");
                     }
                 }
-            } else {
-                warn!("skipping MCP startup because no runtime environment is configured");
             }
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;

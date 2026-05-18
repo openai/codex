@@ -204,6 +204,13 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
+            let configured_server = server
+                .configured_config()
+                .expect("effective MCP servers are configured");
+            if let Some(reason) = runtime_environment.unavailable_reason(configured_server) {
+                warn!(server = %server_name, "{reason}; skipping MCP server");
+                continue;
+            }
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(

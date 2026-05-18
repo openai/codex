@@ -262,14 +262,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let Some(environment) = environment_manager.default_or_local_environment() else {
-        warn!("skipping connector discovery because no MCP runtime environment is configured");
-        return Ok(AccessibleConnectorsStatus {
-            connectors: Vec::new(),
-            codex_apps_ready: false,
-        });
-    };
-
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -278,7 +270,11 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+        McpRuntimeEnvironment::new(
+            environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment().is_some(),
+            config.cwd.to_path_buf(),
+        ),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,
