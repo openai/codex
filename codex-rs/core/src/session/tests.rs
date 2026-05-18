@@ -8632,7 +8632,7 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
         SetGoalRequest {
             objective: Some("Keep improving the benchmark".to_string()),
             status: None,
-            token_budget: None,
+            token_budget: Some(Some(50)),
         },
     )
     .await?;
