@@ -52,31 +52,7 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        let tool_name = self.tool_name();
-        let namespace_name = tool_name.namespace.as_ref()?;
-        let tool = mcp_tool_to_responses_api_tool(&tool_name, &self.tool_info.tool).ok()?;
-        let description = self
-            .tool_info
-            .namespace_description
-            .as_deref()
-            .map(str::trim)
-            .filter(|description| !description.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                self.tool_info
-                    .connector_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|connector_name| !connector_name.is_empty())
-                    .map(|connector_name| format!("Tools for working with {connector_name}."))
-            })
-            .unwrap_or_default();
-
-        Some(ToolSpec::Namespace(ResponsesApiNamespace {
-            name: namespace_name.clone(),
-            description,
-            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-        }))
+        mcp_tool_spec(&self.tool_info)
     }
 
     fn exposure(&self) -> ToolExposure {
@@ -128,6 +104,33 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
             truncation_policy: turn.truncation_policy,
         }))
     }
+}
+
+pub(crate) fn mcp_tool_spec(tool_info: &ToolInfo) -> Option<ToolSpec> {
+    let tool_name = tool_info.canonical_tool_name();
+    let namespace_name = tool_name.namespace.as_ref()?;
+    let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool).ok()?;
+    let description = tool_info
+        .namespace_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            tool_info
+                .connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
+        .unwrap_or_default();
+
+    Some(ToolSpec::Namespace(ResponsesApiNamespace {
+        name: namespace_name.clone(),
+        description,
+        tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+    }))
 }
 
 impl CoreToolRuntime for McpHandler {

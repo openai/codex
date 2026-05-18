@@ -4,11 +4,13 @@ use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_tools::ToolsConfig;
+use codex_utils_output_truncation::approx_token_count;
 
 use crate::config::Config;
 use crate::connectors;
+use crate::tools::handlers::mcp_tool_spec;
 
-pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_RENDERED_TOKEN_LIMIT: usize = 2_500;
 
 pub(crate) struct McpToolExposure {
     pub(crate) direct_tools: Vec<McpToolInfo>,
@@ -35,7 +37,8 @@ pub(crate) fn build_mcp_tool_exposure(
         && (config
             .features
             .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
-            || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+            || rendered_tool_list_token_count(&deferred_tools)
+                >= DIRECT_MCP_TOOL_EXPOSURE_RENDERED_TOKEN_LIMIT);
 
     if !should_defer {
         return McpToolExposure {
@@ -56,6 +59,22 @@ pub(crate) fn build_mcp_tool_exposure(
         direct_tools,
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
+}
+
+fn rendered_tool_list_token_count(mcp_tools: &[McpToolInfo]) -> usize {
+    mcp_tools
+        .iter()
+        .map(rendered_tool_token_count)
+        .sum::<usize>()
+}
+
+fn rendered_tool_token_count(tool: &McpToolInfo) -> usize {
+    let Some(spec) = mcp_tool_spec(tool) else {
+        return 0;
+    };
+    serde_json::to_string(&spec)
+        .map(|rendered| approx_token_count(&rendered))
+        .unwrap_or_default()
 }
 
 fn filter_non_codex_apps_mcp_tools_only(mcp_tools: &[McpToolInfo]) -> Vec<McpToolInfo> {

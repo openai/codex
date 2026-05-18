@@ -71,22 +71,6 @@ fn make_mcp_tool(
     }
 }
 
-fn numbered_mcp_tools(count: usize) -> Vec<ToolInfo> {
-    (0..count)
-        .map(|index| {
-            let tool_name = format!("tool_{index}");
-            make_mcp_tool(
-                "rmcp",
-                &tool_name,
-                "mcp__rmcp__",
-                &tool_name,
-                /*connector_id*/ None,
-                /*connector_name*/ None,
-            )
-        })
-        .collect()
-}
-
 fn tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
     tools
         .iter()
@@ -118,7 +102,14 @@ async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
 async fn directly_exposes_small_effective_tool_sets() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    let mcp_tools = vec![make_mcp_tool(
+        "rmcp",
+        "tool",
+        "mcp__rmcp__",
+        "tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    )];
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
@@ -133,10 +124,18 @@ async fn directly_exposes_small_effective_tool_sets() {
 }
 
 #[tokio::test]
-async fn searches_large_effective_tool_sets() {
+async fn searches_effective_tool_sets_that_exceed_the_render_budget() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+    let mut mcp_tools = vec![make_mcp_tool(
+        "rmcp",
+        "tool",
+        "mcp__rmcp__",
+        "tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    )];
+    mcp_tools[0].tool.description = Some("Tool description. ".repeat(1_000).into());
 
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
@@ -155,10 +154,48 @@ async fn searches_large_effective_tool_sets() {
 }
 
 #[tokio::test]
+async fn searches_tool_sets_when_emitted_namespace_description_exceeds_budget() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let mut mcp_tools = vec![make_mcp_tool(
+        "rmcp",
+        "tool",
+        "mcp__rmcp__",
+        "tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    )];
+    mcp_tools[0].namespace_description = Some("Namespace guidance. ".repeat(2_000));
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &config,
+        &tools_config,
+    );
+
+    assert!(exposure.direct_tools.is_empty());
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("large emitted namespace specs should be discoverable through tool_search");
+    assert_eq!(tool_names(deferred_tools), tool_names(&mcp_tools));
+}
+
+#[tokio::test]
 async fn directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
+    let mut mcp_tools = vec![make_mcp_tool(
+        "rmcp",
+        "tool",
+        "mcp__rmcp__",
+        "tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    )];
+    mcp_tools[0].tool.description = Some("Tool description. ".repeat(1_000).into());
     mcp_tools.push(make_mcp_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
@@ -185,10 +222,7 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
             "_create_event"
         )])
     );
-    assert_eq!(
-        exposure.deferred_tools.as_ref().map(Vec::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
-    );
+    assert_eq!(exposure.deferred_tools.as_ref().map(Vec::len), Some(1));
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
@@ -202,7 +236,7 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
         "mcp__codex_apps__calendar",
         "_create_event"
     )));
-    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool_0")));
+    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool")));
 }
 
 #[tokio::test]
