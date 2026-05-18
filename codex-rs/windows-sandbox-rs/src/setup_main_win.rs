@@ -24,6 +24,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::path_supports_persistent_acls;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -157,6 +158,35 @@ fn apply_read_acls(
                 &format!("{access_label} root {} missing; skipping", root.display()),
             )?;
             continue;
+        }
+        match path_supports_persistent_acls(root) {
+            Ok(true) => {}
+            Ok(false) => {
+                log_line(
+                    log,
+                    &format!(
+                        "{access_label} root {} is on a filesystem without persistent ACL support; skipping sandbox ACL grant",
+                        root.display()
+                    ),
+                )?;
+                continue;
+            }
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "{access_label} ACL capability check failed on {}: {}",
+                    root.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "{access_label} ACL capability check failed on {}: {}; continuing",
+                        root.display(),
+                        err
+                    ),
+                )?;
+                continue;
+            }
         }
         let builtin_has = read_mask_allows_or_log(
             root,
