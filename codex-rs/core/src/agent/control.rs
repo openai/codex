@@ -5,6 +5,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -96,34 +97,53 @@ fn agent_nickname_candidates(
         .collect()
 }
 
-fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
+fn keep_forked_response_item(item: &ResponseItem) -> bool {
     match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
-        {
-            "system" | "developer" | "user" => true,
+        ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } => match role.as_str() {
+            "system" => true,
+            "developer" => false,
+            "user" => !is_contextual_user_message_content(content),
             "assistant" => *phase == Some(MessagePhase::FinalAnswer),
             _ => false,
         },
-        RolloutItem::ResponseItem(
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other,
-        ) => false,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
+fn sanitize_forked_rollout_item(item: &mut RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(response_item) => keep_forked_response_item(response_item),
         // A forked child gets its own runtime config, including spawned-agent
         // instructions, so it must establish a fresh context diff baseline.
         RolloutItem::TurnContext(_) => false,
-        RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
+        RolloutItem::Compacted(compacted) => {
+            if compacted.replacement_history.is_none() {
+                compacted.message =
+                    "Previous compacted history omitted for forked agent.".to_string();
+            }
+            let replacement_history = compacted.replacement_history.get_or_insert_with(Vec::new);
+            replacement_history.retain(keep_forked_response_item);
+            true
+        }
+        RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -417,9 +437,9 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
-        forked_rollout_items.retain(|item| {
+        forked_rollout_items.retain_mut(|item| {
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
-                && role == "developer"
+                && role.as_str() == "developer"
                 && let [ContentItem::InputText { text }] = content.as_slice()
                 && multi_agent_v2_usage_hint_texts_to_filter
                     .iter()
@@ -428,7 +448,7 @@ impl AgentControl {
                 return false;
             }
 
-            keep_forked_rollout_item(item)
+            sanitize_forked_rollout_item(item)
         });
 
         state

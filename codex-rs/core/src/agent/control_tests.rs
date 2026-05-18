@@ -17,6 +17,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -62,6 +63,28 @@ fn text_input(text: &str) -> Op {
     .into()
 }
 
+fn user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+fn developer_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -81,6 +104,61 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         arguments: "{}".to_string(),
         call_id: call_id.to_string(),
     }
+}
+
+#[test]
+fn sanitize_forked_rollout_item_filters_compaction_replacement_history() {
+    let contextual_user_message = <SubagentNotification as ContextualUserFragment>::into(
+        SubagentNotification::new("/root/worker", AgentStatus::Running),
+    );
+    let mut compacted_item = RolloutItem::Compacted(CompactedItem {
+        message: "summary".to_string(),
+        replacement_history: Some(vec![
+            developer_message("parent setup"),
+            contextual_user_message,
+            user_message("real parent prompt"),
+            assistant_message("draft response", /*phase*/ None),
+            assistant_message("final response", Some(MessagePhase::FinalAnswer)),
+        ]),
+    });
+
+    assert!(sanitize_forked_rollout_item(&mut compacted_item));
+    let RolloutItem::Compacted(CompactedItem {
+        replacement_history,
+        ..
+    }) = compacted_item
+    else {
+        panic!("expected compacted rollout item");
+    };
+    assert_eq!(
+        replacement_history,
+        Some(vec![
+            user_message("real parent prompt"),
+            assistant_message("final response", Some(MessagePhase::FinalAnswer)),
+        ])
+    );
+}
+
+#[test]
+fn sanitize_forked_rollout_item_turns_legacy_compaction_into_empty_checkpoint() {
+    let mut compacted_item = RolloutItem::Compacted(CompactedItem {
+        message: "summary with parent setup".to_string(),
+        replacement_history: None,
+    });
+
+    assert!(sanitize_forked_rollout_item(&mut compacted_item));
+    let RolloutItem::Compacted(CompactedItem {
+        message,
+        replacement_history,
+    }) = compacted_item
+    else {
+        panic!("expected compacted rollout item");
+    };
+    assert_eq!(
+        message,
+        "Previous compacted history omitted for forked agent."
+    );
+    assert_eq!(replacement_history, Some(Vec::new()));
 }
 
 struct AgentControlHarness {
@@ -639,22 +717,13 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .record_conversation_items(
             turn_context.as_ref(),
             &[
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent root guidance.".to_string(),
-                    }],
-                    phase: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent subagent guidance.".to_string(),
-                    }],
-                    phase: None,
-                },
+                developer_message("Parent root guidance."),
+                developer_message("Parent subagent guidance."),
+                developer_message("Parent setup context."),
+                <SubagentNotification as ContextualUserFragment>::into(SubagentNotification::new(
+                    "/root/worker",
+                    AgentStatus::Running,
+                )),
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 assistant_message("parent unknown phase", /*phase*/ None),
@@ -711,14 +780,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "parent seed context".to_string(),
-            }],
-            phase: None,
-        },
+        user_message("parent seed context"),
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
     ];
     assert_eq!(
@@ -745,6 +807,223 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_sanitizes_modern_compaction_replacement_history_and_suffix() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("ignored pre-compaction prompt".to_string())
+        .await;
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+            message: "summary".to_string(),
+            replacement_history: Some(vec![
+                developer_message("compacted parent setup"),
+                <SubagentNotification as ContextualUserFragment>::into(SubagentNotification::new(
+                    "/root/worker",
+                    AgentStatus::Running,
+                )),
+                user_message("compacted real prompt"),
+                assistant_message("compacted draft", /*phase*/ None),
+                assistant_message("compacted final", Some(MessagePhase::FinalAnswer)),
+            ]),
+        })])
+        .await;
+    parent_thread
+        .inject_user_message_without_turn("suffix prompt".to_string())
+        .await;
+
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spawn-call-modern-compaction".to_string();
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                developer_message("suffix parent setup"),
+                <SubagentNotification as ContextualUserFragment>::into(SubagentNotification::new(
+                    "/root/worker",
+                    AgentStatus::Running,
+                )),
+                assistant_message("suffix final", Some(MessagePhase::FinalAnswer)),
+                spawn_agent_call(&parent_spawn_call_id),
+            ],
+        )
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked spawn should succeed")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    assert_eq!(
+        history.raw_items(),
+        &[
+            user_message("compacted real prompt"),
+            assistant_message("compacted final", Some(MessagePhase::FinalAnswer)),
+            user_message("suffix prompt"),
+            assistant_message("suffix final", Some(MessagePhase::FinalAnswer)),
+        ],
+        "forked child history should use sanitized replacement history plus sanitized suffix"
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_legacy_compaction_cuts_off_unsafe_prefix_without_summary() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("pre-compaction prompt".to_string())
+        .await;
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+            message: "summary with parent setup".to_string(),
+            replacement_history: None,
+        })])
+        .await;
+    parent_thread
+        .inject_user_message_without_turn("post-compaction prompt".to_string())
+        .await;
+
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spawn-call-legacy-compaction".to_string();
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                developer_message("post-compaction parent setup"),
+                <SubagentNotification as ContextualUserFragment>::into(SubagentNotification::new(
+                    "/root/worker",
+                    AgentStatus::Running,
+                )),
+                assistant_message("post-compaction final", Some(MessagePhase::FinalAnswer)),
+                spawn_agent_call(&parent_spawn_call_id),
+            ],
+        )
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked spawn should succeed")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+    assert!(
+        !history_contains_text(history.raw_items(), "pre-compaction prompt"),
+        "legacy compaction should cut off the unsafe pre-compaction prefix"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "summary with parent setup"),
+        "legacy compaction summary should not become child model-visible history"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "post-compaction parent setup"),
+        "parent developer setup after compaction should be dropped"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "post-compaction prompt"),
+        "real user transcript after legacy compaction should survive"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "post-compaction final"),
+        "assistant final answer after legacy compaction should survive"
+    );
 
     let _ = harness
         .control
