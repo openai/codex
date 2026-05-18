@@ -38,6 +38,7 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
+use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
+mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -58,6 +60,7 @@ use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use doctor::DoctorCommand;
+use state_db_recovery as local_state_db;
 
 use codex_config::LoaderOverrides;
 use codex_core::build_models_manager;
@@ -70,6 +73,8 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::read_codex_access_token_from_env;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
@@ -486,6 +491,10 @@ struct ExecServerCommand {
     /// Human-readable executor name.
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
+
+    /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
+    #[arg(long = "use-agent-identity-auth", requires = "remote")]
+    use_agent_identity_auth: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -620,6 +629,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         thread_id: conversation_id,
+        thread_name,
         ..
     } = exit_info;
 
@@ -628,9 +638,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(token_usage.to_string());
     }
 
-    if let Some(resume_cmd) =
-        codex_core::util::resume_command(/*thread_name*/ None, conversation_id)
-    {
+    if let Some(resume_cmd) = resume_hint(thread_name.as_deref(), conversation_id) {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -1387,7 +1395,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(
+                cmd,
+                &arg0_paths,
+                &root_config_overrides,
+                interactive.config_profile.clone(),
+            )
+            .await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1484,6 +1498,8 @@ fn profile_v2_for_subcommand<'a>(
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1497,8 +1513,14 @@ async fn run_exec_server_command(
         let executor_id = cmd
             .executor_id
             .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let auth_provider = load_exec_server_remote_auth_provider(
+            root_config_overrides,
+            config_profile,
+            cmd.use_agent_identity_auth,
+        )
+        .await?;
         let mut remote_config =
-            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id)?;
+            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id, auth_provider)?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
@@ -1512,6 +1534,75 @@ async fn run_exec_server_command(
     codex_exec_server::run_main(listen_url, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
+}
+
+async fn load_exec_server_remote_auth_provider(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+    use_agent_identity_auth: bool,
+) -> anyhow::Result<codex_api::SharedAuthProvider> {
+    let config = load_exec_server_remote_config(root_config_overrides, config_profile).await?;
+    if use_agent_identity_auth {
+        let agent_identity_jwt = read_codex_access_token_from_env().ok_or_else(|| {
+            anyhow::anyhow!("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
+        })?;
+        let auth =
+            CodexAuth::from_agent_identity_jwt(&agent_identity_jwt, Some(&config.chatgpt_base_url))
+                .await?;
+        return Ok(codex_model_provider::auth_provider_from_auth(&auth));
+    }
+
+    let auth = load_exec_server_remote_auth(
+        &config,
+        "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
+    )
+    .await?;
+
+    if !auth.is_chatgpt_auth() {
+        anyhow::bail!(
+            "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
+        );
+    }
+
+    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+}
+
+async fn load_exec_server_remote_config(
+    root_config_overrides: &CliConfigOverrides,
+    config_profile: Option<String>,
+) -> anyhow::Result<codex_core::config::Config> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    Ok(ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(ConfigOverrides {
+            config_profile,
+            ..Default::default()
+        })
+        .build()
+        .await?)
+}
+
+async fn load_exec_server_remote_auth(
+    config: &codex_core::config::Config,
+    missing_auth_error: &'static str,
+) -> anyhow::Result<codex_login::CodexAuth> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
+
+    let auth = match auth_manager.auth().await {
+        Some(auth) => auth,
+        None => {
+            auth_manager.reload().await;
+            auth_manager
+                .auth()
+                .await
+                .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
+        }
+    };
+
+    Ok(auth)
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
@@ -1645,7 +1736,7 @@ async fn run_debug_prompt_input_command(
         .images
         .into_iter()
         .chain(cmd.images)
-        .map(|path| UserInput::LocalImage { path })
+        .map(|path| UserInput::LocalImage { path, detail: None })
         .collect::<Vec<_>>();
     if let Some(prompt) = cmd.prompt.or(interactive.prompt) {
         input.push(UserInput::Text {
@@ -1981,13 +2072,47 @@ async fn run_interactive_tui(
         };
         *slot = Some(auth_token);
     }
-    codex_tui::run_main(
-        interactive,
-        arg0_paths,
-        codex_config::LoaderOverrides::default(),
-        remote_endpoint,
-    )
-    .await
+    let start_tui = || {
+        codex_tui::run_main(
+            interactive.clone(),
+            arg0_paths.clone(),
+            codex_config::LoaderOverrides::default(),
+            remote_endpoint.clone(),
+        )
+    };
+    let mut attempted_repair = false;
+    loop {
+        let err = match start_tui().await {
+            Ok(exit_info) => return Ok(exit_info),
+            Err(err) => err,
+        };
+        let Some(startup_error) = local_state_db::startup_error(&err) else {
+            return Err(err);
+        };
+        if local_state_db::is_locked(startup_error.detail()) {
+            local_state_db::print_locked_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if attempted_repair {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+        if !local_state_db::confirm_repair(startup_error)? {
+            local_state_db::print_diagnostic_guidance(startup_error);
+            return Ok(AppExitInfo::fatal(startup_error.to_string()));
+        }
+
+        match local_state_db::repair_files(startup_error).await {
+            Ok(backups) => local_state_db::print_repair_backups(&backups),
+            Err(repair_err) => {
+                local_state_db::print_diagnostic_guidance(startup_error);
+                return Ok(AppExitInfo::fatal(format!(
+                    "failed to repair Codex local data automatically: {repair_err}"
+                )));
+            }
+        }
+        attempted_repair = true;
+    }
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -2222,7 +2347,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+    fn exec_resume_accepts_output_flags_after_subcommand() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
             "exec",
@@ -2230,6 +2355,8 @@ mod tests {
             "session-123",
             "-o",
             "/tmp/resume-output.md",
+            "--output-schema",
+            "/tmp/schema.json",
             "re-review",
         ])
         .expect("parse should succeed");
@@ -2244,6 +2371,10 @@ mod tests {
         assert_eq!(
             exec.last_message_file,
             Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(
+            exec.output_schema,
+            Some(std::path::PathBuf::from("/tmp/schema.json"))
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
@@ -2559,7 +2690,7 @@ mod tests {
     }
 
     #[test]
-    fn format_exit_messages_uses_id_even_when_thread_has_name() {
+    fn format_exit_messages_names_picker_item_when_thread_has_name() {
         let exit_info = sample_exit_info(
             Some("123e4567-e89b-12d3-a456-426614174000"),
             Some("my-thread"),
@@ -2569,8 +2700,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
-                    .to_string(),
+                "To continue this session, run codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
             ]
         );
     }

@@ -133,6 +133,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -199,6 +200,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
@@ -227,6 +229,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(rolled_back_context_item),
@@ -297,6 +300,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
@@ -325,6 +329,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::ResponseItem(turn_two_user),
@@ -387,6 +392,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
@@ -415,6 +421,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::ResponseItem(turn_two_user),
@@ -505,6 +512,7 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
@@ -593,6 +601,7 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(only_context_item),
@@ -645,6 +654,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -717,6 +727,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item.clone()),
@@ -743,6 +754,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::Compacted(CompactedItem {
@@ -874,6 +886,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(current_context_item),
@@ -937,6 +950,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         // Compaction clears baseline until a later TurnContextItem re-establishes it.
@@ -1040,6 +1054,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -1066,6 +1081,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnAborted(
@@ -1146,6 +1162,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -1172,6 +1189,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnAborted(
@@ -1261,6 +1279,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -1287,6 +1306,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::Compacted(CompactedItem {
@@ -1337,6 +1357,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(current_context_item.clone()),
@@ -1410,6 +1431,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::TurnContext(previous_context_item),
@@ -1436,6 +1458,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         )),
         RolloutItem::Compacted(CompactedItem {

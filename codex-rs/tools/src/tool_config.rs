@@ -121,6 +121,7 @@ pub struct ToolsConfig {
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
+    pub multi_agent_v2_tool_namespace: Option<String>,
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
     pub wait_agent_max_timeout_ms: Option<i64>,
@@ -175,7 +176,6 @@ impl ToolsConfig {
             session_source,
             ..
         } = params;
-        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_goal_tools = features.enabled(Feature::Goals);
@@ -225,10 +225,7 @@ impl ToolsConfig {
             model_shell_type
         };
 
-        let apply_patch_tool_type = model_info
-            .apply_patch_tool_type
-            .clone()
-            .or_else(|| include_apply_patch_tool.then_some(ApplyPatchToolType::Freeform));
+        let apply_patch_tool_type = model_info.apply_patch_tool_type.clone();
 
         let agent_jobs_worker_tools = include_agent_jobs
             && matches!(
@@ -264,6 +261,7 @@ impl ToolsConfig {
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
+            multi_agent_v2_tool_namespace: None,
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
             wait_agent_max_timeout_ms: None,
@@ -317,6 +315,14 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_multi_agent_v2_tool_namespace(
+        mut self,
+        multi_agent_v2_tool_namespace: Option<String>,
+    ) -> Self {
+        self.multi_agent_v2_tool_namespace = multi_agent_v2_tool_namespace;
         self
     }
 

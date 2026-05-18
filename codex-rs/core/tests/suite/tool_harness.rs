@@ -3,7 +3,6 @@
 use std::fs;
 
 use assert_matches::assert_matches;
-use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::plan_tool::StepStatus;
@@ -324,12 +323,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ApplyPatchFreeform)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
@@ -467,12 +461,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ApplyPatchFreeform)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,

@@ -63,7 +63,10 @@ impl App {
         let Some(goal) = response.goal else {
             return;
         };
-        if goal.status == ThreadGoalStatus::Paused {
+        if matches!(
+            goal.status,
+            ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited
+        ) {
             self.chat_widget
                 .show_resume_paused_goal_prompt(thread_id, goal.objective);
         }

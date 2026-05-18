@@ -347,8 +347,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
     ];
 
     let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
+    let permission_profile = PermissionProfile::Disabled;
     let output = process_exec_tool_call(
         ExecParams {
             command,

@@ -365,7 +365,8 @@ impl Session {
                 turn_state.push_pending_input(item);
             }
         }
-        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
+        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
+            .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
@@ -505,13 +506,13 @@ impl Session {
         }
 
         if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+                .await;
         }
         if (aborted_turn || reason == TurnAbortReason::Interrupted)
             && let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                     turn_context: turn_context.as_deref(),
-                    reason: reason.clone(),
                 })
                 .await
         {
@@ -553,12 +554,12 @@ impl Session {
             self.handle_task_abort(task, reason.clone()).await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+                .await;
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                 turn_context: turn_context.as_deref(),
-                reason: reason.clone(),
             })
             .await
         {
@@ -756,7 +757,8 @@ impl Session {
             .time_to_first_token_ms()
             .await;
         if should_clear_active_turn {
-            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+                .await;
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {

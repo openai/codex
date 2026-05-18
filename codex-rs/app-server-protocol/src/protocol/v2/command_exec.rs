@@ -1,4 +1,4 @@
-use super::PermissionProfile;
+use super::ActivePermissionProfile;
 use super::SandboxPolicy;
 use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
@@ -100,13 +100,13 @@ pub struct CommandExecParams {
     /// combined with `permissionProfile`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Optional full permissions profile for this command.
+    /// Optional active permissions profile for this command.
     ///
     /// Defaults to the user's configured permissions when omitted. Cannot be
     /// combined with `sandboxPolicy`.
     #[experimental("command/exec.permissionProfile")]
     #[ts(optional = nullable)]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: Option<ActivePermissionProfile>,
 }
 
 /// Final buffered result for `command/exec`.

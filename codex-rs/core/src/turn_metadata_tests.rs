@@ -1,9 +1,8 @@
 use super::*;
 
-use crate::sandbox_tags::sandbox_tag;
+use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSource;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -89,7 +88,6 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let permission_profile = PermissionProfile::read_only();
 
     let state = TurnMetadataState::new(
@@ -110,7 +108,11 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let thread_id = json.get("thread_id").and_then(Value::as_str);
     let thread_source = json.get("thread_source").and_then(Value::as_str);
 
-    let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
+    let expected_sandbox = permission_profile_sandbox_tag(
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
     assert_eq!(thread_id, Some("thread-a"));
@@ -210,6 +212,56 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         meta_without_reasoning_effort
             .get("reasoning_effort")
             .is_none()
+    );
+}
+
+#[test]
+fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_request_meta() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert!(meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY).is_none());
+
+    state.mark_user_input_requested_during_turn();
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert_eq!(
+        meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .and_then(Value::as_bool),
+        Some(true)
     );
 }
 

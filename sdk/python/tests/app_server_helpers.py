@@ -111,7 +111,7 @@ def agent_message_texts(events: list[Notification]) -> list[str]:
 
 
 def agent_message_texts_from_items(items: Iterable[Any]) -> list[str]:
-    """Extract agent-message text from completed run result items."""
+    """Extract agent-message text from completed turn result items."""
     texts: list[str] = []
     for item in items:
         root = item.root

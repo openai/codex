@@ -4,13 +4,14 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
+    let visible_thread_id = ThreadId::new();
+    let request_thread_id = ThreadId::new();
+    chat.thread_id = Some(visible_thread_id);
 
     chat.handle_elicitation_request_now(
         codex_app_server_protocol::RequestId::Integer(9),
         codex_app_server_protocol::McpServerElicitationRequestParams {
-            thread_id: thread_id.to_string(),
+            thread_id: request_thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
             request: codex_app_server_protocol::McpServerElicitationRequest::Url {
@@ -33,7 +34,7 @@ async fn invalid_url_elicitation_is_declined() {
                 content: None,
                 meta: None,
             },
-        }) if op_thread_id == thread_id && server_name == "payments"
+        }) if op_thread_id == request_thread_id && server_name == "payments"
     );
 }
 
@@ -637,6 +638,40 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
 }
 
 #[tokio::test]
+async fn live_app_server_failed_turn_consolidates_streamed_answer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_turn_started(&mut chat, "turn-1");
+    while rx.try_recv().is_ok() {}
+
+    handle_agent_message_delta(&mut chat, "```diff\n+ streamed patch\n```\n");
+    chat.run_commit_tick();
+    while rx.try_recv().is_ok() {}
+
+    handle_error(
+        &mut chat,
+        "stream disconnected before completion",
+        /*codex_error_info*/ None,
+    );
+
+    let mut saw_consolidate = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ConsolidateAgentMessage { source, .. } = event {
+            saw_consolidate = true;
+            assert!(
+                source.contains("streamed patch"),
+                "expected partial stream source to be consolidated, got {source:?}"
+            );
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "failed turn should consolidate streamed cells before clearing the stream controller"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -827,7 +862,8 @@ async fn live_app_server_invalid_thread_name_update_is_ignored() {
 #[tokio::test]
 async fn live_app_server_thread_name_update_shows_resume_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
+    let thread_id =
+        ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
     chat.thread_id = Some(thread_id);
 
     chat.handle_server_notification(
@@ -844,8 +880,7 @@ async fn live_app_server_thread_name_update_shows_resume_hint() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("Thread renamed to review-fix"));
-    assert!(rendered.contains("codex resume review-fix"));
+    assert_chatwidget_snapshot!("thread_name_update_resume_hint", rendered);
 }
 
 #[tokio::test]

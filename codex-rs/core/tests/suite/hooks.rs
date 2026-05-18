@@ -1658,7 +1658,6 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2880,7 +2879,6 @@ async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -2959,7 +2957,6 @@ async fn pre_tool_use_rewrites_apply_patch_before_execution() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3025,7 +3022,6 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3627,7 +3623,6 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -3655,22 +3650,9 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
     let tool_response = hook_inputs[0]["tool_response"]
         .as_str()
         .context("apply_patch tool_response should be a string")?;
-    let mut parsed_tool_response = serde_json::from_str::<Value>(tool_response)?;
-    if let Some(metadata) = parsed_tool_response
-        .get_mut("metadata")
-        .and_then(Value::as_object_mut)
-    {
-        let _ = metadata.remove("duration_seconds");
-    }
-    assert_eq!(
-        parsed_tool_response,
-        serde_json::json!({
-            "output": "Success. Updated the following files:\nA post_tool_use_apply_patch.txt\n",
-            "metadata": {
-                "exit_code": 0,
-            },
-        })
-    );
+    assert!(tool_response.starts_with("Exit code: 0"));
+    assert!(tool_response.contains("Success. Updated the following files:"));
+    assert!(tool_response.contains("A post_tool_use_apply_patch.txt"));
 
     Ok(())
 }
@@ -3715,7 +3697,6 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
             }
         })
         .with_config(|config| {
-            config.include_apply_patch_tool = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;

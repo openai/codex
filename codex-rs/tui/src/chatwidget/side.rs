@@ -25,6 +25,10 @@ impl ChatWidget {
         self.bottom_pane.set_side_conversation_active(active);
     }
 
+    pub(crate) fn side_conversation_active(&self) -> bool {
+        self.active_side_conversation
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         self.bottom_pane.set_side_conversation_context_label(label);
     }
