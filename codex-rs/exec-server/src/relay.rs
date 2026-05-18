@@ -19,6 +19,7 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
@@ -166,6 +167,11 @@ where
         }
 
         let mut next_seq = 0u32;
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+            WEBSOCKET_KEEPALIVE_INTERVAL,
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 maybe_message = outgoing_rx.recv() => {
@@ -186,6 +192,12 @@ where
                         .await
                         .is_err()
                     {
+                        let _ = disconnected_tx.send(true);
+                        break;
+                    }
+                }
+                _ = keepalive.tick() => {
+                    if websocket.send(Message::Ping(Vec::new().into())).await.is_err() {
                         let _ = disconnected_tx.send(true);
                         break;
                     }
@@ -312,6 +324,11 @@ pub(crate) async fn run_multiplexed_executor<S>(
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
 
     let mut streams: HashMap<String, VirtualStream> = HashMap::new();
+    let mut keepalive = tokio::time::interval_at(
+        tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+        WEBSOCKET_KEEPALIVE_INTERVAL,
+    );
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let frame = tokio::select! {
             maybe_encoded = physical_outgoing_rx.recv() => {
@@ -319,6 +336,12 @@ pub(crate) async fn run_multiplexed_executor<S>(
                     break;
                 };
                 if websocket.send(Message::Binary(encoded.into())).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            _ = keepalive.tick() => {
+                if websocket.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break;
                 }
                 continue;

@@ -323,11 +323,11 @@ impl JsonRpcConnection {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        Self::from_websocket_stream(stream, connection_label, /*ping_interval*/ None)
+        Self::from_websocket_stream(stream, connection_label, Some(WEBSOCKET_KEEPALIVE_INTERVAL))
     }
 
     pub(crate) fn from_axum_websocket(stream: AxumWebSocket, connection_label: String) -> Self {
-        Self::from_websocket_stream(stream, connection_label, Some(WEBSOCKET_KEEPALIVE_INTERVAL))
+        Self::from_websocket_stream(stream, connection_label, /*ping_interval*/ None)
     }
 
     fn from_websocket_stream<T, M, E>(
