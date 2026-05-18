@@ -203,7 +203,7 @@ fn starts_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
     index == 0
         || text_bytes
             .get(index.saturating_sub(1))
-            .is_none_or(|byte| byte.is_ascii_whitespace())
+            .is_none_or(u8::is_ascii_whitespace)
 }
 
 fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
