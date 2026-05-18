@@ -167,7 +167,7 @@ async fn run_snapshot_command_with_options(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -267,7 +267,7 @@ async fn run_shell_command_snapshot_with_options(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -347,7 +347,7 @@ async fn run_tool_turn_on_harness(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -590,7 +590,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

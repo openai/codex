@@ -3533,8 +3533,8 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
-fn thread_turn_context_update_params_support_partial_updates_and_explicit_nulls() {
-    let params: ThreadTurnContextUpdateParams = serde_json::from_value(json!({
+fn thread_settings_update_params_support_partial_updates_and_explicit_nulls() {
+    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
         "threadId": "thread_123",
         "model": "gpt-5.2",
         "serviceTier": null,
@@ -3555,7 +3555,7 @@ fn thread_turn_context_update_params_support_partial_updates_and_explicit_nulls(
     assert_eq!(serialized.get("effort"), Some(&serde_json::Value::Null));
     assert_eq!(serialized.get("cwd"), Some(&serde_json::Value::Null));
 
-    let without_overrides = ThreadTurnContextUpdateParams {
+    let without_overrides = ThreadSettingsUpdateParams {
         thread_id: "thread_123".to_string(),
         ..Default::default()
     };

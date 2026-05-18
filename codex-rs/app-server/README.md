@@ -157,7 +157,7 @@ Example with notification opt-out:
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
-- `thread/turnContext/update` — update the stored defaults used by subsequent turns without starting a turn. Omitted fields leave the current value unchanged; fields with explicit clearing support, such as `serviceTier`, accept `null` to clear the value. The response is `{ "turnContext": ... }` with the full effective state, and `thread/turnContext/updated` is emitted only when that state changes. `turn/start` emits the same notification when its turn-context overrides change the stored defaults.
+- `thread/settings/update` — update the stored defaults used by subsequent turns without starting a turn. Omitted fields leave the current value unchanged; fields with explicit clearing support, such as `serviceTier`, accept `null` to clear the value. The response is `{ "threadSettings": ... }` with the full effective state, and `thread/settings/updated` is emitted only when that state changes. `turn/start` emits the same notification when its thread-settings overrides change the stored defaults.
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -832,7 +832,7 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 ### Example: Steer an active turn
 
 Use `turn/steer` to append additional user input to the currently active regular turn. This does
-not emit `turn/started` and does not accept turn context overrides.
+not emit `turn/started` and does not accept thread settings overrides.
 
 ```json
 { "method": "turn/steer", "id": 32, "params": {
@@ -1211,7 +1211,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
-- `thread/turnContext/updated` — `{ threadId, turnContext }` whenever the effective next-turn state changes. `turnContext` includes the full effective state: model/provider, service tier, cwd, approval policy, approvals reviewer, sandbox compatibility projection, permission profile, active permission profile, reasoning effort/summary, personality, and collaboration mode.
+- `thread/settings/updated` — `{ threadId, threadSettings }` whenever the effective next-turn state changes. `threadSettings` includes the full effective state: model/provider, service tier, cwd, approval policy, approvals reviewer, sandbox compatibility projection, permission profile, active permission profile, reasoning effort/summary, personality, and collaboration mode.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
 - `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).

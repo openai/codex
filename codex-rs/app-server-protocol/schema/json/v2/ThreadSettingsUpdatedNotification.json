@@ -600,7 +600,7 @@
       ],
       "type": "object"
     },
-    "ThreadTurnContext": {
+    "ThreadSettings": {
       "properties": {
         "activePermissionProfile": {
           "anyOf": [
@@ -690,14 +690,14 @@
     "threadId": {
       "type": "string"
     },
-    "turnContext": {
-      "$ref": "#/definitions/ThreadTurnContext"
+    "threadSettings": {
+      "$ref": "#/definitions/ThreadSettings"
     }
   },
   "required": [
     "threadId",
-    "turnContext"
+    "threadSettings"
   ],
-  "title": "ThreadTurnContextUpdatedNotification",
+  "title": "ThreadSettingsUpdatedNotification",
   "type": "object"
 }

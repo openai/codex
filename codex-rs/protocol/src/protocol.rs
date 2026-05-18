@@ -396,10 +396,10 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
-/// Persistent turn-context overrides that can be applied before user input or
+/// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
-pub struct TurnContextOverrides {
+pub struct ThreadSettingsOverrides {
     /// Updated `cwd` for sandbox/tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
@@ -500,7 +500,7 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
-    /// User input, optionally with turn-context overrides applied first.
+    /// User input, optionally with thread-settings overrides applied first.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -514,19 +514,19 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
 
-        /// Persistent turn-context overrides to apply before the input.
+        /// Persistent thread-settings overrides to apply before the input.
         #[serde(default, flatten)]
-        turn_context: TurnContextOverrides,
+        thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Apply persistent turn-context overrides without starting a turn.
+    /// Apply persistent thread-settings overrides without starting a turn.
     ///
     /// This uses the same submission queue as turn starts so app-server can
     /// preserve caller order between both kinds of mutation.
-    TurnContext {
-        /// Persistent turn-context overrides to apply.
+    ThreadSettings {
+        /// Persistent thread-settings overrides to apply.
         #[serde(flatten)]
-        turn_context: TurnContextOverrides,
+        thread_settings: ThreadSettingsOverrides,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -655,7 +655,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: TurnContextOverrides::default(),
+            thread_settings: ThreadSettingsOverrides::default(),
         }
     }
 }
@@ -722,7 +722,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
-            Self::TurnContext { .. } => "turn_context",
+            Self::ThreadSettings { .. } => "thread_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -1174,9 +1174,9 @@ pub enum EventMsg {
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
 
-    /// Persistent turn-context overrides from the correlated submission have
+    /// Persistent thread-settings overrides from the correlated submission have
     /// been applied to the session configuration.
-    TurnContextApplied(TurnContextAppliedEvent),
+    ThreadSettingsApplied(ThreadSettingsAppliedEvent),
 
     /// Agent has completed all actions.
     /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
@@ -1859,12 +1859,12 @@ pub struct TurnStartedEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TurnContextAppliedEvent {
-    pub turn_context: TurnContextSnapshot,
+pub struct ThreadSettingsAppliedEvent {
+    pub thread_settings: ThreadSettingsSnapshot,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct TurnContextSnapshot {
+pub struct ThreadSettingsSnapshot {
     pub model: String,
     pub model_provider_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4927,7 +4927,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4947,7 +4947,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
-                turn_context: Default::default(),
+                thread_settings: Default::default(),
             }
         );
 
@@ -4969,7 +4969,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4995,7 +4995,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
-            turn_context: Default::default(),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(&op)?;

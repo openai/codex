@@ -12,12 +12,12 @@ use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadTurnContextUpdateParams;
-use codex_app_server_protocol::ThreadTurnContextUpdateResponse;
-use codex_app_server_protocol::ThreadTurnContextUpdatedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -60,11 +60,11 @@ async fn start_thread(mcp: &mut McpProcess) -> Result<ThreadStartResponse> {
     read_response(mcp, request_id).await
 }
 
-async fn send_thread_turn_context_update(
+async fn send_thread_settings_update(
     mcp: &mut McpProcess,
-    params: ThreadTurnContextUpdateParams,
-) -> Result<ThreadTurnContextUpdateResponse> {
-    let request_id = mcp.send_thread_turn_context_update_request(params).await?;
+    params: ThreadSettingsUpdateParams,
+) -> Result<ThreadSettingsUpdateResponse> {
+    let request_id = mcp.send_thread_settings_update_request(params).await?;
     read_response(mcp, request_id).await
 }
 
@@ -96,17 +96,17 @@ async fn wait_for_turn_completed(mcp: &mut McpProcess) -> Result<()> {
     Ok(())
 }
 
-async fn read_turn_context_updated(
+async fn read_thread_settings_updated(
     mcp: &mut McpProcess,
-) -> Result<ThreadTurnContextUpdatedNotification> {
+) -> Result<ThreadSettingsUpdatedNotification> {
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/turnContext/updated"),
+        mcp.read_stream_until_notification_message("thread/settings/updated"),
     )
     .await??;
     let notification: ServerNotification = notification.try_into()?;
-    let ServerNotification::ThreadTurnContextUpdated(notification) = notification else {
-        anyhow::bail!("expected thread/turnContext/updated notification");
+    let ServerNotification::ThreadSettingsUpdated(notification) = notification else {
+        anyhow::bail!("expected thread/settings/updated notification");
     };
     Ok(notification)
 }
@@ -137,7 +137,7 @@ fn assert_permission_profile_write_root(
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_applies_partial_patch_and_emits_full_state() -> Result<()> {
+async fn thread_settings_update_applies_partial_patch_and_emits_full_state() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_config(&codex_home, &server.uri())?;
@@ -146,9 +146,9 @@ async fn thread_turn_context_update_applies_partial_patch_and_emits_full_state()
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
 
-    let response = send_thread_turn_context_update(
+    let response = send_thread_settings_update(
         &mut mcp,
-        ThreadTurnContextUpdateParams {
+        ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
             model: Some("gpt-5.2".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
@@ -157,19 +157,22 @@ async fn thread_turn_context_update_applies_partial_patch_and_emits_full_state()
     )
     .await?;
 
-    assert_eq!(response.turn_context.model, "gpt-5.2");
-    assert_eq!(response.turn_context.service_tier.as_deref(), Some("flex"));
-    assert_eq!(response.turn_context.effort, Some(ReasoningEffort::High));
-    assert_eq!(response.turn_context.cwd, thread.cwd);
+    assert_eq!(response.thread_settings.model, "gpt-5.2");
+    assert_eq!(
+        response.thread_settings.service_tier.as_deref(),
+        Some("flex")
+    );
+    assert_eq!(response.thread_settings.effort, Some(ReasoningEffort::High));
+    assert_eq!(response.thread_settings.cwd, thread.cwd);
 
-    let notification = read_turn_context_updated(&mut mcp).await?;
+    let notification = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(notification.thread_id, thread.id);
-    assert_eq!(notification.turn_context, response.turn_context);
+    assert_eq!(notification.thread_settings, response.thread_settings);
 
     mcp.clear_message_buffer();
-    let no_op_response = send_thread_turn_context_update(
+    let no_op_response = send_thread_settings_update(
         &mut mcp,
-        ThreadTurnContextUpdateParams {
+        ThreadSettingsUpdateParams {
             thread_id: thread.id,
             model: Some("gpt-5.2".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
@@ -177,18 +180,18 @@ async fn thread_turn_context_update_applies_partial_patch_and_emits_full_state()
         },
     )
     .await?;
-    assert_eq!(no_op_response.turn_context, response.turn_context);
+    assert_eq!(no_op_response.thread_settings, response.thread_settings);
     assert!(
         !mcp.pending_notification_methods()
             .iter()
-            .any(|method| method == "thread/turnContext/updated")
+            .any(|method| method == "thread/settings/updated")
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_retargets_permissions_when_cwd_changes() -> Result<()> {
+async fn thread_settings_update_retargets_permissions_when_cwd_changes() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_config(&codex_home, &server.uri())?;
@@ -199,9 +202,9 @@ async fn thread_turn_context_update_retargets_permissions_when_cwd_changes() -> 
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
 
-    let response = send_thread_turn_context_update(
+    let response = send_thread_settings_update(
         &mut mcp,
-        ThreadTurnContextUpdateParams {
+        ThreadSettingsUpdateParams {
             thread_id: thread.id,
             cwd: Some(next_cwd.path().to_path_buf()),
             permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
@@ -210,9 +213,9 @@ async fn thread_turn_context_update_retargets_permissions_when_cwd_changes() -> 
     )
     .await?;
 
-    assert_eq!(response.turn_context.cwd, next_cwd_abs);
+    assert_eq!(response.thread_settings.cwd, next_cwd_abs);
     assert_permission_profile_write_root(
-        &response.turn_context.permission_profile,
+        &response.thread_settings.permission_profile,
         &next_cwd_abs,
         &thread.cwd,
     );
@@ -221,7 +224,7 @@ async fn thread_turn_context_update_retargets_permissions_when_cwd_changes() -> 
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_clears_service_tier_with_explicit_null() -> Result<()> {
+async fn thread_settings_update_clears_service_tier_with_explicit_null() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_config(&codex_home, &server.uri())?;
@@ -230,9 +233,9 @@ async fn thread_turn_context_update_clears_service_tier_with_explicit_null() -> 
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
 
-    let response = send_thread_turn_context_update(
+    let response = send_thread_settings_update(
         &mut mcp,
-        ThreadTurnContextUpdateParams {
+        ThreadSettingsUpdateParams {
             thread_id: thread.id,
             service_tier: Some(None),
             ..Default::default()
@@ -240,15 +243,15 @@ async fn thread_turn_context_update_clears_service_tier_with_explicit_null() -> 
     )
     .await?;
 
-    assert_eq!(response.turn_context.service_tier, None);
-    let notification = read_turn_context_updated(&mut mcp).await?;
-    assert_eq!(notification.turn_context.service_tier, None);
+    assert_eq!(response.thread_settings.service_tier, None);
+    let notification = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(notification.thread_settings.service_tier, None);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_rejects_sandbox_policy_with_permissions() -> Result<()> {
+async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_config(&codex_home, &server.uri())?;
@@ -258,7 +261,7 @@ async fn thread_turn_context_update_rejects_sandbox_policy_with_permissions() ->
     let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
 
     let request_id = mcp
-        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
             permissions: Some(PermissionProfileSelectionParams::new(":read-only")),
@@ -284,7 +287,7 @@ async fn thread_turn_context_update_rejects_sandbox_policy_with_permissions() ->
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_waits_for_pending_cwd_before_permissions() -> Result<()> {
+async fn thread_settings_update_waits_for_pending_cwd_before_permissions() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("Done")?,
     ])
@@ -307,7 +310,7 @@ async fn thread_turn_context_update_waits_for_pending_cwd_before_permissions() -
         })
         .await?;
     let update_request_id = mcp
-        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id,
             permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
             ..Default::default()
@@ -316,11 +319,11 @@ async fn thread_turn_context_update_waits_for_pending_cwd_before_permissions() -
 
     let _: TurnStartResponse = read_response(&mut mcp, turn_request_id).await?;
     let update_response =
-        read_response::<ThreadTurnContextUpdateResponse>(&mut mcp, update_request_id).await?;
+        read_response::<ThreadSettingsUpdateResponse>(&mut mcp, update_request_id).await?;
 
-    assert_eq!(update_response.turn_context.cwd, next_cwd_abs);
+    assert_eq!(update_response.thread_settings.cwd, next_cwd_abs);
     assert_permission_profile_write_root(
-        &update_response.turn_context.permission_profile,
+        &update_response.thread_settings.permission_profile,
         &next_cwd_abs,
         &thread.cwd,
     );
@@ -331,7 +334,7 @@ async fn thread_turn_context_update_waits_for_pending_cwd_before_permissions() -
 }
 
 #[tokio::test]
-async fn turn_start_emits_turn_context_updated_when_overrides_change_defaults() -> Result<()> {
+async fn turn_start_emits_thread_settings_updated_when_overrides_change_defaults() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("Done")?,
     ])
@@ -354,12 +357,15 @@ async fn turn_start_emits_turn_context_updated_when_overrides_change_defaults() 
         .await?;
     let _: TurnStartResponse = read_response(&mut mcp, request_id).await?;
 
-    let notification = read_turn_context_updated(&mut mcp).await?;
+    let notification = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(notification.thread_id, thread.id);
-    assert_eq!(notification.turn_context.model, "gpt-5.2");
-    assert_eq!(notification.turn_context.effort, Some(ReasoningEffort::Low));
+    assert_eq!(notification.thread_settings.model, "gpt-5.2");
     assert_eq!(
-        notification.turn_context.service_tier.as_deref(),
+        notification.thread_settings.effort,
+        Some(ReasoningEffort::Low)
+    );
+    assert_eq!(
+        notification.thread_settings.service_tier.as_deref(),
         Some("flex")
     );
 
@@ -390,7 +396,7 @@ async fn assert_newer_update_survives_turn_start(
         })
         .await?;
     let update_request_id = mcp
-        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
@@ -400,34 +406,34 @@ async fn assert_newer_update_survives_turn_start(
 
     let _: TurnStartResponse = read_response(&mut mcp, turn_request_id).await?;
     let update_response =
-        read_response::<ThreadTurnContextUpdateResponse>(&mut mcp, update_request_id).await?;
-    assert_eq!(update_response.turn_context.model, "gpt-5.4");
+        read_response::<ThreadSettingsUpdateResponse>(&mut mcp, update_request_id).await?;
+    assert_eq!(update_response.thread_settings.model, "gpt-5.4");
     assert_eq!(
-        update_response.turn_context.effort,
+        update_response.thread_settings.effort,
         Some(ReasoningEffort::High)
     );
 
     wait_for_turn_completed(&mut mcp).await?;
 
     mcp.clear_message_buffer();
-    let read_current_response = send_thread_turn_context_update(
+    let read_current_response = send_thread_settings_update(
         &mut mcp,
-        ThreadTurnContextUpdateParams {
+        ThreadSettingsUpdateParams {
             thread_id: thread.id,
             ..Default::default()
         },
     )
     .await?;
     assert_eq!(
-        read_current_response.turn_context,
-        update_response.turn_context
+        read_current_response.thread_settings,
+        update_response.thread_settings
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_after_turn_start_preserves_newer_update() -> Result<()> {
+async fn thread_settings_update_after_turn_start_preserves_newer_update() -> Result<()> {
     assert_newer_update_survives_turn_start(TurnStartParams {
         model: Some("gpt-5.2".to_string()),
         effort: Some(ReasoningEffort::Low),
@@ -437,7 +443,7 @@ async fn thread_turn_context_update_after_turn_start_preserves_newer_update() ->
 }
 
 #[tokio::test]
-async fn queued_updates_keep_each_turn_context_notification_snapshot() -> Result<()> {
+async fn queued_updates_keep_each_thread_settings_notification_snapshot() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("Done")?,
     ])
@@ -459,7 +465,7 @@ async fn queued_updates_keep_each_turn_context_notification_snapshot() -> Result
         })
         .await?;
     let update_request_id = mcp
-        .send_thread_turn_context_update_request(ThreadTurnContextUpdateParams {
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id,
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
@@ -468,19 +474,19 @@ async fn queued_updates_keep_each_turn_context_notification_snapshot() -> Result
         .await?;
 
     let _: TurnStartResponse = read_response(&mut mcp, turn_request_id).await?;
-    let _: ThreadTurnContextUpdateResponse = read_response(&mut mcp, update_request_id).await?;
+    let _: ThreadSettingsUpdateResponse = read_response(&mut mcp, update_request_id).await?;
 
     let notifications = [
-        read_turn_context_updated(&mut mcp).await?,
-        read_turn_context_updated(&mut mcp).await?,
+        read_thread_settings_updated(&mut mcp).await?,
+        read_thread_settings_updated(&mut mcp).await?,
     ];
     assert!(notifications.iter().any(|notification| {
-        notification.turn_context.model == "gpt-5.2"
-            && notification.turn_context.effort == Some(ReasoningEffort::Low)
+        notification.thread_settings.model == "gpt-5.2"
+            && notification.thread_settings.effort == Some(ReasoningEffort::Low)
     }));
     assert!(notifications.iter().any(|notification| {
-        notification.turn_context.model == "gpt-5.4"
-            && notification.turn_context.effort == Some(ReasoningEffort::High)
+        notification.thread_settings.model == "gpt-5.4"
+            && notification.thread_settings.effort == Some(ReasoningEffort::High)
     }));
 
     wait_for_turn_completed(&mut mcp).await?;
@@ -489,7 +495,7 @@ async fn queued_updates_keep_each_turn_context_notification_snapshot() -> Result
 }
 
 #[tokio::test]
-async fn thread_turn_context_update_after_no_op_turn_start_override_preserves_newer_update()
+async fn thread_settings_update_after_no_op_turn_start_override_preserves_newer_update()
 -> Result<()> {
     assert_newer_update_survives_turn_start(TurnStartParams {
         model: Some("mock-model".to_string()),

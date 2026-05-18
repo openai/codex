@@ -162,7 +162,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -244,7 +244,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -325,7 +325,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -419,7 +419,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -484,7 +484,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -614,9 +614,9 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         .await;
     assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             ..Default::default()
         },
@@ -654,7 +654,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -863,9 +863,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let models_manager = thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, model).await;
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some(model.to_string()),
             ..Default::default()
         },
@@ -884,7 +884,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
-            turn_context: codex_protocol::protocol::TurnContextOverrides {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

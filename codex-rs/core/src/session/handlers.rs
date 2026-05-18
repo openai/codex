@@ -42,10 +42,10 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnContextAppliedEvent;
-use codex_protocol::protocol::TurnContextOverrides;
-use codex_protocol::protocol::TurnContextSnapshot;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -93,27 +93,27 @@ pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     .await;
 }
 
-pub async fn update_turn_context(
+pub async fn update_thread_settings(
     sess: &Arc<Session>,
     sub_id: String,
-    turn_context: TurnContextOverrides,
+    thread_settings: ThreadSettingsOverrides,
 ) {
-    let updates = turn_context_settings_update(sess, turn_context).await;
+    let updates = thread_settings_update(sess, thread_settings).await;
     let msg = match sess.update_settings(updates).await {
-        Ok(()) => turn_context_applied_event(sess).await,
+        Ok(()) => thread_settings_applied_event(sess).await,
         Err(err) => EventMsg::Error(ErrorEvent {
-            message: format!("invalid turn context override: {err}"),
+            message: format!("invalid thread settings override: {err}"),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
     };
     sess.send_event_raw(Event { id: sub_id, msg }).await;
 }
 
-async fn turn_context_settings_update(
+async fn thread_settings_update(
     sess: &Session,
-    turn_context: TurnContextOverrides,
+    thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
-    let TurnContextOverrides {
+    let ThreadSettingsOverrides {
         cwd,
         workspace_roots,
         profile_workspace_roots,
@@ -129,7 +129,7 @@ async fn turn_context_settings_update(
         service_tier,
         collaboration_mode,
         personality,
-    } = turn_context;
+    } = thread_settings;
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
         None => {
@@ -158,13 +158,13 @@ async fn turn_context_settings_update(
     }
 }
 
-async fn turn_context_applied_event(sess: &Session) -> EventMsg {
+async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let snapshot = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
     };
-    EventMsg::TurnContextApplied(TurnContextAppliedEvent {
-        turn_context: TurnContextSnapshot {
+    EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+        thread_settings: ThreadSettingsSnapshot {
             model: snapshot.model,
             model_provider_id: snapshot.model_provider_id,
             service_tier: snapshot.service_tier,
@@ -187,17 +187,18 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, emit_turn_context_applied) = match op {
+    let (items, updates, responsesapi_client_metadata, emit_thread_settings_applied) = match op {
         Op::UserInput {
             items,
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
-            turn_context,
+            thread_settings,
         } => {
-            let emit_turn_context_applied = turn_context != TurnContextOverrides::default();
-            let mut updates = if emit_turn_context_applied {
-                turn_context_settings_update(sess, turn_context).await
+            let emit_thread_settings_applied =
+                thread_settings != ThreadSettingsOverrides::default();
+            let mut updates = if emit_thread_settings_applied {
+                thread_settings_update(sess, thread_settings).await
             } else {
                 SessionSettingsUpdate::default()
             };
@@ -207,7 +208,7 @@ pub(super) async fn user_input_or_turn_inner(
                 items,
                 updates,
                 responsesapi_client_metadata,
-                emit_turn_context_applied,
+                emit_thread_settings_applied,
             )
         }
         _ => unreachable!(),
@@ -217,10 +218,10 @@ pub(super) async fn user_input_or_turn_inner(
         // new_turn_with_sub_id already emits the error event.
         return;
     };
-    if emit_turn_context_applied {
+    if emit_thread_settings_applied {
         sess.send_event_raw(Event {
             id: sub_id.clone(),
-            msg: turn_context_applied_event(sess).await,
+            msg: thread_settings_applied_event(sess).await,
         })
         .await;
     }
@@ -769,8 +770,8 @@ pub(super) async fn submission_loop(
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
-                Op::TurnContext { turn_context } => {
-                    update_turn_context(&sess, sub.id.clone(), turn_context).await;
+                Op::ThreadSettings { thread_settings } => {
+                    update_thread_settings(&sess, sub.id.clone(), thread_settings).await;
                     false
                 }
                 Op::InterAgentCommunication { communication } => {

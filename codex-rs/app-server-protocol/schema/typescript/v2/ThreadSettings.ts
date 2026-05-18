@@ -12,4 +12,4 @@ import type { AskForApproval } from "./AskForApproval";
 import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
-export type ThreadTurnContext = { model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, permissionProfile: PermissionProfile, activePermissionProfile: ActivePermissionProfile | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, personality: Personality | null, collaborationMode: CollaborationMode, };
+export type ThreadSettings = { model: string, modelProvider: string, serviceTier: string | null, cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, permissionProfile: PermissionProfile, activePermissionProfile: ActivePermissionProfile | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, personality: Personality | null, collaborationMode: CollaborationMode, };

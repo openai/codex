@@ -242,9 +242,9 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     let test = build_test_codex(&server, home).await?;
     assert_eq!(test.config.service_tier, None);
 
-    core_test_support::submit_turn_context(
+    core_test_support::submit_thread_settings(
         &test.codex,
-        codex_protocol::protocol::TurnContextOverrides {
+        codex_protocol::protocol::ThreadSettingsOverrides {
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
             ..Default::default()
         },

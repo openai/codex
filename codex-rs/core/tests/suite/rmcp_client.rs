@@ -113,7 +113,7 @@ fn read_only_user_turn_with_model(
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
-        turn_context: codex_protocol::protocol::TurnContextOverrides {
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(cwd),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),

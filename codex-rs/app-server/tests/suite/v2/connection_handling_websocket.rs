@@ -18,9 +18,9 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadTurnContextUpdateParams;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
@@ -108,7 +108,7 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
 }
 
 #[tokio::test]
-async fn websocket_turn_context_updates_stay_on_subscribed_connections() -> Result<()> {
+async fn websocket_thread_settings_updates_stay_on_subscribed_connections() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -126,9 +126,9 @@ async fn websocket_turn_context_updates_stay_on_subscribed_connections() -> Resu
     let thread_id = start_thread(&mut ws1, /*id*/ 3).await?;
     send_request(
         &mut ws1,
-        "thread/turnContext/update",
+        "thread/settings/update",
         /*id*/ 4,
-        Some(serde_json::to_value(ThreadTurnContextUpdateParams {
+        Some(serde_json::to_value(ThreadSettingsUpdateParams {
             thread_id: thread_id.clone(),
             model: Some("mock-model-updated".to_string()),
             ..Default::default()
@@ -139,19 +139,19 @@ async fn websocket_turn_context_updates_stay_on_subscribed_connections() -> Resu
     let (_response, caller_notification) = read_response_and_notification_for_method(
         &mut ws1,
         /*id*/ 4,
-        "thread/turnContext/updated",
+        "thread/settings/updated",
     )
     .await?;
 
-    let ServerNotification::ThreadTurnContextUpdated(caller) =
+    let ServerNotification::ThreadSettingsUpdated(caller) =
         ServerNotification::try_from(caller_notification)?
     else {
-        bail!("expected caller thread/turnContext/updated notification");
+        bail!("expected caller thread/settings/updated notification");
     };
     assert_eq!(caller.thread_id, thread_id);
     assert_no_notification_for_method(
         &mut ws2,
-        "thread/turnContext/updated",
+        "thread/settings/updated",
         Duration::from_millis(250),
     )
     .await?;
