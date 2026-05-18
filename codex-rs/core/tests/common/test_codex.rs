@@ -769,7 +769,7 @@ impl TestCodex {
                 environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
-                turn_context: codex_protocol::protocol::TurnContextOverrides {
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                     cwd: Some(self.config.cwd.to_path_buf()),
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
