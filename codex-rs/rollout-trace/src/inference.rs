@@ -92,6 +92,11 @@ struct TracedResponseStreamOutput<'a> {
     output_items: Vec<JsonValue>,
 }
 
+#[derive(Serialize)]
+struct TracedRequestInputPrefix<'a> {
+    input: &'a [ResponseItem],
+}
+
 impl InferenceTraceContext {
     /// Builds a context that accepts trace calls and records nothing.
     pub fn disabled() -> Self {
@@ -132,6 +137,11 @@ impl InferenceTraceContext {
                 terminal_recorded: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Returns true when this context will write trace events.
+    pub fn is_enabled(&self) -> bool {
+        matches!(self.state, InferenceTraceContextState::Enabled(_))
     }
 }
 
@@ -193,6 +203,53 @@ impl InferenceTraceAttempt {
                 model: attempt.context.model.clone(),
                 provider_name: attempt.context.provider_name.clone(),
                 request_input_mode: Some(request_input_mode),
+                request_payload,
+            },
+        );
+    }
+
+    /// Records an incremental provider request whose omitted prefix came from an untraced response.
+    pub fn record_started_with_untraced_prefix(
+        &self,
+        request: &impl Serialize,
+        previous_response_id: String,
+        prefix_input: &[ResponseItem],
+    ) {
+        let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
+            return;
+        };
+        let Some(request_payload) = write_json_payload_best_effort(
+            &attempt.context.writer,
+            RawPayloadKind::InferenceRequest,
+            request,
+        ) else {
+            return;
+        };
+        let prefix = TracedRequestInputPrefix {
+            input: prefix_input,
+        };
+        let Some(prefix_payload) = write_json_payload_best_effort(
+            &attempt.context.writer,
+            RawPayloadKind::InferenceRequest,
+            &prefix,
+        ) else {
+            return;
+        };
+
+        append_with_context_best_effort(
+            &attempt.context,
+            RawTraceEventPayload::InferenceStarted {
+                inference_call_id: attempt.inference_call_id.clone(),
+                thread_id: attempt.context.thread_id.clone(),
+                codex_turn_id: attempt.context.codex_turn_id.clone(),
+                model: attempt.context.model.clone(),
+                provider_name: attempt.context.provider_name.clone(),
+                request_input_mode: Some(
+                    InferenceRequestInputMode::IncrementalWithUntracedPrefix {
+                        previous_response_id,
+                        prefix_payload,
+                    },
+                ),
                 request_payload,
             },
         );

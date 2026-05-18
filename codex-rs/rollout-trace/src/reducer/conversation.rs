@@ -42,23 +42,9 @@ impl TraceReducer {
         request_payload: &RawPayloadRef,
     ) -> Result<Vec<String>> {
         let payload = self.read_payload_json(request_payload)?;
-        let Some(input) = payload.get("input") else {
-            bail!(
-                "inference request payload {} did not contain input",
-                request_payload.raw_payload_id
-            );
-        };
-        let Some(request_items) = input.as_array() else {
-            bail!(
-                "inference request payload {} had non-array input",
-                request_payload.raw_payload_id
-            );
-        };
-
-        let items = normalize::normalize_model_items(request_items, request_payload)?;
-
         let payload_previous_response_id =
             payload.get("previous_response_id").and_then(Value::as_str);
+        let items = self.normalized_request_items(request_payload, &payload)?;
         // Old bundles predate request-input reduction metadata. Preserve their
         // existing replay behavior by deriving the legacy interpretation from
         // the transport payload only when the explicit mode is absent.
@@ -84,31 +70,18 @@ impl TraceReducer {
             InferenceRequestInputMode::Incremental {
                 previous_response_id,
             } => {
-                if payload_previous_response_id != Some(previous_response_id.as_str()) {
-                    bail!(
-                        "incremental inference request {inference_call_id} recorded previous_response_id {previous_response_id}, \
-                         but payload previous_response_id was {payload_previous_response_id:?}"
-                    );
-                }
+                Self::ensure_incremental_previous_response_id_matches(
+                    inference_call_id,
+                    payload_previous_response_id,
+                    &previous_response_id,
+                )?;
                 // Streaming follow-up requests can send only the new input plus a
                 // `previous_response_id`. The trace model still exposes the full
                 // model-visible input, so rebuild the omitted prefix from the
                 // previous request and response before reducing this delta.
-                let previous_items = self
-                    .rollout
-                    .inference_calls
-                    .values()
-                    .find(|inference| {
-                        inference.thread_id == thread_id
-                            && inference.response_id.as_deref()
-                                == Some(previous_response_id.as_str())
-                    })
-                    .map(|inference| {
-                        let mut ids = inference.request_item_ids.clone();
-                        ids.extend(inference.response_item_ids.clone());
-                        ids
-                    });
-                let Some(mut item_ids) = previous_items else {
+                let Some(mut item_ids) =
+                    self.traced_response_snapshot(thread_id, &previous_response_id)
+                else {
                     bail!(
                         "incremental inference request {inference_call_id} referenced unknown previous_response_id {previous_response_id}"
                     );
@@ -123,6 +96,53 @@ impl TraceReducer {
                         start_index: item_ids.len(),
                         mode: ReconcileMode::AppendOnly,
                         snapshot_override: None,
+                    },
+                )?;
+                item_ids.extend(delta_item_ids);
+                item_ids
+            }
+            InferenceRequestInputMode::IncrementalWithUntracedPrefix {
+                previous_response_id,
+                prefix_payload,
+            } => {
+                Self::ensure_incremental_previous_response_id_matches(
+                    inference_call_id,
+                    payload_previous_response_id,
+                    &previous_response_id,
+                )?;
+                if self
+                    .traced_response_snapshot(thread_id, &previous_response_id)
+                    .is_some()
+                {
+                    bail!(
+                        "incremental inference request {inference_call_id} recorded untraced prefix for traced previous_response_id {previous_response_id}"
+                    );
+                }
+                let prefix_payload_json = self.read_payload_json(&prefix_payload)?;
+                let prefix_items =
+                    self.normalized_request_items(&prefix_payload, &prefix_payload_json)?;
+                let mut item_ids = self.reconcile_conversation_items(
+                    prefix_items,
+                    ReconcileItems {
+                        thread_id,
+                        codex_turn_id,
+                        wall_time_unix_ms,
+                        produced_by: Vec::new(),
+                        start_index: 0,
+                        mode: ReconcileMode::FullSnapshot,
+                        snapshot_override: None,
+                    },
+                )?;
+                let delta_item_ids = self.reconcile_conversation_items(
+                    items,
+                    ReconcileItems {
+                        thread_id,
+                        codex_turn_id,
+                        wall_time_unix_ms,
+                        produced_by: Vec::new(),
+                        start_index: item_ids.len(),
+                        mode: ReconcileMode::AppendOnly,
+                        snapshot_override: Some(&item_ids),
                     },
                 )?;
                 item_ids.extend(delta_item_ids);
@@ -150,6 +170,60 @@ impl TraceReducer {
         self.thread_conversation_snapshots
             .insert(thread_id.to_string(), request_item_ids.clone());
         Ok(request_item_ids)
+    }
+
+    fn normalized_request_items(
+        &self,
+        request_payload: &RawPayloadRef,
+        payload: &Value,
+    ) -> Result<Vec<NormalizedConversationItem>> {
+        let Some(input) = payload.get("input") else {
+            bail!(
+                "inference request payload {} did not contain input",
+                request_payload.raw_payload_id
+            );
+        };
+        let Some(request_items) = input.as_array() else {
+            bail!(
+                "inference request payload {} had non-array input",
+                request_payload.raw_payload_id
+            );
+        };
+
+        normalize::normalize_model_items(request_items, request_payload)
+    }
+
+    fn ensure_incremental_previous_response_id_matches(
+        inference_call_id: &InferenceCallId,
+        payload_previous_response_id: Option<&str>,
+        previous_response_id: &str,
+    ) -> Result<()> {
+        if payload_previous_response_id != Some(previous_response_id) {
+            bail!(
+                "incremental inference request {inference_call_id} recorded previous_response_id {previous_response_id}, \
+                 but payload previous_response_id was {payload_previous_response_id:?}"
+            );
+        }
+        Ok(())
+    }
+
+    fn traced_response_snapshot(
+        &self,
+        thread_id: &str,
+        previous_response_id: &str,
+    ) -> Option<Vec<String>> {
+        self.rollout
+            .inference_calls
+            .values()
+            .find(|inference| {
+                inference.thread_id == thread_id
+                    && inference.response_id.as_deref() == Some(previous_response_id)
+            })
+            .map(|inference| {
+                let mut ids = inference.request_item_ids.clone();
+                ids.extend(inference.response_item_ids.clone());
+                ids
+            })
     }
 
     /// Reduces an inference response payload into conversation items produced by the call.

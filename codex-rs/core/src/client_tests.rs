@@ -349,6 +349,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         api_stream,
         test_session_telemetry(),
         attempt,
+        /*traceable_for_replay*/ true,
     );
 
     let observed = stream
@@ -398,6 +399,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         api_stream,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
+        /*traceable_for_replay*/ false,
     );
 
     while stream.next().await.is_some() {}
@@ -439,6 +441,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         api_stream,
         test_session_telemetry(),
         attempt,
+        /*traceable_for_replay*/ true,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output

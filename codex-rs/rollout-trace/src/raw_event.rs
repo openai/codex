@@ -69,7 +69,7 @@ pub enum RawToolCallRequester {
 /// transport can still send a `previous_response_id` when that parent omitted no
 /// model-visible items, so replay needs this trace-side semantic fact rather than
 /// guessing solely from the wire payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum InferenceRequestInputMode {
     /// The request payload contains the whole model-visible input snapshot.
@@ -78,6 +78,16 @@ pub enum InferenceRequestInputMode {
     Incremental {
         /// Responses API `response.id` whose traced request/response items form the omitted prefix.
         previous_response_id: String,
+    },
+    /// The request payload contains only items appended after an untraced prior response.
+    ///
+    /// `prefix_payload` is a trace-only request-shaped payload containing the model-visible
+    /// `input` prefix omitted by `previous_response_id`.
+    IncrementalWithUntracedPrefix {
+        /// Responses API `response.id` whose response was used by the provider but was not traced.
+        previous_response_id: String,
+        /// Request-shaped payload containing the omitted model-visible prefix.
+        prefix_payload: RawPayloadRef,
     },
 }
 
@@ -274,6 +284,15 @@ impl RawTraceEventPayload {
             RawTraceEventPayload::ThreadStarted {
                 metadata_payload, ..
             } => metadata_payload.iter().collect(),
+            RawTraceEventPayload::InferenceStarted {
+                request_input_mode:
+                    Some(InferenceRequestInputMode::IncrementalWithUntracedPrefix {
+                        prefix_payload,
+                        ..
+                    }),
+                request_payload,
+                ..
+            } => vec![request_payload, prefix_payload],
             RawTraceEventPayload::InferenceStarted {
                 request_payload, ..
             }

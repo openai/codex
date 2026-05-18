@@ -251,6 +251,28 @@ pub struct ModelClientSession {
 struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
+    traceable_for_replay: bool,
+}
+
+struct IncrementalInputDelta {
+    input: Vec<ResponseItem>,
+    omitted_prefix: Vec<ResponseItem>,
+}
+
+struct PreparedWebsocketRequest {
+    request: ResponsesWsRequest,
+    input_mode: WebsocketRequestTraceInputMode,
+}
+
+enum WebsocketRequestTraceInputMode {
+    FullSnapshot,
+    Incremental {
+        previous_response_id: String,
+    },
+    IncrementalWithUntracedPrefix {
+        previous_response_id: String,
+        prefix_input: Vec<ResponseItem>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -991,7 +1013,7 @@ impl ModelClientSession {
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
         allow_empty_delta: bool,
-    ) -> Option<Vec<ResponseItem>> {
+    ) -> Option<IncrementalInputDelta> {
         // Checks whether the current request is an incremental extension of the previous request.
         // We only reuse an incremental input delta when non-input request fields are unchanged and
         // `input` is a strict
@@ -1018,7 +1040,10 @@ impl ModelClientSession {
         if request.input.starts_with(&baseline)
             && (allow_empty_delta || baseline_len < request.input.len())
         {
-            Some(request.input[baseline_len..].to_vec())
+            Some(IncrementalInputDelta {
+                input: request.input[baseline_len..].to_vec(),
+                omitted_prefix: baseline,
+            })
         } else {
             trace!("incremental request failed, items didn't match");
             None
@@ -1039,28 +1064,54 @@ impl ModelClientSession {
         &mut self,
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
-    ) -> ResponsesWsRequest {
+    ) -> PreparedWebsocketRequest {
         let Some(last_response) = self.get_last_response() else {
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return PreparedWebsocketRequest {
+                request: ResponsesWsRequest::ResponseCreate(payload),
+                input_mode: WebsocketRequestTraceInputMode::FullSnapshot,
+            };
         };
-        let Some(incremental_items) = self.get_incremental_items(
+        let Some(incremental) = self.get_incremental_items(
             request,
             Some(&last_response),
             /*allow_empty_delta*/ true,
         ) else {
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return PreparedWebsocketRequest {
+                request: ResponsesWsRequest::ResponseCreate(payload),
+                input_mode: WebsocketRequestTraceInputMode::FullSnapshot,
+            };
         };
 
         if last_response.response_id.is_empty() {
             trace!("incremental request failed, no previous response id");
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return PreparedWebsocketRequest {
+                request: ResponsesWsRequest::ResponseCreate(payload),
+                input_mode: WebsocketRequestTraceInputMode::FullSnapshot,
+            };
         }
 
-        ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
-            previous_response_id: Some(last_response.response_id),
-            input: incremental_items,
-            ..payload
-        })
+        let previous_response_id = last_response.response_id;
+        let input_mode = if last_response.traceable_for_replay {
+            WebsocketRequestTraceInputMode::Incremental {
+                previous_response_id: previous_response_id.clone(),
+            }
+        } else if incremental.omitted_prefix.is_empty() {
+            WebsocketRequestTraceInputMode::FullSnapshot
+        } else {
+            WebsocketRequestTraceInputMode::IncrementalWithUntracedPrefix {
+                previous_response_id: previous_response_id.clone(),
+                prefix_input: incremental.omitted_prefix,
+            }
+        };
+
+        PreparedWebsocketRequest {
+            request: ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
+                previous_response_id: Some(previous_response_id),
+                input: incremental.input,
+                ..payload
+            }),
+            input_mode,
+        }
     }
 
     /// Opportunistically preconnects a websocket for this turn-scoped client session.
@@ -1269,6 +1320,7 @@ impl ModelClientSession {
                         stream,
                         session_telemetry.clone(),
                         inference_trace_attempt,
+                        /*traceable_for_replay*/ true,
                     );
                     return Ok(stream);
                 }
@@ -1408,8 +1460,10 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let mut ws_request = self.prepare_websocket_request(ws_payload, &request);
-            let request_input_mode = websocket_trace_request_input_mode(&ws_request, &request);
+            let PreparedWebsocketRequest {
+                request: mut ws_request,
+                input_mode,
+            } = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
@@ -1419,7 +1473,26 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
-            inference_trace_attempt.record_started(&ws_request, request_input_mode);
+            match input_mode {
+                WebsocketRequestTraceInputMode::FullSnapshot => inference_trace_attempt
+                    .record_started(&ws_request, InferenceRequestInputMode::FullSnapshot),
+                WebsocketRequestTraceInputMode::Incremental {
+                    previous_response_id,
+                } => inference_trace_attempt.record_started(
+                    &ws_request,
+                    InferenceRequestInputMode::Incremental {
+                        previous_response_id,
+                    },
+                ),
+                WebsocketRequestTraceInputMode::IncrementalWithUntracedPrefix {
+                    previous_response_id,
+                    prefix_input,
+                } => inference_trace_attempt.record_started_with_untraced_prefix(
+                    &ws_request,
+                    previous_response_id,
+                    &prefix_input,
+                ),
+            }
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
                     map_api_error(ApiError::Stream(
@@ -1444,6 +1517,7 @@ impl ModelClientSession {
                 stream_result,
                 session_telemetry.clone(),
                 inference_trace_attempt,
+                !warmup && inference_trace.is_enabled(),
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1644,30 +1718,6 @@ fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
         );
 }
 
-/// Describes whether the websocket wire payload still contains the logical full input.
-///
-/// A websocket request can reuse `previous_response_id` while omitting zero visible
-/// items, notably after empty startup prewarm. The reducer should treat that as a
-/// full snapshot even though the transport-level parent id is present.
-fn websocket_trace_request_input_mode(
-    request: &ResponsesWsRequest,
-    logical_request: &ResponsesApiRequest,
-) -> InferenceRequestInputMode {
-    let ResponsesWsRequest::ResponseCreate(payload) = request else {
-        return InferenceRequestInputMode::FullSnapshot;
-    };
-    let Some(previous_response_id) = payload.previous_response_id.as_ref() else {
-        return InferenceRequestInputMode::FullSnapshot;
-    };
-    if payload.input == logical_request.input {
-        InferenceRequestInputMode::FullSnapshot
-    } else {
-        InferenceRequestInputMode::Incremental {
-            previous_response_id: previous_response_id.clone(),
-        }
-    }
-}
-
 /// Builds the extra headers attached to Responses API requests.
 ///
 /// These headers implement Codex-specific conventions:
@@ -1743,6 +1793,7 @@ fn map_response_stream(
     api_stream: codex_api::ResponseStream,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
+    traceable_for_replay: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1757,6 +1808,7 @@ fn map_response_stream(
         api_stream,
         session_telemetry,
         inference_trace_attempt,
+        traceable_for_replay,
     )
 }
 
@@ -1765,6 +1817,7 @@ fn map_response_events<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
+    traceable_for_replay: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1843,6 +1896,7 @@ where
                         let _ = sender.send(LastResponse {
                             response_id: response_id.clone(),
                             items_added: std::mem::take(&mut items_added),
+                            traceable_for_replay,
                         });
                     }
                     if tx_event
