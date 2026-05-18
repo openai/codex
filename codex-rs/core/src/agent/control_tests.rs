@@ -177,6 +177,15 @@ fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
     })
 }
 
+fn history_contains_function_call(history_items: &[ResponseItem], call_id: &str) -> bool {
+    history_items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::FunctionCall { call_id: item_call_id, .. } if item_call_id == call_id
+        )
+    })
+}
+
 fn history_contains_assistant_inter_agent_communication(
     history_items: &[ResponseItem],
     expected: &InterAgentCommunication,
@@ -623,7 +632,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
-async fn spawn_agent_can_fork_parent_thread_history_without_rewriting_rollout() {
+async fn spawn_agent_can_fork_parent_thread_history_without_replaying_parent_spawn_call() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
@@ -730,11 +739,16 @@ async fn spawn_agent_can_fork_parent_thread_history_without_rewriting_rollout() 
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
     let mut expected_history = vec![user_message("parent seed context")];
-    expected_history.extend(parent_items);
+    let mut expected_parent_items = parent_items;
+    assert_eq!(
+        expected_parent_items.pop(),
+        Some(spawn_agent_call(&parent_spawn_call_id))
+    );
+    expected_history.extend(expected_parent_items);
     assert_eq!(
         history.raw_items(),
         expected_history.as_slice(),
-        "forked child history should replay the parent rollout without rewriting model-visible items"
+        "forked child history should replay the parent rollout except for the trigger spawn call"
     );
     assert_eq!(
         serde_json::to_value(child_thread.codex.session.reference_context_item().await)
@@ -823,6 +837,10 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     assert!(
         history_contains_text(history.raw_items(), "unflushed final answer"),
         "forked child history should include unflushed assistant final answers after flushing the parent rollout"
+    );
+    assert!(
+        !history_contains_function_call(history.raw_items(), &parent_spawn_call_id),
+        "forked child history should drop the trigger spawn call after flushing the parent rollout"
     );
 
     let _ = harness
@@ -946,6 +964,10 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     assert!(
         history_contains_text(history.raw_items(), "current parent task"),
         "forked child history should keep the parent user message from the requested last-N turn window"
+    );
+    assert!(
+        !history_contains_function_call(history.raw_items(), &parent_spawn_call_id),
+        "forked child history should drop the trigger spawn call from the requested last-N turn window"
     );
 
     let _ = harness
