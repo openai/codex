@@ -1443,32 +1443,36 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.transcript.last_agent_markdown = Some("copy me".to_string());
 
-    chat.copy_last_agent_markdown_with(|markdown| {
+    let status = chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
         Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
     });
 
+    assert_eq!(
+        status,
+        crate::chatwidget::CopyStatus::Success("Copied last message to clipboard".into())
+    );
     assert!(chat.clipboard_lease.is_some());
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one success message");
-    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Copied last message to clipboard"),
-        "expected success message, got {rendered:?}"
+        cells.is_empty(),
+        "expected overlay-style helper not to add history"
     );
 
-    chat.copy_last_agent_markdown_with(|markdown| {
+    let status = chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
         Err("blocked".into())
     });
 
+    assert_eq!(
+        status,
+        crate::chatwidget::CopyStatus::Error("Copy failed: blocked".into())
+    );
     assert!(chat.clipboard_lease.is_some());
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one failure message");
-    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Copy failed: blocked"),
-        "expected failure message, got {rendered:?}"
+        cells.is_empty(),
+        "expected overlay-style helper not to add history"
     );
 }
 
@@ -1479,20 +1483,26 @@ async fn transcript_turn_copy_includes_user_prompt_and_agent_markdown() {
     chat.transcript
         .record_agent_markdown("first response".to_string());
 
-    chat.copy_agent_turn_markdown_with(/*user_turn_count*/ 1, "first prompt", |markdown| {
-        assert_eq!(
-            markdown,
-            "## User\n\nfirst prompt\n\n## Assistant\n\nfirst response"
-        );
-        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
-    });
+    let status = chat.copy_agent_turn_markdown_with(
+        /*user_turn_count*/ 1,
+        "first prompt",
+        |markdown| {
+            assert_eq!(
+                markdown,
+                "## User\n\nfirst prompt\n\n## Assistant\n\nfirst response"
+            );
+            Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+        },
+    );
 
+    assert_eq!(
+        status,
+        crate::chatwidget::CopyStatus::Success("Copied selected turn to clipboard".into())
+    );
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one success message");
-    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Copied selected turn to clipboard"),
-        "expected success message, got {rendered:?}"
+        cells.is_empty(),
+        "expected overlay-style helper not to add history"
     );
 }
 

@@ -453,10 +453,17 @@ impl App {
         } else {
             (None, false, false)
         };
-        if let Some(user_cell_idx) = copy_selection {
-            self.copy_transcript_turn(user_cell_idx);
+        let copy_status = if let Some(user_cell_idx) = copy_selection {
+            Some(self.copy_transcript_turn(user_cell_idx))
         } else if copy_latest {
-            self.chat_widget.copy_last_agent_markdown();
+            Some(self.chat_widget.copy_last_agent_markdown_for_overlay())
+        } else {
+            None
+        };
+        if let Some(status) = copy_status
+            && let Some(Overlay::Transcript(transcript)) = &mut self.overlay
+        {
+            transcript.show_copy_status(&status, tui);
         }
         if close_overlay {
             self.close_transcript_overlay(tui);
@@ -465,17 +472,16 @@ impl App {
         Ok(())
     }
 
-    fn copy_transcript_turn(&mut self, user_cell_idx: usize) {
+    fn copy_transcript_turn(&mut self, user_cell_idx: usize) -> crate::chatwidget::CopyStatus {
         let Some(user_cell) = self.transcript_cells.get(user_cell_idx).and_then(|cell| {
             cell.as_any()
                 .downcast_ref::<crate::history_cell::UserHistoryCell>()
         }) else {
-            self.chat_widget.copy_last_agent_markdown();
-            return;
+            return self.chat_widget.copy_last_agent_markdown_for_overlay();
         };
         let user_turn_count = user_count(&self.transcript_cells[..=user_cell_idx]);
         self.chat_widget
-            .copy_agent_turn_markdown(user_turn_count, &user_cell.message);
+            .copy_agent_turn_markdown_for_overlay(user_turn_count, &user_cell.message)
     }
 
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.

@@ -1,4 +1,6 @@
 use crate::color::is_light;
+use crate::line_truncation::line_width;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::terminal_palette::default_bg;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::style::Styled as _;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
@@ -96,6 +99,62 @@ pub(crate) fn render_footer_separator(area: Rect, buf: &mut Buffer, label: Strin
     }
 }
 
+pub(crate) fn render_footer_line_with_optional_right(
+    area: Rect,
+    buf: &mut Buffer,
+    left: Line<'static>,
+    right: Option<Line<'static>>,
+) {
+    let Some(right) = right else {
+        left.render(area, buf);
+        return;
+    };
+    if area.width == 0 {
+        return;
+    }
+
+    let right_width = line_width(&right) as u16;
+    if right_width > area.width {
+        truncate_line_with_ellipsis_if_overflow(right, area.width as usize).render(area, buf);
+        return;
+    }
+
+    let left_width = line_width(&left) as u16;
+    let gap = u16::from(left_width > 0 && right_width > 0);
+    let left_area_width = area.width.saturating_sub(right_width).saturating_sub(gap);
+    if left_area_width == 0 {
+        right.render(
+            Rect {
+                x: area.x + area.width - right_width,
+                y: area.y,
+                width: right_width,
+                height: 1,
+            },
+            buf,
+        );
+        return;
+    }
+
+    truncate_line_with_ellipsis_if_overflow(left, left_area_width as usize).render(
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: left_area_width,
+            height: 1,
+        },
+        buf,
+    );
+    right.render(
+        Rect {
+            x: area.x + area.width - right_width,
+            y: area.y,
+            width: right_width,
+            height: 1,
+        },
+        buf,
+    );
+}
+
 fn fit_footer_hints(
     hints: &[FooterHint],
     mode: FooterHintLabelMode,
@@ -181,6 +240,19 @@ fn footer_hints_width(hints: &[&FooterHint], mode: FooterHintLabelMode, gap_widt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    fn buffer_text(buf: &Buffer, area: Rect) -> String {
+        let mut out = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let symbol = buf[(x, y)].symbol();
+                out.push(symbol.chars().next().unwrap_or(' '));
+            }
+        }
+        out
+    }
 
     fn line_text(line: Line<'static>) -> String {
         line.spans
@@ -231,5 +303,73 @@ mod tests {
         assert!(rendered.contains('a'));
         assert!(rendered.contains('c'));
         assert!(!rendered.contains('b'));
+    }
+
+    #[test]
+    fn footer_line_renders_left_and_right_when_both_fit() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 1,
+        );
+        let mut buf = Buffer::empty(area);
+
+        render_footer_line_with_optional_right(
+            area,
+            &mut buf,
+            Line::from("left"),
+            Some(Line::from("right")),
+        );
+
+        assert_eq!(buffer_text(&buf, area), "left               right");
+    }
+
+    #[test]
+    fn footer_line_truncates_left_when_right_fits() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 16, /*height*/ 1,
+        );
+        let mut buf = Buffer::empty(area);
+
+        render_footer_line_with_optional_right(
+            area,
+            &mut buf,
+            Line::from("long left status"),
+            Some(Line::from("ok")),
+        );
+
+        assert_eq!(buffer_text(&buf, area), "long left st… ok");
+    }
+
+    #[test]
+    fn footer_line_renders_right_only_when_space_is_tight() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 5, /*height*/ 1,
+        );
+        let mut buf = Buffer::empty(area);
+
+        render_footer_line_with_optional_right(
+            area,
+            &mut buf,
+            Line::from("left"),
+            Some(Line::from("right")),
+        );
+
+        assert_eq!(buffer_text(&buf, area), "right");
+    }
+
+    #[test]
+    fn footer_line_truncates_right_when_it_overflows_area() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 4, /*height*/ 1,
+        );
+        let mut buf = Buffer::empty(area);
+
+        render_footer_line_with_optional_right(
+            area,
+            &mut buf,
+            Line::from("left"),
+            Some(Line::from("status")),
+        );
+
+        assert_eq!(buffer_text(&buf, area), "sta…");
     }
 }

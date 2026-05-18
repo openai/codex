@@ -225,15 +225,25 @@ impl ChatWidget {
 
     /// Copy the last agent response (raw markdown) to the system clipboard.
     pub(crate) fn copy_last_agent_markdown(&mut self) {
-        self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
+        let status = self.copy_last_agent_markdown_for_overlay();
+        self.record_copy_status(&status);
+        self.request_redraw();
     }
 
-    pub(crate) fn copy_agent_turn_markdown(&mut self, user_turn_count: usize, user_prompt: &str) {
+    pub(crate) fn copy_last_agent_markdown_for_overlay(&mut self) -> CopyStatus {
+        self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard)
+    }
+
+    pub(crate) fn copy_agent_turn_markdown_for_overlay(
+        &mut self,
+        user_turn_count: usize,
+        user_prompt: &str,
+    ) -> CopyStatus {
         self.copy_agent_turn_markdown_with(
             user_turn_count,
             user_prompt,
             crate::clipboard_copy::copy_to_clipboard,
-        );
+        )
     }
 
     pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
@@ -248,23 +258,16 @@ impl ChatWidget {
     pub(super) fn copy_last_agent_markdown_with(
         &mut self,
         copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
-    ) {
+    ) -> CopyStatus {
         match self.transcript.last_agent_markdown.clone() {
-            Some(markdown) if !markdown.is_empty() => self.copy_markdown_with_status(
-                &markdown,
-                "Copied last message to clipboard",
-                copy_fn,
-            ),
-            _ if self.transcript.copy_history_evicted_by_rollback => {
-                self.add_to_history(history_cell::new_error_event(format!(
-                    "Cannot copy that response after rewinding. Only the most recent {MAX_AGENT_COPY_HISTORY} responses are available to /copy."
-                )));
+            Some(markdown) if !markdown.is_empty() => {
+                self.copy_markdown_result(&markdown, "Copied last message to clipboard", copy_fn)
             }
-            _ => self.add_to_history(history_cell::new_error_event(
-                "No agent response to copy".into(),
+            _ if self.transcript.copy_history_evicted_by_rollback => CopyStatus::Error(format!(
+                "Cannot copy that response after rewinding. Only the most recent {MAX_AGENT_COPY_HISTORY} responses are available to /copy."
             )),
+            _ => CopyStatus::Error("No agent response to copy".into()),
         }
-        self.request_redraw();
     }
 
     pub(super) fn copy_agent_turn_markdown_with(
@@ -272,43 +275,43 @@ impl ChatWidget {
         user_turn_count: usize,
         user_prompt: &str,
         copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
-    ) {
+    ) -> CopyStatus {
         match self
             .transcript
             .agent_markdown_for_user_turn(user_turn_count)
         {
             Some(markdown) if !markdown.is_empty() => {
                 let markdown = format!("## User\n\n{user_prompt}\n\n## Assistant\n\n{markdown}");
-                self.copy_markdown_with_status(
-                    &markdown,
-                    "Copied selected turn to clipboard",
-                    copy_fn,
-                );
+                self.copy_markdown_result(&markdown, "Copied selected turn to clipboard", copy_fn)
             }
-            _ => self.add_to_history(history_cell::new_error_event(
-                "No agent response to copy for selected prompt".into(),
-            )),
+            _ => CopyStatus::Error("No agent response to copy for selected prompt".into()),
         }
-        self.request_redraw();
     }
 
-    fn copy_markdown_with_status(
+    fn copy_markdown_result(
         &mut self,
         markdown: &str,
         success_message: &str,
         copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
-    ) {
+    ) -> CopyStatus {
         match copy_fn(markdown) {
             Ok(lease) => {
                 self.clipboard_lease = lease;
-                self.add_to_history(history_cell::new_info_event(
-                    success_message.into(),
-                    /*hint*/ None,
-                ));
+                CopyStatus::Success(success_message.into())
             }
-            Err(error) => self.add_to_history(history_cell::new_error_event(format!(
-                "Copy failed: {error}"
-            ))),
+            Err(error) => CopyStatus::Error(format!("Copy failed: {error}")),
+        }
+    }
+
+    fn record_copy_status(&mut self, status: &CopyStatus) {
+        match status {
+            CopyStatus::Success(message) => self.add_to_history(history_cell::new_info_event(
+                message.clone(),
+                /*hint*/ None,
+            )),
+            CopyStatus::Error(message) => {
+                self.add_to_history(history_cell::new_error_event(message.clone()))
+            }
         }
     }
 

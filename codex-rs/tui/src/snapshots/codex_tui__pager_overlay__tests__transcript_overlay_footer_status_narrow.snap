@@ -1,0 +1,11 @@
+---
+source: tui/src/pager_overlay.rs
+expression: "render_snapshot(&mut overlay, Rect::new(0, 0, 28, 8),)"
+---
+ Transcript · 1 prompt · 100
+
+› prompt
+
+────────────────────────────
+No agent response to copy f…
+ q   ctrl + o   ⌥ + r

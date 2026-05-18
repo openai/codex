@@ -193,6 +193,24 @@ use tracing::debug;
 use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CopyStatus {
+    Success(String),
+    Error(String),
+}
+
+impl CopyStatus {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::Success(message) | Self::Error(message) => message,
+        }
+    }
+
+    pub(crate) fn is_success(&self) -> bool {
+        matches!(self, Self::Success(_))
+    }
+}
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";

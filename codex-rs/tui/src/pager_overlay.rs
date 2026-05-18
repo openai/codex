@@ -17,10 +17,14 @@
 
 use std::io::Result;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::chatwidget::CopyStatus;
 use crate::footer_hints::FooterHint;
 use crate::footer_hints::footer_hint_line_for_row;
+use crate::footer_hints::render_footer_line_with_optional_right;
 use crate::footer_hints::render_footer_separator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
@@ -514,9 +518,18 @@ pub(crate) struct TranscriptOverlay {
     copy_keymap: Vec<KeyBinding>,
     toggle_raw_output_keymap: Vec<KeyBinding>,
     copy_requested: bool,
+    footer_status: Option<FooterStatus>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
     is_done: bool,
+}
+
+const FOOTER_STATUS_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Clone)]
+struct FooterStatus {
+    line: Line<'static>,
+    expires_at: Instant,
 }
 
 /// Cache key for the active-cell "live tail" appended to the transcript overlay.
@@ -559,6 +572,7 @@ impl TranscriptOverlay {
             copy_keymap,
             toggle_raw_output_keymap,
             copy_requested: false,
+            footer_status: None,
             live_tail_key: None,
             is_done: false,
         }
@@ -788,6 +802,12 @@ impl TranscriptOverlay {
         std::mem::take(&mut self.copy_requested)
     }
 
+    pub(crate) fn show_copy_status(&mut self, status: &CopyStatus, tui: &mut tui::Tui) {
+        self.show_copy_status_at(status, Instant::now());
+        tui.frame_requester().schedule_frame();
+        tui.frame_requester().schedule_frame_in(FOOTER_STATUS_TTL);
+    }
+
     pub(crate) fn selected_user_cell(&self) -> Option<usize> {
         self.highlight_cell.filter(|idx| {
             self.cells
@@ -901,6 +921,33 @@ impl TranscriptOverlay {
         renderable
     }
 
+    fn show_copy_status_at(&mut self, status: &CopyStatus, now: Instant) {
+        let line = if status.is_success() {
+            Line::from(status.message().to_string().green())
+        } else {
+            Line::from(status.message().to_string().red())
+        };
+        self.footer_status = Some(FooterStatus {
+            line,
+            expires_at: now + FOOTER_STATUS_TTL,
+        });
+    }
+
+    fn clear_footer_status(&mut self) -> bool {
+        self.footer_status.take().is_some()
+    }
+
+    fn clear_expired_footer_status_at(&mut self, now: Instant) -> bool {
+        if self
+            .footer_status
+            .as_ref()
+            .is_some_and(|status| status.expires_at <= now)
+        {
+            return self.clear_footer_status();
+        }
+        false
+    }
+
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
@@ -936,7 +983,14 @@ impl TranscriptOverlay {
             FooterHint::new(key_label(&page_keys), "page", "page", /*priority*/ 6),
             FooterHint::new(key_label(&jump_keys), "jump", "jump", /*priority*/ 7),
         ];
-        footer_hint_line_for_row(&navigation_hints, area.width).render_ref(line1, buf);
+        render_footer_line_with_optional_right(
+            line1,
+            buf,
+            footer_hint_line_for_row(&navigation_hints, area.width),
+            self.footer_status
+                .as_ref()
+                .map(|status| status.line.clone()),
+        );
 
         let mut action_hints = Vec::new();
         action_hints.push(FooterHint::new(
@@ -1002,6 +1056,7 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.clear_expired_footer_status_at(Instant::now());
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
@@ -1014,37 +1069,40 @@ impl TranscriptOverlay {
 impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
-            TuiEvent::Key(key_event) => match key_event {
-                e if self.view.keymap.close.is_pressed(e)
-                    || self.view.keymap.close_transcript.is_pressed(e) =>
-                {
-                    self.is_done = true;
-                    Ok(())
+            TuiEvent::Key(key_event) => {
+                self.clear_footer_status();
+                match key_event {
+                    e if self.view.keymap.close.is_pressed(e)
+                        || self.view.keymap.close_transcript.is_pressed(e) =>
+                    {
+                        self.is_done = true;
+                        Ok(())
+                    }
+                    e if self.view.keymap.previous_user_prompt.is_pressed(e) => {
+                        self.move_prompt_selection(PromptSelectionDirection::Previous);
+                        tui.frame_requester()
+                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                        Ok(())
+                    }
+                    e if self.view.keymap.next_user_prompt.is_pressed(e) => {
+                        self.move_prompt_selection(PromptSelectionDirection::Next);
+                        tui.frame_requester()
+                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                        Ok(())
+                    }
+                    e if self.toggle_raw_output_keymap.is_pressed(e) => {
+                        self.toggle_render_mode();
+                        tui.frame_requester()
+                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                        Ok(())
+                    }
+                    e if self.copy_keymap.is_pressed(e) => {
+                        self.copy_requested = true;
+                        Ok(())
+                    }
+                    other => self.view.handle_key_event(tui, other),
                 }
-                e if self.view.keymap.previous_user_prompt.is_pressed(e) => {
-                    self.move_prompt_selection(PromptSelectionDirection::Previous);
-                    tui.frame_requester()
-                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                    Ok(())
-                }
-                e if self.view.keymap.next_user_prompt.is_pressed(e) => {
-                    self.move_prompt_selection(PromptSelectionDirection::Next);
-                    tui.frame_requester()
-                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                    Ok(())
-                }
-                e if self.toggle_raw_output_keymap.is_pressed(e) => {
-                    self.toggle_render_mode();
-                    tui.frame_requester()
-                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                    Ok(())
-                }
-                e if self.copy_keymap.is_pressed(e) => {
-                    self.copy_requested = true;
-                    Ok(())
-                }
-                other => self.view.handle_key_event(tui, other),
-            },
+            }
             TuiEvent::Draw | TuiEvent::Resize => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -1206,6 +1264,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
+    use std::time::Instant;
 
     use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
@@ -1214,7 +1273,7 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_protocol::parse_command::ParsedCommand;
-    use ratatui::Terminal;
+    use ratatui::Terminal as RatatuiTerminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
     use ratatui::text::Text;
@@ -1339,7 +1398,7 @@ mod tests {
                 lines: vec![Line::from("gamma")],
             }),
         ]);
-        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
@@ -1381,7 +1440,7 @@ mod tests {
             |_| Some(vec![HyperlinkLine::from("tail")]),
         );
 
-        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
@@ -1548,6 +1607,12 @@ mod tests {
         out
     }
 
+    fn render_snapshot(overlay: &mut TranscriptOverlay, area: Rect) -> String {
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        buffer_to_text(&buf, area)
+    }
+
     #[test]
     fn transcript_overlay_apply_patch_scroll_vt100_clears_previous_page() {
         let cwd = PathBuf::from("/repo");
@@ -1614,6 +1679,94 @@ mod tests {
     }
 
     #[test]
+    fn transcript_overlay_footer_status_snapshot() {
+        let mut overlay = transcript_overlay(vec![user_cell("prompt")]);
+        overlay.show_copy_status_at(
+            &CopyStatus::Success("Copied selected turn to clipboard".into()),
+            Instant::now(),
+        );
+
+        assert_snapshot!(
+            "transcript_overlay_footer_status",
+            render_snapshot(
+                &mut overlay,
+                Rect::new(
+                    /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 8
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_footer_status_snapshot_narrow() {
+        let mut overlay = transcript_overlay(vec![user_cell("prompt")]);
+        overlay.show_copy_status_at(
+            &CopyStatus::Error("No agent response to copy for selected prompt".into()),
+            Instant::now(),
+        );
+
+        assert_snapshot!(
+            "transcript_overlay_footer_status_narrow",
+            render_snapshot(
+                &mut overlay,
+                Rect::new(
+                    /*x*/ 0, /*y*/ 0, /*width*/ 28, /*height*/ 8
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_footer_status_can_be_cleared_immediately() {
+        let mut overlay = transcript_overlay(vec![user_cell("prompt")]);
+        overlay.show_copy_status_at(
+            &CopyStatus::Success("Copied selected turn to clipboard".into()),
+            Instant::now(),
+        );
+        assert!(overlay.clear_footer_status());
+
+        assert!(overlay.footer_status.is_none());
+    }
+
+    #[test]
+    fn transcript_overlay_footer_status_clears_after_expiry() {
+        let mut overlay = transcript_overlay(vec![user_cell("prompt")]);
+        overlay.show_copy_status_at(
+            &CopyStatus::Success("Copied selected turn to clipboard".into()),
+            Instant::now() - FOOTER_STATUS_TTL,
+        );
+
+        let _ = render_snapshot(
+            &mut overlay,
+            Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 8,
+            ),
+        );
+
+        assert!(overlay.footer_status.is_none());
+    }
+
+    #[test]
+    fn transcript_overlay_footer_status_replaces_previous_message() {
+        let mut overlay = transcript_overlay(vec![user_cell("prompt")]);
+        overlay.show_copy_status_at(
+            &CopyStatus::Error("Copy failed: blocked".into()),
+            Instant::now(),
+        );
+        overlay.show_copy_status_at(
+            &CopyStatus::Success("Copied selected turn to clipboard".into()),
+            Instant::now(),
+        );
+
+        let status = overlay.footer_status.as_ref().expect("status").line.clone();
+        assert_eq!(status.spans.len(), 1);
+        assert_eq!(
+            status.spans[0].content.as_ref(),
+            "Copied selected turn to clipboard"
+        );
+    }
+
+    #[test]
     fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
         let mut overlay = transcript_overlay(
             (0..20)
@@ -1624,7 +1777,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
 
@@ -1651,7 +1804,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
 
@@ -1725,7 +1878,7 @@ mod tests {
             vec!["one".into(), "two".into(), "three".into()],
             "S T A T I C",
         );
-        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
@@ -1831,7 +1984,7 @@ mod tests {
             vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
             "S T A T I C",
         );
-        let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
+        let mut term = RatatuiTerminal::new(TestBackend::new(24, 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
