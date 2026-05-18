@@ -103,12 +103,14 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -230,12 +232,14 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -310,13 +314,14 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    initial
-        .codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &initial.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     initial
         .codex
@@ -409,13 +414,14 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    initial
-        .codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &initial.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             approval_policy: Some(AskForApproval::Never),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     initial
         .codex

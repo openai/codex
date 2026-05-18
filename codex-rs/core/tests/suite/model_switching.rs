@@ -161,12 +161,14 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some(next_model.to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex
         .submit(read_only_user_turn(
@@ -231,13 +233,15 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some(next_model.to_string()),
             personality: Some(Personality::Pragmatic),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex
         .submit(read_only_user_turn(
@@ -969,12 +973,14 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     );
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .update_turn_context_overrides(codex_core::CodexThreadTurnContextOverrides {
+    core_test_support::submit_turn_context(
+        &test.codex,
+        codex_protocol::protocol::TurnContextOverrides {
             model: Some(smaller_model_slug.to_string()),
             ..Default::default()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     test.codex
         .submit(read_only_user_turn(
