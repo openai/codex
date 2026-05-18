@@ -35,6 +35,7 @@ use crate::app_event::AppEvent;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
+use crate::key_hint::KeyBindingListExt;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -104,9 +105,9 @@ pub(crate) struct PendingBacktrackRollback {
 impl App {
     /// Route overlay events while the transcript overlay is active.
     ///
-    /// If backtrack preview is active, Esc / Left steps selection, Right steps forward, Enter
-    /// confirms. Otherwise, Esc begins preview mode and all other events are forwarded to the
-    /// overlay.
+    /// If backtrack preview is active, Esc / previous-prompt steps selection, next-prompt steps
+    /// forward, Enter confirms. Otherwise, Esc or a prompt-selection key begins preview mode and
+    /// all other events are forwarded to the overlay.
     pub(crate) async fn handle_backtrack_overlay_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -122,19 +123,15 @@ impl App {
                     self.overlay_step_backtrack(tui, event)?;
                     Ok(true)
                 }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
+                TuiEvent::Key(key_event)
+                    if self.keymap.pager.previous_user_prompt.is_pressed(key_event) =>
+                {
                     self.overlay_step_backtrack(tui, event)?;
                     Ok(true)
                 }
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => {
+                TuiEvent::Key(key_event)
+                    if self.keymap.pager.next_user_prompt.is_pressed(key_event) =>
+                {
                     self.overlay_step_backtrack_forward(tui, event)?;
                     Ok(true)
                 }
@@ -151,13 +148,19 @@ impl App {
                     Ok(true)
                 }
             }
-        } else if let TuiEvent::Key(KeyEvent {
-            code: KeyCode::Esc,
-            kind: KeyEventKind::Press | KeyEventKind::Repeat,
-            ..
-        }) = event
+        } else if let TuiEvent::Key(key_event) = event
+            && (matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }
+            ) || self.keymap.pager.previous_user_prompt.is_pressed(key_event)
+                || self.keymap.pager.next_user_prompt.is_pressed(key_event))
         {
-            // First Esc in transcript overlay: begin backtrack preview at latest user message.
+            // First Esc / prompt-selection key in transcript overlay: begin backtrack preview at
+            // latest user message.
             self.begin_overlay_backtrack_preview(tui);
             Ok(true)
         } else {
@@ -496,7 +499,8 @@ impl App {
         Ok(())
     }
 
-    /// Handle Right in overlay backtrack preview: step selection forward if armed, else forward.
+    /// Handle next-prompt in overlay backtrack preview: step selection forward if armed, else
+    /// forward.
     fn overlay_step_backtrack_forward(
         &mut self,
         tui: &mut tui::Tui,

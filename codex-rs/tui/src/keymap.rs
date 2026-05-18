@@ -1091,8 +1091,8 @@ impl RuntimeKeymap {
                 jump_bottom: default_bindings![plain(KeyCode::End)],
                 close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
                 close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
-                previous_user_prompt: default_bindings![alt(KeyCode::Up)],
-                next_user_prompt: default_bindings![alt(KeyCode::Down)],
+                previous_user_prompt: default_bindings![plain(KeyCode::Left), alt(KeyCode::Up)],
+                next_user_prompt: default_bindings![plain(KeyCode::Right), alt(KeyCode::Down)],
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -1802,14 +1802,6 @@ const TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
     (
         "fixed.transcript_edit_previous",
         key_hint::plain(KeyCode::Esc),
-    ),
-    (
-        "fixed.transcript_edit_previous",
-        key_hint::plain(KeyCode::Left),
-    ),
-    (
-        "fixed.transcript_edit_next",
-        key_hint::plain(KeyCode::Right),
     ),
     (
         "fixed.transcript_confirm_edit",
@@ -2642,9 +2634,26 @@ mod tests {
     #[test]
     fn rejects_pager_bindings_that_collide_with_transcript_backtrack_keys() {
         let mut keymap = TuiKeymap::default();
-        keymap.pager.close = Some(one("left"));
+        keymap.pager.close = Some(one("enter"));
 
-        expect_conflict(&keymap, "close", "fixed.transcript_edit_previous");
+        expect_conflict(&keymap, "close", "fixed.transcript_confirm_edit");
+    }
+
+    #[test]
+    fn pager_prompt_selection_defaults_to_left_and_right_arrows() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.pager.previous_user_prompt,
+            vec![key_hint::plain(KeyCode::Left), key_hint::alt(KeyCode::Up)]
+        );
+        assert_eq!(
+            runtime.pager.next_user_prompt,
+            vec![
+                key_hint::plain(KeyCode::Right),
+                key_hint::alt(KeyCode::Down)
+            ]
+        );
     }
 
     #[test]

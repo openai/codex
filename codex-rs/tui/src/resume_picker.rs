@@ -9,6 +9,9 @@ mod transcript;
 use crate::app_server_session::AppServerSession;
 use crate::color::blend;
 use crate::color::is_light;
+use crate::footer_hints::FooterHint;
+use crate::footer_hints::footer_hint_line_for_row;
+use crate::footer_hints::render_footer_separator;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
@@ -73,9 +76,6 @@ const SESSION_META_MIN_CWD_WIDTH: usize = 30;
 const SESSION_META_MAX_CWD_WIDTH: usize = 72;
 const SESSION_META_BRANCH_ICON: &str = "";
 const SESSION_META_CWD_ICON: &str = "⌁";
-const FOOTER_COMPACT_BREAKPOINT: u16 = 120;
-const FOOTER_HINT_LEFT_PADDING: usize = 1;
-const FOOTER_HINT_GAP: usize = 3;
 const PICKER_CHROME_HEIGHT: u16 = 8;
 const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 
@@ -2023,13 +2023,6 @@ fn filter_mode_label(filter_mode: SessionFilterMode) -> &'static str {
     }
 }
 
-struct PickerFooterHint {
-    key: &'static str,
-    wide_label: String,
-    compact_label: String,
-    priority: u8,
-}
-
 fn render_picker_footer(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
@@ -2041,9 +2034,9 @@ fn render_picker_footer(
     }
 
     let separator = Rect::new(area.x, area.y, area.width, 1);
-    render_picker_footer_separator(
-        frame,
+    render_footer_separator(
         separator,
+        frame.buffer,
         picker_footer_progress_label(state, list_height, area.width),
     );
 
@@ -2054,30 +2047,6 @@ fn render_picker_footer(
             break;
         }
         frame.render_widget_ref(line, Rect::new(area.x, y, area.width, 1));
-    }
-}
-
-fn render_picker_footer_separator(
-    frame: &mut crate::custom_terminal::Frame,
-    area: Rect,
-    progress_label: String,
-) {
-    if area.width == 0 {
-        return;
-    }
-
-    let separator = "─".repeat(area.width as usize);
-    frame.render_widget_ref(Line::from(separator.dim()), area);
-
-    let progress_width = UnicodeWidthStr::width(progress_label.as_str()) as u16;
-    if progress_width < area.width {
-        let percent_area = Rect::new(
-            area.x + area.width - progress_width - 1,
-            area.y,
-            progress_width,
-            1,
-        );
-        frame.render_widget_ref(Line::from(progress_label.dim()), percent_area);
     }
 }
 
@@ -2147,23 +2116,10 @@ fn picker_footer_scroll_percent(state: &PickerState, list_height: u16) -> u8 {
 fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
     if state.is_transcript_loading() {
         let hints = [
-            PickerFooterHint {
-                key: "loading",
-                wide_label: String::from("transcript"),
-                compact_label: String::from("transcript"),
-                priority: 0,
-            },
-            PickerFooterHint {
-                key: "ctrl+c",
-                wide_label: String::from("quit"),
-                compact_label: String::from("quit"),
-                priority: 1,
-            },
+            FooterHint::new("loading", "transcript", "transcript", /*priority*/ 0),
+            FooterHint::new("ctrl+c", "quit", "quit", /*priority*/ 1),
         ];
-        let line = fit_footer_hints(&hints, FooterHintLabelMode::Wide, width)
-            .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::Compact, width))
-            .or_else(|| fit_footer_hints(&hints, FooterHintLabelMode::KeyOnly, width))
-            .unwrap_or_default();
+        let line = footer_hint_line_for_row(&hints, width);
         return vec![line, Line::default()];
     }
 
@@ -2189,97 +2145,28 @@ fn footer_hint_lines(state: &PickerState, width: u16) -> Vec<Line<'static>> {
         SessionListDensity::Dense => "comfy",
     };
     let first_row_hints = vec![
-        PickerFooterHint {
-            key: "enter",
-            wide_label: action_label.to_string(),
-            compact_label: action_label.to_string(),
-            priority: 0,
-        },
-        PickerFooterHint {
-            key: "esc",
-            wide_label: esc_label.to_string(),
-            compact_label: esc_compact_label.to_string(),
-            priority: 1,
-        },
-        PickerFooterHint {
-            key: "ctrl+c",
-            wide_label: ctrl_c_label.to_string(),
-            compact_label: ctrl_c_label.to_string(),
-            priority: 2,
-        },
-        PickerFooterHint {
-            key: "tab",
-            wide_label: String::from("focus sort/filter"),
-            compact_label: String::from("focus"),
-            priority: 7,
-        },
-        PickerFooterHint {
-            key: "←/→",
-            wide_label: String::from("change option"),
-            compact_label: String::from("option"),
-            priority: 8,
-        },
+        FooterHint::new("enter", action_label, action_label, /*priority*/ 0),
+        FooterHint::new("esc", esc_label, esc_compact_label, /*priority*/ 1),
+        FooterHint::new("ctrl+c", ctrl_c_label, ctrl_c_label, /*priority*/ 2),
+        FooterHint::new("tab", "focus sort/filter", "focus", /*priority*/ 7),
+        FooterHint::new("←/→", "change option", "option", /*priority*/ 8),
     ];
     let second_row_hints = vec![
-        PickerFooterHint {
-            key: "ctrl+o",
-            wide_label: density_label.to_string(),
-            compact_label: density_compact_label.to_string(),
-            priority: 3,
-        },
-        PickerFooterHint {
-            key: "ctrl+t",
-            wide_label: String::from("transcript"),
-            compact_label: String::from("preview"),
-            priority: 4,
-        },
-        PickerFooterHint {
-            key: "ctrl+e",
-            wide_label: String::from("expand"),
-            compact_label: String::from("exp"),
-            priority: 6,
-        },
-        PickerFooterHint {
-            key: "↑/↓",
-            wide_label: String::from("browse"),
-            compact_label: String::from("browse"),
-            priority: 5,
-        },
+        FooterHint::new(
+            "ctrl+o",
+            density_label,
+            density_compact_label,
+            /*priority*/ 3,
+        ),
+        FooterHint::new("ctrl+t", "transcript", "preview", /*priority*/ 4),
+        FooterHint::new("ctrl+e", "expand", "exp", /*priority*/ 6),
+        FooterHint::new("↑/↓", "browse", "browse", /*priority*/ 5),
     ];
 
     vec![
-        hint_line_for_row(&first_row_hints, width),
-        hint_line_for_row(&second_row_hints, width),
+        footer_hint_line_for_row(&first_row_hints, width),
+        footer_hint_line_for_row(&second_row_hints, width),
     ]
-}
-
-fn hint_line_for_row(hints: &[PickerFooterHint], width: u16) -> Line<'static> {
-    if width >= FOOTER_COMPACT_BREAKPOINT
-        && let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::Wide, width)
-    {
-        return line;
-    }
-    if let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::Compact, width) {
-        return line;
-    }
-    if let Some(line) = fit_footer_hints(hints, FooterHintLabelMode::KeyOnly, width) {
-        return line;
-    }
-
-    let mut retained = (0..hints.len()).collect::<Vec<_>>();
-    retained.sort_by_key(|idx| hints[*idx].priority);
-    for retain_count in (1..=retained.len()).rev() {
-        let mut candidate_indices = retained[..retain_count].to_vec();
-        candidate_indices.sort_unstable();
-        let candidate = candidate_indices
-            .iter()
-            .map(|idx| &hints[*idx])
-            .collect::<Vec<_>>();
-        if let Some(line) = fit_footer_hint_refs(&candidate, FooterHintLabelMode::KeyOnly, width) {
-            return line;
-        }
-    }
-    Line::default()
 }
 
 fn render_transcript_loading_overlay(frame: &mut crate::custom_terminal::Frame, area: Rect) {
@@ -2329,99 +2216,6 @@ fn transcript_loading_overlay_style() -> Style {
         ((255, 255, 255), 0.14)
     };
     Style::default().bg(best_color(blend(overlay, bg, alpha)))
-}
-
-#[derive(Clone, Copy)]
-enum FooterHintLabelMode {
-    Wide,
-    Compact,
-    KeyOnly,
-}
-
-fn fit_footer_hints(
-    hints: &[PickerFooterHint],
-    mode: FooterHintLabelMode,
-    width: u16,
-) -> Option<Line<'static>> {
-    let hint_refs = hints.iter().collect::<Vec<_>>();
-    fit_footer_hint_refs(&hint_refs, mode, width)
-}
-
-fn fit_footer_hint_refs(
-    hints: &[&PickerFooterHint],
-    mode: FooterHintLabelMode,
-    width: u16,
-) -> Option<Line<'static>> {
-    let gap_width = FOOTER_HINT_GAP;
-    if footer_hints_width(hints, mode, gap_width) > width as usize {
-        return None;
-    }
-
-    let mut spans = vec![
-        " ".repeat(FOOTER_HINT_LEFT_PADDING)
-            .set_style(footer_hint_label_style()),
-    ];
-    for (idx, hint) in hints.iter().enumerate() {
-        if idx > 0 {
-            spans.push(" ".repeat(gap_width).set_style(footer_hint_label_style()));
-        }
-        spans.push(hint.key.set_style(footer_hint_key_style()));
-        let label = match mode {
-            FooterHintLabelMode::Wide => Some(hint.wide_label.as_str()),
-            FooterHintLabelMode::Compact => Some(hint.compact_label.as_str()),
-            FooterHintLabelMode::KeyOnly => None,
-        };
-        if let Some(label) = label {
-            spans.push(" ".set_style(footer_hint_label_style()));
-            spans.push(label.to_string().set_style(footer_hint_label_style()));
-        }
-    }
-    Some(spans.into())
-}
-
-fn footer_hint_key_style() -> Style {
-    if default_bg().is_some_and(is_light) {
-        Style::default().fg(Color::Black)
-    } else {
-        Style::default()
-    }
-}
-
-fn footer_hint_label_style() -> Style {
-    if default_bg().is_some_and(is_light) {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().dim()
-    }
-}
-
-fn footer_hints_width(
-    hints: &[&PickerFooterHint],
-    mode: FooterHintLabelMode,
-    gap_width: usize,
-) -> usize {
-    FOOTER_HINT_LEFT_PADDING
-        + hints
-            .iter()
-            .enumerate()
-            .map(|(idx, hint)| {
-                let label_width = match mode {
-                    FooterHintLabelMode::Wide => {
-                        1 + UnicodeWidthStr::width(hint.wide_label.as_str())
-                    }
-                    FooterHintLabelMode::Compact => {
-                        1 + UnicodeWidthStr::width(hint.compact_label.as_str())
-                    }
-                    FooterHintLabelMode::KeyOnly => 0,
-                };
-                let hint_width = UnicodeWidthStr::width(hint.key) + label_width;
-                if idx == 0 {
-                    hint_width
-                } else {
-                    hint_width + gap_width
-                }
-            })
-            .sum::<usize>()
 }
 
 fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {

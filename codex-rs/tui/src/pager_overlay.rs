@@ -19,6 +19,9 @@ use std::io::Result;
 use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::footer_hints::FooterHint;
+use crate::footer_hints::footer_hint_line_for_row;
+use crate::footer_hints::render_footer_separator;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::UserHistoryCell;
@@ -43,7 +46,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::text::Text;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
@@ -125,25 +127,12 @@ fn first_or_empty(bindings: &[KeyBinding]) -> Vec<KeyBinding> {
     bindings.first().copied().into_iter().collect()
 }
 
-// Render a single line of key hints from (key(s), description) pairs.
-fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &str)]) {
-    let mut spans: Vec<Span<'static>> = vec![" ".into()];
-    let mut first = true;
-    for (keys, desc) in pairs {
-        if !first {
-            spans.push("   ".into());
-        }
-        for (i, key) in keys.iter().enumerate() {
-            if i > 0 {
-                spans.push("/".into());
-            }
-            spans.push(Span::from(key));
-        }
-        spans.push(" ".into());
-        spans.push(Span::from(desc.to_string()));
-        first = false;
-    }
-    Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
+fn key_label(bindings: &[KeyBinding]) -> String {
+    bindings
+        .iter()
+        .map(KeyBinding::display_label)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Generic widget for rendering a pager view.
@@ -223,11 +212,11 @@ impl PagerView {
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        self.render_header(area, buf);
         let content_area = self.content_area(area);
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
         self.last_rendered_height = Some(content_height);
+        self.render_header(area, content_area, buf, content_height);
         // If there is a pending request to scroll a specific chunk into view,
         // satisfy it now that wrapping is up to date for this width.
         if let Some(idx) = self.pending_scroll_chunk.take() {
@@ -242,12 +231,13 @@ impl PagerView {
         self.render_bottom_bar(area, content_area, buf, content_height);
     }
 
-    fn render_header(&self, area: Rect, buf: &mut Buffer) {
-        Span::from("/ ".repeat(area.width as usize / 2))
+    fn render_header(&self, area: Rect, content_area: Rect, buf: &mut Buffer, total_len: usize) {
+        let header = Rect::new(area.x, area.y, area.width, 1);
+        render_footer_separator(header, buf, String::new());
+        let percent = self.scroll_percent(content_area.height, total_len);
+        format!(" {} · {percent}% ", self.title)
             .dim()
-            .render_ref(area, buf);
-        let header = format!("/ {}", self.title);
-        header.dim().render_ref(area, buf);
+            .render_ref(header, buf);
     }
 
     fn render_content(&mut self, area: Rect, buf: &mut Buffer) {
@@ -310,31 +300,23 @@ impl PagerView {
         full_area: Rect,
         content_area: Rect,
         buf: &mut Buffer,
-        total_len: usize,
+        _total_len: usize,
     ) {
         let sep_y = content_area.bottom();
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
 
-        Span::from("─".repeat(sep_rect.width as usize))
-            .dim()
-            .render_ref(sep_rect, buf);
-        let percent = if total_len == 0 {
-            100
-        } else {
-            let max_scroll = total_len.saturating_sub(content_area.height as usize);
-            if max_scroll == 0 {
-                100
-            } else {
-                (((self.scroll_offset.min(max_scroll)) as f32 / max_scroll as f32) * 100.0).round()
-                    as u8
-            }
-        };
-        let pct_text = format!(" {percent}% ");
-        let pct_w = pct_text.chars().count() as u16;
-        let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
-        Span::from(pct_text)
-            .dim()
-            .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
+        render_footer_separator(sep_rect, buf, String::new());
+    }
+
+    fn scroll_percent(&self, content_height: u16, total_len: usize) -> u8 {
+        if total_len == 0 {
+            return 100;
+        }
+        let max_scroll = total_len.saturating_sub(content_height as usize);
+        if max_scroll == 0 {
+            return 100;
+        }
+        (((self.scroll_offset.min(max_scroll)) as f32 / max_scroll as f32) * 100.0).round() as u8
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
@@ -567,7 +549,7 @@ impl TranscriptOverlay {
         Self {
             view: PagerView::new(
                 Self::render_cells(&transcript_cells, state.highlight_cell, state.render_mode),
-                "T R A N S C R I P T".to_string(),
+                "Transcript".to_string(),
                 state.scroll_offset,
                 keymap,
             ),
@@ -592,7 +574,7 @@ impl TranscriptOverlay {
             .enumerate()
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
-                let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
+                let base_renderable = if c.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: if highlight_cell == Some(i) {
@@ -609,6 +591,7 @@ impl TranscriptOverlay {
                         render_mode,
                     })) as Box<dyn Renderable>
                 };
+                let mut cell_renderable = base_renderable;
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
                         cell_renderable,
@@ -853,6 +836,29 @@ impl TranscriptOverlay {
         self.set_highlight_cell(Some(next_prompt));
     }
 
+    fn header_title(&self) -> String {
+        let total = self
+            .cells
+            .iter()
+            .filter(|cell| cell.is_user_prompt())
+            .count();
+        let Some(highlight_cell) = self.highlight_cell else {
+            let noun = if total == 1 { "prompt" } else { "prompts" };
+            return format!("Transcript · {total} {noun}");
+        };
+        let selected = self
+            .cells
+            .iter()
+            .take(highlight_cell.saturating_add(1))
+            .filter(|cell| cell.is_user_prompt())
+            .count();
+        if selected == 0 || total == 0 {
+            let noun = if total == 1 { "prompt" } else { "prompts" };
+            return format!("Transcript · {total} {noun}");
+        }
+        format!("Transcript · {selected}/{total}")
+    }
+
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
         self.view.renderables =
@@ -898,69 +904,108 @@ impl TranscriptOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.previous_user_prompt)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.next_user_prompt))
-                        .collect(),
-                    "to prompts",
-                ),
-            ],
-        );
+        let scroll_keys = first_or_empty(&self.view.keymap.scroll_up)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.scroll_down))
+            .collect::<Vec<_>>();
+        let page_keys = first_or_empty(&self.view.keymap.page_up)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.page_down))
+            .collect::<Vec<_>>();
+        let jump_keys = first_or_empty(&self.view.keymap.jump_top)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.jump_bottom))
+            .collect::<Vec<_>>();
+        let prompt_keys = first_or_empty(&self.view.keymap.previous_user_prompt)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.next_user_prompt))
+            .collect::<Vec<_>>();
+        let navigation_hints = vec![
+            FooterHint::new(
+                key_label(&scroll_keys),
+                "scroll",
+                "scroll",
+                /*priority*/ 1,
+            ),
+            FooterHint::new(
+                key_label(&prompt_keys),
+                "prompts",
+                "prompts",
+                /*priority*/ 2,
+            ),
+            FooterHint::new(key_label(&page_keys), "page", "page", /*priority*/ 6),
+            FooterHint::new(key_label(&jump_keys), "jump", "jump", /*priority*/ 7),
+        ];
+        footer_hint_line_for_row(&navigation_hints, area.width).render_ref(line1, buf);
 
-        let mut pairs: Vec<(Vec<KeyBinding>, &str)> = Vec::new();
+        let mut action_hints = Vec::new();
+        action_hints.push(FooterHint::new(
+            key_label(&first_or_empty(&self.view.keymap.close)),
+            "quit",
+            "quit",
+            /*priority*/ 0,
+        ));
         if !self.copy_keymap.is_empty() {
-            pairs.push((first_or_empty(&self.copy_keymap), "to copy"));
+            action_hints.push(FooterHint::new(
+                key_label(&first_or_empty(&self.copy_keymap)),
+                "copy",
+                "copy",
+                /*priority*/ 3,
+            ));
         }
         if !self.toggle_raw_output_keymap.is_empty() {
-            pairs.push((first_or_empty(&self.toggle_raw_output_keymap), "raw"));
-        }
-        pairs.push((first_or_empty(&self.view.keymap.close), "to quit"));
-        if self.highlight_cell.is_some() {
-            pairs.push((
-                vec![
-                    key_hint::plain(KeyCode::Esc),
-                    key_hint::plain(KeyCode::Left),
-                ],
-                "to edit prev",
+            let mode_label = match self.render_mode {
+                HistoryRenderMode::Rich => "raw",
+                HistoryRenderMode::Raw => "rich",
+            };
+            action_hints.push(FooterHint::new(
+                key_label(&first_or_empty(&self.toggle_raw_output_keymap)),
+                mode_label,
+                mode_label,
+                /*priority*/ 4,
             ));
-            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to edit next"));
-            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to edit message"));
-        } else {
-            pairs.push((vec![key_hint::plain(KeyCode::Esc)], "to edit prev"));
         }
-        render_key_hints(line2, buf, &pairs);
+        if self.highlight_cell.is_some() {
+            let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
+                .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
+                .collect::<Vec<_>>();
+            action_hints.push(FooterHint::new(
+                key_label(&previous_edit_keys),
+                "edit prev",
+                "prev",
+                /*priority*/ 8,
+            ));
+            action_hints.push(FooterHint::new(
+                key_label(&first_or_empty(&self.view.keymap.next_user_prompt)),
+                "edit next",
+                "next",
+                /*priority*/ 9,
+            ));
+            action_hints.push(FooterHint::new(
+                key_label(&[key_hint::plain(KeyCode::Enter)]),
+                "edit message",
+                "edit",
+                /*priority*/ 10,
+            ));
+        } else {
+            let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
+                .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
+                .collect::<Vec<_>>();
+            action_hints.push(FooterHint::new(
+                key_label(&previous_edit_keys),
+                "edit prev",
+                "prev",
+                /*priority*/ 8,
+            ));
+        }
+        footer_hint_line_for_row(&action_hints, area.width).render_ref(line2, buf);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
+        self.view.title = self.header_title();
         self.view.render(top, buf);
         self.render_hints(bottom, buf);
     }
@@ -1057,36 +1102,37 @@ impl StaticOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-            ],
-        );
-        let pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
-        render_key_hints(line2, buf, &pairs);
+        let scroll_keys = first_or_empty(&self.view.keymap.scroll_up)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.scroll_down))
+            .collect::<Vec<_>>();
+        let page_keys = first_or_empty(&self.view.keymap.page_up)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.page_down))
+            .collect::<Vec<_>>();
+        let jump_keys = first_or_empty(&self.view.keymap.jump_top)
+            .into_iter()
+            .chain(first_or_empty(&self.view.keymap.jump_bottom))
+            .collect::<Vec<_>>();
+        let navigation_hints = vec![
+            FooterHint::new(
+                key_label(&scroll_keys),
+                "scroll",
+                "scroll",
+                /*priority*/ 1,
+            ),
+            FooterHint::new(key_label(&page_keys), "page", "page", /*priority*/ 6),
+            FooterHint::new(key_label(&jump_keys), "jump", "jump", /*priority*/ 7),
+        ];
+        footer_hint_line_for_row(&navigation_hints, area.width).render_ref(line1, buf);
+
+        let action_hints = vec![FooterHint::new(
+            key_label(&first_or_empty(&self.view.keymap.close)),
+            "quit",
+            "quit",
+            /*priority*/ 0,
+        )];
+        footer_hint_line_for_row(&action_hints, area.width).render_ref(line2, buf);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -1164,11 +1210,13 @@ mod tests {
     use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
     use crate::history_cell;
+    use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_protocol::parse_command::ParsedCommand;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
     use ratatui::text::Text;
 
     #[derive(Debug)]
@@ -1407,6 +1455,52 @@ mod tests {
 
         overlay.move_prompt_selection(PromptSelectionDirection::Next);
         assert_eq!(overlay.selected_user_cell(), Some(2));
+    }
+
+    #[test]
+    fn transcript_header_counts_selected_user_prompt() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )),
+            user_cell("second"),
+        ]);
+
+        assert_eq!(overlay.header_title(), "Transcript · 2 prompts");
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.header_title(), "Transcript · 2/2");
+
+        overlay.move_prompt_selection(PromptSelectionDirection::Previous);
+        assert_eq!(overlay.header_title(), "Transcript · 1/2");
+    }
+
+    #[test]
+    fn selected_user_prompt_keeps_reversed_style_without_role_gutter() {
+        let mut overlay = transcript_overlay(vec![user_cell("selected prompt")]);
+        overlay.set_highlight_cell(Some(0));
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 8,
+        );
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+        let rendered = buffer_to_text(&buf, area);
+
+        assert!(!rendered.contains('▌'));
+        assert!(!rendered.contains('│'));
+        let prompt_marker = (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+            .find(|(x, y)| buf[(*x, *y)].symbol() == "›")
+            .expect("expected selected prompt marker");
+        assert!(
+            buf[prompt_marker]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 
     #[test]

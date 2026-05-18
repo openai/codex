@@ -2,11 +2,11 @@
 source: tui/src/pager_overlay.rs
 expression: term.backend()
 ---
-"/ S T A T I C / / / / / "
+" S T A T I C · 0% ──────"
 "a very long line that   "
 "should wrap when        "
 "rendered within a narrow"
-"─────────────────── 0% ─"
-" ↑/↓ to scroll   pgup/pg"
-" q to quit              "
+"────────────────────────"
+" ↑/↓   pgup/pgdn        "
+" q quit                 "
 "                        "
