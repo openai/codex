@@ -76,10 +76,3 @@ pub use codex_protocol::protocol::TurnEnvironmentSelection;
 pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;
 pub use codex_utils_absolute_path::AbsolutePathBuf;
-
-pub fn plugins_extension_registry<C>() -> std::sync::Arc<codex_extension_api::ExtensionRegistry<C>>
-{
-    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
-    codex_plugins_extension::install(&mut builder);
-    std::sync::Arc::new(builder.build())
-}

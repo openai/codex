@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
@@ -31,9 +33,38 @@ pub struct InstallablePluginsProviderHandle {
     provider: Arc<dyn InstallablePluginsProvider>,
 }
 
+pub type InstallablePluginsFuture =
+    Pin<Box<dyn Future<Output = Result<Vec<RequestPluginInstallEntry>, String>> + Send>>;
+
+struct FnInstallablePluginsProvider<F>
+where
+    F: Fn() -> InstallablePluginsFuture + Send + Sync,
+{
+    list_installable_plugins: F,
+}
+
+#[async_trait::async_trait]
+impl<F> InstallablePluginsProvider for FnInstallablePluginsProvider<F>
+where
+    F: Fn() -> InstallablePluginsFuture + Send + Sync,
+{
+    async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String> {
+        (self.list_installable_plugins)().await
+    }
+}
+
 impl InstallablePluginsProviderHandle {
     pub fn new(provider: Arc<dyn InstallablePluginsProvider>) -> Self {
         Self { provider }
+    }
+
+    pub fn from_fn<F>(list_installable_plugins: F) -> Self
+    where
+        F: Fn() -> InstallablePluginsFuture + Send + Sync + 'static,
+    {
+        Self::new(Arc::new(FnInstallablePluginsProvider {
+            list_installable_plugins,
+        }))
     }
 
     async fn list_installable_plugins(&self) -> Result<Vec<RequestPluginInstallEntry>, String> {

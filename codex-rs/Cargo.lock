@@ -2609,7 +2609,6 @@ dependencies = [
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
- "codex-plugins-extension",
  "codex-protocol",
  "codex-utils-absolute-path",
 ]
@@ -3120,7 +3119,6 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-login",
- "codex-plugins-extension",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",

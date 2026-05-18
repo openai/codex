@@ -19,22 +19,24 @@ use codex_tools::ToolSpec;
 use codex_tools::all_requested_connectors_picked_up;
 use codex_tools::build_request_plugin_install_elicitation_request;
 use codex_tools::collect_request_plugin_install_entries;
+use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_tools::verified_connector_install_completed;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tracing::warn;
 
+use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::request_plugin_install_spec::create_request_plugin_install_tool;
-use crate::tools::installable_plugins::discoverable_request_plugin_install_tools;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 
@@ -42,6 +44,39 @@ use crate::tools::registry::ToolExecutor;
 pub struct RequestPluginInstallHandler {
     discoverable_tools: Vec<RequestPluginInstallEntry>,
     plugin_install_list_tool: bool,
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "plugin install discovery reads through the session-owned manager guard"
+)]
+pub(crate) async fn discoverable_request_plugin_install_tools(
+    session: &Session,
+    config: &Config,
+    app_server_client_name: Option<&str>,
+) -> anyhow::Result<Vec<DiscoverableTool>> {
+    let auth = session.services.auth_manager.auth().await;
+    let manager = session.services.mcp_connection_manager.read().await;
+    let mcp_tools = manager.list_all_tools().await;
+    drop(manager);
+
+    let accessible_connectors = connectors::with_app_enabled_state(
+        connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        config,
+    );
+    connectors::list_tool_suggest_discoverable_tools_with_auth(
+        config,
+        auth.as_ref(),
+        &accessible_connectors,
+        session.services.plugins_manager.as_ref(),
+    )
+    .await
+    .map(|discoverable_tools| {
+        filter_request_plugin_install_discoverable_tools_for_client(
+            discoverable_tools,
+            app_server_client_name,
+        )
+    })
 }
 
 impl RequestPluginInstallHandler {

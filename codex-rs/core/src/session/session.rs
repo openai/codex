@@ -971,12 +971,33 @@ impl Session {
                 services,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            let session = Arc::downgrade(&sess);
             sess.services.session_extension_data.insert(
-                codex_plugins_extension::InstallablePluginsProviderHandle::new(Arc::new(
-                    crate::tools::installable_plugins::SessionInstallablePluginsProvider::new(
-                        Arc::downgrade(&sess),
-                    ),
-                )),
+                codex_plugins_extension::InstallablePluginsProviderHandle::from_fn(move || {
+                    let session = session.clone();
+                    Box::pin(async move {
+                        let session = session.upgrade().ok_or_else(|| {
+                            "plugin install requests are unavailable right now".to_string()
+                        })?;
+                        let config = session.get_config().await;
+                        let app_server_client_metadata =
+                            session.app_server_client_metadata().await;
+                        let discoverable_tools =
+                            crate::tools::handlers::discoverable_request_plugin_install_tools(
+                                session.as_ref(),
+                                config.as_ref(),
+                                app_server_client_metadata.client_name.as_deref(),
+                            )
+                            .await
+                            .map_err(|err| {
+                                format!("plugin install requests are unavailable right now: {err}")
+                            })?;
+
+                        Ok(codex_tools::collect_request_plugin_install_entries(
+                            &discoverable_tools,
+                        ))
+                    })
+                }),
             );
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;

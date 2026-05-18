@@ -6,8 +6,7 @@ use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::ExtensionRegistry;
-use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::empty_extension_registry;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -69,7 +68,7 @@ impl MessageProcessor {
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
-            plugins_extension_registry(),
+            empty_extension_registry(),
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
             state_db.clone(),
@@ -608,10 +607,4 @@ impl MessageProcessor {
     fn handle_initialized_notification(&self) {
         tracing::info!("notifications/initialized");
     }
-}
-
-fn plugins_extension_registry() -> Arc<ExtensionRegistry<Config>> {
-    let mut builder = ExtensionRegistryBuilder::new();
-    codex_plugins_extension::install(&mut builder);
-    Arc::new(builder.build())
 }

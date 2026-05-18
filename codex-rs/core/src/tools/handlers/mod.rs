@@ -61,6 +61,7 @@ pub use mcp_resource::ReadMcpResourceHandler;
 pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
+pub(crate) use request_plugin_install::discoverable_request_plugin_install_tools;
 pub use request_user_input::RequestUserInputHandler;
 pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
