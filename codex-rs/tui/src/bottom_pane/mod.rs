@@ -789,6 +789,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.view_stack.clear();
+        self.composer.show_shutdown_in_progress();
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         if let Some(text) = self.composer.clear_for_ctrl_c() {
             if let Some(thread_id) = self.thread_id {

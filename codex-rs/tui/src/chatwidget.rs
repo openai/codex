@@ -1277,6 +1277,10 @@ impl ChatWidget {
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.bottom_pane.show_shutdown_in_progress();
+    }
+
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
