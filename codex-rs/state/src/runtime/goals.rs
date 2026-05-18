@@ -1051,6 +1051,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         let goal = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "optimize the benchmark",
@@ -1061,6 +1062,7 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let usage_limited = runtime
+            .thread_goals()
             .usage_limit_active_thread_goal(thread_id)
             .await
             .expect("usage limiting should succeed")
@@ -1073,12 +1075,14 @@ mod tests {
         assert_eq!(expected, usage_limited);
 
         let second_update = runtime
+            .thread_goals()
             .usage_limit_active_thread_goal(thread_id)
             .await
             .expect("repeated usage limiting should succeed");
         assert_eq!(None, second_update);
 
         let budget_limited = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "keep the usage failure visible",
@@ -1088,6 +1092,7 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         let usage_limited = runtime
+            .thread_goals()
             .usage_limit_active_thread_goal(thread_id)
             .await
             .expect("usage limiting should succeed")
@@ -1405,6 +1410,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -1414,6 +1420,7 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 1,
@@ -1428,6 +1435,7 @@ mod tests {
         };
 
         let blocked = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
                 ThreadGoalUpdate {
