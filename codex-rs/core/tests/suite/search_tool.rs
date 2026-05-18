@@ -760,17 +760,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     )
     .await?;
 
-    let requests = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
-        loop {
-            let requests = mock.requests();
-            if requests.len() >= 2 {
-                return requests;
-            }
-            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
-        }
-    })
-    .await;
-    let requests = requests.expect("timed out waiting for tool_search follow-up request");
+    let requests = mock.requests();
     assert_eq!(requests.len(), 2);
 
     let first_request_body = requests[0].body_json();
