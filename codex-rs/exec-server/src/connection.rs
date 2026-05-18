@@ -401,19 +401,6 @@ impl JsonRpcConnection {
                                         break;
                                     }
                                 }
-                                Ok(JsonRpcWebSocketFrame::Ping(payload)) => {
-                                    if let Err(err) = websocket.send(M::pong(payload)).await {
-                                        send_disconnected(
-                                            &incoming_tx,
-                                            &disconnected_tx,
-                                            Some(format!(
-                                                "failed to write websocket pong to {connection_label}: {err}"
-                                            )),
-                                        )
-                                        .await;
-                                        break;
-                                    }
-                                }
                                 Ok(JsonRpcWebSocketFrame::Close) => {
                                     send_disconnected(
                                         &incoming_tx,
@@ -477,7 +464,6 @@ impl JsonRpcConnection {
 
 enum JsonRpcWebSocketFrame {
     Message(JSONRPCMessage),
-    Ping(bytes::Bytes),
     Close,
     Ignore,
 }
@@ -486,7 +472,6 @@ trait JsonRpcWebSocketMessage: Send + 'static {
     fn parse_jsonrpc_frame(self) -> Result<JsonRpcWebSocketFrame, serde_json::Error>;
     fn from_text(text: String) -> Self;
     fn ping() -> Self;
-    fn pong(payload: bytes::Bytes) -> Self;
 }
 
 impl JsonRpcWebSocketMessage for Message {
@@ -499,8 +484,9 @@ impl JsonRpcWebSocketMessage for Message {
                 serde_json::from_slice(bytes.as_ref()).map(JsonRpcWebSocketFrame::Message)
             }
             Message::Close(_) => Ok(JsonRpcWebSocketFrame::Close),
-            Message::Ping(payload) => Ok(JsonRpcWebSocketFrame::Ping(payload)),
-            Message::Pong(_) | Message::Frame(_) => Ok(JsonRpcWebSocketFrame::Ignore),
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                Ok(JsonRpcWebSocketFrame::Ignore)
+            }
         }
     }
 
@@ -510,10 +496,6 @@ impl JsonRpcWebSocketMessage for Message {
 
     fn ping() -> Self {
         Self::Ping(Vec::new().into())
-    }
-
-    fn pong(payload: bytes::Bytes) -> Self {
-        Self::Pong(payload)
     }
 }
 
@@ -527,8 +509,9 @@ impl JsonRpcWebSocketMessage for AxumWebSocketMessage {
                 serde_json::from_slice(bytes.as_ref()).map(JsonRpcWebSocketFrame::Message)
             }
             AxumWebSocketMessage::Close(_) => Ok(JsonRpcWebSocketFrame::Close),
-            AxumWebSocketMessage::Ping(payload) => Ok(JsonRpcWebSocketFrame::Ping(payload)),
-            AxumWebSocketMessage::Pong(_) => Ok(JsonRpcWebSocketFrame::Ignore),
+            AxumWebSocketMessage::Ping(_) | AxumWebSocketMessage::Pong(_) => {
+                Ok(JsonRpcWebSocketFrame::Ignore)
+            }
         }
     }
 
@@ -538,10 +521,6 @@ impl JsonRpcWebSocketMessage for AxumWebSocketMessage {
 
     fn ping() -> Self {
         Self::Ping(Vec::new().into())
-    }
-
-    fn pong(payload: bytes::Bytes) -> Self {
-        Self::Pong(payload)
     }
 }
 
@@ -627,23 +606,6 @@ mod tests {
     use tokio_tungstenite::connect_async;
 
     use super::*;
-
-    #[tokio::test]
-    async fn websocket_connection_pongs_server_ping() -> anyhow::Result<()> {
-        let (client_websocket, mut server_websocket) = websocket_pair().await?;
-        let connection = JsonRpcConnection::from_websocket(client_websocket, "test".into());
-
-        server_websocket
-            .send(Message::Ping(b"check".to_vec().into()))
-            .await?;
-        let message = timeout(Duration::from_secs(1), server_websocket.next())
-            .await?
-            .expect("websocket should stay open")?;
-        assert_eq!(message, Message::Pong(b"check".to_vec().into()));
-
-        drop(connection);
-        Ok(())
-    }
 
     #[tokio::test]
     async fn websocket_connection_sends_configured_ping() -> anyhow::Result<()> {
@@ -733,7 +695,7 @@ mod tests {
 
         connection.outgoing_tx.send(message.clone()).await?;
         control.wait_for_blocked_write().await?;
-        control.send_inbound(Message::Ping(b"check".to_vec().into()))?;
+        control.send_inbound(Message::Pong(b"check".to_vec().into()))?;
         assert!(
             timeout(Duration::from_millis(50), connection.incoming_rx.recv())
                 .await
@@ -745,11 +707,6 @@ mod tests {
             timeout(Duration::from_secs(1), outbound_rx.next()).await?,
             Some(Message::Text(text)) if serde_json::from_str::<JSONRPCMessage>(&text)? == message
         ));
-        assert!(matches!(
-            timeout(Duration::from_secs(1), outbound_rx.next()).await?,
-            Some(Message::Pong(payload)) if payload.as_ref() == b"check"
-        ));
-
         drop(connection);
         Ok(())
     }

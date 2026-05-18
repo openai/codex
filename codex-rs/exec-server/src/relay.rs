@@ -268,12 +268,6 @@ where
                                 | RelayFrameBodyKind::Heartbeat => {}
                             }
                         }
-                        Some(Ok(Message::Ping(payload))) => {
-                            if websocket.send(Message::Pong(payload)).await.is_err() {
-                                let _ = disconnected_tx.send(true);
-                                break;
-                            }
-                        }
                         Some(Ok(Message::Close(_))) | None => {
                             let _ = disconnected_tx.send(true);
                             let _ = incoming_tx
@@ -281,7 +275,7 @@ where
                                 .await;
                             break;
                         }
-                        Some(Ok(Message::Pong(_) | Message::Frame(_))) => {}
+                        Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
                         Some(Ok(Message::Text(_))) => {
                             let _ = incoming_tx
                                 .send(JsonRpcConnectionEvent::MalformedMessage {
@@ -359,14 +353,8 @@ pub(crate) async fn run_multiplexed_executor<S>(
                         }
                     }
                 }
-                Some(Ok(Message::Ping(payload))) => {
-                    if websocket.send(Message::Pong(payload)).await.is_err() {
-                        break;
-                    }
-                    continue;
-                }
                 Some(Ok(Message::Close(_))) | None => break,
-                Some(Ok(Message::Pong(_) | Message::Frame(_))) => continue,
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
                 Some(Ok(Message::Text(_))) => {
                     warn!("dropping non-binary relay message frame from harness");
                     continue;
@@ -517,46 +505,6 @@ mod tests {
 
     use super::*;
 
-    fn test_runtime_paths() -> anyhow::Result<crate::ExecServerRuntimePaths> {
-        crate::ExecServerRuntimePaths::new(
-            std::env::current_exe()?,
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .map_err(anyhow::Error::from)
-    }
-
-    #[tokio::test]
-    async fn multiplexed_executor_pongs_server_ping() -> anyhow::Result<()> {
-        let (client_websocket, mut server_websocket) = websocket_pair().await?;
-        let executor_task = tokio::spawn(run_multiplexed_executor(
-            client_websocket,
-            ConnectionProcessor::new(test_runtime_paths()?),
-        ));
-
-        server_websocket
-            .send(Message::Ping(b"check".to_vec().into()))
-            .await?;
-        read_pong(&mut server_websocket).await?;
-
-        executor_task.abort();
-        let _ = executor_task.await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn harness_connection_pongs_server_ping() -> anyhow::Result<()> {
-        let (client_websocket, mut server_websocket) = websocket_pair().await?;
-        let connection = harness_connection_from_websocket(client_websocket, "test".to_string());
-
-        server_websocket
-            .send(Message::Ping(b"check".to_vec().into()))
-            .await?;
-        read_pong(&mut server_websocket).await?;
-
-        drop(connection);
-        Ok(())
-    }
-
     #[tokio::test]
     async fn harness_connection_receives_relay_data() -> anyhow::Result<()> {
         let (client_websocket, mut server_websocket) = websocket_pair().await?;
@@ -637,7 +585,7 @@ mod tests {
         control.set_write_blocked();
         connection.outgoing_tx.send(message.clone()).await?;
         control.wait_for_blocked_write().await?;
-        control.send_inbound(Message::Ping(b"check".to_vec().into()))?;
+        control.send_inbound(Message::Pong(b"check".to_vec().into()))?;
         assert!(
             timeout(Duration::from_millis(50), connection.incoming_rx.recv())
                 .await
@@ -654,11 +602,6 @@ mod tests {
         let frame = decode_relay_message_frame(data_payload.as_ref())?;
         assert_eq!(frame.stream_id, stream_id);
         assert_eq!(frame.into_jsonrpc_message()?, message);
-        assert!(matches!(
-            timeout(Duration::from_secs(1), outbound_rx.next()).await?,
-            Some(Message::Pong(payload)) if payload.as_ref() == b"check"
-        ));
-
         drop(connection);
         Ok(())
     }
@@ -699,25 +642,6 @@ mod tests {
             params: None,
             trace: None,
         })
-    }
-
-    async fn read_pong(
-        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
-    ) -> anyhow::Result<()> {
-        loop {
-            let Some(message) = timeout(Duration::from_secs(1), websocket.next()).await? else {
-                anyhow::bail!("websocket closed before pong");
-            };
-            match message? {
-                Message::Pong(payload) if payload.as_ref() == b"check" => return Ok(()),
-                Message::Binary(_)
-                | Message::Text(_)
-                | Message::Ping(_)
-                | Message::Pong(_)
-                | Message::Frame(_) => {}
-                Message::Close(_) => anyhow::bail!("websocket closed before pong"),
-            }
-        }
     }
 
     struct ControlledWebSocket {
