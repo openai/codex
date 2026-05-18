@@ -2827,6 +2827,11 @@ pub struct TurnContextItem {
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
+    // Compatibility-only field written with a default value so older Codex
+    // versions can deserialize turn-context rollout items. It is no longer
+    // read by context reconstruction and should be removed in a future schema
+    // cleanup.
+    pub summary: ReasoningSummaryConfig,
 }
 
 impl TurnContextItem {
@@ -5212,6 +5217,7 @@ mod tests {
                 }]
             })
         );
+        assert_eq!(value["summary"], json!("auto"));
         Ok(())
     }
 

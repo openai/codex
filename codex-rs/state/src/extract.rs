@@ -347,6 +347,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: None,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
         );
@@ -381,6 +382,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
         );
@@ -409,6 +411,7 @@ mod tests {
                 collaboration_mode: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
             }),
             "test-provider",
         );

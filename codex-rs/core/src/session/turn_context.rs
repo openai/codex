@@ -381,6 +381,7 @@ impl TurnContext {
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
+            summary: ReasoningSummaryConfig::Auto,
         }
     }
 
