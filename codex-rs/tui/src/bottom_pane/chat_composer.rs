@@ -1821,6 +1821,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
+        let can_switch_search_mode = self.current_editable_at_token().is_some();
 
         let ActivePopup::MentionV2(popup) = &mut self.popups.active else {
             unreachable!();
@@ -1859,16 +1860,24 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                popup.previous_search_mode();
-                (InputResult::None, true)
+                if can_switch_search_mode {
+                    popup.previous_search_mode();
+                    (InputResult::None, true)
+                } else {
+                    self.handle_input_basic(key_event)
+                }
             }
             KeyEvent {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                popup.next_search_mode();
-                (InputResult::None, true)
+                if can_switch_search_mode {
+                    popup.next_search_mode();
+                    (InputResult::None, true)
+                } else {
+                    self.handle_input_basic(key_event)
+                }
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -2109,14 +2118,14 @@ impl ChatComposer {
     ///   second `@` in `@scope/pkg@latest`), keep treating the surrounding
     ///   whitespace-delimited token as the active token rather than starting a
     ///   new token at that nested prefix.
-    /// - If the token under the cursor starts with `prefix`, that token is
-    ///   returned without the leading prefix. When `allow_empty` is true, a
-    ///   lone prefix character yields `Some(String::new())` to surface hints.
-    fn current_prefixed_token(
+    /// - If the token under the cursor starts with `prefix`, its byte range and
+    ///   text without the leading prefix are returned. When `allow_empty` is
+    ///   true, a lone prefix character yields `Some(String::new())` to surface hints.
+    fn current_prefixed_token_range(
         textarea: &TextArea,
         prefix: char,
         allow_empty: bool,
-    ) -> Option<String> {
+    ) -> Option<(Range<usize>, String)> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
@@ -2189,15 +2198,17 @@ impl ChatComposer {
         let left_match = token_left.filter(|t| t.starts_with(prefix));
         let right_match = token_right.filter(|t| t.starts_with(prefix));
 
-        let left_prefixed = left_match.map(|t| t[prefix.len_utf8()..].to_string());
-        let right_prefixed = right_match.map(|t| t[prefix.len_utf8()..].to_string());
+        let left_prefixed =
+            left_match.map(|t| (start_left..end_left, t[prefix.len_utf8()..].to_string()));
+        let right_prefixed =
+            right_match.map(|t| (start_right..end_right, t[prefix.len_utf8()..].to_string()));
 
         if at_whitespace {
             if right_prefixed.is_some() {
                 return right_prefixed;
             }
             if token_left.is_some_and(|t| t == prefix_str) {
-                return allow_empty.then(String::new);
+                return allow_empty.then(|| (start_left..end_left, String::new()));
             }
             return left_prefixed;
         }
@@ -2215,11 +2226,32 @@ impl ChatComposer {
         left_prefixed.or(right_prefixed)
     }
 
+    fn current_prefixed_token(
+        textarea: &TextArea,
+        prefix: char,
+        allow_empty: bool,
+    ) -> Option<String> {
+        Self::current_prefixed_token_range(textarea, prefix, allow_empty).map(|(_, token)| token)
+    }
+
     /// Extract the `@token` that the cursor is currently positioned on, if any.
     ///
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
+    }
+
+    fn current_editable_at_token(&self) -> Option<String> {
+        let (range, token) = Self::current_prefixed_token_range(
+            &self.draft.textarea,
+            '@',
+            /*allow_empty*/ false,
+        )?;
+        self.draft
+            .textarea
+            .element_id_for_exact_range(range)
+            .is_none()
+            .then_some(token)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -4619,6 +4651,58 @@ mod tests {
     }
 
     #[test]
+    fn recalled_plugin_at_mentions_keep_plugin_accent_style() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content_with_mention_bindings(
+            "@sample plugin".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        let (_, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(needs_redraw);
+
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let textarea_row = 1;
+        let row_text = (0..area.width)
+            .map(|x| {
+                buf[(x, textarea_row)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' ')
+            })
+            .collect::<String>();
+        let mention_x = row_text
+            .find("@sample")
+            .expect("expected recalled plugin mention in composer row");
+        assert_eq!(
+            buf[(mention_x as u16, textarea_row)].style().fg,
+            Some(Color::Magenta)
+        );
+    }
+
+    #[test]
     fn status_line_hyperlink_marks_pr_number_cells() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -6352,6 +6436,50 @@ mod tests {
         );
 
         assert_eq!(composer.mention_bindings(), mention_bindings);
+    }
+
+    #[test]
+    fn bound_at_mentions_do_not_block_arrow_navigation() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content_with_mention_bindings(
+            "go @figma now".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                mention: "figma".to_string(),
+                path: "plugin://figma@debug".to_string(),
+            }],
+        );
+        composer.draft.textarea.set_cursor("go".len());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), "go".len() + 1);
+        assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), "go @figma".len());
+        assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), "go ".len());
+        assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.cursor(), "go".len());
+        assert!(matches!(composer.popups.active, ActivePopup::None));
     }
 
     #[test]
