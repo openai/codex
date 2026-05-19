@@ -137,7 +137,7 @@ async fn setup_turn_one_with_spawned_child(
     server: &MockServer,
     child_response_delay: Option<Duration>,
 ) -> Result<(TestCodex, String)> {
-    setup_turn_one_with_custom_spawned_child(
+    let (test, spawned_id, _child_request_log) = setup_turn_one_with_custom_spawned_child(
         server,
         json!({
             "message": CHILD_PROMPT,
@@ -146,7 +146,8 @@ async fn setup_turn_one_with_spawned_child(
         /*wait_for_parent_notification*/ true,
         |builder| builder,
     )
-    .await
+    .await?;
+    Ok((test, spawned_id))
 }
 
 async fn setup_turn_one_with_custom_spawned_child(
@@ -157,7 +158,11 @@ async fn setup_turn_one_with_custom_spawned_child(
     configure_test: impl FnOnce(
         core_test_support::test_codex::TestCodexBuilder,
     ) -> core_test_support::test_codex::TestCodexBuilder,
-) -> Result<(TestCodex, String)> {
+) -> Result<(
+    TestCodex,
+    String,
+    core_test_support::responses::ResponseMock,
+)> {
     let spawn_args = serde_json::to_string(&spawn_args)?;
 
     mount_sse_once_match(
@@ -247,7 +252,7 @@ async fn setup_turn_one_with_custom_spawned_child(
     }
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
 
-    Ok((test, spawned_id))
+    Ok((test, spawned_id, child_request_log))
 }
 
 async fn spawn_child_and_capture_snapshot(
@@ -257,7 +262,7 @@ async fn spawn_child_and_capture_snapshot(
         core_test_support::test_codex::TestCodexBuilder,
     ) -> core_test_support::test_codex::TestCodexBuilder,
 ) -> Result<ThreadConfigSnapshot> {
-    let (test, spawned_id) = setup_turn_one_with_custom_spawned_child(
+    let (test, spawned_id, _child_request_log) = setup_turn_one_with_custom_spawned_child(
         server,
         spawn_args,
         /*child_response_delay*/ None,
@@ -448,9 +453,11 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     )
     .await;
 
-    let _child_request_log = mount_sse_once_match(
+    let child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_completed("resp-child-1"),
@@ -460,9 +467,7 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
 
     let _turn1_followup = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| {
-            body_contains(req, "function_call_output") && body_contains(req, "/root/worker")
-        },
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
         sse(vec![
             ev_response_created("resp-turn1-2"),
             ev_assistant_message("msg-turn1-2", "parent done"),
@@ -486,29 +491,12 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let child_request = loop {
-        if let Some(request) = server
-            .received_requests()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|request| {
-                body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
-            })
-        {
-            break request;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for spawned child request with developer context");
-        }
-        sleep(Duration::from_millis(10)).await;
-    };
-    assert!(body_contains(
-        &child_request,
-        "Parent developer instructions."
-    ));
-    assert!(body_contains(&child_request, CHILD_PROMPT));
+    let child_requests = wait_for_requests(&child_request_log).await?;
+    let child_request = child_requests
+        .last()
+        .expect("child request log should capture at least one request");
+    assert!(child_request.body_contains_text("Parent developer instructions."));
+    assert!(child_request.body_contains_text(CHILD_PROMPT));
 
     Ok(())
 }
@@ -538,9 +526,11 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
     )
     .await;
 
-    let _child_request_log = mount_sse_once_match(
+    let child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_completed("resp-child-1"),
@@ -550,9 +540,7 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
 
     let _turn1_followup = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| {
-            body_contains(req, "function_call_output") && body_contains(req, "/root/worker")
-        },
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
         sse(vec![
             ev_response_created("resp-turn1-2"),
             ev_assistant_message("msg-turn1-2", "parent done"),
@@ -585,26 +573,12 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
     assert!(!parent_request.body_contains_text("<skills_instructions>"));
     assert!(!parent_request.body_contains_text("demo-skill"));
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let child_request = loop {
-        if let Some(request) = server
-            .received_requests()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|request| {
-                body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
-            })
-        {
-            break request;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for spawned child request");
-        }
-        sleep(Duration::from_millis(10)).await;
-    };
-    assert!(!body_contains(&child_request, "<skills_instructions>"));
-    assert!(!body_contains(&child_request, "demo-skill"));
+    let child_requests = wait_for_requests(&child_request_log).await?;
+    let child_request = child_requests
+        .last()
+        .expect("child request log should capture at least one request");
+    assert!(!child_request.body_contains_text("<skills_instructions>"));
+    assert!(!child_request.body_contains_text("demo-skill"));
 
     Ok(())
 }
