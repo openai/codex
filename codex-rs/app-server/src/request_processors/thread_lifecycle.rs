@@ -476,18 +476,11 @@ pub(super) async fn handle_thread_listener_command(
                 ))
                 .await;
             if !goal_is_active {
-                let subscribed_connection_ids = thread_state_manager
-                    .subscribed_connection_ids(conversation_id)
-                    .await;
-                let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
-                    outgoing.clone(),
-                    subscribed_connection_ids,
+                flush_pending_terminal_plan_cleanup_for_subscribers(
                     conversation_id,
-                );
-                crate::bespoke_event_handling::flush_pending_terminal_plan_cleanup(
-                    conversation_id,
+                    thread_state_manager,
                     thread_state,
-                    &thread_outgoing,
+                    outgoing,
                 )
                 .await;
             }
@@ -500,18 +493,11 @@ pub(super) async fn handle_thread_listener_command(
                     },
                 ))
                 .await;
-            let subscribed_connection_ids = thread_state_manager
-                .subscribed_connection_ids(conversation_id)
-                .await;
-            let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
-                outgoing.clone(),
-                subscribed_connection_ids,
+            flush_pending_terminal_plan_cleanup_for_subscribers(
                 conversation_id,
-            );
-            crate::bespoke_event_handling::flush_pending_terminal_plan_cleanup(
-                conversation_id,
+                thread_state_manager,
                 thread_state,
-                &thread_outgoing,
+                outgoing,
             )
             .await;
         }
@@ -532,6 +518,28 @@ pub(super) async fn handle_thread_listener_command(
             let _ = completion_tx.send(());
         }
     }
+}
+
+async fn flush_pending_terminal_plan_cleanup_for_subscribers(
+    conversation_id: ThreadId,
+    thread_state_manager: &ThreadStateManager,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &Arc<OutgoingMessageSender>,
+) {
+    let subscribed_connection_ids = thread_state_manager
+        .subscribed_connection_ids(conversation_id)
+        .await;
+    let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+        outgoing.clone(),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+    crate::bespoke_event_handling::flush_pending_terminal_plan_cleanup(
+        conversation_id,
+        thread_state,
+        &thread_outgoing,
+    )
+    .await;
 }
 
 #[allow(clippy::too_many_arguments)]

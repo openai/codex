@@ -1327,11 +1327,8 @@ pub(crate) async fn flush_pending_terminal_plan_cleanup(
 ) {
     let pending_terminal_plan_cleanups =
         take_flushable_pending_terminal_plan_cleanup(thread_state).await;
-    for (turn_id, latest_plan_update) in
-        terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
-    {
-        emit_turn_plan_updated(conversation_id, &turn_id, latest_plan_update, outgoing).await;
-    }
+    emit_terminal_plan_cleanup_updates(conversation_id, pending_terminal_plan_cleanups, outgoing)
+        .await;
 }
 
 async fn flush_all_pending_terminal_plan_cleanup(
@@ -1341,6 +1338,15 @@ async fn flush_all_pending_terminal_plan_cleanup(
 ) {
     let pending_terminal_plan_cleanups =
         std::mem::take(&mut thread_state.lock().await.pending_terminal_plan_cleanups);
+    emit_terminal_plan_cleanup_updates(conversation_id, pending_terminal_plan_cleanups, outgoing)
+        .await;
+}
+
+async fn emit_terminal_plan_cleanup_updates(
+    conversation_id: ThreadId,
+    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
     for (turn_id, latest_plan_update) in
         terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
     {

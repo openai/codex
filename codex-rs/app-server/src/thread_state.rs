@@ -140,11 +140,8 @@ impl ThreadState {
     }
 
     pub(crate) fn prune_pending_terminal_plan_cleanups_after_rollback(&mut self) {
-        self.pending_terminal_plan_cleanups.retain(|cleanup| {
-            self.terminal_turn_ids
-                .iter()
-                .any(|turn_id| turn_id == &cleanup.turn_id)
-        });
+        self.pending_terminal_plan_cleanups
+            .retain(|cleanup| self.terminal_turn_ids.contains(&cleanup.turn_id));
     }
 
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
