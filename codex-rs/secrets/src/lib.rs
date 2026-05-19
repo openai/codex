@@ -187,13 +187,27 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn tempdir_outside_ambient_repo() -> tempfile::TempDir {
-        let home = std::env::var_os("HOME")
+        let mut candidates = Vec::new();
+        if let Some(home) = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
-            .expect("home directory should be available");
-        tempfile::Builder::new()
-            .prefix("secrets-tests-")
-            .tempdir_in(home)
+        {
+            candidates.push(home);
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.extend(cwd.ancestors().map(Path::to_path_buf));
+        }
+        candidates.push(std::env::temp_dir());
+
+        candidates
+            .into_iter()
+            .filter(|candidate| get_git_repo_root(candidate).is_none())
+            .find_map(|candidate| {
+                tempfile::Builder::new()
+                    .prefix("secrets-tests-")
+                    .tempdir_in(candidate)
+                    .ok()
+            })
             .expect("tempdir outside ambient repo")
     }
 
