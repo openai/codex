@@ -549,6 +549,12 @@ impl ChatWidget {
     fn set_effective_collaboration_mode(&mut self, mode: CollaborationMode) {
         let mode_kind = mode.mode;
         let settings = mode.settings;
+        if mode_kind == ModeKind::Default {
+            self.current_collaboration_mode = CollaborationMode {
+                mode: ModeKind::Default,
+                settings: settings.clone(),
+            };
+        }
         self.active_collaboration_mask = Some(CollaborationModeMask {
             name: mode_kind.display_name().to_string(),
             mode: Some(mode_kind),
@@ -556,10 +562,6 @@ impl ChatWidget {
             reasoning_effort: Some(settings.reasoning_effort),
             developer_instructions: Some(settings.developer_instructions.clone()),
         });
-        self.current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
-            settings,
-        };
         self.update_collaboration_mode_indicator();
         self.refresh_plan_mode_nudge();
         self.refresh_model_dependent_surfaces();
