@@ -32,6 +32,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::shell::default_user_shell;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use pretty_assertions::assert_eq;
@@ -178,6 +179,49 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
     assert_eq!(thread.turns.len(), 1);
     assert_no_command_executions(&thread.turns[0].items, "thread/fork");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_shell_command_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let server = create_mock_responses_server_sequence(vec![]).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.as_path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let shell_id = mcp
+        .send_thread_shell_command_request(ThreadShellCommandParams {
+            thread_id: thread.id,
+            command: "pwd".to_string(),
+        })
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(shell_id))
+        .await?;
+    assert_eq!(error.error.message, "local environment is not configured");
 
     Ok(())
 }

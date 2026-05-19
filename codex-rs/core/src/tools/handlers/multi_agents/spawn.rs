@@ -83,6 +83,9 @@ async fn handle_spawn_agent(
         .await;
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    if let Some(service_tier) = args.service_tier.as_ref() {
+        config.service_tier = Some(service_tier.clone());
+    }
     if args.fork_context {
         reject_full_fork_spawn_overrides(role_name, args.model.as_deref(), args.reasoning_effort)?;
     } else {

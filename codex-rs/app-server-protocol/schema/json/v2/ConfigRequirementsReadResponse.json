@@ -60,6 +60,17 @@
         }
       ]
     },
+    "ComputerUseRequirements": {
+      "properties": {
+        "allowLockedComputerUse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ConfigRequirements": {
       "properties": {
         "allowManagedHooksOnly": {
@@ -93,6 +104,16 @@
           "type": [
             "array",
             "null"
+          ]
+        },
+        "computerUse": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseRequirements"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "enforceResidency": {

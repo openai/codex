@@ -57,10 +57,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_endpoint.clone() {
-                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
-                        None => crate::AppServerTarget::Embedded,
-                    },
+                    &self.app_server_target,
                     self.state_db.clone(),
                     self.environment_manager.clone(),
                 )
@@ -1680,7 +1677,7 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
-                        if !app_server.is_remote()
+                        if !app_server.uses_remote_workspace()
                             && let Err(err) = self.refresh_in_memory_config_from_disk().await
                         {
                             tracing::warn!(
@@ -1724,7 +1721,7 @@ impl App {
                 {
                     Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
-                        if !app_server.is_remote()
+                        if !app_server.uses_remote_workspace()
                             && let Err(err) = self.refresh_in_memory_config_from_disk().await
                         {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");

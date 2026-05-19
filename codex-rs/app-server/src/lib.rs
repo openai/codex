@@ -31,7 +31,10 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
+use crate::transport::acquire_app_server_startup_lock;
+use crate::transport::app_server_startup_lock_path;
 use crate::transport::auth::policy_from_settings;
+use crate::transport::prepare_control_socket_path;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -445,9 +448,9 @@ pub async fn run_main_with_transport_options(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager = if loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(local_runtime_paths).await
+        EnvironmentManager::from_env(Some(local_runtime_paths)).await
     } else {
-        EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
     }
     .map(Arc::new)
     .map_err(std::io::Error::other)?;
@@ -516,6 +519,15 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
+    let unix_socket_startup_lock = match &transport {
+        AppServerTransport::UnixSocket { socket_path } => {
+            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+            prepare_control_socket_path(socket_path.as_path()).await?;
+            Some(startup_lock)
+        }
+        _ => None,
+    };
     let state_db = match rollout_state_db::try_init(&config).await {
         Ok(state_db) => Some(state_db),
         Err(err) => {
@@ -682,6 +694,7 @@ pub async fn run_main_with_transport_options(
         }
         AppServerTransport::Off => {}
     }
+    drop(unix_socket_startup_lock);
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
