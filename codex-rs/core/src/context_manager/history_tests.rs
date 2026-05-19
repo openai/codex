@@ -2,7 +2,6 @@ use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -121,7 +120,6 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
 fn reference_context_item() -> TurnContextItem {
     TurnContextItem {
         turn_id: Some("reference-turn".to_string()),
-        trace_id: None,
         cwd: PathBuf::from("/tmp/reference-cwd"),
         current_date: Some("2026-03-23".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
@@ -135,11 +133,7 @@ fn reference_context_item() -> TurnContextItem {
         collaboration_mode: None,
         realtime_active: Some(false),
         effort: None,
-        summary: ReasoningSummary::Auto,
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: Some(codex_protocol::protocol::TruncationPolicy::Tokens(10_000)),
+        summary: codex_protocol::config_types::ReasoningSummary::Auto,
     }
 }
 

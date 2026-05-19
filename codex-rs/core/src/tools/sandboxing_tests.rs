@@ -5,7 +5,6 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::protocol::GranularApprovalConfig;
-use codex_protocol::protocol::NetworkAccess;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -39,13 +38,10 @@ fn bash_permission_request_payload_includes_description_when_present() {
 
 #[test]
 fn external_sandbox_skips_exec_approval_on_request() {
-    let sandbox_policy = SandboxPolicy::ExternalSandbox {
-        network_access: NetworkAccess::Restricted,
-    };
     assert_eq!(
         default_exec_approval_requirement(
             AskForApproval::OnRequest,
-            &FileSystemSandboxPolicy::from(&sandbox_policy),
+            &FileSystemSandboxPolicy::external_sandbox(),
         ),
         ExecApprovalRequirement::Skip {
             bypass_sandbox: false,
@@ -56,11 +52,10 @@ fn external_sandbox_skips_exec_approval_on_request() {
 
 #[test]
 fn restricted_sandbox_requires_exec_approval_on_request() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     assert_eq!(
         default_exec_approval_requirement(
             AskForApproval::OnRequest,
-            &FileSystemSandboxPolicy::from(&sandbox_policy)
+            &FileSystemSandboxPolicy::default()
         ),
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
@@ -79,9 +74,8 @@ fn default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disabl
         mcp_elicitations: true,
     });
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let requirement =
-        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::from(&sandbox_policy));
+        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::default());
 
     assert_eq!(
         requirement,
@@ -101,9 +95,8 @@ fn default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_a
         mcp_elicitations: false,
     });
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let requirement =
-        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::from(&sandbox_policy));
+        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::default());
 
     assert_eq!(
         requirement,

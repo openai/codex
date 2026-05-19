@@ -8,7 +8,8 @@
 
 ## `run()` vs `stream()`
 
-- `TurnHandle.run()` / `AsyncTurnHandle.run()` is the easiest path. It consumes events until completion and returns the public app-server `Turn` model from `openai_codex.types`.
+- `Thread.run(...)` starts a turn and returns `TurnResult`.
+- `TurnHandle.run()` / `AsyncTurnHandle.run()` consumes events for an existing turn handle and returns the same `TurnResult` shape.
 - `TurnHandle.stream()` / `AsyncTurnHandle.stream()` yields raw notifications (`Notification`) so you can react event-by-event.
 
 Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout logic, or custom parsing.
@@ -22,6 +23,16 @@ Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout
   entry or first awaited API use.
 
 If your app is not already async, stay with `Codex`.
+
+## How do I log in?
+
+- `login_api_key(...)` authenticates immediately with an API key.
+- `login_chatgpt()` starts browser login and returns a handle with `auth_url`.
+- `login_chatgpt_device_code()` starts device-code login and returns a handle
+  with `verification_url` and `user_code`.
+- Interactive handles expose `wait()` for the matching
+  `account/login/completed` notification and `cancel()` to stop that attempt.
+- `account()` reads the current account state, and `logout()` clears it.
 
 ## Public kwargs are snake_case
 
@@ -56,8 +67,7 @@ Common causes:
 
 - published runtime package (`openai-codex-cli-bin`) is not installed
 - local `codex_bin` override points to a missing file
-- local auth/session is missing
-- incompatible/old app-server
+- app-server version older than the SDK schema
 
 ## Why does a turn "hang"?
 
@@ -70,11 +80,11 @@ A turn is complete only when `turn/completed` arrives for that turn ID.
 
 Use `retry_on_overload(...)` for transient overload failures (`ServerBusyError`).
 
-Do not blindly retry all errors. For `InvalidParamsError` or `MethodNotFoundError`, fix inputs/version compatibility instead.
+Do not blindly retry all errors. For `InvalidParamsError` or `MethodNotFoundError`, fix inputs or update the runtime/schema version instead.
 
 ## Common pitfalls
 
 - Starting a new thread for every prompt when you wanted continuity.
 - Forgetting to `close()` (or not using context managers).
-- Assuming `run()` returns extra SDK-only fields instead of the public `Turn` model.
+- Reading `Turn.items` from live start/completed payloads instead of using `TurnResult.items`.
 - Mixing SDK input classes with raw dicts incorrectly.

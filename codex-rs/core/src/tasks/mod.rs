@@ -347,25 +347,25 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-start event: {err}");
         }
-        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
-        let mailbox_items = self.get_pending_input().await;
+        let queued_response_items = self
+            .input_queue
+            .take_queued_response_items_for_next_turn()
+            .await;
+        let mailbox_items = self.input_queue.get_pending_input(&self.active_turn).await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             debug_assert!(turn.tasks.is_empty());
             Arc::clone(&turn.turn_state)
         };
-        {
-            let mut turn_state = turn_state.lock().await;
-            turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
-            for item in queued_response_items {
-                turn_state.push_pending_input(item);
-            }
-            for item in mailbox_items {
-                turn_state.push_pending_input(item);
-            }
-        }
-        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref());
+        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
+        let mut pending_items = queued_response_items;
+        pending_items.extend(mailbox_items);
+        self.input_queue
+            .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
+            .await;
+        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
+            .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
@@ -467,8 +467,11 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.has_queued_response_items_for_next_turn().await
-            && !self.has_trigger_turn_mailbox_items().await
+        if !self
+            .input_queue
+            .has_queued_response_items_for_next_turn()
+            .await
+            && !self.input_queue.has_trigger_turn_mailbox_items().await
         {
             return;
         }
@@ -505,13 +508,13 @@ impl Session {
         }
 
         if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+                .await;
         }
         if (aborted_turn || reason == TurnAbortReason::Interrupted)
             && let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                     turn_context: turn_context.as_deref(),
-                    reason: reason.clone(),
                 })
                 .await
         {
@@ -520,7 +523,7 @@ impl Session {
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            active_turn.clear_pending().await;
+            self.input_queue.clear_pending(&active_turn).await;
         }
         if reason == TurnAbortReason::Interrupted && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
@@ -553,12 +556,12 @@ impl Session {
             self.handle_task_abort(task, reason.clone()).await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
+            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+                .await;
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                 turn_context: turn_context.as_deref(),
-                reason: reason.clone(),
             })
             .await
         {
@@ -566,7 +569,7 @@ impl Session {
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-        active_turn.clear_pending().await;
+        self.input_queue.clear_pending(&active_turn).await;
 
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
@@ -608,8 +611,11 @@ impl Session {
             }
         };
         if let Some(turn_state) = turn_state.as_ref() {
-            let mut ts = turn_state.lock().await;
-            pending_input = ts.take_pending_input();
+            pending_input = self
+                .input_queue
+                .take_pending_input_for_turn_state(turn_state.as_ref())
+                .await;
+            let ts = turn_state.lock().await;
             turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
@@ -756,7 +762,8 @@ impl Session {
             .time_to_first_token_ms()
             .await;
         if should_clear_active_turn {
-            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref());
+            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+                .await;
         }
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {

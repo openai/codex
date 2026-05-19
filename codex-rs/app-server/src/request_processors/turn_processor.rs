@@ -23,7 +23,7 @@ struct ThreadSettingsOverrideRequest {
     approval_policy: Option<AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
-    permissions: Option<PermissionProfileSelectionParams>,
+    permissions: Option<String>,
     model: Option<String>,
     service_tier: Option<Option<String>>,
     effort: Option<Option<ReasoningEffort>>,
@@ -462,7 +462,7 @@ impl TurnRequestProcessor {
         let sandbox_policy = request.sandbox_policy.map(|p| p.to_core());
         let (permission_profile, active_permission_profile, profile_workspace_roots) =
             if let Some(permissions) = request.permissions {
-                let mut overrides = ConfigOverrides {
+                let overrides = ConfigOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: Some(
                         effective_workspace_roots
@@ -470,14 +470,11 @@ impl TurnRequestProcessor {
                             .map(AbsolutePathBuf::to_path_buf)
                             .collect(),
                     ),
+                    default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
                 let config = self
                     .config_manager
                     .load_for_cwd(

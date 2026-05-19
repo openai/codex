@@ -1516,6 +1516,12 @@
         "subagent_usage_hint_text": {
           "type": "string"
         },
+        "tool_namespace": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },

@@ -1102,6 +1102,9 @@ impl MessageProcessor {
             ClientRequest::PluginList { params, .. } => {
                 self.plugin_processor.plugin_list(params).await
             }
+            ClientRequest::PluginInstalled { params, .. } => {
+                self.plugin_processor.plugin_installed(params).await
+            }
             ClientRequest::PluginRead { params, .. } => {
                 self.plugin_processor.plugin_read(params).await
             }
