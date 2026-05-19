@@ -279,6 +279,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -291,11 +292,20 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: Restore staged Windows sandbox artifacts
+        id: windows_sandbox_artifacts
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: dist/${{ matrix.target }}
+          key: v8-canary-windows-ptrcomp-sandbox-${{ matrix.target }}-${{ needs.metadata.outputs.v8_version }}-${{ hashFiles('.github/scripts/rusty_v8_bazel.py') }}
+
       - name: Configure git for upstream checkout
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         shell: bash
         run: git config --global core.symlinks true
 
       - name: Check out upstream rusty_v8
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: denoland/rusty_v8
@@ -304,6 +314,7 @@ jobs:
           submodules: recursive
 
       - name: Set up Python
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.11"
@@ -316,6 +327,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install rusty_v8 Rust toolchain
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
@@ -325,11 +337,13 @@ jobs:
           rustup target add --toolchain 1.91.0 "${TARGET}"
 
       - name: Write upstream submodule status
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         shell: bash
         working-directory: upstream-rusty-v8
         run: git submodule status --recursive > git_submodule_status.txt
 
       - name: Restore upstream source-build cache
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -340,6 +354,7 @@ jobs:
             rusty-v8-source-${{ matrix.target }}-sandbox-
 
       - name: Install and start sccache
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           SCCACHE_CACHE_SIZE: 256M
@@ -357,12 +372,13 @@ jobs:
           echo "$(pwd)/$basename" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Chromium clang for ARM64 MSVC cross build
-        if: matrix.target == 'aarch64-pc-windows-msvc'
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true' && matrix.target == 'aarch64-pc-windows-msvc'
         shell: bash
         working-directory: upstream-rusty-v8
         run: python3 tools/clang/scripts/update.py
 
       - name: Build upstream rusty_v8 sandbox release pair
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         env:
           SCCACHE_IDLE_TIMEOUT: 0
           TARGET: ${{ matrix.target }}
@@ -372,6 +388,7 @@ jobs:
         run: cargo +1.91.0 build --locked --release --target "${TARGET}" --features v8_enable_sandbox
 
       - name: Stage upstream sandbox release pair
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
@@ -403,6 +420,13 @@ jobs:
             RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
             cargo +1.93.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
           )
+
+      - name: Save staged Windows sandbox artifacts
+        if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: dist/${{ matrix.target }}
+          key: ${{ steps.windows_sandbox_artifacts.outputs.cache-primary-key }}
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
