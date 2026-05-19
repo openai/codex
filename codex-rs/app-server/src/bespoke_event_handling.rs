@@ -1,7 +1,6 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ClientRequestResult;
-use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
@@ -1325,7 +1324,7 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
-async fn emit_terminal_plan_cleanup(
+pub(crate) async fn emit_terminal_plan_cleanup(
     conversation_id: ThreadId,
     pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1334,22 +1333,6 @@ async fn emit_terminal_plan_cleanup(
         terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
     {
         emit_turn_plan_updated(conversation_id, &turn_id, latest_plan_update, outgoing).await;
-    }
-}
-
-pub(crate) async fn emit_terminal_plan_cleanup_globally(
-    conversation_id: ThreadId,
-    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
-    outgoing: &Arc<OutgoingMessageSender>,
-) {
-    for (turn_id, latest_plan_update) in
-        terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
-    {
-        let notification =
-            turn_plan_updated_notification(conversation_id, &turn_id, latest_plan_update);
-        outgoing
-            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
-            .await;
     }
 }
 

@@ -476,11 +476,19 @@ pub(super) async fn handle_thread_listener_command(
                 ))
                 .await;
             if !goal_is_active {
-                crate::bespoke_event_handling::emit_terminal_plan_cleanup_globally(
+                let subscribed_connection_ids = thread_state_manager
+                    .subscribed_connection_ids(conversation_id)
+                    .await;
+                let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+                    outgoing.clone(),
+                    subscribed_connection_ids,
+                    conversation_id,
+                );
+                crate::bespoke_event_handling::emit_terminal_plan_cleanup(
                     conversation_id,
                     crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(thread_state)
                         .await,
-                    outgoing,
+                    &thread_outgoing,
                 )
                 .await;
             }
@@ -493,11 +501,19 @@ pub(super) async fn handle_thread_listener_command(
                     },
                 ))
                 .await;
-            crate::bespoke_event_handling::emit_terminal_plan_cleanup_globally(
+            let subscribed_connection_ids = thread_state_manager
+                .subscribed_connection_ids(conversation_id)
+                .await;
+            let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+                outgoing.clone(),
+                subscribed_connection_ids,
+                conversation_id,
+            );
+            crate::bespoke_event_handling::emit_terminal_plan_cleanup(
                 conversation_id,
                 crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(thread_state)
                     .await,
-                outgoing,
+                &thread_outgoing,
             )
             .await;
         }

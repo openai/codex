@@ -403,6 +403,7 @@ impl ThreadGoalRequestProcessor {
         goal: ThreadGoal,
         listener_command_tx: Option<tokio::sync::mpsc::UnboundedSender<ThreadListenerCommand>>,
     ) {
+        let goal_is_active = goal.status == ThreadGoalStatus::Active;
         if let Some(listener_command_tx) = listener_command_tx {
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalUpdated {
                 goal: goal.clone(),
@@ -423,6 +424,9 @@ impl ThreadGoalRequestProcessor {
                 },
             ))
             .await;
+        if !goal_is_active {
+            self.emit_pending_terminal_plan_cleanup(thread_id).await;
+        }
     }
 
     async fn emit_thread_goal_cleared_ordered(
@@ -446,6 +450,26 @@ impl ThreadGoalRequestProcessor {
                 },
             ))
             .await;
+        self.emit_pending_terminal_plan_cleanup(thread_id).await;
+    }
+
+    async fn emit_pending_terminal_plan_cleanup(&self, thread_id: ThreadId) {
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        let subscribed_connection_ids = self
+            .thread_state_manager
+            .subscribed_connection_ids(thread_id)
+            .await;
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            self.outgoing.clone(),
+            subscribed_connection_ids,
+            thread_id,
+        );
+        crate::bespoke_event_handling::emit_terminal_plan_cleanup(
+            thread_id,
+            crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(&thread_state).await,
+            &thread_outgoing,
+        )
+        .await;
     }
 }
 
