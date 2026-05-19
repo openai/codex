@@ -147,7 +147,8 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
     - Personal plugin in `~/.agents/plugins/marketplace.json`: `./plugins/<plugin-name>`
     - Repo/team plugin: `./plugins/<plugin-name>`
   - The same relative path convention is used for both personal and repo/team marketplaces.
-    - Example: with `~/.agents/plugins/marketplace.json`, `./plugins/<plugin-name>` resolves to `~/plugins/<plugin-name>`.
+    - Example: with `~/.agents/plugins/marketplace.json`, `./plugins/<plugin-name>` resolves to
+      `~/plugins/<plugin-name>`.
 - `policy` (`object`): Marketplace policy block. Always include it.
   - `installation` (`string`): Availability policy.
     - Allowed values: `NOT_AVAILABLE`, `AVAILABLE`, `INSTALLED_BY_DEFAULT`

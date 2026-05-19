@@ -41,8 +41,17 @@ def validate_plugin_name(plugin_name: str) -> None:
         )
 
 
+def validate_marketplace_name(marketplace_name: str) -> None:
+    if not marketplace_name:
+        raise ValueError("Marketplace name must include at least one letter or digit.")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", marketplace_name) is None:
+        raise ValueError(
+            "Marketplace name may only contain ASCII letters, digits, `_`, and `-`."
+        )
+
+
 def display_name_from_plugin_name(plugin_name: str) -> str:
-    return " ".join(part.capitalize() for part in plugin_name.split("-"))
+    return " ".join(part.capitalize() for part in re.split(r"[-_]+", plugin_name))
 
 
 def build_plugin_json(plugin_name: str, *, with_mcp: bool, with_apps: bool) -> dict[str, Any]:
