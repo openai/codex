@@ -182,8 +182,7 @@ impl ToolsConfig {
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
-        let include_search_tool =
-            model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
+        let include_search_tool = model_info.supports_search_tool;
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
