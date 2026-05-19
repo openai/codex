@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
+use crate::config_provider::PreparedConfig;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
 use crate::extensions::guardian_agent_spawner;
@@ -67,7 +68,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::RuntimeCapabilities;
 use codex_core::ThreadManager;
-use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -257,7 +257,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
-    pub(crate) config: Arc<Config>,
+    pub(crate) prepared_config: PreparedConfig,
     pub(crate) config_manager: ConfigManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) runtime_capabilities: Arc<RuntimeCapabilities>,
@@ -281,7 +281,7 @@ impl MessageProcessor {
             outgoing,
             analytics_events_client,
             arg0_paths,
-            config,
+            prepared_config,
             config_manager,
             environment_manager,
             runtime_capabilities,
@@ -296,6 +296,7 @@ impl MessageProcessor {
             remote_control_handle,
             plugin_startup_tasks,
         } = args;
+        let config = prepared_config.config();
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
@@ -413,6 +414,7 @@ impl MessageProcessor {
             outgoing.clone(),
             arg0_paths.clone(),
             Arc::clone(&config),
+            prepared_config.clone(),
             config_manager.clone(),
             Arc::clone(&runtime_capabilities),
             Arc::clone(&thread_store),

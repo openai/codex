@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
+use crate::config_provider::PreparedConfig;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -79,6 +80,7 @@ mod command_exec;
 mod config;
 mod config_manager;
 mod config_manager_service;
+pub mod config_provider;
 mod connection_rpc_gate;
 mod dynamic_tools;
 mod error_code;
@@ -687,8 +689,10 @@ pub async fn run_main_with_transport_options(
         AppServerTransport::Off => {}
     }
 
+    let config = Arc::new(config);
+    let prepared_config = PreparedConfig::reloadable(Arc::clone(&config));
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false).await;
 
     let remote_control_requested = runtime_options.remote_control_enabled;
     let remote_control_enabled = remote_control_requested && state_db.is_some();
@@ -777,10 +781,13 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        let auth_manager = AuthManager::shared_from_config(
+            config.as_ref(),
+            /*enable_codex_api_key_env*/ false,
+        )
+        .await;
         let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+            analytics_events_client_from_config(Arc::clone(&auth_manager), config.as_ref());
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -791,7 +798,7 @@ pub async fn run_main_with_transport_options(
             outgoing: outgoing_message_sender,
             analytics_events_client,
             arg0_paths,
-            config: Arc::new(config),
+            prepared_config,
             config_manager,
             environment_manager,
             runtime_capabilities,

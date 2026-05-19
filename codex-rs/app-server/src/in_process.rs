@@ -52,6 +52,11 @@ use std::time::Duration;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
+use crate::config_provider::ConfigProvider;
+#[cfg(test)]
+use crate::config_provider::PreparedConfig;
+#[cfg(test)]
+use crate::config_provider::StaticConfigProvider;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
@@ -81,6 +86,7 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::RuntimeCapabilities;
+#[cfg(test)]
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
@@ -114,8 +120,8 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
 pub struct InProcessStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
     pub arg0_paths: Arg0DispatchPaths,
-    /// Shared base config used to initialize core components.
-    pub config: Arc<Config>,
+    /// Prepared read-only config source used to initialize core components.
+    pub config_provider: Arc<dyn ConfigProvider>,
     /// CLI config overrides that are already parsed into TOML values.
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
@@ -371,17 +377,21 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
-    let installation_id = resolve_installation_id(&args.config.codex_home).await?;
+    let prepared_config = args
+        .config_provider
+        .current()
+        .with_thread_config_loader(Arc::clone(&args.thread_config_loader));
+    let config = prepared_config.config();
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let auth_manager =
-            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
-                .await;
+            AuthManager::shared_from_config(config.as_ref(), args.enable_codex_api_key_env).await;
         let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+            analytics_events_client_from_config(Arc::clone(&auth_manager), config.as_ref());
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -411,7 +421,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let config_manager = ConfigManager::new(
-            args.config.codex_home.to_path_buf(),
+            config.codex_home.to_path_buf(),
             args.cli_overrides,
             args.loader_overrides,
             args.strict_config,
@@ -426,7 +436,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 outgoing: Arc::clone(&processor_outgoing),
                 analytics_events_client,
                 arg0_paths: args.arg0_paths,
-                config: args.config,
+                prepared_config,
                 config_manager,
                 environment_manager: args.environment_manager,
                 runtime_capabilities: args.runtime_capabilities,
@@ -743,6 +753,7 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
@@ -789,7 +800,7 @@ mod tests {
         let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config,
+            config_provider: Arc::new(StaticConfigProvider::new(PreparedConfig::new(config))),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             strict_config: false,
@@ -900,6 +911,33 @@ mod tests {
                 .await
                 .expect("in-process runtime should shutdown cleanly");
         }
+    }
+
+    #[tokio::test]
+    async fn isolated_thread_start_uses_prepared_config() {
+        let client = start_isolated_test_client().await;
+        let response = client
+            .request(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(2),
+                params: ThreadStartParams {
+                    config: Some(HashMap::from([(
+                        "model_reasoning_effort".to_string(),
+                        serde_json::Value::String("high".to_string()),
+                    )])),
+                    ephemeral: Some(true),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .expect("request transport should work")
+            .expect("thread/start should succeed");
+        let parsed: ThreadStartResponse =
+            serde_json::from_value(response).expect("thread/start response should parse");
+        assert_eq!(parsed.reasoning_effort, Some(ReasoningEffort::High));
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
     }
 
     #[tokio::test]

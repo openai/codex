@@ -2,6 +2,8 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server::config_provider::PreparedConfig;
+use codex_app_server::config_provider::StaticConfigProvider;
 use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
@@ -244,7 +246,9 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
-        config: Arc::new(config),
+        config_provider: Arc::new(StaticConfigProvider::new(PreparedConfig::new(Arc::new(
+            config,
+        )))),
         cli_overrides: Vec::new(),
         loader_overrides,
         strict_config: false,

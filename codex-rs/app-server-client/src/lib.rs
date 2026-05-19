@@ -26,6 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub use codex_app_server::app_server_control_socket_path;
+use codex_app_server::config_provider::PreparedConfig;
+use codex_app_server::config_provider::StaticConfigProvider;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
@@ -402,9 +404,14 @@ impl InProcessClientStartArgs {
     fn into_runtime_start_args(self) -> InProcessStartArgs {
         let initialize = self.initialize_params();
         let thread_config_loader = configured_thread_config_loader(&self.config);
+        let prepared_config = if self.runtime_capabilities.local_filesystem().is_some() {
+            PreparedConfig::reloadable(self.config)
+        } else {
+            PreparedConfig::new(self.config)
+        };
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
-            config: self.config,
+            config_provider: Arc::new(StaticConfigProvider::new(prepared_config)),
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             strict_config: self.strict_config,
@@ -2220,7 +2227,7 @@ mod tests {
         }
         .into_runtime_start_args();
 
-        assert_eq!(runtime_args.config, config);
+        assert_eq!(runtime_args.config_provider.current().config(), config);
         assert!(Arc::ptr_eq(
             &runtime_args.environment_manager,
             &environment_manager

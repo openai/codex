@@ -46,6 +46,7 @@ mod thread_processor_behavior_tests {
     }
 
     use super::super::*;
+    use crate::config_provider::PreparedConfig;
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
@@ -59,6 +60,7 @@ mod thread_processor_behavior_tests {
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_core::config::ConfigBuilder;
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
@@ -621,6 +623,58 @@ mod thread_processor_behavior_tests {
                             "wire_api": "responses",
                         }),
                     ),
+                ])),
+                ConfigOverrides::default(),
+            )
+            .await?;
+
+        assert_eq!(config.model_provider_id, "session");
+        assert_eq!(config.model_provider, session_provider);
+        assert!(!config.features.enabled(Feature::Plugins));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepared_config_uses_session_thread_config_model_provider() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let session_provider = ModelProviderInfo {
+            name: "session".to_string(),
+            base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: true,
+        };
+        let base_config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await?;
+        let config = PreparedConfig::new(Arc::new(base_config))
+            .with_thread_config_loader(Arc::new(StaticThreadConfigLoader::new(vec![
+                ThreadConfigSource::Session(SessionThreadConfig {
+                    model_provider: Some("session".to_string()),
+                    model_providers: HashMap::from([(
+                        "session".to_string(),
+                        session_provider.clone(),
+                    )]),
+                    features: BTreeMap::from([("plugins".to_string(), false)]),
+                }),
+            ])))
+            .derive_thread_config(
+                Some(HashMap::from([
+                    ("model_provider".to_string(), json!("request")),
+                    ("features.plugins".to_string(), json!(true)),
                 ])),
                 ConfigOverrides::default(),
             )

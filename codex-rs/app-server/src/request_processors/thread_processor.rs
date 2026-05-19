@@ -1,4 +1,5 @@
 use super::*;
+use crate::config_provider::PreparedConfig;
 use crate::error_code::method_not_found;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
@@ -329,6 +330,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) arg0_paths: Arg0DispatchPaths,
     pub(super) config: Arc<Config>,
+    pub(super) prepared_config: PreparedConfig,
     pub(super) config_manager: ConfigManager,
     pub(super) runtime_capabilities: Arc<RuntimeCapabilities>,
     pub(super) thread_store: Arc<dyn ThreadStore>,
@@ -350,6 +352,7 @@ impl ThreadRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
+        prepared_config: PreparedConfig,
         config_manager: ConfigManager,
         runtime_capabilities: Arc<RuntimeCapabilities>,
         thread_store: Arc<dyn ThreadStore>,
@@ -367,6 +370,7 @@ impl ThreadRequestProcessor {
             outgoing,
             arg0_paths,
             config,
+            prepared_config,
             config_manager,
             runtime_capabilities,
             thread_store,
@@ -883,12 +887,14 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let prepared_config = self.prepared_config.clone();
         let runtime_capabilities = Arc::clone(&self.runtime_capabilities);
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
+                prepared_config,
                 config_manager,
                 runtime_capabilities,
                 request_id,
@@ -974,6 +980,7 @@ impl ThreadRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
+        prepared_config: PreparedConfig,
         config_manager: ConfigManager,
         runtime_capabilities: Arc<RuntimeCapabilities>,
         request_id: ConnectionRequestId,
@@ -991,10 +998,16 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let mut config = config_manager
-            .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
-            .await
-            .map_err(|err| config_load_error(&err))?;
+        let mut config = if prepared_config.reloads_thread_config() {
+            config_manager
+                .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+                .await
+        } else {
+            prepared_config
+                .derive_thread_config(config_overrides.clone(), typesafe_overrides.clone())
+                .await
+        }
+        .map_err(|err| config_load_error(&err))?;
 
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
@@ -1008,7 +1021,8 @@ impl ThreadRequestProcessor {
             config.cwd.as_path(),
         );
 
-        if requested_cwd.is_some()
+        if runtime_capabilities.local_filesystem().is_some()
+            && requested_cwd.is_some()
             && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project || effective_permissions_trust_project)
         {

@@ -3,6 +3,7 @@ use super::MessageProcessor;
 use super::MessageProcessorArgs;
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
+use crate::config_provider::PreparedConfig;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::AppServerTransport;
@@ -258,7 +259,7 @@ async fn build_test_processor(
         outgoing,
         analytics_events_client,
         arg0_paths: Arg0DispatchPaths::default(),
-        config,
+        prepared_config: PreparedConfig::new(config),
         config_manager,
         environment_manager,
         runtime_capabilities,

@@ -8,6 +8,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -1362,6 +1363,59 @@ impl Config {
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
+            config_layer_stack,
+        )
+        .await
+    }
+
+    /// Derives a thread-scoped config from this prepared snapshot without
+    /// loading config layers from disk again.
+    pub async fn derive_thread_config(
+        &self,
+        session_overrides: Vec<(String, TomlValue)>,
+        thread_config_layers: Vec<ConfigLayerEntry>,
+        overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        let mut layers = self
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let session_overrides = codex_config::build_cli_overrides_layer(&session_overrides);
+        if session_overrides
+            .as_table()
+            .is_some_and(|table| !table.is_empty())
+        {
+            layers.push(ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                session_overrides,
+            ));
+            layers.sort_by_key(|layer| layer.name.precedence());
+        }
+        layers.extend(thread_config_layers);
+        layers.sort_by_key(|layer| layer.name.precedence());
+        let config_layer_stack = ConfigLayerStack::new(
+            layers,
+            self.config_layer_stack.requirements().clone(),
+            self.config_layer_stack.requirements_toml().clone(),
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            self.config_layer_stack
+                .ignore_user_and_project_exec_policy_rules(),
+        );
+        let cfg = deserialize_config_toml_with_base(
+            config_layer_stack.effective_config(),
+            &self.codex_home,
+        )?;
+        Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            overrides,
+            self.codex_home.clone(),
             config_layer_stack,
         )
         .await
