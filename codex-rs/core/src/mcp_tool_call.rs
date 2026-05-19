@@ -2097,8 +2097,10 @@ fn custom_mcp_tool_approval_config_builder(
     config: &Config,
     server: &str,
 ) -> anyhow::Result<Option<ConfigEditsBuilder>> {
-    if let Some(project_config_folder) = project_mcp_tool_approval_config_folder(config, server) {
-        return Ok(Some(ConfigEditsBuilder::new(&project_config_folder)));
+    if let Some(config_path) = mcp_tool_approval_config_path(config, server) {
+        return Ok(Some(ConfigEditsBuilder::for_config_path(
+            config_path.as_path(),
+        )));
     }
 
     Ok(user_mcp_server_is_configured(config, server)?
@@ -2140,33 +2142,33 @@ fn user_mcp_server_is_configured(config: &Config, server: &str) -> anyhow::Resul
     Ok(servers.contains_key(server))
 }
 
-fn project_mcp_tool_approval_config_folder(
-    config: &Config,
-    server: &str,
-) -> Option<AbsolutePathBuf> {
+fn mcp_tool_approval_config_path(config: &Config, server: &str) -> Option<AbsolutePathBuf> {
     config
         .config_layer_stack
         .layers_high_to_low()
         .into_iter()
         .find_map(|layer| {
-            if !matches!(layer.name, ConfigLayerSource::Project { .. }) {
-                return None;
-            }
-
-            let servers = layer
-                .config
-                .as_table()
-                .and_then(|table| table.get("mcp_servers"))
-                .cloned()
-                .and_then(|value| {
-                    HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
-                })?;
-            if servers.contains_key(server) {
-                layer.config_folder()
-            } else {
-                None
-            }
+            let config_path = match &layer.name {
+                ConfigLayerSource::Project { dot_codex_folder } => {
+                    dot_codex_folder.join(codex_config::CONFIG_TOML_FILE)
+                }
+                ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+                    dot_codex_folder.join(codex_config::CONFIG_OVERRIDE_TOML_FILE)
+                }
+                ConfigLayerSource::UserOverride { file } => file.clone(),
+                _ => return None,
+            };
+            layer_declares_mcp_server(layer, server).then_some(config_path)
         })
+}
+
+fn layer_declares_mcp_server(layer: &codex_config::ConfigLayerEntry, server: &str) -> bool {
+    layer
+        .config
+        .as_table()
+        .and_then(|table| table.get("mcp_servers"))
+        .and_then(toml::Value::as_table)
+        .is_some_and(|servers| servers.contains_key(server))
 }
 
 fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
