@@ -189,32 +189,24 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, emit_thread_settings_applied) = match op {
-        Op::UserInput {
-            items,
-            environments,
-            final_output_json_schema,
-            responsesapi_client_metadata,
-            thread_settings,
-        } => {
-            let emit_thread_settings_applied =
-                thread_settings != ThreadSettingsOverrides::default();
-            let mut updates = if emit_thread_settings_applied {
-                thread_settings_update(sess, thread_settings).await
-            } else {
-                SessionSettingsUpdate::default()
-            };
-            updates.final_output_json_schema = Some(final_output_json_schema);
-            updates.environments = environments;
-            (
-                items,
-                updates,
-                responsesapi_client_metadata,
-                emit_thread_settings_applied,
-            )
-        }
-        _ => unreachable!(),
+    let Op::UserInput {
+        items,
+        environments,
+        final_output_json_schema,
+        responsesapi_client_metadata,
+        thread_settings,
+    } = op
+    else {
+        unreachable!();
     };
+    let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
+    let mut updates = if emit_thread_settings_applied {
+        thread_settings_update(sess, thread_settings).await
+    } else {
+        SessionSettingsUpdate::default()
+    };
+    updates.final_output_json_schema = Some(final_output_json_schema);
+    updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
