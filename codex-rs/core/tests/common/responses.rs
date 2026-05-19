@@ -1246,7 +1246,10 @@ pub async fn start_websocket_server_with_headers(
             };
 
             if let Some(delay) = connection.accept_delay {
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = &mut shutdown_rx => return,
+                    _ = tokio::time::sleep(delay) => {}
+                }
             }
 
             let response_headers = connection.response_headers.clone();
