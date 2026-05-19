@@ -188,8 +188,8 @@ Example with notification opt-out:
 - `fs/changed` — notification emitted when watched paths change, including the `watchId` and `changedPaths`.
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, `additionalSpeedTiers`, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `modelProvider/capabilities/read` — read provider-level capabilities for the currently configured model provider.
-- `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
-- `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `memories`, `plugins`, `tool_search`, `tool_suggest`, `tool_call_mcp_elicitation`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
+- `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. Pass `threadId` when showing feature state for an existing loaded thread so `enabled` is computed from that thread's refreshed config, including project-local config for the thread's cwd; if omitted, the server uses its default config resolution context. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
+- `experimentalFeature/enablement/set` — patch the in-memory process-wide runtime feature enablement for the currently supported feature keys (`apps`, `memories`, `plugins`, `tool_suggest`, `tool_call_mcp_elicitation`). For each feature, precedence is: cloud requirements > --enable <feature_name> > config.toml > experimentalFeature/enablement/set (new) > code default.
 - `environment/add` — experimental; add or replace a named remote environment by `environmentId` and `execServerUrl` for later selection by `thread/start` or `turn/start`; returns `{}` and does not change the default environment.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
@@ -496,7 +496,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Set and update a thread goal
 
-Use `thread/goal/set` to create or update the current goal for a materialized thread. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+Use `thread/goal/set` to create or update the current goal for a materialized thread. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted, `blocked` when progress is waiting on outside intervention, and `usageLimited` when usage availability stops further work. The system also sets `budgetLimited` when accounting crosses a configured token budget and `usageLimited` when a turn ends on a hard usage-limit error.
 
 ```json
 { "method": "thread/goal/set", "id": 27, "params": {
@@ -529,12 +529,12 @@ Use `thread/goal/set` to create or update the current goal for a materialized th
 ```json
 { "method": "thread/goal/set", "id": 28, "params": {
     "threadId": "thr_123",
-    "status": "paused"
+    "status": "blocked"
 } }
 { "id": 28, "result": { "goal": {
     "threadId": "thr_123",
     "objective": "Keep improving the benchmark until p95 latency is under 120ms",
-    "status": "paused",
+    "status": "blocked",
     "tokenBudget": 200000,
     "tokensUsed": 10000,
     "timeUsedSeconds": 60,
@@ -832,7 +832,7 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 ### Example: Steer an active turn
 
 Use `turn/steer` to append additional user input to the currently active regular turn. This does
-not emit `turn/started` and does not accept turn context overrides.
+not emit `turn/started` and does not accept thread settings overrides.
 
 ```json
 { "method": "turn/steer", "id": 32, "params": {
@@ -927,7 +927,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
     "cwd": "/Users/me/project",                    // optional; defaults to server cwd
     "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names
     "size": { "rows": 40, "cols": 120 },           // optional; PTY size in character cells, only valid with tty=true
-    "permissionProfile": { "id": ":workspace", "extends": null }, // optional; defaults to user config
+    "permissionProfile": ":workspace",             // optional profile id; defaults to user config
     "outputBytesCap": 1048576,                     // optional; per-stream capture cap
     "disableOutputCap": false,                     // optional; cannot be combined with outputBytesCap
     "timeoutMs": 10000,                            // optional; ms timeout; defaults to server timeout

@@ -425,7 +425,7 @@ impl TurnRequestProcessor {
                         "turn/start permission selection missing thread snapshot",
                     ));
                 };
-                let mut overrides = ConfigOverrides {
+                let overrides = ConfigOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
                         || {
@@ -436,14 +436,11 @@ impl TurnRequestProcessor {
                                 .collect()
                         },
                     )),
+                    default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
                 let config = self
                     .config_manager
                     .load_for_cwd(
@@ -460,7 +457,7 @@ impl TurnRequestProcessor {
                     warning.contains("Configured value for `permission_profile` is disallowed")
                 }) {
                     return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
+                        "invalid thread settings override: {warning}"
                     )));
                 }
                 (
@@ -482,7 +479,7 @@ impl TurnRequestProcessor {
         // still queued together with the input below to preserve submission order.
         if has_any_overrides {
             thread
-                .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
+                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
@@ -500,39 +497,36 @@ impl TurnRequestProcessor {
                     personality,
                 })
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
         }
 
+        let thread_settings = codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        };
+
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if has_any_overrides {
-            Op::UserInputWithTurnContext {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                cwd,
-                workspace_roots: runtime_workspace_roots,
-                profile_workspace_roots,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level: None,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            }
-        } else {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-            }
+        let turn_op = Op::UserInput {
+            items: mapped_items,
+            environments: environment_selections,
+            final_output_json_schema: params.output_schema,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            thread_settings,
         };
         let turn_id = self
             .submit_core_op(&request_id, thread.as_ref(), turn_op)

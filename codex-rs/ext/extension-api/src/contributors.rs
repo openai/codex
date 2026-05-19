@@ -11,6 +11,7 @@ use crate::ExtensionData;
 
 mod prompt;
 mod thread_lifecycle;
+mod tool_lifecycle;
 mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
@@ -18,6 +19,11 @@ pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
+pub use tool_lifecycle::ToolCallOutcome;
+pub use tool_lifecycle::ToolCallSource;
+pub use tool_lifecycle::ToolFinishInput;
+pub use tool_lifecycle::ToolLifecycleFuture;
+pub use tool_lifecycle::ToolStartInput;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
@@ -88,9 +94,10 @@ pub trait ConfigContributor<C>: Send + Sync {
 /// Implementations should keep this callback cheap. The host calls it after
 /// updating cached token usage and before emitting the corresponding client
 /// token-count notification.
+#[async_trait::async_trait]
 pub trait TokenUsageContributor: Send + Sync {
     /// Called each time the host records token usage from a model response.
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
@@ -108,6 +115,23 @@ pub trait ToolContributor: Send + Sync {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
+}
+
+/// Contributor for host-owned tool lifecycle gates.
+///
+/// Implementations should use these callbacks to observe tool execution without
+/// inspecting or rewriting tool input/output. Use `ToolContributor` for owning a
+/// tool implementation and hooks for policy that needs tool payloads.
+pub trait ToolLifecycleContributor: Send + Sync {
+    /// Called once the host has accepted a tool call for execution.
+    fn on_tool_start<'a>(&'a self, _input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
+
+    /// Called after the tool call returns, is blocked, fails, or is cancelled.
+    fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
 }
 
 /// Future returned by one claimed approval-review contribution.

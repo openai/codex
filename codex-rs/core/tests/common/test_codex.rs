@@ -184,10 +184,9 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
-/// A collection of different ways the model can output an apply_patch call
+/// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    Freeform,
     ShellCommandViaHeredoc,
 }
 
@@ -198,8 +197,7 @@ pub enum ShellModelOutput {
     // UnifiedExec has its own set of tests
 }
 
-/// Returns the permission fields required by `Op::UserTurn` for tests that
-/// construct the op directly.
+/// Returns the permission fields required by test thread-settings overrides.
 pub fn turn_permission_fields(
     permission_profile: PermissionProfile,
     cwd: &Path,
@@ -762,24 +760,30 @@ impl TestCodex {
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
-            .submit(Op::UserTurn {
-                environments,
+            .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
+                environments,
                 final_output_json_schema: None,
-                cwd: self.config.cwd.to_path_buf(),
-                approval_policy,
-                approvals_reviewer: None,
-                sandbox_policy,
-                permission_profile,
-                model: session_model,
-                effort: None,
-                summary: None,
-                service_tier,
-                collaboration_mode: None,
-                personality: None,
+                responsesapi_client_metadata: None,
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                    cwd: Some(self.config.cwd.to_path_buf()),
+                    approval_policy: Some(approval_policy),
+                    sandbox_policy: Some(sandbox_policy),
+                    permission_profile,
+                    service_tier,
+                    collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: session_model,
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
             })
             .await?;
 
@@ -977,21 +981,8 @@ impl TestCodexHarness {
         custom_tool_call_output_text(&bodies, call_id)
     }
 
-    pub async fn apply_patch_output(
-        &self,
-        call_id: &str,
-        output_type: ApplyPatchModelOutput,
-    ) -> String {
-        // Box the awaited output helpers so callers do not inline request
-        // capture and response parsing into their own async state.
-        match output_type {
-            ApplyPatchModelOutput::Freeform => {
-                Box::pin(self.custom_tool_call_output(call_id)).await
-            }
-            ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                Box::pin(self.function_call_stdout(call_id)).await
-            }
-        }
+    pub async fn apply_patch_output(&self, call_id: &str) -> String {
+        self.custom_tool_call_output(call_id).await
     }
 }
 

@@ -23,6 +23,7 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
@@ -58,13 +59,14 @@ impl<'a> AgentsMdManager<'a> {
         Self { config }
     }
 
-    pub(crate) fn load_global_instructions(
+    pub(crate) async fn load_global_instructions(
+        fs: &dyn ExecutorFileSystem,
         codex_dir: Option<&AbsolutePathBuf>,
     ) -> Option<LoadedAgentsMd> {
         let base = codex_dir?;
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(contents) = fs.read_file_text(&path, /*sandbox*/ None).await {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
                     return Some(LoadedAgentsMd {
@@ -128,9 +130,11 @@ impl<'a> AgentsMdManager<'a> {
 
     /// Returns all instruction source files included in the current config.
     pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        let mut paths = Self::load_global_instructions(Some(&self.config.codex_home))
-            .map(|loaded| vec![loaded.path])
-            .unwrap_or_default();
+        let mut paths =
+            Self::load_global_instructions(LOCAL_FS.as_ref(), Some(&self.config.codex_home))
+                .await
+                .map(|loaded| vec![loaded.path])
+                .unwrap_or_default();
         match self.agents_md_paths(fs).await {
             Ok(agents_md_paths) => paths.extend(agents_md_paths),
             Err(err) => {

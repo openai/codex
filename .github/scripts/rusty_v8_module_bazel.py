@@ -9,6 +9,7 @@ from pathlib import Path
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 HTTP_FILE_BLOCK_RE = re.compile(r"(?ms)^http_file\(\n.*?^\)\n?")
+HTTP_FILE_VERSION_RE = re.compile(r"^rusty_v8_([0-9]+)_([0-9]+)_([0-9]+)_")
 
 
 class RustyV8ChecksumError(ValueError):
@@ -93,6 +94,18 @@ def rusty_v8_http_files(module_bazel: str, version: str) -> list[RustyV8HttpFile
             )
         )
     return entries
+
+
+def rusty_v8_http_file_versions(module_bazel: str) -> list[str]:
+    versions = set()
+    for match in HTTP_FILE_BLOCK_RE.finditer(module_bazel):
+        name = string_field(match.group(0), "name")
+        if not name:
+            continue
+        version_match = HTTP_FILE_VERSION_RE.match(name)
+        if version_match:
+            versions.add(".".join(version_match.groups()))
+    return sorted(versions)
 
 
 def module_entry_set_errors(

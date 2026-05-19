@@ -1,0 +1,79 @@
+diff --git a/toolchain/BUILD.bazel b/toolchain/BUILD.bazel
+index fa00156236..bf0ee9d368 100644
+--- a/toolchain/BUILD.bazel
++++ b/toolchain/BUILD.bazel
+@@ -222,11 +222,16 @@ cc_args_list(
+ 
+ # TODO(cerisier): extract those into proper semantic args list.
+ # TODO(zbarsky): This must match llvm/toolchains/llvm.bzl
++_DEFAULT_LIBCXX_HEADER_ARGS = select({
++    "@@//third_party/v8:use_rusty_v8_custom_libcxx": [],
++    "//conditions:default": [
++        "//toolchain/args:libcxx_headers_include_search_paths",
++    ],
++})
++
+ cc_args_list(
+     name = "linux_toolchain_args",
+-    args = [
+-        "//toolchain/args:libcxx_headers_include_search_paths",
+-    ] + select({
++    args = _DEFAULT_LIBCXX_HEADER_ARGS + select({
+         "//platforms/config:musl": [
+             "//toolchain/args/linux:kernel_headers_include_search_paths",
+             "//toolchain/args/linux:musl_libc_headers_include_search_paths",
+@@ -252,8 +257,7 @@ cc_args_list(
+ # TODO(zbarsky): This must match llvm/toolchains/llvm.bzl
+ cc_args_list(
+     name = "windows_toolchain_args",
+-    args = [
+-        "//toolchain/args:libcxx_headers_include_search_paths",
++    args = _DEFAULT_LIBCXX_HEADER_ARGS + [
+         "//toolchain/args/windows:mingw_headers_include_search_paths",
+     ],
+ )
+diff --git a/toolchain/llvm/llvm.bzl b/toolchain/llvm/llvm.bzl
+index d36d8b94bd..97aa879d4a 100644
+--- a/toolchain/llvm/llvm.bzl
++++ b/toolchain/llvm/llvm.bzl
+@@ -186,16 +186,22 @@ def declare_llvm_targets(*, suffix = ""):
+         ],
+     )
+ 
++    default_libcxx_target_headers = select({
++        "@@//third_party/v8:use_rusty_v8_custom_libcxx": [],
++        "//conditions:default": [
++            "@llvm//runtimes/libcxx:libcxx_headers_include_search_directory",
++            "@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory",
++        ],
++    })
++
+     # This must match //toolchain:linux_toolchain_args
+     include_path(
+         name = "linux_target_headers",
+         srcs = [
+             ":builtin_resource_dir",
+-            "@llvm//runtimes/libcxx:libcxx_headers_include_search_directory",
+-            "@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory",
+             "@kernel_headers//:kernel_headers_directory",
+             "@llvm//sanitizers:sanitizers_headers_include_search_directory",
+-        ] + select({
++        ] + default_libcxx_target_headers + select({
+             "@llvm//platforms/config:musl": [
+                 "@llvm//runtimes/musl:musl_headers_include_search_directory",
+             ],
+@@ -210,13 +216,11 @@ def declare_llvm_targets(*, suffix = ""):
+         name = "windows_target_headers",
+         srcs = [
+             ":builtin_resource_dir",
+-            "@llvm//runtimes/libcxx:libcxx_headers_include_search_directory",
+-            "@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory",
+             "@mingw//:mingw_generated_headers_crt_directory",
+             "@mingw//:mingw_w64_headers_include_directory",
+             "@mingw//:mingw_w64_headers_crt_directory",
+             "@mingw//:mingw_w64_winpthreads_include_directory",
+-        ],
++        ] + default_libcxx_target_headers,
+     )
+ 
+     include_path(

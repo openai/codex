@@ -15,6 +15,7 @@ use codex_protocol::protocol::validate_thread_goal_objective;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::events::GoalEventEmitter;
 use crate::extension::GoalToolBackend;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
@@ -28,6 +29,7 @@ pub(crate) struct GoalToolExecutor {
     kind: GoalToolKind,
     thread_id: ThreadId,
     backend: Arc<dyn GoalToolBackend>,
+    event_emitter: GoalEventEmitter,
 }
 
 #[derive(Clone, Copy)]
@@ -65,27 +67,42 @@ enum CompletionBudgetReport {
 }
 
 impl GoalToolExecutor {
-    pub(crate) fn get(thread_id: ThreadId, backend: Arc<dyn GoalToolBackend>) -> Self {
+    pub(crate) fn get(
+        thread_id: ThreadId,
+        backend: Arc<dyn GoalToolBackend>,
+        event_emitter: GoalEventEmitter,
+    ) -> Self {
         Self {
             kind: GoalToolKind::Get,
             thread_id,
             backend,
+            event_emitter,
         }
     }
 
-    pub(crate) fn create(thread_id: ThreadId, backend: Arc<dyn GoalToolBackend>) -> Self {
+    pub(crate) fn create(
+        thread_id: ThreadId,
+        backend: Arc<dyn GoalToolBackend>,
+        event_emitter: GoalEventEmitter,
+    ) -> Self {
         Self {
             kind: GoalToolKind::Create,
             thread_id,
             backend,
+            event_emitter,
         }
     }
 
-    pub(crate) fn update(thread_id: ThreadId, backend: Arc<dyn GoalToolBackend>) -> Self {
+    pub(crate) fn update(
+        thread_id: ThreadId,
+        backend: Arc<dyn GoalToolBackend>,
+        event_emitter: GoalEventEmitter,
+    ) -> Self {
         Self {
             kind: GoalToolKind::Update,
             thread_id,
             backend,
+            event_emitter,
         }
     }
 }
@@ -146,6 +163,7 @@ impl GoalToolExecutor {
             .create_goal(self.thread_id, request)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        self.emit_goal_updated_from_tool_call(&invocation, goal.clone());
         goal_response(Some(goal), CompletionBudgetReport::Omit)
     }
 
@@ -168,7 +186,19 @@ impl GoalToolExecutor {
             .complete_goal(self.thread_id)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        self.emit_goal_updated_from_tool_call(&invocation, goal.clone());
         goal_response(Some(goal), CompletionBudgetReport::Include)
+    }
+
+    fn emit_goal_updated_from_tool_call(&self, invocation: &ToolCall, goal: ThreadGoal) {
+        // TODO: ToolCall should expose the current turn submission id so goal
+        // tool events can set ThreadGoalUpdatedEvent.turn_id exactly as core
+        // does today. Until then, correlate the event with the tool call id.
+        self.event_emitter.thread_goal_updated(
+            invocation.call_id.clone(),
+            /*turn_id*/ None,
+            goal,
+        );
     }
 }
 

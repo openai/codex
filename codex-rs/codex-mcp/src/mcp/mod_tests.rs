@@ -30,6 +30,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         apps_enabled: false,
         client_elicitation_capability: ElicitationCapability::default(),
         configured_mcp_servers: HashMap::new(),
+        plugin_ids_by_mcp_server_name: HashMap::new(),
         plugin_capability_summaries: Vec::new(),
     }
 }
@@ -124,7 +125,10 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
 
 #[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
-    let provenance = ToolPluginProvenance::from_capability_summaries(&[
+    let mut config = test_mcp_config(PathBuf::new());
+    config.plugin_ids_by_mcp_server_name =
+        HashMap::from([("alpha".to_string(), "alpha@test".to_string())]);
+    config.plugin_capability_summaries = vec![
         PluginCapabilitySummary {
             display_name: "alpha-plugin".to_string(),
             app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
@@ -140,7 +144,8 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
             mcp_server_names: vec!["beta".to_string()],
             ..PluginCapabilitySummary::default()
         },
-    ]);
+    ];
+    let provenance = tool_plugin_provenance(&config);
 
     assert_eq!(
         provenance,
@@ -159,8 +164,17 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
                 ("alpha".to_string(), vec!["alpha-plugin".to_string()]),
                 ("beta".to_string(), vec!["beta-plugin".to_string()]),
             ]),
+            plugin_ids_by_mcp_server_name: HashMap::from([(
+                "alpha".to_string(),
+                "alpha@test".to_string(),
+            )]),
         }
     );
+    assert_eq!(
+        provenance.plugin_id_for_mcp_server_name("alpha"),
+        Some("alpha@test")
+    );
+    assert_eq!(provenance.plugin_id_for_mcp_server_name("beta"), None);
 }
 
 #[test]

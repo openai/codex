@@ -106,6 +106,7 @@ struct StatusHistoryCell {
     agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
+    show_chatgpt_usage_link: bool,
     account: Option<StatusAccountDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
@@ -308,6 +309,7 @@ impl StatusHistoryCell {
             workspace_root_suffix.as_deref(),
         );
         let model_provider = format_model_provider(config, runtime_model_provider_base_url);
+        let show_chatgpt_usage_link = config.model_provider.requires_openai_auth;
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
@@ -347,6 +349,7 @@ impl StatusHistoryCell {
                 permissions,
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
+                show_chatgpt_usage_link,
                 account,
                 thread_name,
                 session_id,
@@ -765,8 +768,12 @@ impl HistoryCell for StatusHistoryCell {
             [note_first_line, note_second_line],
             RtOptions::new(available_inner_width),
         );
-        lines.extend(note_lines);
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        // The ChatGPT usage page only applies to providers backed by OpenAI auth;
+        // providers like Bedrock manage limits and billing elsewhere.
+        if self.show_chatgpt_usage_link {
+            lines.extend(note_lines);
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+        }
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {

@@ -1555,6 +1555,7 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
@@ -2721,7 +2722,33 @@ mod tests {
                 "id": 8,
                 "params": {
                     "cursor": null,
-                    "limit": null
+                    "limit": null,
+                    "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_experimental_features_with_thread_id() -> Result<()> {
+        let request = ClientRequest::ExperimentalFeatureList {
+            request_id: RequestId::Integer(8),
+            params: v2::ExperimentalFeatureListParams {
+                cursor: Some("3".to_string()),
+                limit: Some(2),
+                thread_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "experimentalFeature/list",
+                "id": 8,
+                "params": {
+                    "cursor": "3",
+                    "limit": 2,
+                    "threadId": "00000000-0000-4000-8000-000000000001"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2968,7 +2995,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
-                permission_profile: Some(v2::ActivePermissionProfile::read_only()),
+                permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
             },
         };
 

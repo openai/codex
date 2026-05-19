@@ -793,7 +793,6 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
 
     for disabled_feature in [Feature::Apps, Feature::Plugins] {
         let mut features = Features::with_defaults();
-        features.enable(Feature::ToolSearch);
         features.enable(Feature::ToolSuggest);
         features.enable(Feature::Apps);
         features.enable(Feature::Plugins);
@@ -832,7 +831,6 @@ async fn search_tool_is_hidden_without_deferred_tools() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -863,7 +861,6 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -907,7 +904,7 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
 }
 
 #[tokio::test]
-async fn test_mcp_tool_property_missing_type_defaults_to_string() {
+async fn test_mcp_tool_property_missing_type_defaults_to_empty_schema() {
     let config = test_config().await;
     let model_info = construct_model_info_offline("gpt-5.4", &config);
     let mut features = Features::with_defaults();
@@ -950,10 +947,7 @@ async fn test_mcp_tool_property_missing_type_defaults_to_string() {
             name: "search".to_string(),
             parameters: JsonSchema::object(
                 /*properties*/
-                BTreeMap::from([(
-                    "query".to_string(),
-                    JsonSchema::string(Some("search query".to_string())),
-                )]),
+                BTreeMap::from([("query".to_string(), JsonSchema::default())]),
                 /*required*/ None,
                 /*additional_properties*/ None
             ),

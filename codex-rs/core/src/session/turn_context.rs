@@ -368,7 +368,6 @@ impl TurnContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
-            trace_id: self.trace_id.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
@@ -383,11 +382,7 @@ impl TurnContext {
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
-            summary: self.reasoning_summary,
-            user_instructions: self.user_instructions.clone(),
-            developer_instructions: self.developer_instructions.clone(),
-            final_output_json_schema: self.final_output_json_schema.clone(),
-            truncation_policy: Some(self.truncation_policy),
+            summary: ReasoningSummaryConfig::Auto,
         }
     }
 

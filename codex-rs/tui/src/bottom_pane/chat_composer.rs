@@ -4130,6 +4130,15 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.set_input_enabled(/*enabled*/ false, Some("Shutting down...".to_string()));
+        self.footer.quit_shortcut_expires_at = None;
+        self.footer.mode = FooterMode::ComposerEmpty;
+        self.footer.hint_override = Some(Vec::new());
+        self.footer.plan_mode_nudge_visible = false;
+        self.footer.flash = None;
+    }
+
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
     }
@@ -4627,36 +4636,38 @@ impl ChatComposer {
 
         let mut state = self.draft.textarea_state.borrow_mut();
         let textarea_is_empty = self.draft.textarea.text().is_empty() && !self.draft.is_bash_mode;
-        if let Some(mask_char) = mask_char {
-            self.draft
-                .textarea
-                .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
-        } else {
-            let highlight_ranges = self.history_search_highlight_ranges();
-            if highlight_ranges.is_empty() {
-                StatefulWidgetRef::render_ref(
-                    &(&self.draft.textarea),
-                    textarea_rect,
-                    buf,
-                    &mut state,
-                );
+        if self.draft.input_enabled {
+            if let Some(mask_char) = mask_char {
+                self.draft
+                    .textarea
+                    .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
             } else {
-                let highlight_style =
-                    Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-                let highlights = highlight_ranges
-                    .into_iter()
-                    .map(|range| (range, highlight_style))
-                    .collect::<Vec<_>>();
-                self.draft.textarea.render_ref_styled_with_highlights(
-                    textarea_rect,
-                    buf,
-                    &mut state,
-                    Style::default(),
-                    &highlights,
-                );
+                let highlight_ranges = self.history_search_highlight_ranges();
+                if highlight_ranges.is_empty() {
+                    StatefulWidgetRef::render_ref(
+                        &(&self.draft.textarea),
+                        textarea_rect,
+                        buf,
+                        &mut state,
+                    );
+                } else {
+                    let highlight_style =
+                        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+                    let highlights = highlight_ranges
+                        .into_iter()
+                        .map(|range| (range, highlight_style))
+                        .collect::<Vec<_>>();
+                    self.draft.textarea.render_ref_styled_with_highlights(
+                        textarea_rect,
+                        buf,
+                        &mut state,
+                        Style::default(),
+                        &highlights,
+                    );
+                }
             }
         }
-        if textarea_is_empty {
+        if !self.draft.input_enabled || textarea_is_empty {
             let text = if self.draft.input_enabled {
                 self.placeholder_text.as_str().to_string()
             } else {
@@ -10683,5 +10694,42 @@ mod tests {
             height: 5,
         };
         assert_eq!(composer.cursor_pos(area), None);
+    }
+
+    #[test]
+    fn shutdown_in_progress_disables_input_and_uses_hint_without_footer() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
+        composer.show_shutdown_in_progress();
+
+        assert!(!composer.input_enabled());
+        assert_eq!(composer.current_text(), "hello");
+        assert_eq!(composer.custom_footer_height(), Some(0));
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 5,
+        };
+        assert_eq!(composer.cursor_pos(area), None);
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap();
+        insta::assert_snapshot!("shutdown_in_progress", terminal.backend());
     }
 }
