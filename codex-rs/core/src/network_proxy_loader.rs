@@ -90,12 +90,8 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
         .iter()
         .filter_map(|layer| {
             let path = match &layer.name {
-                ConfigLayerSource::System { file } | ConfigLayerSource::SystemOverride { file } => {
-                    Some(file.clone())
-                }
-                ConfigLayerSource::User { file, .. } | ConfigLayerSource::UserOverride { file } => {
-                    Some(file.clone())
-                }
+                ConfigLayerSource::System { file } => Some(file.clone()),
+                ConfigLayerSource::User { file, .. } => Some(file.clone()),
                 ConfigLayerSource::Project { dot_codex_folder } => {
                     Some(dot_codex_folder.join(CONFIG_TOML_FILE))
                 }
@@ -116,9 +112,9 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
     let optional_override_paths = layers
         .into_iter()
         .filter_map(|layer| match &layer.name {
-            ConfigLayerSource::System { file } | ConfigLayerSource::User { file, .. } => file
-                .parent()
-                .map(|parent| parent.join(CONFIG_OVERRIDE_TOML_FILE)),
+            ConfigLayerSource::Project { dot_codex_folder } => {
+                Some(dot_codex_folder.join(CONFIG_OVERRIDE_TOML_FILE))
+            }
             _ => None,
         })
         .filter(|path| !watched_paths.contains(path))
@@ -281,7 +277,6 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
     matches!(
         layer,
         ConfigLayerSource::User { .. }
-            | ConfigLayerSource::UserOverride { .. }
             | ConfigLayerSource::Project { .. }
             | ConfigLayerSource::ProjectOverride { .. }
             | ConfigLayerSource::SessionFlags

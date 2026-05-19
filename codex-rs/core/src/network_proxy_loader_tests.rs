@@ -8,19 +8,17 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn network_proxy_reloader_notices_new_user_override_files() {
+async fn network_proxy_reloader_notices_new_project_override_files() {
     let temp = tempdir().expect("create temp dir");
-    let base_file =
-        AbsolutePathBuf::try_from(temp.path().join(CONFIG_TOML_FILE)).expect("base path");
-    let override_file = AbsolutePathBuf::try_from(temp.path().join(CONFIG_OVERRIDE_TOML_FILE))
-        .expect("override path");
+    let dot_codex_folder =
+        AbsolutePathBuf::try_from(temp.path().join(".codex")).expect("project config folder");
+    std::fs::create_dir_all(dot_codex_folder.as_path()).expect("create project config folder");
+    let base_file = dot_codex_folder.join(CONFIG_TOML_FILE);
+    let override_file = dot_codex_folder.join(CONFIG_OVERRIDE_TOML_FILE);
     std::fs::write(base_file.as_path(), "").expect("write base config");
     let stack = ConfigLayerStack::new(
         vec![codex_config::ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: base_file,
-                profile: None,
-            },
+            ConfigLayerSource::Project { dot_codex_folder },
             toml::Value::Table(Default::default()),
         )],
         codex_config::ConfigRequirements::default(),
