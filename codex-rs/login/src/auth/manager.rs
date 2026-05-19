@@ -1715,6 +1715,19 @@ impl AuthManager {
         }
     }
 
+    /// Refresh managed ChatGPT auth even when its access token has not expired yet.
+    ///
+    /// CLI startup uses this to begin sessions with a freshly issued access token.
+    /// Other auth modes either cannot be refreshed locally or have separate refresh
+    /// ownership, so they intentionally no-op here.
+    pub async fn refresh_managed_chatgpt_token(&self) -> Result<(), RefreshTokenError> {
+        if !matches!(self.auth_cached(), Some(CodexAuth::Chatgpt(_))) {
+            return Ok(());
+        }
+
+        self.refresh_token().await
+    }
+
     /// Attempt to refresh the current auth token from the authority that issued
     /// the token. On success, reloads the auth state from disk so other components
     /// observe refreshed token. If the token refresh fails, returns the error to
