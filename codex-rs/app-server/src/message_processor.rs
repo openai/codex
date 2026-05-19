@@ -388,7 +388,6 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             outgoing.clone(),
             config_manager.clone(),
-            Arc::clone(&runtime_capabilities),
         );
         let plugin_processor = PluginRequestProcessor::new(
             auth_manager.clone(),

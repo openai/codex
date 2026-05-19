@@ -657,16 +657,10 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    async fn instruction_sources_from_config(
-        runtime_capabilities: &RuntimeCapabilities,
-        config: &Config,
-    ) -> Result<Vec<AbsolutePathBuf>, JSONRPCErrorError> {
-        let file_system = runtime_capabilities
-            .require_local_filesystem("load thread instruction sources")
-            .map_err(|err| internal_error(err.to_string()))?;
-        Ok(codex_core::AgentsMdManager::new(config)
-            .instruction_sources(file_system.as_ref())
-            .await)
+    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
+        codex_core::AgentsMdManager::new(config)
+            .instruction_sources(LOCAL_FS.as_ref())
+            .await
     }
 
     async fn load_thread(
@@ -889,12 +883,14 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let runtime_capabilities = Arc::clone(&self.runtime_capabilities);
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
                 config_manager,
+                runtime_capabilities,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
@@ -979,6 +975,7 @@ impl ThreadRequestProcessor {
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
         config_manager: ConfigManager,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -1015,8 +1012,7 @@ impl ThreadRequestProcessor {
             && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project || effective_permissions_trust_project)
         {
-            let file_system = self
-                .runtime_capabilities
+            let file_system = runtime_capabilities
                 .require_local_filesystem("trust requested thread cwd")
                 .map_err(|err| internal_error(err.to_string()))?;
             let trust_target =
@@ -1069,8 +1065,7 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let instruction_sources =
-            Self::instruction_sources_from_config(&self.runtime_capabilities, &config).await?;
+        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -2454,8 +2449,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let instruction_sources =
-            Self::instruction_sources_from_config(&self.runtime_capabilities, &config).await?;
+        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
         match self
@@ -2740,11 +2734,8 @@ impl ThreadRequestProcessor {
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
-            let instruction_sources = Self::instruction_sources_from_config(
-                &self.runtime_capabilities,
-                &config_for_instruction_sources,
-            )
-            .await?;
+            let instruction_sources =
+                Self::instruction_sources_from_config(&config_for_instruction_sources).await;
 
             let listener_command_tx = {
                 let thread_state = thread_state.lock().await;
@@ -3114,8 +3105,7 @@ impl ThreadRequestProcessor {
             .map_err(|err| config_load_error(&err))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources =
-            Self::instruction_sources_from_config(&self.runtime_capabilities, &config).await?;
+        let instruction_sources = Self::instruction_sources_from_config(&config).await;
 
         let NewThread {
             thread_id,
