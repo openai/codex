@@ -59,6 +59,8 @@ mod thread_processor_behavior_tests {
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_core::RuntimeCapabilities;
+    use codex_core::config::ConfigBuilder;
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
@@ -87,6 +89,28 @@ mod thread_processor_behavior_tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn instruction_sources_reject_isolated_runtime_without_local_filesystem() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await
+            .expect("build config");
+
+        let error = ThreadRequestProcessor::instruction_sources_from_config(
+            &RuntimeCapabilities::isolated(),
+            &config,
+        )
+        .await
+        .expect_err("isolated runtime should reject instruction source load");
+
+        assert_eq!(
+            error.message,
+            "load thread instruction sources requires ambient worker-local filesystem"
+        );
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {

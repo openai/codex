@@ -8,6 +8,7 @@ pub(crate) struct McpRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
+    runtime_capabilities: Arc<RuntimeCapabilities>,
 }
 
 impl McpRequestProcessor {
@@ -16,12 +17,14 @@ impl McpRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
     ) -> Self {
         Self {
             auth_manager,
             thread_manager,
             outgoing,
             config_manager,
+            runtime_capabilities,
         }
     }
 
@@ -204,18 +207,12 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
-        };
+        let runtime_environment = runtime_environment_without_thread(
+            self.thread_manager.environment_manager().as_ref(),
+            &self.runtime_capabilities,
+            config.cwd.to_path_buf(),
+            "list MCP server status without thread",
+        )?;
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -369,15 +366,12 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = {
-            let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
-                .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-        };
+        let runtime_environment = runtime_environment_without_thread(
+            self.thread_manager.environment_manager().as_ref(),
+            &self.runtime_capabilities,
+            config.cwd.to_path_buf(),
+            "read MCP resource without thread",
+        )?;
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
@@ -432,6 +426,64 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
+    }
+}
+
+fn runtime_environment_without_thread(
+    environment_manager: &EnvironmentManager,
+    runtime_capabilities: &RuntimeCapabilities,
+    cwd: PathBuf,
+    local_fallback_operation: &str,
+) -> Result<McpRuntimeEnvironment, JSONRPCErrorError> {
+    let environment = match environment_manager.default_environment() {
+        Some(environment) => environment,
+        None => runtime_capabilities
+            .require_local_environment(local_fallback_operation)
+            .map_err(|err| internal_error(err.to_string()))?,
+    };
+    // Threadless MCP requests have no turn cwd. This fallback is used only
+    // by executor-backed stdio MCPs whose config omits `cwd`.
+    Ok(McpRuntimeEnvironment::new(environment, cwd))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_environment_without_thread;
+    use codex_core::RuntimeCapabilities;
+    use codex_exec_server::EnvironmentManager;
+    use codex_exec_server::ExecServerRuntimePaths;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn threadless_mcp_local_fallback_rejects_isolated_runtime() {
+        let environment_manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
+        let error = runtime_environment_without_thread(
+            &environment_manager,
+            &RuntimeCapabilities::isolated(),
+            test_cwd(),
+            "list MCP server status without thread",
+        )
+        .expect_err("isolated runtime should reject local MCP fallback");
+
+        assert_eq!(
+            error.message,
+            "list MCP server status without thread requires ambient worker-local environment"
+        );
+    }
+
+    fn test_runtime_paths() -> ExecServerRuntimePaths {
+        ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths")
+    }
+
+    fn test_cwd() -> std::path::PathBuf {
+        AbsolutePathBuf::current_dir()
+            .expect("current dir")
+            .to_path_buf()
     }
 }
 

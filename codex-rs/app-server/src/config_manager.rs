@@ -222,6 +222,10 @@ impl ConfigManager {
         typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
+        let file_system = self
+            .runtime_capabilities
+            .require_local_filesystem("load app-server config")
+            .map_err(std::io::Error::other)?;
         let merged_cli_overrides = cli_overrides
             .iter()
             .cloned()
@@ -242,7 +246,7 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
             .thread_config_loader(self.current_thread_config_loader())
-            .build()
+            .build_with_file_system(file_system.as_ref())
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
