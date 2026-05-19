@@ -1,0 +1,14 @@
+---
+source: tui/src/pager_overlay.rs
+expression: term.backend()
+---
+" Transcript · 1 prompt · 100% ────────────────────"
+"Search: needle                                 1/1"
+"› find this prompt                                "
+"                                                  "
+"                                                  "
+"• assistant needle result                         "
+"──────────────────────────────────────────────────"
+" ↑/↓   ←/→   pgup/pgdn   home/end                 "
+" ctrl + t   esc   enter   shift + n   /           "
+"                                                  "

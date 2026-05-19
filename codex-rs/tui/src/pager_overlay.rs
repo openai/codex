@@ -17,6 +17,7 @@
 
 use std::any::TypeId;
 use std::cell::Cell as StdCell;
+use std::cell::RefCell;
 use std::io::Result;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -38,10 +39,12 @@ use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::style::accent_style;
 use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
@@ -53,9 +56,11 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -65,6 +70,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthChar;
 
 pub(crate) enum Overlay {
     Transcript(Box<TranscriptOverlay>),
@@ -165,6 +171,8 @@ struct PagerView {
     layout: Option<PagerLayout>,
     /// If set, on next render position this row of the chunk near the upper third.
     pending_anchor_chunk: Option<(usize, usize)>,
+    /// If set, on next render ensure this search-match line is visible.
+    pending_search_line: Option<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -193,6 +201,7 @@ impl PagerView {
             last_rendered_height: None,
             layout: None,
             pending_anchor_chunk: None,
+            pending_search_line: None,
         }
     }
 
@@ -254,7 +263,6 @@ impl PagerView {
         self.last_rendered_height = Some(content_height);
         self.resolve_pending_scroll(content_area, content_height);
         self.render_header(area, content_area, buf, content_height);
-
         self.render_content(content_area, buf);
 
         self.render_bottom_bar(area, content_area, buf, content_height);
@@ -407,9 +415,15 @@ impl PagerView {
     }
 
     fn content_area(&self, area: Rect) -> Rect {
+        self.content_area_with_inset(area, /*top_inset*/ 0)
+    }
+
+    fn content_area_with_inset(&self, area: Rect, top_inset: u16) -> Rect {
         let mut area = area;
         area.y = area.y.saturating_add(1);
         area.height = area.height.saturating_sub(2);
+        area.y = area.y.saturating_add(top_inset);
+        area.height = area.height.saturating_sub(top_inset);
         area
     }
 }
@@ -438,10 +452,17 @@ impl PagerView {
     fn resolve_pending_scroll(&mut self, area: Rect, content_height: usize) {
         if let Some((idx, row_offset)) = self.pending_anchor_chunk.take() {
             self.position_chunk_at_upper_third(idx, row_offset, area);
+            self.pending_search_line.take();
+        } else if let Some((chunk_index, line_index)) = self.pending_search_line.take() {
+            self.ensure_line_visible(chunk_index, line_index, area);
         }
         self.scroll_offset = self
             .scroll_offset
             .min(content_height.saturating_sub(area.height as usize));
+    }
+
+    fn scroll_line_into_view(&mut self, chunk_index: usize, line_index: usize) {
+        self.pending_search_line = Some((chunk_index, line_index));
     }
 
     fn clamped_scroll_offset(&mut self, area: Rect) -> usize {
@@ -464,6 +485,21 @@ impl PagerView {
         let row = layout.offsets[idx].saturating_add(row_offset);
         let anchor = (area.height as usize) / 3;
         self.scroll_offset = row.saturating_sub(anchor);
+    }
+
+    fn ensure_line_visible(&mut self, chunk_index: usize, line_index: usize, area: Rect) {
+        if area.height == 0 || chunk_index >= self.renderables.len() {
+            return;
+        }
+        let layout = self.layout(area.width);
+        let line = layout.offsets[chunk_index].saturating_add(line_index);
+        let current_top = self.scroll_offset;
+        let current_bottom = current_top.saturating_add(area.height.saturating_sub(1) as usize);
+        if line < current_top {
+            self.scroll_offset = line;
+        } else if line > current_bottom {
+            self.scroll_offset = line.saturating_sub(area.height.saturating_sub(1) as usize);
+        }
     }
 }
 
@@ -498,18 +534,27 @@ impl Renderable for CachedRenderable {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderableMatch {
+    renderable_index: usize,
+    line_index: usize,
+    start_col: u16,
+    end_col: u16,
+}
+
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
-    cell_index: usize,
+    renderable_index: usize,
     style: Style,
     selected_style: Option<Style>,
     highlight_cell: Rc<StdCell<Option<usize>>>,
     render_mode: HistoryRenderMode,
+    active_match: Rc<RefCell<Option<RenderableMatch>>>,
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let style = if self.highlight_cell.get() == Some(self.cell_index) {
+        let style = if self.highlight_cell.get() == Some(self.renderable_index) {
             self.selected_style.unwrap_or(self.style)
         } else {
             self.style
@@ -522,6 +567,25 @@ impl Renderable for CellRenderable {
             .wrap(Wrap { trim: false });
         p.render(area, buf);
         mark_buffer_hyperlinks(buf, area, &hyperlink_lines, /*scroll_rows*/ 0);
+
+        if let Some(active_match) = *self.active_match.borrow()
+            && active_match.renderable_index == self.renderable_index
+            && active_match.end_col > active_match.start_col
+        {
+            let y = area.y.saturating_add(active_match.line_index as u16);
+            if y < area.bottom() {
+                let width = active_match
+                    .end_col
+                    .saturating_sub(active_match.start_col)
+                    .min(area.width);
+                if width > 0 {
+                    buf.set_style(
+                        Rect::new(area.x.saturating_add(active_match.start_col), y, width, 1),
+                        accent_style().add_modifier(Modifier::REVERSED),
+                    );
+                }
+            }
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -530,16 +594,37 @@ impl Renderable for CellRenderable {
     }
 }
 
-struct HyperlinkLinesRenderable {
+struct TailLinesRenderable {
     lines: Vec<HyperlinkLine>,
+    renderable_index: usize,
+    active_match: Rc<RefCell<Option<RenderableMatch>>>,
 }
 
-impl Renderable for HyperlinkLinesRenderable {
+impl Renderable for TailLinesRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         Paragraph::new(Text::from(visible_lines(self.lines.clone())))
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);
+
+        if let Some(active_match) = *self.active_match.borrow()
+            && active_match.renderable_index == self.renderable_index
+            && active_match.end_col > active_match.start_col
+        {
+            let y = area.y.saturating_add(active_match.line_index as u16);
+            if y < area.bottom() {
+                let width = active_match
+                    .end_col
+                    .saturating_sub(active_match.start_col)
+                    .min(area.width);
+                if width > 0 {
+                    buf.set_style(
+                        Rect::new(area.x.saturating_add(active_match.start_col), y, width, 1),
+                        accent_style().add_modifier(Modifier::REVERSED),
+                    );
+                }
+            }
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -548,6 +633,45 @@ impl Renderable for HyperlinkLinesRenderable {
             .line_count(width)
             .try_into()
             .unwrap_or(/*default*/ 0)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SearchMatch {
+    renderable_index: usize,
+    line_index: usize,
+    scroll_line_index: usize,
+    start_col: u16,
+    end_col: u16,
+    owning_user_prompt_cell: Option<usize>,
+}
+
+#[derive(Default)]
+struct TranscriptSearchState {
+    active: bool,
+    editing: bool,
+    query: String,
+    matches: Vec<SearchMatch>,
+    active_match: Option<usize>,
+    dirty: bool,
+}
+
+impl TranscriptSearchState {
+    fn activate(&mut self) {
+        self.active = true;
+        self.editing = true;
+        self.query.clear();
+        self.matches.clear();
+        self.active_match = None;
+        self.dirty = true;
+    }
+
+    fn deactivate(&mut self) {
+        self.active = false;
+        self.editing = false;
+        self.query.clear();
+        self.matches.clear();
+        self.active_match = None;
+        self.dirty = false;
     }
 }
 
@@ -567,6 +691,10 @@ pub(crate) struct TranscriptOverlay {
     copy_requested: bool,
     scroll_selected_user_cell: Option<usize>,
     footer_status: Option<FooterStatus>,
+    search: TranscriptSearchState,
+    active_search_match: Rc<RefCell<Option<RenderableMatch>>>,
+    last_content_width: Option<u16>,
+    live_tail_lines: Option<Vec<HyperlinkLine>>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
     async_layout: AsyncTranscriptLayout,
@@ -633,10 +761,12 @@ impl TranscriptOverlay {
         state: TranscriptOverlayState,
     ) -> Self {
         let highlight_cell = Rc::new(StdCell::new(state.highlight_cell));
+        let active_search_match = Rc::new(RefCell::new(None));
         let renderables = Self::render_cells(
             &transcript_cells,
             Rc::clone(&highlight_cell),
             state.render_mode,
+            Rc::clone(&active_search_match),
         );
         let user_prompt_positions = Self::user_prompt_positions(&transcript_cells);
 
@@ -660,6 +790,10 @@ impl TranscriptOverlay {
             copy_requested: false,
             scroll_selected_user_cell: None,
             footer_status: None,
+            search: TranscriptSearchState::default(),
+            active_search_match,
+            last_content_width: None,
+            live_tail_lines: None,
             live_tail_key: None,
             async_layout: AsyncTranscriptLayout::new(),
             is_done: false,
@@ -670,6 +804,7 @@ impl TranscriptOverlay {
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Rc<StdCell<Option<usize>>>,
         render_mode: HistoryRenderMode,
+        active_match: Rc<RefCell<Option<RenderableMatch>>>,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
@@ -679,20 +814,22 @@ impl TranscriptOverlay {
                 let base_renderable = if c.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        cell_index: i,
+                        renderable_index: i,
                         style: user_message_style(),
                         selected_style: Some(user_message_style().reversed()),
                         highlight_cell: Rc::clone(&highlight_cell),
                         render_mode,
+                        active_match: Rc::clone(&active_match),
                     })) as Box<dyn Renderable>
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
-                        cell_index: i,
+                        renderable_index: i,
                         style: Style::default(),
                         selected_style: None,
                         highlight_cell: Rc::clone(&highlight_cell),
                         render_mode,
+                        active_match: Rc::clone(&active_match),
                     })) as Box<dyn Renderable>
                 };
                 let mut cell_renderable = base_renderable;
@@ -741,6 +878,7 @@ impl TranscriptOverlay {
             &self.cells,
             Rc::clone(&self.highlight_cell),
             self.render_mode,
+            Rc::clone(&self.active_search_match),
         );
         self.view.invalidate_layout();
         if let Some(tail) = tail_renderable {
@@ -762,6 +900,7 @@ impl TranscriptOverlay {
             };
             self.view.renderables.push(tail);
         }
+        self.search.dirty = true;
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -785,6 +924,7 @@ impl TranscriptOverlay {
             self.highlight_cell.set(None);
         }
         self.rebuild_renderables();
+        self.search.dirty = true;
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -831,6 +971,7 @@ impl TranscriptOverlay {
                 self.highlight_cell.set(None);
             }
             self.rebuild_renderables();
+            self.search.dirty = true;
         }
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
@@ -870,18 +1011,23 @@ impl TranscriptOverlay {
 
         self.take_live_tail_renderable();
         self.live_tail_key = next_key;
+        self.live_tail_lines = None;
 
         if let Some(key) = next_key {
             let lines = compute_lines(width).unwrap_or_default();
             if !lines.is_empty() {
+                self.live_tail_lines = Some(lines.clone());
                 self.view.renderables.push(Self::live_tail_renderable(
                     lines,
                     !self.cells.is_empty(),
                     key.is_stream_continuation,
+                    self.cells.len(),
+                    Rc::clone(&self.active_search_match),
                 ));
                 self.view.invalidate_layout();
             }
         }
+        self.search.dirty = true;
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -1025,12 +1171,25 @@ impl TranscriptOverlay {
         tui.frame_requester().schedule_frame_in(FOOTER_STATUS_TTL);
     }
 
+    pub(crate) fn search_is_active(&self) -> bool {
+        self.search.active
+    }
+
+    pub(crate) fn is_start_search_key(&self, key_event: KeyEvent) -> bool {
+        self.view.keymap.start_search.is_pressed(key_event)
+    }
+
     pub(crate) fn selected_user_cell(&self) -> Option<usize> {
         self.highlight_cell.get().filter(|idx| {
             self.cells
                 .get(*idx)
                 .is_some_and(|cell| cell.is_user_prompt())
         })
+    }
+
+    pub(crate) fn cancel_search_mode(&mut self) {
+        self.search.deactivate();
+        self.active_search_match.borrow_mut().take();
     }
 
     fn toggle_render_mode(&mut self) {
@@ -1040,6 +1199,160 @@ impl TranscriptOverlay {
         };
         self.invalidate_async_layout();
         self.rebuild_renderables();
+        self.search.dirty = true;
+    }
+
+    fn append_search_text(&mut self, text: &str) {
+        self.search.editing = true;
+        self.search.query.push_str(text);
+        self.search.dirty = true;
+    }
+
+    fn search_backspace(&mut self) {
+        self.search.editing = true;
+        if self.search.query.pop().is_some() {
+            self.search.dirty = true;
+        }
+    }
+
+    fn activate_search(&mut self) {
+        self.search.activate();
+        self.active_search_match.borrow_mut().take();
+    }
+
+    fn update_active_search_match(&mut self) {
+        let active = self
+            .search
+            .active_match
+            .and_then(|idx| self.search.matches.get(idx))
+            .map(|search_match| RenderableMatch {
+                renderable_index: search_match.renderable_index,
+                line_index: search_match.line_index,
+                start_col: search_match.start_col,
+                end_col: search_match.end_col,
+            });
+        *self.active_search_match.borrow_mut() = active;
+    }
+
+    fn recompute_search_matches(&mut self, width: u16) {
+        self.last_content_width = Some(width);
+        self.search.dirty = false;
+        self.search.matches.clear();
+        self.search.active_match = None;
+        self.active_search_match.borrow_mut().take();
+        if !self.search.active || self.search.query.is_empty() || width == 0 {
+            return;
+        }
+
+        let query = self.search.query.to_lowercase();
+        let mut owner_user_prompt = None;
+        for (idx, cell) in self.cells.iter().enumerate() {
+            if cell.is_user_prompt() {
+                owner_user_prompt = Some(idx);
+            }
+            let top_padding = usize::from(!cell.is_stream_continuation() && idx > 0);
+            for (line_index, line) in cell
+                .transcript_lines_for_mode(width, self.render_mode)
+                .iter()
+                .enumerate()
+            {
+                self.search.matches.extend(find_matches_in_line(
+                    idx,
+                    line_index,
+                    top_padding.saturating_add(line_index),
+                    line,
+                    &query,
+                    owner_user_prompt,
+                ));
+            }
+        }
+
+        if let Some(lines) = &self.live_tail_lines {
+            let top_padding = usize::from(
+                self.live_tail_key
+                    .is_some_and(|key| !key.is_stream_continuation && !self.cells.is_empty()),
+            );
+            let renderable_index = self.cells.len();
+            for (line_index, line) in visible_lines(lines.clone()).iter().enumerate() {
+                self.search.matches.extend(find_matches_in_line(
+                    renderable_index,
+                    line_index,
+                    top_padding.saturating_add(line_index),
+                    line,
+                    &query,
+                    owner_user_prompt,
+                ));
+            }
+        }
+
+        if !self.search.matches.is_empty() {
+            self.search.active_match = Some(0);
+            self.update_active_search_match();
+        }
+    }
+
+    fn scroll_to_active_match(&mut self) {
+        let Some(active_idx) = self.search.active_match else {
+            return;
+        };
+        let Some(active_match) = self.search.matches.get(active_idx) else {
+            return;
+        };
+        self.view.scroll_line_into_view(
+            active_match.renderable_index,
+            active_match.scroll_line_index,
+        );
+    }
+
+    fn select_next_match(&mut self) {
+        self.search.editing = false;
+        if self.search.matches.is_empty() {
+            return;
+        }
+        let next = self
+            .search
+            .active_match
+            .map(|idx| (idx + 1) % self.search.matches.len())
+            .unwrap_or(0);
+        self.search.active_match = Some(next);
+        self.update_active_search_match();
+        self.scroll_to_active_match();
+    }
+
+    fn select_previous_match(&mut self) {
+        self.search.editing = false;
+        if self.search.matches.is_empty() {
+            return;
+        }
+        let prev = self
+            .search
+            .active_match
+            .map(|idx| {
+                if idx == 0 {
+                    self.search.matches.len().saturating_sub(1)
+                } else {
+                    idx.saturating_sub(1)
+                }
+            })
+            .unwrap_or_else(|| self.search.matches.len().saturating_sub(1));
+        self.search.active_match = Some(prev);
+        self.update_active_search_match();
+        self.scroll_to_active_match();
+    }
+
+    fn navigate_search_prompt(&mut self, direction: PromptSelectionDirection) {
+        if self.highlight_cell.get().is_none() {
+            let anchor = self
+                .search
+                .active_match
+                .and_then(|idx| self.search.matches.get(idx))
+                .and_then(|search_match| search_match.owning_user_prompt_cell);
+            let Some(anchor) = anchor else {
+                return;
+            };
+            self.set_highlight_cell(Some(anchor));
+        }
+        self.move_prompt_selection(direction);
     }
 
     fn move_prompt_selection(&mut self, direction: PromptSelectionDirection) {
@@ -1122,7 +1435,8 @@ impl TranscriptOverlay {
             tui.terminal.viewport_area.width,
             top_h,
         );
-        let content_area = self.view.content_area(top);
+        let search_row_height = u16::from(self.search.active);
+        let content_area = self.view.content_area_with_inset(top, search_row_height);
         if self.is_waiting_for_async_layout(content_area.width) {
             return Ok(());
         }
@@ -1191,6 +1505,7 @@ impl TranscriptOverlay {
             &self.cells,
             Rc::clone(&self.highlight_cell),
             self.render_mode,
+            Rc::clone(&self.active_search_match),
         );
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
@@ -1216,9 +1531,15 @@ impl TranscriptOverlay {
         lines: Vec<HyperlinkLine>,
         has_prior_cells: bool,
         is_stream_continuation: bool,
+        renderable_index: usize,
+        active_match: Rc<RefCell<Option<RenderableMatch>>>,
     ) -> Box<dyn Renderable> {
         let mut renderable: Box<dyn Renderable> =
-            Box::new(CachedRenderable::new(HyperlinkLinesRenderable { lines }));
+            Box::new(CachedRenderable::new(TailLinesRenderable {
+                lines,
+                renderable_index,
+                active_match,
+            }));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(
                 renderable,
@@ -1255,6 +1576,29 @@ impl TranscriptOverlay {
             return self.clear_footer_status();
         }
         false
+    }
+
+    fn search_status_text(&self) -> String {
+        let current = self.search.active_match.map(|idx| idx + 1).unwrap_or(0);
+        format!("{current}/{}", self.search.matches.len())
+    }
+
+    fn search_row(&self, area: Rect, buf: &mut Buffer) {
+        let label = format!("Search: {}", self.search.query);
+        Line::from(label).render_ref(area, buf);
+        let status = self.search_status_text();
+        let status_width = u16::try_from(status.chars().count()).unwrap_or(u16::MAX);
+        if status_width < area.width {
+            Line::from(status).dim().render_ref(
+                Rect::new(
+                    area.right().saturating_sub(status_width),
+                    area.y,
+                    status_width,
+                    1,
+                ),
+                buf,
+            );
+        }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -1302,64 +1646,103 @@ impl TranscriptOverlay {
         );
 
         let mut action_hints = Vec::new();
-        action_hints.push(FooterHint::new(
-            key_label(&first_or_empty(&self.view.keymap.close)),
-            "quit",
-            "quit",
-            /*priority*/ 0,
-        ));
-        if !self.copy_keymap.is_empty() {
+        if self.search.active {
             action_hints.push(FooterHint::new(
-                key_label(&first_or_empty(&self.copy_keymap)),
-                "copy",
-                "copy",
+                key_label(&first_or_empty(&self.view.keymap.close_transcript)),
+                "quit",
+                "quit",
+                /*priority*/ 0,
+            ));
+            action_hints.push(FooterHint::new(
+                key_label(&[key_hint::plain(KeyCode::Esc)]),
+                "exit search",
+                "exit",
+                /*priority*/ 1,
+            ));
+            action_hints.push(FooterHint::new(
+                key_label(&first_or_empty(&self.view.keymap.next_search_match)),
+                "next hit",
+                "next",
+                /*priority*/ 2,
+            ));
+            action_hints.push(FooterHint::new(
+                key_label(&first_or_empty(&self.view.keymap.previous_search_match)),
+                "prev hit",
+                "prev",
                 /*priority*/ 3,
             ));
-        }
-        if !self.toggle_raw_output_keymap.is_empty() {
-            let mode_label = match self.render_mode {
-                HistoryRenderMode::Rich => "raw",
-                HistoryRenderMode::Raw => "rich",
-            };
             action_hints.push(FooterHint::new(
-                key_label(&first_or_empty(&self.toggle_raw_output_keymap)),
-                mode_label,
-                mode_label,
+                key_label(&first_or_empty(&self.view.keymap.start_search)),
+                "restart",
+                "restart",
                 /*priority*/ 4,
             ));
-        }
-        if self.highlight_cell.get().is_some() {
-            let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
-                .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
-                .collect::<Vec<_>>();
-            action_hints.push(FooterHint::new(
-                key_label(&previous_edit_keys),
-                "edit prev",
-                "prev",
-                /*priority*/ 8,
-            ));
-            action_hints.push(FooterHint::new(
-                key_label(&first_or_empty(&self.view.keymap.next_user_prompt)),
-                "edit next",
-                "next",
-                /*priority*/ 9,
-            ));
-            action_hints.push(FooterHint::new(
-                key_label(&[key_hint::plain(KeyCode::Enter)]),
-                "edit message",
-                "edit",
-                /*priority*/ 10,
-            ));
         } else {
-            let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
-                .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
-                .collect::<Vec<_>>();
             action_hints.push(FooterHint::new(
-                key_label(&previous_edit_keys),
-                "edit prev",
-                "prev",
-                /*priority*/ 8,
+                key_label(&first_or_empty(&self.view.keymap.close)),
+                "quit",
+                "quit",
+                /*priority*/ 0,
             ));
+            if !self.copy_keymap.is_empty() {
+                action_hints.push(FooterHint::new(
+                    key_label(&first_or_empty(&self.copy_keymap)),
+                    "copy",
+                    "copy",
+                    /*priority*/ 3,
+                ));
+            }
+            if !self.toggle_raw_output_keymap.is_empty() {
+                let mode_label = match self.render_mode {
+                    HistoryRenderMode::Rich => "raw",
+                    HistoryRenderMode::Raw => "rich",
+                };
+                action_hints.push(FooterHint::new(
+                    key_label(&first_or_empty(&self.toggle_raw_output_keymap)),
+                    mode_label,
+                    mode_label,
+                    /*priority*/ 4,
+                ));
+            }
+            if self.highlight_cell.get().is_some() {
+                let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
+                    .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
+                    .collect::<Vec<_>>();
+                action_hints.push(FooterHint::new(
+                    key_label(&previous_edit_keys),
+                    "edit prev",
+                    "prev",
+                    /*priority*/ 8,
+                ));
+                action_hints.push(FooterHint::new(
+                    key_label(&first_or_empty(&self.view.keymap.next_user_prompt)),
+                    "edit next",
+                    "next",
+                    /*priority*/ 9,
+                ));
+                action_hints.push(FooterHint::new(
+                    key_label(&[key_hint::plain(KeyCode::Enter)]),
+                    "edit message",
+                    "edit",
+                    /*priority*/ 10,
+                ));
+            } else {
+                let previous_edit_keys = std::iter::once(key_hint::plain(KeyCode::Esc))
+                    .chain(first_or_empty(&self.view.keymap.previous_user_prompt))
+                    .collect::<Vec<_>>();
+                action_hints.push(FooterHint::new(
+                    key_label(&previous_edit_keys),
+                    "edit prev",
+                    "prev",
+                    /*priority*/ 8,
+                ));
+                action_hints.push(FooterHint::new(
+                    key_label(&first_or_empty(&self.view.keymap.start_search)),
+                    "search",
+                    "search",
+                    /*priority*/ 11,
+                ));
+            }
         }
         footer_hint_line_for_row(&action_hints, area.width).render_ref(line2, buf);
     }
@@ -1370,17 +1753,34 @@ impl TranscriptOverlay {
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
         self.view.title = self.header_title();
-        let content_area = self.view.content_area(top);
+        Clear.render(top, buf);
+        let search_row_height = u16::from(self.search.active);
+        let content_area = self.view.content_area_with_inset(top, search_row_height);
         self.install_measured_layout_if_ready(content_area.width);
         if self.is_waiting_for_async_layout(content_area.width) {
             self.render_loading(top, bottom, buf);
             return;
         }
-        let total_len = self.view.content_height(content_area.width);
-        self.view.resolve_pending_scroll(content_area, total_len);
+        self.view.update_last_content_height(content_area.height);
+        let width_changed = self.last_content_width != Some(content_area.width);
+        self.last_content_width = Some(content_area.width);
+        if self.search.dirty || width_changed {
+            self.recompute_search_matches(content_area.width);
+        }
+        if self.search.active {
+            self.search_row(Rect::new(top.x, top.y.saturating_add(1), top.width, 1), buf);
+        }
+        let content_height = self.view.content_height(content_area.width);
+        self.view.last_rendered_height = Some(content_height);
+        self.view
+            .resolve_pending_scroll(content_area, content_height);
         self.view.footer_separator_label =
-            self.footer_progress_label(content_area.height, total_len, top.width);
-        self.view.render(top, buf);
+            self.footer_progress_label(content_area.height, content_height, top.width);
+        self.view
+            .render_header(top, content_area, buf, content_height);
+        self.view.render_content(content_area, buf);
+        self.view
+            .render_bottom_bar(top, content_area, buf, content_height);
         self.render_hints(bottom, buf);
     }
 
@@ -1409,38 +1809,109 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => {
+                if matches!(key_event.kind, KeyEventKind::Release) {
+                    return Ok(());
+                }
                 self.clear_footer_status();
-                match key_event {
-                    e if self.view.keymap.close.is_pressed(e)
-                        || self.view.keymap.close_transcript.is_pressed(e) =>
+                if self.view.keymap.close_transcript.is_pressed(key_event) {
+                    self.is_done = true;
+                    return Ok(());
+                }
+                if self.search.active {
+                    if self.view.keymap.close.is_pressed(key_event)
+                        && !is_plain_text_key_event(key_event)
                     {
                         self.is_done = true;
-                        Ok(())
+                        return Ok(());
                     }
-                    e if self.view.keymap.previous_user_prompt.is_pressed(e) => {
-                        self.move_prompt_selection(PromptSelectionDirection::Previous);
-                        tui.frame_requester()
-                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                        Ok(())
+                    let next_match_pressed =
+                        self.view.keymap.next_search_match.is_pressed(key_event);
+                    let previous_match_pressed =
+                        self.view.keymap.previous_search_match.is_pressed(key_event);
+                    if self.view.keymap.start_search.is_pressed(key_event) {
+                        self.activate_search();
+                    } else if matches!(key_event.code, KeyCode::Esc) {
+                        self.cancel_search_mode();
+                    } else if matches!(key_event.code, KeyCode::Backspace) {
+                        self.search_backspace();
+                    } else if self.view.keymap.previous_user_prompt.is_pressed(key_event) {
+                        self.navigate_search_prompt(PromptSelectionDirection::Previous);
+                    } else if self.view.keymap.next_user_prompt.is_pressed(key_event) {
+                        self.navigate_search_prompt(PromptSelectionDirection::Next);
+                    } else if next_match_pressed
+                        && (!self.search.editing || matches!(key_event.code, KeyCode::Enter))
+                    {
+                        self.select_next_match();
+                    } else if previous_match_pressed && !self.search.editing {
+                        self.select_previous_match();
+                    } else if is_plain_text_key_event(key_event)
+                        && (self.search.editing || (!next_match_pressed && !previous_match_pressed))
+                    {
+                        if let KeyCode::Char(ch) = key_event.code {
+                            let mut text = String::new();
+                            text.push(ch);
+                            self.append_search_text(&text);
+                        }
+                    } else {
+                        return self.handle_viewport_key_event(tui, key_event);
                     }
-                    e if self.view.keymap.next_user_prompt.is_pressed(e) => {
-                        self.move_prompt_selection(PromptSelectionDirection::Next);
-                        tui.frame_requester()
-                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                        Ok(())
+                    if self.search.dirty {
+                        if let Some(width) = self.last_content_width {
+                            self.recompute_search_matches(width);
+                        }
                     }
-                    e if self.toggle_raw_output_keymap.is_pressed(e) => {
-                        self.toggle_render_mode();
-                        tui.frame_requester()
-                            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-                        Ok(())
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                } else {
+                    match key_event {
+                        e if self.view.keymap.close.is_pressed(e) => {
+                            self.is_done = true;
+                            Ok(())
+                        }
+                        e if self.view.keymap.start_search.is_pressed(e) => {
+                            self.activate_search();
+                            tui.frame_requester()
+                                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                            Ok(())
+                        }
+                        e if self.view.keymap.previous_user_prompt.is_pressed(e) => {
+                            self.move_prompt_selection(PromptSelectionDirection::Previous);
+                            tui.frame_requester()
+                                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                            Ok(())
+                        }
+                        e if self.view.keymap.next_user_prompt.is_pressed(e) => {
+                            self.move_prompt_selection(PromptSelectionDirection::Next);
+                            tui.frame_requester()
+                                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                            Ok(())
+                        }
+                        e if self.toggle_raw_output_keymap.is_pressed(e) => {
+                            self.toggle_render_mode();
+                            tui.frame_requester()
+                                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                            Ok(())
+                        }
+                        e if self.copy_keymap.is_pressed(e) => {
+                            self.copy_requested = true;
+                            Ok(())
+                        }
+                        other => self.handle_viewport_key_event(tui, other),
                     }
-                    e if self.copy_keymap.is_pressed(e) => {
-                        self.copy_requested = true;
-                        Ok(())
-                    }
-                    other => self.handle_viewport_key_event(tui, other),
                 }
+            }
+            TuiEvent::Paste(pasted) if self.search.active => {
+                let normalized = normalize_search_paste(&pasted);
+                if !normalized.is_empty() {
+                    self.append_search_text(&normalized);
+                    if let Some(width) = self.last_content_width {
+                        self.recompute_search_matches(width);
+                    }
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                }
+                Ok(())
             }
             TuiEvent::Draw | TuiEvent::Resize => {
                 tui.draw(u16::MAX, |frame| {
@@ -1596,6 +2067,61 @@ fn render_offset_content(
     }
 
     copy_height
+}
+
+fn normalize_search_paste(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn line_plain_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .collect()
+}
+
+fn find_matches_in_line(
+    renderable_index: usize,
+    line_index: usize,
+    scroll_line_index: usize,
+    line: &Line<'_>,
+    query: &str,
+    owning_user_prompt_cell: Option<usize>,
+) -> Vec<SearchMatch> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let plain_text = line_plain_text(line);
+    let lower = plain_text.to_lowercase();
+    let mut matches = Vec::new();
+    let mut start = 0usize;
+
+    while let Some(found) = lower[start..].find(query) {
+        let match_start = start + found;
+        let match_end = match_start + query.len();
+        let mut start_col = 0u16;
+        let mut end_col = 0u16;
+        for (idx, ch) in plain_text.char_indices() {
+            let width = u16::try_from(ch.width().unwrap_or(0)).unwrap_or(0);
+            if idx < match_start {
+                start_col = start_col.saturating_add(width);
+            }
+            if idx < match_end {
+                end_col = end_col.saturating_add(width);
+            }
+        }
+        matches.push(SearchMatch {
+            renderable_index,
+            line_index,
+            scroll_line_index,
+            start_col,
+            end_col,
+            owning_user_prompt_cell,
+        });
+        start = match_start.saturating_add(1);
+    }
+
+    matches
 }
 
 fn session_start_index(cells: &[Arc<dyn HistoryCell>]) -> usize {
@@ -1972,6 +2498,97 @@ mod tests {
                 .symbol()
                 .contains(&format!("\x1b]8;;{destination}\x07"))
         }));
+    }
+
+    #[test]
+    fn transcript_overlay_search_matches_all_text_case_insensitively() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("Prompt with NeedLe"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant needle")],
+                /*is_first_line*/ true,
+            )),
+        ]);
+
+        overlay.activate_search();
+        overlay.append_search_text("needle");
+        overlay.recompute_search_matches(/*width*/ 80);
+
+        assert_eq!(overlay.search.matches.len(), 2);
+        assert_eq!(overlay.search.active_match, Some(0));
+    }
+
+    #[test]
+    fn transcript_overlay_search_prompt_navigation_uses_match_owner() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant one")],
+                /*is_first_line*/ true,
+            )),
+            user_cell("second prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant needle")],
+                /*is_first_line*/ true,
+            )),
+        ]);
+
+        overlay.activate_search();
+        overlay.append_search_text("needle");
+        overlay.recompute_search_matches(/*width*/ 80);
+        overlay.navigate_search_prompt(PromptSelectionDirection::Previous);
+
+        assert_eq!(overlay.selected_user_cell(), Some(0));
+    }
+
+    #[test]
+    fn transcript_overlay_search_highlights_active_match_and_renders_search_row() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant needle here")],
+                /*is_first_line*/ true,
+            )),
+        ]);
+        overlay.activate_search();
+        overlay.append_search_text("needle");
+
+        let area = Rect::new(0, 0, 60, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        let rendered = buffer_to_text(&buf, area);
+
+        assert!(rendered.contains("Search: needle"));
+        assert!(
+            (area.y..area.bottom())
+                .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+                .any(|(x, y)| {
+                    buf[(x, y)].symbol() == "n"
+                        && buf[(x, y)]
+                            .style()
+                            .add_modifier
+                            .contains(Modifier::REVERSED)
+                }),
+            "expected a reversed search match cell"
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_search_snapshot() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("find this prompt"),
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant needle result")],
+                /*is_first_line*/ true,
+            )),
+        ]);
+        overlay.activate_search();
+        overlay.append_search_text("needle");
+
+        let mut term = RatatuiTerminal::new(TestBackend::new(50, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
     }
 
     #[test]

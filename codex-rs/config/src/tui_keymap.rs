@@ -315,6 +315,8 @@ pub struct TuiVimTextObjectKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiPagerKeymap {
+    /// Start transcript search.
+    pub start_search: Option<KeybindingsSpec>,
     /// Scroll up by one row.
     pub scroll_up: Option<KeybindingsSpec>,
     /// Scroll down by one row.
@@ -331,14 +333,18 @@ pub struct TuiPagerKeymap {
     pub jump_top: Option<KeybindingsSpec>,
     /// Jump to the end.
     pub jump_bottom: Option<KeybindingsSpec>,
+    /// Move to the previous user prompt in transcript search mode.
+    pub previous_user_prompt: Option<KeybindingsSpec>,
+    /// Move to the next user prompt in transcript search mode.
+    pub next_user_prompt: Option<KeybindingsSpec>,
+    /// Move to the next transcript search match.
+    pub next_search_match: Option<KeybindingsSpec>,
+    /// Move to the previous transcript search match.
+    pub previous_search_match: Option<KeybindingsSpec>,
     /// Close the pager overlay.
     pub close: Option<KeybindingsSpec>,
     /// Close the transcript overlay via its dedicated toggle key.
     pub close_transcript: Option<KeybindingsSpec>,
-    /// Jump to the previous user prompt in the transcript overlay.
-    pub previous_user_prompt: Option<KeybindingsSpec>,
-    /// Jump to the next user prompt in the transcript overlay.
-    pub next_user_prompt: Option<KeybindingsSpec>,
 }
 
 /// List selection context keybindings for popup-style selectable lists.

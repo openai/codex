@@ -114,6 +114,24 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+            let key_event = match event {
+                TuiEvent::Key(key_event) => Some(key_event),
+                _ => None,
+            };
+            if transcript.search_is_active() {
+                self.overlay_forward_event(tui, event)?;
+                return Ok(true);
+            }
+            if let Some(key_event) = key_event
+                && transcript.is_start_search_key(key_event)
+            {
+                self.cancel_overlay_backtrack_preview();
+                self.overlay_forward_event(tui, TuiEvent::Key(key_event))?;
+                return Ok(true);
+            }
+        }
+
         if self.backtrack.overlay_preview_active {
             match event {
                 TuiEvent::Key(KeyEvent {
@@ -588,6 +606,17 @@ impl App {
         self.backtrack.base_id = None;
         self.backtrack.nth_user_message = usize::MAX;
         // In case a hint is somehow still visible (e.g., race with overlay open/close).
+        self.chat_widget.clear_esc_backtrack_hint();
+    }
+
+    fn cancel_overlay_backtrack_preview(&mut self) {
+        self.backtrack.overlay_preview_active = false;
+        self.backtrack.primed = false;
+        self.backtrack.base_id = None;
+        self.backtrack.nth_user_message = usize::MAX;
+        if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+            transcript.set_highlight_cell(/*cell*/ None);
+        }
         self.chat_widget.clear_esc_backtrack_hint();
     }
 

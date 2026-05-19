@@ -12,4 +12,4 @@ expression: snapshot
     2 +world
 ─────────────────────────────────────────────────────────────────── 0 / 0 · 0% ─
  ↑/↓ scroll   ←/→ prompts   pgup/pgdn page   home/end jump
- q quit   ctrl + o copy   ⌥ + r raw   esc/← prev
+ q quit   ctrl + o copy   ⌥ + r raw   esc/← prev   / search

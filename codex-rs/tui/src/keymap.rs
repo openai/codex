@@ -211,6 +211,7 @@ pub(crate) struct VimTextObjectKeymap {
 /// Pager/overlay keybindings for transcript and static help views.
 #[derive(Clone, Debug)]
 pub(crate) struct PagerKeymap {
+    pub(crate) start_search: Vec<KeyBinding>,
     pub(crate) scroll_up: Vec<KeyBinding>,
     pub(crate) scroll_down: Vec<KeyBinding>,
     pub(crate) page_up: Vec<KeyBinding>,
@@ -219,10 +220,12 @@ pub(crate) struct PagerKeymap {
     pub(crate) half_page_down: Vec<KeyBinding>,
     pub(crate) jump_top: Vec<KeyBinding>,
     pub(crate) jump_bottom: Vec<KeyBinding>,
-    pub(crate) close: Vec<KeyBinding>,
-    pub(crate) close_transcript: Vec<KeyBinding>,
     pub(crate) previous_user_prompt: Vec<KeyBinding>,
     pub(crate) next_user_prompt: Vec<KeyBinding>,
+    pub(crate) next_search_match: Vec<KeyBinding>,
+    pub(crate) previous_search_match: Vec<KeyBinding>,
+    pub(crate) close: Vec<KeyBinding>,
+    pub(crate) close_transcript: Vec<KeyBinding>,
 }
 
 /// Generic list picker keybindings shared across popup list views.
@@ -741,6 +744,7 @@ impl RuntimeKeymap {
         };
 
         let pager = PagerKeymap {
+            start_search: resolve_local!(keymap, defaults, pager, start_search),
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
             scroll_down: resolve_local!(keymap, defaults, pager, scroll_down),
             page_up: resolve_local!(keymap, defaults, pager, page_up),
@@ -749,10 +753,12 @@ impl RuntimeKeymap {
             half_page_down: resolve_local!(keymap, defaults, pager, half_page_down),
             jump_top: resolve_local!(keymap, defaults, pager, jump_top),
             jump_bottom: resolve_local!(keymap, defaults, pager, jump_bottom),
-            close: resolve_local!(keymap, defaults, pager, close),
-            close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
             previous_user_prompt: resolve_local!(keymap, defaults, pager, previous_user_prompt),
             next_user_prompt: resolve_local!(keymap, defaults, pager, next_user_prompt),
+            next_search_match: resolve_local!(keymap, defaults, pager, next_search_match),
+            previous_search_match: resolve_local!(keymap, defaults, pager, previous_search_match),
+            close: resolve_local!(keymap, defaults, pager, close),
+            close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
         };
 
         let approval = ApprovalKeymap {
@@ -1073,6 +1079,7 @@ impl RuntimeKeymap {
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
+                start_search: default_bindings![plain(KeyCode::Char('/'))],
                 scroll_up: default_bindings![plain(KeyCode::Up), plain(KeyCode::Char('k'))],
                 scroll_down: default_bindings![plain(KeyCode::Down), plain(KeyCode::Char('j'))],
                 page_up: default_bindings![
@@ -1089,10 +1096,18 @@ impl RuntimeKeymap {
                 half_page_down: default_bindings![ctrl(KeyCode::Char('d'))],
                 jump_top: default_bindings![plain(KeyCode::Home)],
                 jump_bottom: default_bindings![plain(KeyCode::End)],
-                close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
-                close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 previous_user_prompt: default_bindings![plain(KeyCode::Left), alt(KeyCode::Up)],
                 next_user_prompt: default_bindings![plain(KeyCode::Right), alt(KeyCode::Down)],
+                next_search_match: default_bindings![
+                    plain(KeyCode::Enter),
+                    plain(KeyCode::Char('n'))
+                ],
+                previous_search_match: default_bindings![
+                    shift(KeyCode::Char('n')),
+                    plain(KeyCode::Char('N'))
+                ],
+                close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
+                close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -1567,9 +1582,10 @@ impl RuntimeKeymap {
             ],
         )?;
 
-        validate_no_reserved(
+        validate_unique(
             "pager",
             [
+                ("start_search", self.pager.start_search.as_slice()),
                 ("scroll_up", self.pager.scroll_up.as_slice()),
                 ("scroll_down", self.pager.scroll_down.as_slice()),
                 ("page_up", self.pager.page_up.as_slice()),
@@ -1585,6 +1601,38 @@ impl RuntimeKeymap {
                     self.pager.previous_user_prompt.as_slice(),
                 ),
                 ("next_user_prompt", self.pager.next_user_prompt.as_slice()),
+                ("next_search_match", self.pager.next_search_match.as_slice()),
+                (
+                    "previous_search_match",
+                    self.pager.previous_search_match.as_slice(),
+                ),
+            ],
+        )?;
+
+        validate_no_reserved(
+            "pager",
+            [
+                ("start_search", self.pager.start_search.as_slice()),
+                ("scroll_up", self.pager.scroll_up.as_slice()),
+                ("scroll_down", self.pager.scroll_down.as_slice()),
+                ("page_up", self.pager.page_up.as_slice()),
+                ("page_down", self.pager.page_down.as_slice()),
+                ("half_page_up", self.pager.half_page_up.as_slice()),
+                ("half_page_down", self.pager.half_page_down.as_slice()),
+                ("jump_top", self.pager.jump_top.as_slice()),
+                ("jump_bottom", self.pager.jump_bottom.as_slice()),
+                ("close", self.pager.close.as_slice()),
+                ("close_transcript", self.pager.close_transcript.as_slice()),
+                (
+                    "previous_user_prompt",
+                    self.pager.previous_user_prompt.as_slice(),
+                ),
+                ("next_user_prompt", self.pager.next_user_prompt.as_slice()),
+                ("next_search_match", self.pager.next_search_match.as_slice()),
+                (
+                    "previous_search_match",
+                    self.pager.previous_search_match.as_slice(),
+                ),
             ],
             TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS,
             [],
@@ -1798,16 +1846,10 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
     ),
 ];
 
-const TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
-    (
-        "fixed.transcript_edit_previous",
-        key_hint::plain(KeyCode::Esc),
-    ),
-    (
-        "fixed.transcript_confirm_edit",
-        key_hint::plain(KeyCode::Enter),
-    ),
-];
+const TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[(
+    "fixed.transcript_edit_previous",
+    key_hint::plain(KeyCode::Esc),
+)];
 
 /// Resolve one action with context -> global -> default precedence.
 ///
