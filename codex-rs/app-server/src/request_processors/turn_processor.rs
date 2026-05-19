@@ -636,9 +636,7 @@ impl TurnRequestProcessor {
             collaboration_mode: params.collaboration_mode,
             personality: params.personality,
         };
-        if thread_settings_request.has_any_overrides() {
-            self.wait_for_pending_thread_settings(thread_id).await?;
-        }
+        self.wait_for_pending_thread_settings(thread_id).await?;
 
         let before_snapshot = thread.config_snapshot().await;
         let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
