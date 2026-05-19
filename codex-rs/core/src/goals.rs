@@ -1348,8 +1348,7 @@ impl Session {
             return;
         }
         self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
+            .inject(
                 candidate
                     .items
                     .into_iter()
@@ -1394,11 +1393,7 @@ impl Session {
             tracing::debug!("skipping active goal continuation because a turn is already active");
             return None;
         }
-        if self
-            .input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-        {
+        if self.input_queue.has_queued_input_for_next_turn().await {
             tracing::debug!("skipping active goal continuation because queued input exists");
             return None;
         }
@@ -1439,10 +1434,7 @@ impl Session {
             return None;
         }
         if self.active_turn.lock().await.is_some()
-            || self
-                .input_queue
-                .has_queued_response_items_for_next_turn()
-                .await
+            || self.input_queue.has_queued_input_for_next_turn().await
             || self.input_queue.has_trigger_turn_mailbox_items().await
         {
             tracing::debug!("skipping active goal continuation because pending work appeared");

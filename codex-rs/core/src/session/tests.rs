@@ -7966,7 +7966,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     };
 
     sess.input_queue
-        .queue_response_items_for_next_turn(vec![queued_item.clone()])
+        .inject(vec![TurnInput::ResponseInputItem(queued_item.clone())])
         .await;
 
     sess.spawn_task(
@@ -7997,17 +7997,13 @@ async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
     };
 
     sess.input_queue
-        .queue_response_items_for_next_turn(vec![queued_item])
+        .inject(vec![TurnInput::ResponseInputItem(queued_item)])
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     assert!(sess.active_turn.lock().await.is_none());
-    assert!(
-        sess.input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-    );
+    assert!(sess.input_queue.has_queued_input_for_next_turn().await);
 }
 
 #[tokio::test]
@@ -8020,25 +8016,19 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         }],
         phase: None,
     };
-    let turn_state = {
+    {
         let mut active = sess.active_turn.lock().await;
-        let active_turn = active.get_or_insert_with(ActiveTurn::default);
-        Arc::clone(&active_turn.turn_state)
-    };
+        active.get_or_insert_with(ActiveTurn::default);
+    }
     sess.input_queue
-        .extend_pending_input_for_turn_state(
-            turn_state.as_ref(),
-            vec![TurnInput::ResponseInputItem(pending_item.clone())],
-        )
+        .inject(vec![TurnInput::ResponseInputItem(pending_item.clone())])
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
     assert!(sess.active_turn.lock().await.is_none());
     assert_eq!(
-        sess.input_queue
-            .take_pending_input_for_turn_state(turn_state.as_ref())
-            .await,
+        sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![TurnInput::ResponseInputItem(pending_item)]
     );
 }

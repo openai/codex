@@ -24,10 +24,6 @@ use tracing::warn;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::inspect_pending_input;
-use crate::hook_runtime::record_additional_contexts;
-use crate::hook_runtime::record_pending_input;
-use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -346,11 +342,6 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-start event: {err}");
         }
-        let queued_response_items = self
-            .input_queue
-            .take_queued_response_items_for_next_turn()
-            .await;
-        let mailbox_items = self.input_queue.get_pending_input(&self.active_turn).await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -358,14 +349,6 @@ impl Session {
             Arc::clone(&turn.turn_state)
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
-        let mut pending_items = queued_response_items
-            .into_iter()
-            .map(TurnInput::ResponseInputItem)
-            .collect::<Vec<_>>();
-        pending_items.extend(mailbox_items);
-        self.input_queue
-            .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
-            .await;
         self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
             .await;
 
@@ -469,10 +452,7 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self
-            .input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
+        if !self.input_queue.has_queued_input_for_next_turn().await
             && !self.input_queue.has_trigger_turn_mailbox_items().await
         {
             return;
@@ -525,7 +505,7 @@ impl Session {
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            self.input_queue.clear_pending(&active_turn).await;
+            self.clear_pending(&active_turn).await;
         }
         if reason == TurnAbortReason::Interrupted && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
@@ -571,7 +551,7 @@ impl Session {
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-        self.input_queue.clear_pending(&active_turn).await;
+        self.clear_pending(&active_turn).await;
 
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
@@ -589,7 +569,6 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<TurnInput>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
@@ -613,36 +592,10 @@ impl Session {
             }
         };
         if let Some(turn_state) = turn_state.as_ref() {
-            pending_input = self
-                .input_queue
-                .take_pending_input_for_turn_state(turn_state.as_ref())
-                .await;
             let ts = turn_state.lock().await;
             turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
-        }
-        if !pending_input.is_empty() {
-            for pending_input_item in pending_input {
-                let hook_outcome =
-                    inspect_pending_input(self, &turn_context, &pending_input_item).await;
-                if hook_outcome.should_stop {
-                    record_additional_contexts(
-                        self,
-                        &turn_context,
-                        hook_outcome.additional_contexts,
-                    )
-                    .await;
-                } else {
-                    record_pending_input(
-                        self,
-                        &turn_context,
-                        pending_input_item,
-                        hook_outcome.additional_contexts,
-                    )
-                    .await;
-                }
-            }
         }
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
@@ -828,6 +781,10 @@ impl Session {
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()
+    }
+
+    async fn clear_pending(&self, active_turn: &ActiveTurn) {
+        active_turn.turn_state.lock().await.clear_pending_waiters();
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {

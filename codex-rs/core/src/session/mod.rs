@@ -208,7 +208,6 @@ use self::config_lock::validate_config_lock_if_configured;
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 pub(crate) use self::input_queue::TurnInput;
-pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
@@ -3191,22 +3190,38 @@ impl Session {
         }
 
         self.input_queue
-            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                TurnInput::UserInput(input),
-            )
+            .inject(vec![TurnInput::UserInput(input)])
             .await;
+        active_turn
+            .turn_state
+            .lock()
+            .await
+            .accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
 
     /// Returns the input if there was no task running to inject into.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and input queue updates must remain atomic"
+    )]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
     ) -> Result<(), Vec<ResponseInputItem>> {
+        let active = self.active_turn.lock().await;
+        if active.is_none() {
+            return Err(input);
+        }
         self.input_queue
-            .inject_response_items(&self.active_turn, input)
-            .await
+            .inject(
+                input
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
+            .await;
+        Ok(())
     }
 
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {

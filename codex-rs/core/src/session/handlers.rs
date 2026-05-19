@@ -10,6 +10,7 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::SteerInputError;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
@@ -901,7 +902,12 @@ Approved action:
 
     if let Err(items) = sess.inject_response_items(items).await {
         sess.input_queue
-            .queue_response_items_for_next_turn(items)
+            .inject(
+                items
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
             .await;
     }
 }
