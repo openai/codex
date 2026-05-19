@@ -195,38 +195,38 @@ pub struct ExecServerClient {
 }
 
 #[derive(Clone)]
-pub(crate) struct LazyRemoteExecServerClient {
+pub(crate) struct RemoteExecServerClient {
     transport_params: ExecServerTransportParams,
-    state: Arc<Mutex<LazyRemoteExecServerClientState>>,
+    state: Arc<Mutex<RemoteExecServerClientState>>,
 }
 
-enum LazyRemoteExecServerClientState {
+enum RemoteExecServerClientState {
     Uninitialized,
     Connected(ExecServerClient),
     TerminalResumeError { code: i64, message: String },
 }
 
-impl LazyRemoteExecServerClient {
+impl RemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
             transport_params,
-            state: Arc::new(Mutex::new(LazyRemoteExecServerClientState::Uninitialized)),
+            state: Arc::new(Mutex::new(RemoteExecServerClientState::Uninitialized)),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         let mut state = self.state.lock().await;
         match &*state {
-            LazyRemoteExecServerClientState::TerminalResumeError { code, message } => {
+            RemoteExecServerClientState::TerminalResumeError { code, message } => {
                 return Err(ExecServerError::Server {
                     code: *code,
                     message: message.clone(),
                 });
             }
-            LazyRemoteExecServerClientState::Connected(client) if !client.is_disconnected() => {
+            RemoteExecServerClientState::Connected(client) if !client.is_disconnected() => {
                 return Ok(client.clone());
             }
-            LazyRemoteExecServerClientState::Connected(client) => {
+            RemoteExecServerClientState::Connected(client) => {
                 if !matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
@@ -241,13 +241,13 @@ impl LazyRemoteExecServerClient {
                 })?;
                 match self.reconnect_websocket(session_id).await {
                     Ok(client) => {
-                        *state = LazyRemoteExecServerClientState::Connected(client.clone());
+                        *state = RemoteExecServerClientState::Connected(client.clone());
                         return Ok(client);
                     }
                     Err(err) => {
                         if let Some((code, message)) = terminal_resume_error(&err) {
                             debug!("caching terminal exec-server websocket resume failure");
-                            *state = LazyRemoteExecServerClientState::TerminalResumeError {
+                            *state = RemoteExecServerClientState::TerminalResumeError {
                                 code,
                                 message: message.clone(),
                             };
@@ -257,12 +257,15 @@ impl LazyRemoteExecServerClient {
                     }
                 }
             }
-            LazyRemoteExecServerClientState::Uninitialized => {}
+            RemoteExecServerClientState::Uninitialized => {}
         }
 
-        let client =
-            ExecServerClient::connect_for_transport(self.transport_params.clone(), None).await?;
-        *state = LazyRemoteExecServerClientState::Connected(client.clone());
+        let client = ExecServerClient::connect_for_transport(
+            self.transport_params.clone(),
+            /*resume_session_id*/ None,
+        )
+        .await?;
+        *state = RemoteExecServerClientState::Connected(client.clone());
         Ok(client)
     }
 
@@ -297,7 +300,7 @@ impl LazyRemoteExecServerClient {
     }
 }
 
-impl HttpClient for LazyRemoteExecServerClient {
+impl HttpClient for RemoteExecServerClient {
     fn http_request(
         &self,
         params: crate::HttpRequestParams,
@@ -1005,7 +1008,7 @@ mod tests {
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use super::ExecServerError;
-    use super::LazyRemoteExecServerClient;
+    use super::RemoteExecServerClient;
     use crate::ProcessId;
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
@@ -1558,7 +1561,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lazy_websocket_client_reconnects_with_previous_session_id() {
+    async fn remote_websocket_client_reconnects_with_previous_session_id() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -1578,15 +1581,15 @@ mod tests {
             complete_websocket_initialize(&mut second, "session-1", Some("session-1")).await;
         });
 
-        let lazy = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+        let client = RemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
             websocket_url,
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });
-        let first = lazy.get().await.expect("first client should connect");
+        let first = client.get().await.expect("first client should connect");
         wait_for_disconnect(&first).await;
 
-        let second = lazy.get().await.expect("client should reconnect");
+        let second = client.get().await.expect("client should reconnect");
         assert_eq!(second.session_id().as_deref(), Some("session-1"));
         assert!(
             !Arc::ptr_eq(&first.inner, &second.inner),
@@ -1597,7 +1600,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lazy_websocket_client_caches_terminal_resume_error() {
+    async fn remote_websocket_client_caches_terminal_resume_error() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -1641,16 +1644,19 @@ mod tests {
                 .is_ok()
         });
 
-        let lazy = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+        let client = RemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
             websocket_url,
             connect_timeout: Duration::from_secs(1),
             initialize_timeout: Duration::from_secs(1),
         });
-        let first = lazy.get().await.expect("first client should connect");
+        let first = client.get().await.expect("first client should connect");
         wait_for_disconnect(&first).await;
 
         for _ in 0..2 {
-            let err = lazy.get().await.expect_err("resume should stay rejected");
+            let err = match client.get().await {
+                Ok(_) => panic!("resume should stay rejected"),
+                Err(err) => err,
+            };
             assert!(matches!(
                 err,
                 ExecServerError::Server {
@@ -1668,8 +1674,8 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn lazy_stdio_client_remains_one_shot_after_disconnect() {
-        let lazy = LazyRemoteExecServerClient::new(ExecServerTransportParams::StdioCommand {
+    async fn remote_stdio_client_remains_one_shot_after_disconnect() {
+        let client = RemoteExecServerClient::new(ExecServerTransportParams::StdioCommand {
             command: StdioExecServerCommand {
                 program: "sh".to_string(),
                 args: vec![
@@ -1681,10 +1687,10 @@ mod tests {
             },
             initialize_timeout: Duration::from_secs(1),
         });
-        let first = lazy.get().await.expect("first client should connect");
+        let first = client.get().await.expect("first client should connect");
         wait_for_disconnect(&first).await;
 
-        let second = lazy.get().await.expect("stdio client should stay cached");
+        let second = client.get().await.expect("stdio client should stay cached");
         assert!(
             Arc::ptr_eq(&first.inner, &second.inner),
             "stdio client should not reconnect after disconnect"

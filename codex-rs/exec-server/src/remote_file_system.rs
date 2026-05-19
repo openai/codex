@@ -14,7 +14,7 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
-use crate::client::LazyRemoteExecServerClient;
+use crate::client::RemoteExecServerClient;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -28,11 +28,11 @@ const NOT_FOUND_ERROR_CODE: i64 = -32004;
 
 #[derive(Clone)]
 pub(crate) struct RemoteFileSystem {
-    client: LazyRemoteExecServerClient,
+    client: RemoteExecServerClient,
 }
 
 impl RemoteFileSystem {
-    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
+    pub(crate) fn new(client: RemoteExecServerClient) -> Self {
         trace!("remote fs new");
         Self { client }
     }

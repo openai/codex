@@ -6,7 +6,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
-use crate::client::LazyRemoteExecServerClient;
+use crate::client::RemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_provider::DefaultEnvironmentProvider;
@@ -403,7 +403,7 @@ impl Environment {
             } => Some(exec_server_url.clone()),
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
-        let client = LazyRemoteExecServerClient::new(remote_transport.clone());
+        let client = RemoteExecServerClient::new(remote_transport.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));

@@ -9,7 +9,7 @@ use crate::ExecProcess;
 use crate::ExecProcessEventReceiver;
 use crate::ExecServerError;
 use crate::StartedExecProcess;
-use crate::client::LazyRemoteExecServerClient;
+use crate::client::RemoteExecServerClient;
 use crate::client::Session;
 use crate::protocol::ExecParams;
 use crate::protocol::ReadResponse;
@@ -17,7 +17,7 @@ use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
-    client: LazyRemoteExecServerClient,
+    client: RemoteExecServerClient,
 }
 
 struct RemoteExecProcess {
@@ -25,7 +25,7 @@ struct RemoteExecProcess {
 }
 
 impl RemoteProcess {
-    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
+    pub(crate) fn new(client: RemoteExecServerClient) -> Self {
         trace!("remote process new");
         Self { client }
     }
