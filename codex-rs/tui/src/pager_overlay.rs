@@ -64,6 +64,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::text::Text;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
@@ -562,30 +563,17 @@ impl Renderable for CellRenderable {
         let hyperlink_lines = self
             .cell
             .transcript_hyperlink_lines_for_mode(area.width, self.render_mode);
-        let p = Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
+        let mut lines = visible_lines(hyperlink_lines.clone());
+        if let Some(active_match) = *self.active_match.borrow()
+            && active_match.renderable_index == self.renderable_index
+        {
+            highlight_match_in_lines(&mut lines, active_match);
+        }
+        let p = Paragraph::new(Text::from(lines))
             .style(style)
             .wrap(Wrap { trim: false });
         p.render(area, buf);
         mark_buffer_hyperlinks(buf, area, &hyperlink_lines, /*scroll_rows*/ 0);
-
-        if let Some(active_match) = *self.active_match.borrow()
-            && active_match.renderable_index == self.renderable_index
-            && active_match.end_col > active_match.start_col
-        {
-            let y = area.y.saturating_add(active_match.line_index as u16);
-            if y < area.bottom() {
-                let width = active_match
-                    .end_col
-                    .saturating_sub(active_match.start_col)
-                    .min(area.width);
-                if width > 0 {
-                    buf.set_style(
-                        Rect::new(area.x.saturating_add(active_match.start_col), y, width, 1),
-                        accent_style().add_modifier(Modifier::REVERSED),
-                    );
-                }
-            }
-        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -602,29 +590,16 @@ struct TailLinesRenderable {
 
 impl Renderable for TailLinesRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(visible_lines(self.lines.clone())))
+        let mut lines = visible_lines(self.lines.clone());
+        if let Some(active_match) = *self.active_match.borrow()
+            && active_match.renderable_index == self.renderable_index
+        {
+            highlight_match_in_lines(&mut lines, active_match);
+        }
+        Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &self.lines, /*scroll_rows*/ 0);
-
-        if let Some(active_match) = *self.active_match.borrow()
-            && active_match.renderable_index == self.renderable_index
-            && active_match.end_col > active_match.start_col
-        {
-            let y = area.y.saturating_add(active_match.line_index as u16);
-            if y < area.bottom() {
-                let width = active_match
-                    .end_col
-                    .saturating_sub(active_match.start_col)
-                    .min(area.width);
-                if width > 0 {
-                    buf.set_style(
-                        Rect::new(area.x.saturating_add(active_match.start_col), y, width, 1),
-                        accent_style().add_modifier(Modifier::REVERSED),
-                    );
-                }
-            }
-        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -1251,19 +1226,20 @@ impl TranscriptOverlay {
                 owner_user_prompt = Some(idx);
             }
             let top_padding = usize::from(!cell.is_stream_continuation() && idx > 0);
-            for (line_index, line) in cell
-                .transcript_lines_for_mode(width, self.render_mode)
-                .iter()
-                .enumerate()
-            {
+            let lines = cell.transcript_lines_for_mode(width, self.render_mode);
+            let mut scroll_line_index = top_padding;
+            for (line_index, line) in lines.iter().enumerate() {
                 self.search.matches.extend(find_matches_in_line(
                     idx,
                     line_index,
-                    top_padding.saturating_add(line_index),
+                    scroll_line_index,
                     line,
                     &query,
                     owner_user_prompt,
+                    width,
                 ));
+                scroll_line_index =
+                    scroll_line_index.saturating_add(rendered_line_height(line, width));
             }
         }
 
@@ -1273,21 +1249,27 @@ impl TranscriptOverlay {
                     .is_some_and(|key| !key.is_stream_continuation && !self.cells.is_empty()),
             );
             let renderable_index = self.cells.len();
-            for (line_index, line) in visible_lines(lines.clone()).iter().enumerate() {
+            let lines = visible_lines(lines.clone());
+            let mut scroll_line_index = top_padding;
+            for (line_index, line) in lines.iter().enumerate() {
                 self.search.matches.extend(find_matches_in_line(
                     renderable_index,
                     line_index,
-                    top_padding.saturating_add(line_index),
+                    scroll_line_index,
                     line,
                     &query,
                     owner_user_prompt,
+                    width,
                 ));
+                scroll_line_index =
+                    scroll_line_index.saturating_add(rendered_line_height(line, width));
             }
         }
 
         if !self.search.matches.is_empty() {
             self.search.active_match = Some(0);
             self.update_active_search_match();
+            self.scroll_to_active_match();
         }
     }
 
@@ -1855,10 +1837,10 @@ impl TranscriptOverlay {
                     } else {
                         return self.handle_viewport_key_event(tui, key_event);
                     }
-                    if self.search.dirty {
-                        if let Some(width) = self.last_content_width {
-                            self.recompute_search_matches(width);
-                        }
+                    if self.search.dirty
+                        && let Some(width) = self.last_content_width
+                    {
+                        self.recompute_search_matches(width);
                     }
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
@@ -2080,6 +2062,42 @@ fn line_plain_text(line: &Line<'_>) -> String {
         .collect()
 }
 
+fn highlight_match_in_lines(lines: &mut [Line<'static>], active_match: RenderableMatch) {
+    if active_match.end_col <= active_match.start_col {
+        return;
+    }
+    let Some(line) = lines.get_mut(active_match.line_index) else {
+        return;
+    };
+
+    let mut col = 0u16;
+    let mut spans = Vec::new();
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            let char_width = u16::try_from(ch.width().unwrap_or(0)).unwrap_or(0);
+            let next_col = col.saturating_add(char_width);
+            let is_match = next_col > active_match.start_col && col < active_match.end_col;
+            let style = if is_match {
+                accent_style().add_modifier(Modifier::REVERSED)
+            } else {
+                span.style
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+            col = next_col;
+        }
+    }
+
+    let mut highlighted = line.clone();
+    highlighted.spans = spans;
+    *line = highlighted;
+}
+
+fn rendered_line_height(line: &Line<'_>, width: u16) -> usize {
+    Paragraph::new(Text::from(vec![line.clone()]))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+}
+
 fn find_matches_in_line(
     renderable_index: usize,
     line_index: usize,
@@ -2087,6 +2105,7 @@ fn find_matches_in_line(
     line: &Line<'_>,
     query: &str,
     owning_user_prompt_cell: Option<usize>,
+    width: u16,
 ) -> Vec<SearchMatch> {
     if query.is_empty() {
         return Vec::new();
@@ -2113,7 +2132,7 @@ fn find_matches_in_line(
         matches.push(SearchMatch {
             renderable_index,
             line_index,
-            scroll_line_index,
+            scroll_line_index: scroll_line_index.saturating_add(usize::from(start_col / width)),
             start_col,
             end_col,
             owning_user_prompt_cell,
@@ -2571,6 +2590,96 @@ mod tests {
                 }),
             "expected a reversed search match cell"
         );
+    }
+
+    #[test]
+    fn transcript_overlay_search_highlights_wrapped_later_match_text() {
+        let mut overlay = transcript_overlay(vec![user_cell(
+            "main first hit with enough padding words to push the second main hit onto a wrapped line",
+        )]);
+        overlay.activate_search();
+        overlay.append_search_text("main");
+        overlay.recompute_search_matches(/*width*/ 32);
+        overlay.select_next_match();
+
+        let area = Rect::new(0, 0, 32, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let highlighted = (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let cell = &buf[(x, y)];
+                cell.style()
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+                    .then(|| cell.symbol().to_string())
+            })
+            .collect::<String>();
+
+        assert_eq!(highlighted, "main");
+    }
+
+    #[test]
+    fn transcript_overlay_search_highlights_match_after_viewport_wrapping() {
+        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+            lines: vec![Line::from(format!(
+                "main first hit {}main second hit",
+                "padding ".repeat(16)
+            ))],
+        })]);
+        overlay.activate_search();
+        overlay.append_search_text("main");
+        overlay.recompute_search_matches(/*width*/ 24);
+        overlay.select_next_match();
+
+        let area = Rect::new(0, 0, 24, 8);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let highlighted = (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let cell = &buf[(x, y)];
+                cell.style()
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+                    .then(|| cell.symbol().to_string())
+            })
+            .collect::<String>();
+
+        assert_eq!(highlighted, "main");
+    }
+
+    #[test]
+    fn transcript_overlay_search_scrolls_initial_match_into_view() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("main first hit"),
+            Arc::new(TestCell {
+                lines: (0..24)
+                    .map(|line| Line::from(format!("tail line {line}")))
+                    .collect(),
+            }),
+        ]);
+        overlay.activate_search();
+        overlay.append_search_text("main");
+
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let highlighted = (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let cell = &buf[(x, y)];
+                cell.style()
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+                    .then(|| cell.symbol().to_string())
+            })
+            .collect::<String>();
+
+        assert_eq!(highlighted, "main");
     }
 
     #[test]
