@@ -800,6 +800,7 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureListResponse,
     },
+    #[experimental("permissionProfile/list")]
     PermissionProfileList => "permissionProfile/list" {
         params: v2::PermissionProfileListParams,
         serialization: global_shared_read("config"),
@@ -2980,6 +2981,16 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("environment/add"));
+    }
+
+    #[test]
+    fn permission_profile_list_is_marked_experimental() {
+        let request = ClientRequest::PermissionProfileList {
+            request_id: RequestId::Integer(1),
+            params: v2::PermissionProfileListParams::default(),
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("permissionProfile/list"));
     }
 
     #[test]

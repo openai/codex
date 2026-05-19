@@ -404,9 +404,22 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
-        let config = self.load_latest_config(cwd.map(PathBuf::from)).await?;
-        let effective_config: ConfigToml = config
-            .config_layer_stack
+        let config_layer_stack = match cwd {
+            Some(cwd) => {
+                let cwd = PathBuf::from(cwd);
+                let (_, config_layer_stack) = self
+                    .resolve_cwd_config(&cwd)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                config_layer_stack
+            }
+            None => self
+                .config_manager
+                .load_config_layers(/*cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+        };
+        let effective_config: ConfigToml = config_layer_stack
             .effective_config()
             .try_into()
             .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;

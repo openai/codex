@@ -162,6 +162,64 @@ description = "Project-scoped profile."
     Ok(())
 }
 
+#[tokio::test]
+async fn permission_profile_list_discovers_project_profiles_without_default_selection() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"
+[permissions.project]
+description = "Project-scoped profile."
+
+[permissions.project.filesystem]
+":workspace_roots" = "write"
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_permission_profile_list_request(PermissionProfileListParams {
+            cursor: None,
+            limit: None,
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        })
+        .await?;
+    let actual = read_response::<PermissionProfileListResponse>(&mut mcp, request_id).await?;
+
+    assert_eq!(
+        actual,
+        PermissionProfileListResponse {
+            data: vec![
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: "project".to_string(),
+                    description: Some("Project-scoped profile.".to_string()),
+                },
+            ],
+            next_cursor: None,
+        }
+    );
+    Ok(())
+}
+
 async fn read_response<T: serde::de::DeserializeOwned>(
     mcp: &mut McpProcess,
     request_id: i64,
