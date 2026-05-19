@@ -402,10 +402,6 @@ if (!tool) {
                 .expect("test config should allow feature update");
             config
                 .features
-                .enable(Feature::ToolSearch)
-                .expect("test config should allow feature update");
-            config
-                .features
                 .enable(Feature::CodeMode)
                 .expect("test config should allow feature update");
             config

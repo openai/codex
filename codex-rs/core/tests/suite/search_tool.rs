@@ -4,7 +4,6 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
-use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -113,14 +112,6 @@ fn tool_search_output_has_namespace_child(
     namespace_child_tool(&output, namespace, tool_name).is_some()
 }
 
-fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
-    configure_search_capable_apps(config, apps_base_url);
-    config
-        .features
-        .disable(Feature::ToolSearch)
-        .expect("test config should allow feature update");
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -220,54 +211,6 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
     assert!(
         tools.iter().all(|name| !name.starts_with("mcp__")),
         "MCP tools should not be directly exposed: {tools:?}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount_searchable(&server).await?;
-    let mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            configure_apps_without_tool_search(config, apps_server.chatgpt_base_url.as_str())
-        });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn_with_approval_and_permission_profile(
-        "list tools",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
-
-    let body = mock.single_request().body_json();
-    let tools = tool_names(&body);
-    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
-    assert!(
-        namespace_child_tool(
-            &body,
-            SEARCH_CALENDAR_NAMESPACE,
-            SEARCH_CALENDAR_CREATE_TOOL
-        )
-        .is_some()
-    );
-    assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some()
     );
 
     Ok(())

@@ -793,7 +793,6 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
 
     for disabled_feature in [Feature::Apps, Feature::Plugins] {
         let mut features = Features::with_defaults();
-        features.enable(Feature::ToolSearch);
         features.enable(Feature::ToolSuggest);
         features.enable(Feature::Apps);
         features.enable(Feature::Plugins);
@@ -832,7 +831,6 @@ async fn search_tool_is_hidden_without_deferred_tools() {
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -863,7 +861,6 @@ async fn search_tool_description_falls_back_to_connector_name_without_descriptio
     let model_info = search_capable_model_info().await;
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
