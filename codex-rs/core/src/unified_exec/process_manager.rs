@@ -221,7 +221,7 @@ async fn finish_deferred_network_approval_for_session(
 
 fn network_approval_error_message(err: ToolError) -> String {
     match err {
-        ToolError::Rejected(message) => message,
+        ToolError::Rejected(message) | ToolError::Failed(message) => message,
         ToolError::Codex(err) => err.to_string(),
     }
 }
