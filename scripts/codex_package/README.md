@@ -22,6 +22,10 @@ The builder creates a canonical Codex package directory:
 The package directory is the primary artifact. Archive formats such as
 `.tar.gz`, `.tar.zst`, and `.zip` are serializations of that directory.
 
+If `--target` is omitted, the builder uses the current host platform. If
+`--package-dir` is omitted, the builder creates a new temporary directory and
+prints its path after the package is built.
+
 ## Source-built artifacts
 
 Artifacts built from this repository are always built by the package builder in
