@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
@@ -307,6 +307,10 @@ impl ExecServerClient {
                 *session_id = Some(response.session_id.clone());
             }
             self.notify_initialized().await?;
+            debug!(
+                session_id = %response.session_id,
+                "exec-server initialize handshake completed"
+            );
             Ok(response)
         })
         .await
@@ -439,6 +443,10 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
+                                warn!(
+                                    error = %err,
+                                    "exec-server notification handling failed"
+                                );
                                 let message = record_disconnected(
                                     &inner,
                                     format!("exec-server notification handling failed: {err}"),
@@ -449,6 +457,10 @@ impl ExecServerClient {
                         }
                         RpcClientEvent::Disconnected { reason } => {
                             if let Some(inner) = weak.upgrade() {
+                                warn!(
+                                    reason = reason.as_deref().unwrap_or("unknown"),
+                                    "exec-server transport disconnected"
+                                );
                                 let message = record_disconnected(
                                     &inner,
                                     disconnected_message(reason.as_deref()),
@@ -508,6 +520,7 @@ impl ExecServerClient {
                     // A call can race with disconnect after the preflight
                     // check. Only the reader task drains sessions so queued
                     // process notifications stay ordered before disconnect.
+                    warn!(method, "exec-server request observed a closed transport");
                     let message = disconnected_message(/*reason*/ None);
                     let message = record_disconnected(&self.inner, message);
                     Err(ExecServerError::Disconnected(message))

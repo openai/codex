@@ -5,6 +5,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
+use tracing::info;
 use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -58,17 +59,45 @@ impl ExecServerClient {
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
+        let redacted_websocket_url = url_without_query(&websocket_url);
         let connect_timeout = args.connect_timeout;
-        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
-            .await
-            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-                url: websocket_url.clone(),
-                timeout: connect_timeout,
-            })?
-            .map_err(|source| ExecServerError::WebSocketConnect {
-                url: websocket_url.clone(),
-                source,
-            })?;
+        info!(
+            websocket_url = %redacted_websocket_url,
+            connect_timeout_ms = connect_timeout.as_millis(),
+            "connecting exec-server websocket"
+        );
+        let (stream, _) =
+            match timeout(connect_timeout, connect_async(websocket_url.as_str())).await {
+                Ok(Ok(websocket)) => {
+                    info!(
+                        websocket_url = %redacted_websocket_url,
+                        "exec-server websocket transport connected"
+                    );
+                    websocket
+                }
+                Ok(Err(source)) => {
+                    warn!(
+                        websocket_url = %redacted_websocket_url,
+                        error = %source,
+                        "failed to connect exec-server websocket transport"
+                    );
+                    return Err(ExecServerError::WebSocketConnect {
+                        url: websocket_url.clone(),
+                        source,
+                    });
+                }
+                Err(_) => {
+                    warn!(
+                        websocket_url = %redacted_websocket_url,
+                        connect_timeout_ms = connect_timeout.as_millis(),
+                        "timed out connecting exec-server websocket transport"
+                    );
+                    return Err(ExecServerError::WebSocketConnectTimeout {
+                        url: websocket_url.clone(),
+                        timeout: connect_timeout,
+                    });
+                }
+            };
 
         let connection_label = format!("exec-server websocket {websocket_url}");
         let connection = if is_rendezvous_harness_url(&websocket_url) {
@@ -76,7 +105,24 @@ impl ExecServerClient {
         } else {
             JsonRpcConnection::from_websocket(stream, connection_label)
         };
-        Self::connect(connection, args.into()).await
+        match Self::connect(connection, args.into()).await {
+            Ok(client) => {
+                info!(
+                    websocket_url = %redacted_websocket_url,
+                    session_id = ?client.session_id(),
+                    "exec-server websocket initialized"
+                );
+                Ok(client)
+            }
+            Err(err) => {
+                warn!(
+                    websocket_url = %redacted_websocket_url,
+                    error = %err,
+                    "failed to initialize exec-server websocket"
+                );
+                Err(err)
+            }
+        }
     }
 
     pub(crate) async fn connect_stdio_command(
@@ -128,6 +174,10 @@ fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .any(|(key, value)| key == "role" && value == "harness")
+}
+
+fn url_without_query(url: &str) -> &str {
+    url.split_once('?').map_or(url, |(prefix, _)| prefix)
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {
