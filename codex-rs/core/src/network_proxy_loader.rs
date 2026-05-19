@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::Result;
 use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
@@ -81,25 +82,49 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
 }
 
 fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
-    stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
+    let layers = stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    let mut layer_mtimes = layers
         .iter()
         .filter_map(|layer| {
             let path = match &layer.name {
-                ConfigLayerSource::System { file } => Some(file.clone()),
-                ConfigLayerSource::User { file, .. } => Some(file.clone()),
+                ConfigLayerSource::System { file } | ConfigLayerSource::SystemOverride { file } => {
+                    Some(file.clone())
+                }
+                ConfigLayerSource::User { file, .. } | ConfigLayerSource::UserOverride { file } => {
+                    Some(file.clone())
+                }
                 ConfigLayerSource::Project { dot_codex_folder } => {
                     Some(dot_codex_folder.join(CONFIG_TOML_FILE))
+                }
+                ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+                    Some(dot_codex_folder.join(CONFIG_OVERRIDE_TOML_FILE))
                 }
                 ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.clone()),
                 _ => None,
             };
             path.map(LayerMtime::new)
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    let watched_paths = layer_mtimes
+        .iter()
+        .map(|layer| layer.path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let optional_override_paths = layers
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            ConfigLayerSource::System { file } | ConfigLayerSource::User { file, .. } => file
+                .parent()
+                .map(|parent| parent.join(CONFIG_OVERRIDE_TOML_FILE)),
+            _ => None,
+        })
+        .filter(|path| !watched_paths.contains(path))
+        .map(LayerMtime::new);
+    layer_mtimes.extend(optional_override_paths);
+    layer_mtimes
 }
 
 fn enforce_trusted_constraints(
@@ -256,7 +281,9 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
     matches!(
         layer,
         ConfigLayerSource::User { .. }
+            | ConfigLayerSource::UserOverride { .. }
             | ConfigLayerSource::Project { .. }
+            | ConfigLayerSource::ProjectOverride { .. }
             | ConfigLayerSource::SessionFlags
     )
 }
