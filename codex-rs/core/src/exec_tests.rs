@@ -698,7 +698,7 @@ fn windows_restricted_token_rejects_unreadable_split_carveouts() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: blocked },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -846,7 +846,7 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
                 path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&blocked)
                     .expect("absolute blocked"),
             },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -908,7 +908,7 @@ fn windows_elevated_supports_unreadable_globs() {
             path: codex_protocol::permissions::FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 

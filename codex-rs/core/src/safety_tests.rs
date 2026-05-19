@@ -218,7 +218,7 @@ fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
             path: FileSystemPath::Path {
                 path: blocked_absolute,
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 

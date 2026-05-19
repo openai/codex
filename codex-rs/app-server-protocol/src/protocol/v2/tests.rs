@@ -421,7 +421,7 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
                 path: CoreFileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: CoreFileSystemAccessMode::None,
+                access: CoreFileSystemAccessMode::Deny,
             },
         ],
         glob_scan_max_depth: NonZeroUsize::new(2),
@@ -445,7 +445,7 @@ fn additional_file_system_permissions_preserves_canonical_entries() {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/*.env".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ]),
         }
