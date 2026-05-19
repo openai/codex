@@ -355,6 +355,11 @@ pub(crate) enum AppEvent {
         force_refetch: bool,
     },
 
+    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    FetchConnectorsList {
+        force_refetch: bool,
+    },
+
     /// Fetch plugin marketplace state for the provided working directory.
     FetchPluginsList {
         cwd: PathBuf,
