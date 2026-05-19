@@ -24,10 +24,10 @@ use tracing::warn;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -42,7 +42,6 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -359,7 +358,10 @@ impl Session {
             Arc::clone(&turn.turn_state)
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
-        let mut pending_items = queued_response_items;
+        let mut pending_items = queued_response_items
+            .into_iter()
+            .map(TurnInput::ResponseInputItem)
+            .collect::<Vec<_>>();
         pending_items.extend(mailbox_items);
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
@@ -587,7 +589,7 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_input = Vec::<TurnInput>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
@@ -622,15 +624,23 @@ impl Session {
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(self, &turn_context, *pending_input).await;
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        record_additional_contexts(self, &turn_context, additional_contexts).await;
-                    }
+                let hook_outcome =
+                    inspect_pending_input(self, &turn_context, &pending_input_item).await;
+                if hook_outcome.should_stop {
+                    record_additional_contexts(
+                        self,
+                        &turn_context,
+                        hook_outcome.additional_contexts,
+                    )
+                    .await;
+                } else {
+                    record_pending_input(
+                        self,
+                        &turn_context,
+                        pending_input_item,
+                        hook_outcome.additional_contexts,
+                    )
+                    .await;
                 }
             }
         }

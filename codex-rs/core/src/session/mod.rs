@@ -205,6 +205,7 @@ use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
+pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
@@ -3062,11 +3063,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         input: &[UserInput],
-        response_item: ResponseItem,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
+        let response_item = ResponseItem::from(ResponseInputItem::from(input.to_vec()));
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
@@ -3155,7 +3156,7 @@ impl Session {
         self.input_queue
             .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
-                input.into(),
+                TurnInput::UserInput(input),
             )
             .await;
         Ok(active_turn_id.clone())
