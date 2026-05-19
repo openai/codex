@@ -210,6 +210,7 @@ impl McpRequestProcessor {
         // env in no-local modes.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment(),
             config.cwd.to_path_buf(),
         );
 
@@ -371,6 +372,7 @@ impl McpRequestProcessor {
         // manufacture a hidden local env in no-local modes.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment(),
             config.cwd.to_path_buf(),
         );
         let request_id = request_id.clone();

@@ -35,17 +35,25 @@ pub struct SandboxState {
 /// Keep it explicit at manager construction time so status/snapshot paths and
 /// real sessions make the same placement decision. `fallback_cwd` is not a
 /// per-server override; it is used when a stdio server omits `cwd` and the
-/// launcher needs a concrete process working directory.
+/// launcher needs a concrete process working directory. `local_environment`
+/// is separate because a remote selected/default environment can coexist with
+/// an explicitly configured local environment that may launch local stdio MCPs.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Option<Arc<Environment>>,
+    local_environment: Option<Arc<Environment>>,
     fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeEnvironment {
-    pub fn new(environment: Option<Arc<Environment>>, fallback_cwd: PathBuf) -> Self {
+    pub fn new(
+        environment: Option<Arc<Environment>>,
+        local_environment: Option<Arc<Environment>>,
+        fallback_cwd: PathBuf,
+    ) -> Self {
         Self {
             environment,
+            local_environment,
             fallback_cwd,
         }
     }
@@ -68,10 +76,10 @@ impl McpRuntimeEnvironment {
         // the ambient HTTP client with no local environment configured.
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
-                if self
-                    .environment
-                    .as_ref()
-                    .is_none_or(|environment| environment.is_remote())
+                // Local stdio only needs an explicitly configured local
+                // launcher. The selected/default MCP environment can be remote
+                // when both local and remote environments are configured.
+                if self.local_environment.is_none()
                     && matches!(
                         config.transport,
                         codex_config::McpServerTransportConfig::Stdio { .. }
@@ -154,8 +162,11 @@ mod tests {
 
     #[test]
     fn local_stdio_requires_local_stdio_availability() {
-        let runtime_environment =
-            McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        );
 
         assert_eq!(
             runtime_environment.startup_unavailable_reason(
@@ -168,8 +179,11 @@ mod tests {
 
     #[test]
     fn local_http_does_not_require_local_stdio_availability() {
-        let runtime_environment =
-            McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        );
 
         assert_eq!(
             runtime_environment.startup_unavailable_reason(
@@ -182,8 +196,11 @@ mod tests {
 
     #[test]
     fn remote_stdio_requires_remote_environment() {
-        let runtime_environment =
-            McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        );
 
         assert_eq!(
             runtime_environment.startup_unavailable_reason(
@@ -200,8 +217,11 @@ mod tests {
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                 .expect("remote environment"),
         );
-        let runtime_environment =
-            McpRuntimeEnvironment::new(Some(environment), PathBuf::from("/tmp"));
+        let runtime_environment = McpRuntimeEnvironment::new(
+            Some(environment),
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        );
 
         assert_eq!(
             runtime_environment.startup_unavailable_reason(
@@ -214,6 +234,29 @@ mod tests {
             runtime_environment.startup_unavailable_reason(
                 "http",
                 &http_server(/*experimental_environment*/ Some("remote")),
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn local_stdio_accepts_remote_runtime_when_local_environment_exists() {
+        let remote_environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                .expect("remote environment"),
+        );
+        let local_environment =
+            Arc::new(Environment::create_for_tests(None).expect("local environment"));
+        let runtime_environment = McpRuntimeEnvironment::new(
+            Some(remote_environment),
+            Some(local_environment),
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason(
+                "stdio",
+                &stdio_server(/*experimental_environment*/ None),
             ),
             None
         );

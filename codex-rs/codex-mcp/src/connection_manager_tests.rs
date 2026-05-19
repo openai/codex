@@ -915,7 +915,11 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         String::new(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp")),
+        McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        ),
         codex_home.path().to_path_buf(),
         CodexAppsToolsCacheKey {
             account_id: None,

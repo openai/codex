@@ -292,12 +292,14 @@ impl Session {
         let mcp_runtime_environment = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeEnvironment::new(
                 Some(Arc::clone(&turn_environment.environment)),
+                self.services.environment_manager.try_local_environment(),
                 turn_environment.cwd.to_path_buf(),
             ),
             None => McpRuntimeEnvironment::new(
                 self.services
                     .environment_manager
                     .default_or_local_environment(),
+                self.services.environment_manager.try_local_environment(),
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),

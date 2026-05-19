@@ -1049,10 +1049,12 @@ impl Session {
             let mcp_runtime_environment = match turn_environment {
                 Some(turn_environment) => McpRuntimeEnvironment::new(
                     Some(Arc::clone(&turn_environment.environment)),
+                    sess.services.environment_manager.try_local_environment(),
                     turn_environment.cwd.to_path_buf(),
                 ),
                 None => McpRuntimeEnvironment::new(
                     sess.services.environment_manager.default_or_local_environment(),
+                    sess.services.environment_manager.try_local_environment(),
                     session_configuration.cwd.to_path_buf(),
                 ),
             };

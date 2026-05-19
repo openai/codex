@@ -274,6 +274,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         // one exists, but do not reintroduce the old hidden-local fallback.
         McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment(),
             config.cwd.to_path_buf(),
         ),
         config.codex_home.to_path_buf(),
