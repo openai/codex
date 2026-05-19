@@ -1,7 +1,5 @@
 use super::*;
-use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
-use codex_config::permissions_toml::PermissionsToml;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -412,9 +410,29 @@ impl CatalogRequestProcessor {
             .effective_config()
             .try_into()
             .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
-        let profiles = permission_profile_summaries(
-            effective_config.permissions.as_ref(),
-            config.config_layer_stack.requirements_toml(),
+        let mut profiles = vec![
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
+                description: None,
+            },
+        ];
+        profiles.extend(
+            effective_config
+                .permissions
+                .into_iter()
+                .flat_map(|permissions| permissions.entries)
+                .map(|(id, profile)| PermissionProfileSummary {
+                    id,
+                    description: profile.description,
+                }),
         );
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
@@ -647,102 +665,5 @@ impl CatalogRequestProcessor {
                 }
             })
             .map_err(|err| internal_error(format!("failed to update skill settings: {err}")))
-    }
-}
-
-fn permission_profile_summaries(
-    config_permissions: Option<&PermissionsToml>,
-    requirements_toml: &ConfigRequirementsToml,
-) -> Vec<PermissionProfileSummary> {
-    let mut profiles = vec![
-        PermissionProfileSummary {
-            id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
-            description: None,
-        },
-        PermissionProfileSummary {
-            id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
-            description: None,
-        },
-        PermissionProfileSummary {
-            id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-            description: None,
-        },
-    ];
-    profiles.extend(
-        config_permissions
-            .into_iter()
-            .flat_map(|permissions| permissions.entries.iter())
-            .map(|(id, profile)| PermissionProfileSummary {
-                id: id.clone(),
-                description: profile.description.clone(),
-            }),
-    );
-    profiles.extend(
-        requirements_toml
-            .permissions
-            .as_ref()
-            .into_iter()
-            .flat_map(|permissions| permissions.profiles.iter())
-            .map(|(id, profile)| PermissionProfileSummary {
-                id: id.clone(),
-                description: profile.description.clone(),
-            }),
-    );
-    if let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() {
-        profiles.retain(|profile| {
-            allowed_permissions
-                .iter()
-                .any(|allowed_profile| allowed_profile == &profile.id)
-        });
-    }
-    profiles
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PermissionProfileSummary;
-    use super::permission_profile_summaries;
-    use codex_config::ConfigRequirementsToml;
-    use codex_config::permissions_toml::PermissionProfileToml;
-    use codex_config::permissions_toml::PermissionsToml;
-    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
-    use pretty_assertions::assert_eq;
-    use std::collections::BTreeMap;
-    use toml::from_str;
-
-    #[test]
-    fn permission_profile_summaries_include_managed_profiles_and_apply_allowlist() {
-        let config_permissions = PermissionsToml {
-            entries: BTreeMap::from([(
-                "local".to_string(),
-                PermissionProfileToml {
-                    description: Some("Local profile.".to_string()),
-                    ..PermissionProfileToml::default()
-                },
-            )]),
-        };
-        let requirements_toml: ConfigRequirementsToml = from_str(
-            r#"
-                allowed_permissions = [":read-only", "managed-standard"]
-
-                [permissions.managed-standard]
-                description = "Managed profile."
-            "#,
-        )
-        .expect("requirements TOML should parse");
-
-        assert_eq!(
-            permission_profile_summaries(Some(&config_permissions), &requirements_toml),
-            vec![
-                PermissionProfileSummary {
-                    id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
-                    description: None,
-                },
-                PermissionProfileSummary {
-                    id: "managed-standard".to_string(),
-                    description: Some("Managed profile.".to_string()),
-                },
-            ]
-        );
     }
 }

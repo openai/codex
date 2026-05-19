@@ -77,15 +77,6 @@
             "null"
           ]
         },
-        "allowedPermissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "allowedSandboxModes": {
           "items": {
             "$ref": "#/definitions/SandboxMode"
@@ -101,12 +92,6 @@
           },
           "type": [
             "array",
-            "null"
-          ]
-        },
-        "defaultPermissions": {
-          "type": [
-            "string",
             "null"
           ]
         },

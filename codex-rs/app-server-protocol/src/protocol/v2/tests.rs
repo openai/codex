@@ -1697,8 +1697,6 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             }]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
-            default_permissions: None,
-            allowed_permissions: None,
             allowed_web_search_modes: None,
             allow_managed_hooks_only: None,
             feature_requirements: None,
