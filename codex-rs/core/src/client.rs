@@ -150,6 +150,8 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+const TOKEN_INVALIDATED_ERROR_CODE: &str = "token_invalidated";
+const TOKEN_REVOKED_ERROR_CODE: &str = "token_revoked";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1979,7 +1981,12 @@ async fn handle_unauthorized(
     session_telemetry: &SessionTelemetry,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
-    if let Some(recovery) = auth_recovery
+    let revocation_recovery_reason = access_token_revocation_recovery_reason(
+        debug.auth_error_code.as_deref(),
+        debug.auth_error_type.as_deref(),
+    );
+    if revocation_recovery_reason.is_none()
+        && let Some(recovery) = auth_recovery
         && recovery.has_next()
     {
         let mode = recovery.mode_name();
@@ -2057,13 +2064,18 @@ async fn handle_unauthorized(
         };
     }
 
-    let (mode, phase, recovery_reason) = match auth_recovery.as_ref() {
-        Some(recovery) => (
+    let (mode, phase, recovery_reason) = match (auth_recovery.as_ref(), revocation_recovery_reason)
+    {
+        (Some(recovery), Some(reason)) => {
+            (recovery.mode_name(), recovery.step_name(), Some(reason))
+        }
+        (None, Some(reason)) => ("none", "none", Some(reason)),
+        (Some(recovery), None) => (
             recovery.mode_name(),
             recovery.step_name(),
             Some(recovery.unavailable_reason()),
         ),
-        None => ("none", "none", Some("auth_manager_missing")),
+        (None, None) => ("none", "none", Some("auth_manager_missing")),
     };
     session_telemetry.record_auth_recovery(
         mode,
@@ -2087,6 +2099,21 @@ async fn handle_unauthorized(
     );
 
     Err(map_api_error(ApiError::Transport(transport)))
+}
+
+fn access_token_revocation_recovery_reason(
+    auth_error_code: Option<&str>,
+    auth_error_type: Option<&str>,
+) -> Option<&'static str> {
+    match (auth_error_code, auth_error_type) {
+        (Some(TOKEN_INVALIDATED_ERROR_CODE), _) | (_, Some(TOKEN_INVALIDATED_ERROR_CODE)) => {
+            Some("access_token_invalidated")
+        }
+        (Some(TOKEN_REVOKED_ERROR_CODE), _) | (_, Some(TOKEN_REVOKED_ERROR_CODE)) => {
+            Some("access_token_revoked")
+        }
+        _ => None,
+    }
 }
 
 fn api_error_http_status(error: &ApiError) -> Option<u16> {

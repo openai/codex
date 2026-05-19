@@ -14,15 +14,13 @@ pub struct ResponseDebugContext {
     pub cf_ray: Option<String>,
     pub auth_error: Option<String>,
     pub auth_error_code: Option<String>,
+    pub auth_error_type: Option<String>,
 }
 
 pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
 
-    let TransportError::Http {
-        headers, body: _, ..
-    } = transport
-    else {
+    let TransportError::Http { headers, body, .. } = transport else {
         return context;
     };
 
@@ -38,19 +36,44 @@ pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDeb
         extract_header(REQUEST_ID_HEADER).or_else(|| extract_header(OAI_REQUEST_ID_HEADER));
     context.cf_ray = extract_header(CF_RAY_HEADER);
     context.auth_error = extract_header(AUTH_ERROR_HEADER);
-    context.auth_error_code = extract_header(X_ERROR_JSON_HEADER).and_then(|encoded| {
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .ok()?;
-        let parsed = serde_json::from_slice::<serde_json::Value>(&decoded).ok()?;
-        parsed
-            .get("error")
-            .and_then(|error| error.get("code"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-    });
+    let header_error = extract_header(X_ERROR_JSON_HEADER)
+        .and_then(|encoded| parse_x_error_json(encoded.as_str()));
+    let body_error = body
+        .as_deref()
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+    context.auth_error_code = header_error
+        .as_ref()
+        .and_then(|error| extract_error_field(error, "code"))
+        .or_else(|| {
+            body_error
+                .as_ref()
+                .and_then(|error| extract_error_field(error, "code"))
+        });
+    context.auth_error_type = header_error
+        .as_ref()
+        .and_then(|error| extract_error_field(error, "type"))
+        .or_else(|| {
+            body_error
+                .as_ref()
+                .and_then(|error| extract_error_field(error, "type"))
+        });
 
     context
+}
+
+fn parse_x_error_json(encoded: &str) -> Option<serde_json::Value> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&decoded).ok()
+}
+
+fn extract_error_field(error: &serde_json::Value, field: &str) -> Option<String> {
+    error
+        .get("error")
+        .and_then(|error| error.get(field))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 pub fn extract_response_debug_context_from_api_error(error: &ApiError) -> ResponseDebugContext {
@@ -127,6 +150,43 @@ mod tests {
                 cf_ray: Some("ray-auth".to_string()),
                 auth_error: Some("missing_authorization_header".to_string()),
                 auth_error_code: Some("token_expired".to_string()),
+                auth_error_type: None,
+            }
+        );
+    }
+
+    #[test]
+    fn extract_response_debug_context_reads_identity_error_code_from_body() {
+        let context = extract_response_debug_context(&TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"code":"token_revoked"}}"#.to_string()),
+        });
+
+        assert_eq!(
+            context,
+            ResponseDebugContext {
+                auth_error_code: Some("token_revoked".to_string()),
+                ..ResponseDebugContext::default()
+            }
+        );
+    }
+
+    #[test]
+    fn extract_response_debug_context_reads_identity_error_type_from_body() {
+        let context = extract_response_debug_context(&TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"type":"token_invalidated"}}"#.to_string()),
+        });
+
+        assert_eq!(
+            context,
+            ResponseDebugContext {
+                auth_error_type: Some("token_invalidated".to_string()),
+                ..ResponseDebugContext::default()
             }
         );
     }

@@ -1064,7 +1064,8 @@ enum UnauthorizedRecoveryMode {
 }
 
 // UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests
-// to API fail with 401 status code.
+// to API fail with a refreshable 401 status code. Callers must leave explicit access-token revocation signals
+// outside this flow.
 // The client calls next() every time it encounters a 401 error, one time per retry.
 // For API key based authentication, we don't do anything and let the error bubble to the user.
 //

@@ -7,11 +7,14 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::handle_unauthorized;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use base64::Engine;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
+use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -23,6 +26,7 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -37,6 +41,9 @@ use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
 use futures::StreamExt;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -580,4 +587,77 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
         None,
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn token_invalidated_401_skips_unauthorized_recovery() {
+    let manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut recovery = Some(manager.unauthorized_recovery());
+    let x_error_json = base64::engine::general_purpose::STANDARD
+        .encode(r#"{"error":{"code":"token_invalidated"}}"#);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-error-json",
+        HeaderValue::from_str(&x_error_json).expect("valid x-error-json header"),
+    );
+
+    let err = handle_unauthorized(
+        TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: Some(headers),
+            body: Some(r#"{"error":{"message":"revoked"}}"#.to_string()),
+        },
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("revoked access tokens should not enter refresh recovery");
+
+    let CodexErr::UnexpectedStatus(unexpected) = err else {
+        panic!("expected unauthorized response to bubble up, got {err:?}");
+    };
+    assert_eq!(
+        unexpected.identity_error_code.as_deref(),
+        Some("token_invalidated")
+    );
+    assert_eq!(
+        recovery
+            .as_ref()
+            .expect("recovery state should remain available")
+            .step_name(),
+        "reload"
+    );
+}
+
+#[tokio::test]
+async fn token_invalidated_error_type_401_skips_unauthorized_recovery() {
+    let manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut recovery = Some(manager.unauthorized_recovery());
+
+    let err = handle_unauthorized(
+        TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"type":"token_invalidated"}}"#.to_string()),
+        },
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("invalidated access tokens should not enter refresh recovery");
+
+    let CodexErr::UnexpectedStatus(_) = err else {
+        panic!("expected unauthorized response to bubble up, got {err:?}");
+    };
+    assert_eq!(
+        recovery
+            .as_ref()
+            .expect("recovery state should remain available")
+            .step_name(),
+        "reload"
+    );
 }
