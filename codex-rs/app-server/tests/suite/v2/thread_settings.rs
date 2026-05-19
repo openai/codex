@@ -8,7 +8,6 @@ use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PermissionProfile;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -208,7 +207,7 @@ async fn thread_settings_update_absolutizes_relative_cwd_before_permissions() ->
         ThreadSettingsUpdateParams {
             thread_id: thread.id,
             cwd: Some(next_cwd),
-            permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
+            permissions: Some(":workspace".to_string()),
             ..Default::default()
         },
     )
@@ -265,7 +264,7 @@ async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Res
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-            permissions: Some(PermissionProfileSelectionParams::new(":read-only")),
+            permissions: Some(":read-only".to_string()),
             ..Default::default()
         })
         .await?;
@@ -313,7 +312,7 @@ async fn thread_settings_update_waits_for_pending_cwd_before_permissions() -> Re
     let update_request_id = mcp
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {
             thread_id: thread.id,
-            permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
+            permissions: Some(":workspace".to_string()),
             ..Default::default()
         })
         .await?;
