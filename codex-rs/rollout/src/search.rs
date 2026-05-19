@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_install_context::InstallContext;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -94,7 +95,7 @@ async fn ripgrep_rollout_matches(
         return Ok(HashMap::new());
     }
 
-    let output = match Command::new("rg")
+    let output = match Command::new(InstallContext::current().rg_command())
         .arg("--json")
         .arg("--fixed-strings")
         .arg("--no-ignore")

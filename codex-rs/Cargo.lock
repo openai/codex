@@ -3551,6 +3551,7 @@ dependencies = [
  "chrono",
  "codex-file-search",
  "codex-git-utils",
+ "codex-install-context",
  "codex-login",
  "codex-otel",
  "codex-protocol",
