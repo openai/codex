@@ -1475,7 +1475,6 @@ fn thread_settings_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> Thre
             &config_snapshot.permission_profile,
             config_snapshot.cwd.as_path(),
         ),
-        permission_profile: config_snapshot.permission_profile.clone().into(),
         active_permission_profile: thread_response_active_permission_profile(
             config_snapshot.active_permission_profile.clone(),
         ),
@@ -1501,7 +1500,6 @@ fn thread_settings_from_applied_event(
             &thread_settings.permission_profile,
             thread_settings.cwd.as_path(),
         ),
-        permission_profile: thread_settings.permission_profile.clone().into(),
         active_permission_profile: thread_response_active_permission_profile(
             thread_settings.active_permission_profile.clone(),
         ),

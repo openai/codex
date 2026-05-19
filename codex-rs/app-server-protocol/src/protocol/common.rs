@@ -1598,7 +1598,6 @@ mod tests {
             approval_policy: v2::AskForApproval::OnFailure,
             approvals_reviewer: v2::ApprovalsReviewer::User,
             sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
-            permission_profile: v2::PermissionProfile::Disabled,
             active_permission_profile: None,
             effort: None,
             summary: None,

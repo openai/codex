@@ -1,7 +1,6 @@
 use super::ActivePermissionProfile;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
-use super::PermissionProfile;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
@@ -244,7 +243,6 @@ pub struct ThreadSettings {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,

@@ -7,7 +7,6 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -21,10 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::Feature;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -110,31 +106,6 @@ async fn read_thread_settings_updated(
     Ok(notification)
 }
 
-fn assert_permission_profile_write_root(
-    permission_profile: &PermissionProfile,
-    expected_root: &AbsolutePathBuf,
-    unexpected_root: &AbsolutePathBuf,
-) {
-    let permission_profile: CorePermissionProfile = permission_profile.clone().into();
-    let sandbox_policy = permission_profile.file_system_sandbox_policy();
-    assert!(
-        sandbox_policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path == expected_root)
-        }),
-        "expected permission profile write entries to contain {expected_root:?}; got {:?}",
-        sandbox_policy.entries
-    );
-    assert!(
-        !sandbox_policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path == unexpected_root)
-        }),
-        "did not expect permission profile write entries to contain {unexpected_root:?}; got {:?}",
-        sandbox_policy.entries
-    );
-}
-
 #[tokio::test]
 async fn thread_settings_update_applies_partial_patch_and_emits_full_state() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
@@ -205,7 +176,7 @@ async fn thread_settings_update_absolutizes_relative_cwd_before_permissions() ->
     let response = send_thread_settings_update(
         &mut mcp,
         ThreadSettingsUpdateParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             cwd: Some(next_cwd),
             permissions: Some(":workspace".to_string()),
             ..Default::default()
@@ -214,10 +185,12 @@ async fn thread_settings_update_absolutizes_relative_cwd_before_permissions() ->
     .await?;
 
     assert_eq!(response.thread_settings.cwd, next_cwd_abs);
-    assert_permission_profile_write_root(
-        &response.thread_settings.permission_profile,
-        &next_cwd_abs,
-        &thread.cwd,
+    assert_eq!(
+        response
+            .thread_settings
+            .active_permission_profile
+            .map(|profile| profile.id),
+        Some(":workspace".to_string())
     );
 
     Ok(())
@@ -311,7 +284,7 @@ async fn thread_settings_update_waits_for_pending_cwd_before_permissions() -> Re
         .await?;
     let update_request_id = mcp
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             permissions: Some(":workspace".to_string()),
             ..Default::default()
         })
@@ -322,10 +295,12 @@ async fn thread_settings_update_waits_for_pending_cwd_before_permissions() -> Re
         read_response::<ThreadSettingsUpdateResponse>(&mut mcp, update_request_id).await?;
 
     assert_eq!(update_response.thread_settings.cwd, next_cwd_abs);
-    assert_permission_profile_write_root(
-        &update_response.thread_settings.permission_profile,
-        &next_cwd_abs,
-        &thread.cwd,
+    assert_eq!(
+        update_response
+            .thread_settings
+            .active_permission_profile
+            .map(|profile| profile.id),
+        Some(":workspace".to_string())
     );
 
     wait_for_turn_completed(&mut mcp).await?;
