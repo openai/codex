@@ -98,3 +98,77 @@ disable_on_external_context = true
     );
     assert_eq!(base, expected);
 }
+
+#[test]
+fn merge_toml_values_normalizes_legacy_feature_key_from_base_layer() {
+    let mut base = parse_toml(
+        r#"
+[features]
+codex_hooks = false
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[features]
+hooks = true
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[features]
+hooks = true
+"#,
+    );
+    assert_eq!(base, expected);
+}
+
+#[test]
+fn merge_toml_values_normalizes_legacy_feature_key_from_overlay_layer() {
+    let mut base = parse_toml(
+        r#"
+[features]
+hooks = true
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[features]
+codex_hooks = false
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[features]
+hooks = false
+"#,
+    );
+    assert_eq!(base, expected);
+}
+
+#[test]
+fn merge_toml_values_prefers_canonical_feature_key_when_one_layer_has_both_names() {
+    let mut base = TomlValue::Table(toml::map::Map::new());
+    let overlay = parse_toml(
+        r#"
+[features]
+hooks = true
+codex_hooks = false
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[features]
+hooks = true
+"#,
+    );
+    assert_eq!(base, expected);
+}

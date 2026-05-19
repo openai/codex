@@ -8,11 +8,18 @@ struct ConfigKeyAlias {
     canonical_key: &'static str,
 }
 
-const CONFIG_KEY_ALIASES: &[ConfigKeyAlias] = &[ConfigKeyAlias {
-    table_path: &["memories"],
-    legacy_key: "no_memories_if_mcp_or_web_search",
-    canonical_key: "disable_on_external_context",
-}];
+const CONFIG_KEY_ALIASES: &[ConfigKeyAlias] = &[
+    ConfigKeyAlias {
+        table_path: &["memories"],
+        legacy_key: "no_memories_if_mcp_or_web_search",
+        canonical_key: "disable_on_external_context",
+    },
+    ConfigKeyAlias {
+        table_path: &["features"],
+        legacy_key: "codex_hooks",
+        canonical_key: "hooks",
+    },
+];
 
 pub(crate) fn normalize_key_aliases(path: &[String], table: &mut TomlMap<String, TomlValue>) {
     for alias in CONFIG_KEY_ALIASES {
