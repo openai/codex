@@ -184,7 +184,11 @@ pub(crate) async fn apply_bespoke_event_handling(
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             let preserve_terminal_plan_progress =
-                should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
+                terminal_plan_cleanup_may_be_needed(&thread_state).await
+                    && should_preserve_terminal_plan_progress(
+                        conversation.as_ref(),
+                        conversation_id,
+                    )
                     .await;
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -1121,6 +1125,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             let preserve_terminal_plan_progress = turn_aborted_event.reason
                 != TurnAbortReason::Interrupted
+                && terminal_plan_cleanup_may_be_needed(&thread_state).await
                 && should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
                     .await;
             thread_watch_manager
@@ -1344,6 +1349,21 @@ async fn emit_turn_plan_updated(
         .await;
 }
 
+async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadState>>) -> bool {
+    thread_state
+        .lock()
+        .await
+        .turn_summary
+        .latest_plan_update
+        .as_ref()
+        .is_some_and(|update| {
+            update
+                .plan
+                .iter()
+                .any(|item| matches!(item.status, StepStatus::InProgress))
+        })
+}
+
 async fn should_preserve_terminal_plan_progress(
     conversation: &CodexThread,
     conversation_id: ThreadId,
@@ -1352,7 +1372,11 @@ async fn should_preserve_terminal_plan_progress(
         return false;
     };
 
-    match state_db.get_thread_goal(conversation_id).await {
+    match state_db
+        .thread_goals()
+        .get_thread_goal(conversation_id)
+        .await
+    {
         Ok(goal) => goal.is_some_and(|goal| goal.status == codex_state::ThreadGoalStatus::Active),
         Err(err) => {
             tracing::warn!(
