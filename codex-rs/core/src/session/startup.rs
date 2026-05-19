@@ -158,7 +158,9 @@ impl Session {
                 turn_environment.cwd.to_path_buf(),
             ),
             None => McpRuntimeEnvironment::new(
-                self.services.environment_manager.default_or_local_environment(),
+                self.services
+                    .environment_manager
+                    .default_or_local_environment(),
                 self.services.environment_manager.try_local_environment(),
                 session_configuration.cwd.to_path_buf(),
             ),
