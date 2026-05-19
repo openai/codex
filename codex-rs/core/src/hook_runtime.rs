@@ -589,6 +589,7 @@ fn hook_run_analytics_payload(
                 .turn_id
                 .clone()
                 .unwrap_or_else(|| turn_context.sub_id.clone()),
+            turn_context.originator.value().to_string(),
         ),
         HookRunFact {
             event_name: completed.run.event_name,

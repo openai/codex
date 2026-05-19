@@ -41,6 +41,7 @@ use codex_core::ThreadManager;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
+use codex_login::default_client::Originator;
 use codex_model_provider::create_model_provider;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::WebSearchMode;
@@ -128,8 +129,9 @@ impl ConfigRequestProcessor {
     pub(crate) async fn value_write(
         &self,
         params: ConfigValueWriteParams,
+        originator: &Originator,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
-        self.handle_config_mutation_result(self.write_value(params).await)
+        self.handle_config_mutation_result(self.write_value(params, originator).await)
             .await
             .map(ClientResponsePayload::ConfigValueWrite)
     }
@@ -137,8 +139,9 @@ impl ConfigRequestProcessor {
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
+        originator: &Originator,
     ) -> Result<ClientResponsePayload, JSONRPCErrorError> {
-        self.handle_config_mutation_result(self.batch_write_inner(params).await)
+        self.handle_config_mutation_result(self.batch_write_inner(params, originator).await)
             .await
             .map(ClientResponsePayload::ConfigBatchWrite)
     }
@@ -274,6 +277,7 @@ impl ConfigRequestProcessor {
     async fn write_value(
         &self,
         params: ConfigValueWriteParams,
+        originator: &Originator,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
             [(&params.key_path, &params.value)].into_iter(),
@@ -283,13 +287,15 @@ impl ConfigRequestProcessor {
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes).await;
+        self.emit_plugin_toggle_events(pending_changes, originator)
+            .await;
         Ok(response)
     }
 
     async fn batch_write_inner(
         &self,
         params: ConfigBatchWriteParams,
+        originator: &Originator,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let reload_user_config = params.reload_user_config;
         let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
@@ -303,7 +309,8 @@ impl ConfigRequestProcessor {
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes).await;
+        self.emit_plugin_toggle_events(pending_changes, originator)
+            .await;
         if reload_user_config {
             self.reload_user_config().await;
         }
@@ -379,6 +386,7 @@ impl ConfigRequestProcessor {
     async fn emit_plugin_toggle_events(
         &self,
         pending_changes: std::collections::BTreeMap<String, bool>,
+        originator: &Originator,
     ) {
         for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
@@ -390,9 +398,11 @@ impl ConfigRequestProcessor {
             )
             .await;
             if enabled {
-                self.analytics_events_client.track_plugin_enabled(metadata);
+                self.analytics_events_client
+                    .track_plugin_enabled_with_originator(metadata, originator);
             } else {
-                self.analytics_events_client.track_plugin_disabled(metadata);
+                self.analytics_events_client
+                    .track_plugin_disabled_with_originator(metadata, originator);
             }
         }
     }

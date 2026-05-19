@@ -111,7 +111,6 @@ use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::WebSearchAction;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
-use codex_login::default_client::Originator;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -680,7 +679,7 @@ impl AnalyticsReducer {
                         turn_id: Some(tracking.turn_id.clone()),
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
-                        product_client_id: Some(Originator::process_default().value().to_string()),
+                        product_client_id: Some(tracking.product_client_id.clone()),
                         repo_url,
                         skill_scope: Some(skill_scope.to_string()),
                         plugin_id: invocation.plugin_id,
@@ -731,10 +730,14 @@ impl AnalyticsReducer {
         input: PluginStateChangedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let PluginStateChangedInput { plugin, state } = input;
+        let PluginStateChangedInput {
+            plugin,
+            state,
+            product_client_id,
+        } = input;
         let event = CodexPluginEventRequest {
             event_type: plugin_state_event_type(state),
-            event_params: codex_plugin_metadata(plugin),
+            event_params: codex_plugin_metadata(plugin, product_client_id),
         };
         out.push(match state {
             PluginState::Installed => TrackEventRequest::PluginInstalled(event),

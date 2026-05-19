@@ -59,6 +59,7 @@ use codex_core_skills::SkillMetadata;
 use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
@@ -832,12 +833,21 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        self.install_plugin_with_originator(request, &Originator::process_default())
+            .await
+    }
+
+    pub async fn install_plugin_with_originator(
+        &self,
+        request: PluginInstallRequest,
+        originator: &Originator,
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let resolved = find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
         )?;
-        self.install_resolved_plugin(resolved).await
+        self.install_resolved_plugin(resolved, originator).await
     }
 
     pub async fn install_plugin_with_remote_sync(
@@ -860,12 +870,14 @@ impl PluginsManager {
         )
         .await
         .map_err(PluginInstallError::from)?;
-        self.install_resolved_plugin(resolved).await
+        self.install_resolved_plugin(resolved, &Originator::process_default())
+            .await
     }
 
     async fn install_resolved_plugin(
         &self,
         resolved: ResolvedMarketplacePlugin,
+        originator: &Originator,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let auth_policy = resolved.policy.authentication;
         let plugin_version =
@@ -909,9 +921,10 @@ impl PluginsManager {
             Err(err) => err.into_inner().clone(),
         };
         if let Some(analytics_events_client) = analytics_events_client {
-            analytics_events_client.track_plugin_installed(
+            analytics_events_client.track_plugin_installed_with_originator(
                 plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path)
                     .await,
+                originator,
             );
         }
 
@@ -924,8 +937,17 @@ impl PluginsManager {
     }
 
     pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
+        self.uninstall_plugin_with_originator(plugin_id, &Originator::process_default())
+            .await
+    }
+
+    pub async fn uninstall_plugin_with_originator(
+        &self,
+        plugin_id: String,
+        originator: &Originator,
+    ) -> Result<(), PluginUninstallError> {
         let plugin_id = PluginId::parse(&plugin_id)?;
-        self.uninstall_plugin_id(plugin_id).await
+        self.uninstall_plugin_id(plugin_id, originator).await
     }
 
     pub async fn uninstall_plugin_with_remote_sync(
@@ -946,10 +968,15 @@ impl PluginsManager {
         )
         .await
         .map_err(PluginUninstallError::from)?;
-        self.uninstall_plugin_id(plugin_id).await
+        self.uninstall_plugin_id(plugin_id, &Originator::process_default())
+            .await
     }
 
-    async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
+    async fn uninstall_plugin_id(
+        &self,
+        plugin_id: PluginId,
+        originator: &Originator,
+    ) -> Result<(), PluginUninstallError> {
         let plugin_telemetry = if self.store.active_plugin_root(&plugin_id).is_some() {
             Some(installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id).await)
         } else {
@@ -972,7 +999,8 @@ impl PluginsManager {
         if let Some(plugin_telemetry) = plugin_telemetry
             && let Some(analytics_events_client) = analytics_events_client
         {
-            analytics_events_client.track_plugin_uninstalled(plugin_telemetry);
+            analytics_events_client
+                .track_plugin_uninstalled_with_originator(plugin_telemetry, originator);
         }
 
         Ok(())

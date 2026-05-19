@@ -464,6 +464,7 @@ async fn build_skills_and_plugins(
         turn_context.model_info.slug.clone(),
         sess.conversation_id.to_string(),
         turn_context.sub_id.clone(),
+        turn_context.originator.value().to_string(),
     );
     let loaded_plugins = sess
         .services

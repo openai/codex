@@ -887,12 +887,16 @@ impl MessageProcessor {
                 .import(request_id.clone(), params, &request_context)
                 .await
                 .map(|()| None),
-            ClientRequest::ConfigValueWrite { params, .. } => {
-                self.config_processor.value_write(params).await.map(Some)
-            }
-            ClientRequest::ConfigBatchWrite { params, .. } => {
-                self.config_processor.batch_write(params).await.map(Some)
-            }
+            ClientRequest::ConfigValueWrite { params, .. } => self
+                .config_processor
+                .value_write(params, request_context.originator())
+                .await
+                .map(Some),
+            ClientRequest::ConfigBatchWrite { params, .. } => self
+                .config_processor
+                .batch_write(params, request_context.originator())
+                .await
+                .map(Some),
             ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
                 self.config_processor
                     .experimental_feature_enablement_set(request_id.clone(), params)
@@ -1127,10 +1131,14 @@ impl MessageProcessor {
                 self.catalog_processor.skills_config_write(params).await
             }
             ClientRequest::PluginInstall { params, .. } => {
-                self.plugin_processor.plugin_install(params).await
+                self.plugin_processor
+                    .plugin_install(params, request_context.originator())
+                    .await
             }
             ClientRequest::PluginUninstall { params, .. } => {
-                self.plugin_processor.plugin_uninstall(params).await
+                self.plugin_processor
+                    .plugin_uninstall(params, request_context.originator())
+                    .await
             }
             ClientRequest::ModelList { params, .. } => {
                 self.catalog_processor.model_list(params).await

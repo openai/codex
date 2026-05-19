@@ -155,6 +155,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 
+fn default_product_client_id() -> String {
+    Originator::process_default().value().to_string()
+}
+
 fn sample_thread_with_metadata(
     thread_id: &str,
     ephemeral: bool,
@@ -941,6 +945,7 @@ fn app_mentioned_event_serializes_expected_shape() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: "codex_ios".to_string(),
     };
     let event = TrackEventRequest::AppMentioned(CodexAppMentionedEventRequest {
         event_type: "codex_app_mentioned",
@@ -965,7 +970,7 @@ fn app_mentioned_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
                 "app_name": "Calendar",
-                "product_client_id": Originator::process_default().value().to_string(),
+                "product_client_id": "codex_ios",
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
@@ -979,6 +984,7 @@ fn app_used_event_serializes_expected_shape() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-2".to_string(),
         turn_id: "turn-2".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let event = TrackEventRequest::AppUsed(CodexAppUsedEventRequest {
         event_type: "codex_app_used",
@@ -1280,11 +1286,13 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let turn_2 = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-2".to_string(),
+        product_client_id: default_product_client_id(),
     };
 
     assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), true);
@@ -2755,6 +2763,7 @@ fn plugin_used_event_serializes_expected_shape() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-3".to_string(),
         turn_id: "turn-3".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let event = TrackEventRequest::PluginUsed(CodexPluginUsedEventRequest {
         event_type: "codex_plugin_used",
@@ -2785,9 +2794,10 @@ fn plugin_used_event_serializes_expected_shape() {
 
 #[test]
 fn plugin_management_event_serializes_expected_shape() {
+    let product_client_id = "codex_desktop".to_string();
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
         event_type: "codex_plugin_installed",
-        event_params: codex_plugin_metadata(sample_plugin_metadata()),
+        event_params: codex_plugin_metadata(sample_plugin_metadata(), product_client_id),
     });
 
     let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
@@ -2803,7 +2813,7 @@ fn plugin_management_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": Originator::process_default().value().to_string()
+                "product_client_id": "codex_desktop"
             }
         })
     );
@@ -2815,7 +2825,7 @@ fn plugin_management_event_can_use_remote_plugin_id_override() {
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
         event_type: "codex_plugin_installed",
-        event_params: codex_plugin_metadata(plugin),
+        event_params: codex_plugin_metadata(plugin, default_product_client_id()),
     });
 
     let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
@@ -2834,6 +2844,7 @@ fn hook_run_event_serializes_expected_shape() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-3".to_string(),
         turn_id: "turn-3".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let event = TrackEventRequest::HookRun(CodexHookRunEventRequest {
         event_type: "codex_hook_run",
@@ -2871,6 +2882,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
 
     let system = serde_json::to_value(codex_hook_run_metadata(
@@ -2926,6 +2938,7 @@ fn hook_run_metadata_maps_stopped_status() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: "codex_web".to_string(),
     };
 
     let stopped = serde_json::to_value(codex_hook_run_metadata(
@@ -2956,11 +2969,13 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let turn_2 = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-2".to_string(),
+        product_client_id: default_product_client_id(),
     };
 
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), true);
@@ -2976,6 +2991,7 @@ async fn reducer_ingests_skill_invoked_fact() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
     let expected_skill_id = skill_id_for_local_skill(
@@ -3009,7 +3025,7 @@ async fn reducer_ingests_skill_invoked_fact() {
             "skill_id": expected_skill_id,
             "skill_name": "doc",
             "event_params": {
-                "product_client_id": Originator::process_default().value().to_string(),
+                "product_client_id": "codex_web",
                 "skill_scope": "user",
                 "plugin_id": null,
                 "repo_url": null,
@@ -3030,6 +3046,7 @@ async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
     let skill_path =
         PathBuf::from("/Users/abc/.codex/plugins/cache/test/sample/skills/doc/SKILL.md");
@@ -3069,6 +3086,7 @@ async fn reducer_ingests_hook_run_fact() {
                     model_slug: "gpt-5".to_string(),
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
+                    product_client_id: default_product_client_id(),
                 },
                 hook: HookRunFact {
                     event_name: HookEventName::PostToolUse,
@@ -3096,6 +3114,7 @@ async fn reducer_ingests_app_and_plugin_facts() {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
+        product_client_id: default_product_client_id(),
     };
 
     reducer
@@ -3152,6 +3171,7 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 PluginStateChangedInput {
                     plugin: sample_plugin_metadata(),
                     state: PluginState::Disabled,
+                    product_client_id: default_product_client_id(),
                 },
             )),
             &mut events,

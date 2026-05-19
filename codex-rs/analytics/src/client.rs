@@ -258,37 +258,73 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
+        self.track_plugin_installed_with_originator(plugin, &Originator::process_default());
+    }
+
+    pub fn track_plugin_installed_with_originator(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        originator: &Originator,
+    ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Installed,
+                product_client_id: originator.value().to_string(),
             }),
         ));
     }
 
     pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
+        self.track_plugin_uninstalled_with_originator(plugin, &Originator::process_default());
+    }
+
+    pub fn track_plugin_uninstalled_with_originator(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        originator: &Originator,
+    ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Uninstalled,
+                product_client_id: originator.value().to_string(),
             }),
         ));
     }
 
     pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
+        self.track_plugin_enabled_with_originator(plugin, &Originator::process_default());
+    }
+
+    pub fn track_plugin_enabled_with_originator(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        originator: &Originator,
+    ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Enabled,
+                product_client_id: originator.value().to_string(),
             }),
         ));
     }
 
     pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
+        self.track_plugin_disabled_with_originator(plugin, &Originator::process_default());
+    }
+
+    pub fn track_plugin_disabled_with_originator(
+        &self,
+        plugin: PluginTelemetryMetadata,
+        originator: &Originator,
+    ) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Disabled,
+                product_client_id: originator.value().to_string(),
             }),
         ));
     }

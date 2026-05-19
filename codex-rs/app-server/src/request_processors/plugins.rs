@@ -9,6 +9,7 @@ use codex_config::types::McpServerConfig;
 use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
+use codex_login::default_client::Originator;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
@@ -377,8 +378,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_install(
         &self,
         params: PluginInstallParams,
+        originator: &Originator,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_install_response(params)
+        self.plugin_install_response(params, originator)
             .await
             .map(|response| Some(response.into()))
     }
@@ -386,8 +388,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_uninstall(
         &self,
         params: PluginUninstallParams,
+        originator: &Originator,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_uninstall_response(params)
+        self.plugin_uninstall_response(params, originator)
             .await
             .map(|response| Some(response.into()))
     }
@@ -1274,6 +1277,7 @@ impl PluginRequestProcessor {
     async fn plugin_install_response(
         &self,
         params: PluginInstallParams,
+        originator: &Originator,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let PluginInstallParams {
             marketplace_path,
@@ -1284,7 +1288,11 @@ impl PluginRequestProcessor {
             (Some(marketplace_path), None) => marketplace_path,
             (None, Some(remote_marketplace_name)) => {
                 return self
-                    .remote_plugin_install_response(remote_marketplace_name, plugin_name)
+                    .remote_plugin_install_response(
+                        remote_marketplace_name,
+                        plugin_name,
+                        originator,
+                    )
                     .await;
             }
             (Some(_), Some(_)) | (None, None) => {
@@ -1313,7 +1321,7 @@ impl PluginRequestProcessor {
         };
 
         let result = plugins_manager
-            .install_plugin(request)
+            .install_plugin_with_originator(request, originator)
             .await
             .map_err(Self::plugin_install_error)?;
         let config = match self.load_latest_config(config_cwd).await {
@@ -1355,6 +1363,7 @@ impl PluginRequestProcessor {
         &self,
         remote_marketplace_name: String,
         remote_plugin_id: String,
+        originator: &Originator,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1441,7 +1450,7 @@ impl PluginRequestProcessor {
             plugin_telemetry_metadata_from_root(&result.plugin_id, &result.installed_path).await;
         plugin_metadata.remote_plugin_id = Some(remote_plugin_id);
         self.analytics_events_client
-            .track_plugin_installed(plugin_metadata);
+            .track_plugin_installed_with_originator(plugin_metadata, originator);
 
         let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path()).await;
         if !plugin_mcp_servers.is_empty() {
@@ -1613,6 +1622,7 @@ impl PluginRequestProcessor {
     async fn plugin_uninstall_response(
         &self,
         params: PluginUninstallParams,
+        originator: &Originator,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_plugin::PluginId::parse(&plugin_id).is_err()
@@ -1626,7 +1636,7 @@ impl PluginRequestProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
 
         plugins_manager
-            .uninstall_plugin(plugin_id)
+            .uninstall_plugin_with_originator(plugin_id, originator)
             .await
             .map_err(Self::plugin_uninstall_error)?;
         match self.load_latest_config(/*fallback_cwd*/ None).await {
