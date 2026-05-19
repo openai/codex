@@ -100,7 +100,6 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
@@ -1124,11 +1123,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
 
-            let preserve_terminal_plan_progress = turn_aborted_event.reason
-                != TurnAbortReason::Interrupted
-                && terminal_plan_cleanup_may_be_needed(&thread_state).await
-                && should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
-                    .await;
+            let preserve_terminal_plan_progress = false;
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
                 .await;
@@ -1145,6 +1140,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ThreadRolledBack(_rollback_event) => {
             let pending = {
                 let mut state = thread_state.lock().await;
+                state.pending_terminal_plan_cleanups.clear();
                 state.pending_rollbacks.take()
             };
 
@@ -1329,7 +1325,16 @@ pub(crate) async fn flush_pending_terminal_plan_cleanup(
     thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    let pending_terminal_plan_cleanups = take_pending_terminal_plan_cleanup(thread_state).await;
+    let pending_terminal_plan_cleanups =
+        take_flushable_pending_terminal_plan_cleanup(thread_state).await;
+    emit_terminal_plan_cleanup(conversation_id, pending_terminal_plan_cleanups, outgoing).await;
+}
+
+async fn emit_terminal_plan_cleanup(
+    conversation_id: ThreadId,
+    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
     for (turn_id, latest_plan_update) in
         terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
     {
@@ -1393,10 +1398,20 @@ async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadStat
         .is_empty()
 }
 
-async fn take_pending_terminal_plan_cleanup(
+async fn take_flushable_pending_terminal_plan_cleanup(
     thread_state: &Arc<Mutex<ThreadState>>,
 ) -> Vec<PendingTerminalPlanCleanup> {
-    std::mem::take(&mut thread_state.lock().await.pending_terminal_plan_cleanups)
+    let mut state = thread_state.lock().await;
+    let Some(active_turn_id) = state.active_turn_snapshot().map(|turn| turn.id) else {
+        return std::mem::take(&mut state.pending_terminal_plan_cleanups);
+    };
+
+    let pending_terminal_plan_cleanups = std::mem::take(&mut state.pending_terminal_plan_cleanups);
+    let (retained, flushable) = pending_terminal_plan_cleanups
+        .into_iter()
+        .partition(|cleanup| cleanup.turn_id == active_turn_id);
+    state.pending_terminal_plan_cleanups = retained;
+    flushable
 }
 
 async fn should_preserve_terminal_plan_progress(
@@ -1418,7 +1433,7 @@ async fn should_preserve_terminal_plan_progress(
                 thread_id = %conversation_id,
                 "failed to read thread goal before terminal plan cleanup: {err}"
             );
-            true
+            false
         }
     }
 }
@@ -3798,6 +3813,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replaced_turn_downgrades_in_progress_plan() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let turn_id = "replaced-plan-turn".to_string();
+        let thread_state = new_thread_state();
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
+                turn_id: turn_id.clone(),
+                plan_update: UpdatePlanArgs {
+                    explanation: Some("still working".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "first".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
+            }];
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: turn_id.clone(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some(turn_id.clone()),
+                    reason: codex_protocol::protocol::TurnAbortReason::Replaced,
+                    completed_at: Some(TEST_TURN_COMPLETED_AT),
+                    duration_ms: Some(TEST_TURN_DURATION_MS),
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state,
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        let first = recv_broadcast_message(&mut rx).await?;
+        assert!(matches!(
+            first,
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(_))
+        ));
+
+        let second = recv_broadcast_message(&mut rx).await?;
+        assert!(matches!(
+            second,
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(_))
+        ));
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_handle_turn_complete_preserves_in_progress_plan_with_active_goal() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete_active_goal".to_string();
@@ -3958,6 +4050,177 @@ mod tests {
                 .pending_terminal_plan_cleanups
                 .is_empty(),
             "terminal goal updates consume preserved cleanup state"
+        );
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn terminal_thread_goal_update_retains_active_turn_cleanup() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let turn_id = "active-plan-turn".to_string();
+        let thread_state = new_thread_state();
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(
+                &turn_id,
+                &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: turn_id.clone(),
+                    started_at: Some(42),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                }),
+            );
+            state.pending_terminal_plan_cleanups = vec![PendingTerminalPlanCleanup {
+                turn_id: turn_id.clone(),
+                plan_update: UpdatePlanArgs {
+                    explanation: Some("still working".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "first".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
+            }];
+        }
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: turn_id.clone(),
+                msg: EventMsg::ThreadGoalUpdated(
+                    codex_protocol::protocol::ThreadGoalUpdatedEvent {
+                        thread_id: conversation_id,
+                        turn_id: Some(turn_id.clone()),
+                        goal: codex_protocol::protocol::ThreadGoal {
+                            thread_id: conversation_id,
+                            objective: "finish the work".to_string(),
+                            status: codex_protocol::protocol::ThreadGoalStatus::Complete,
+                            token_budget: None,
+                            tokens_used: 1,
+                            time_used_seconds: 1,
+                            created_at: 1,
+                            updated_at: 2,
+                        },
+                    },
+                ),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state.clone(),
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        let first = recv_broadcast_message(&mut rx).await?;
+        assert!(matches!(
+            first,
+            OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(_))
+        ));
+        assert!(
+            thread_state
+                .lock()
+                .await
+                .pending_terminal_plan_cleanups
+                .len()
+                == 1,
+            "active turn cleanup stays deferred until the turn actually settles"
+        );
+        assert!(rx.try_recv().is_err(), "no cleanup should be emitted");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rollback_discards_preserved_plan_cleanup() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state = new_thread_state();
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
+                turn_id: "rolled-back-turn".to_string(),
+                plan_update: UpdatePlanArgs {
+                    explanation: Some("still working".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "first".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
+            }];
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "rollback-turn".to_string(),
+                msg: EventMsg::ThreadRolledBack(codex_protocol::protocol::ThreadRolledBackEvent {
+                    num_turns: 1,
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state.clone(),
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        assert!(
+            thread_state
+                .lock()
+                .await
+                .pending_terminal_plan_cleanups
+                .is_empty(),
+            "rollback drops cleanup for history it has rewritten"
         );
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
