@@ -469,6 +469,7 @@ impl TestCodexBuilder {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let thread_manager = ThreadManager::new(
             &config,
+            config.prepared_instructions(),
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),

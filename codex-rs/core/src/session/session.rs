@@ -440,6 +440,7 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         runtime_capabilities: Arc<RuntimeCapabilities>,
+        prepared_instructions: PreparedInstructions,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
@@ -947,6 +948,7 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
                 runtime_capabilities,
+                prepared_instructions,
             };
             services
                 .model_client

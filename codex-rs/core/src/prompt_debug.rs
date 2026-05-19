@@ -50,6 +50,7 @@ pub async fn build_prompt_input(
     let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let thread_manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         Arc::clone(&auth_manager),
         SessionSource::Exec,
         environment_manager,

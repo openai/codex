@@ -3,6 +3,7 @@ use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::PreparedInstructions;
 use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
@@ -204,6 +205,7 @@ pub(crate) struct ThreadManagerState {
     models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
     runtime_capabilities: Arc<RuntimeCapabilities>,
+    prepared_instructions: PreparedInstructions,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
@@ -246,6 +248,7 @@ impl ThreadManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: &Config,
+        prepared_instructions: PreparedInstructions,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
@@ -277,6 +280,7 @@ impl ThreadManager {
                 models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
                 runtime_capabilities,
+                prepared_instructions,
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -381,6 +385,7 @@ impl ThreadManager {
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
                 runtime_capabilities,
+                prepared_instructions: PreparedInstructions::default(),
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -1208,6 +1213,7 @@ impl ThreadManagerState {
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
+            prepared_instructions: self.prepared_instructions.clone(),
             config,
             installation_id: self.installation_id.clone(),
             auth_manager,

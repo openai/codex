@@ -231,6 +231,23 @@ async fn keeps_existing_instructions_when_doc_missing() {
     assert_eq!(res, Some(INSTRUCTIONS.to_string()));
 }
 
+#[tokio::test]
+async fn prepared_global_instructions_preserve_project_doc_reads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, Some("prepared")).await;
+    let prepared_instructions = config.prepared_instructions();
+    config.user_instructions = Some("mutated".to_string());
+
+    let res = AgentsMdManager::new(&config)
+        .user_instructions_from_prepared_with_fs(&prepared_instructions, LOCAL_FS.as_ref())
+        .await
+        .expect("prepared instructions should combine with project docs");
+
+    assert_eq!(res, format!("prepared{AGENTS_MD_SEPARATOR}proj doc"));
+}
+
 /// When both the repository root and the working directory contain
 /// AGENTS.md files, their contents are concatenated from root to cwd.
 #[tokio::test]

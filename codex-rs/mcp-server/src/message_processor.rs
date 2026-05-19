@@ -68,6 +68,7 @@ impl MessageProcessor {
             Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
+            config.prepared_instructions(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,

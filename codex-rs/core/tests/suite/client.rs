@@ -1129,6 +1129,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let thread_manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager,
         SessionSource::Exec,
         environment_manager,

@@ -187,6 +187,7 @@ mod tests {
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 &good_config,
+                good_config.prepared_instructions(),
                 auth_manager,
                 SessionSource::Exec,
                 environment_manager,

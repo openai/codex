@@ -503,6 +503,27 @@ pub enum ThreadStoreConfig {
     InMemory { id: String },
 }
 
+/// Instruction text prepared while loading ambient/global configuration.
+///
+/// Project AGENTS.md text is intentionally excluded because it must be read
+/// from the environment selected for the session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreparedInstructions {
+    pub(crate) global_agents_md: Option<String>,
+}
+
+impl PreparedInstructions {
+    fn from_global_agents_md(global_agents_md: Option<crate::agents_md::LoadedAgentsMd>) -> Self {
+        Self {
+            global_agents_md: global_agents_md.map(|loaded| loaded.contents),
+        }
+    }
+
+    fn into_user_instructions(self) -> Option<String> {
+        self.global_agents_md
+    }
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -1197,6 +1218,13 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    /// Returns ambient/global instruction text prepared during config loading.
+    pub fn prepared_instructions(&self) -> PreparedInstructions {
+        PreparedInstructions {
+            global_agents_md: self.user_instructions.clone(),
+        }
+    }
+
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }
@@ -2486,9 +2514,10 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = AgentsMdManager::load_global_instructions(fs, Some(&codex_home))
-            .await
-            .map(|loaded| loaded.contents);
+        let user_instructions = PreparedInstructions::from_global_agents_md(
+            AgentsMdManager::load_global_instructions(fs, Some(&codex_home)).await,
+        )
+        .into_user_instructions();
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()

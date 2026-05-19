@@ -308,6 +308,7 @@ impl MessageProcessor {
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
+                config.prepared_instructions(),
                 auth_manager.clone(),
                 session_source,
                 environment_manager,

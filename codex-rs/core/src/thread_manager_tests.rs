@@ -503,6 +503,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -623,6 +624,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager,
         SessionSource::Exec,
         environment_manager,
@@ -664,6 +666,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -723,6 +726,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -789,6 +793,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -881,6 +886,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -986,6 +992,7 @@ async fn new_uses_active_provider_for_model_refresh() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager,
         SessionSource::Exec,
         environment_manager,
@@ -1206,6 +1213,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -1316,6 +1324,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -1415,6 +1424,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,
@@ -1560,6 +1570,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let (environment_manager, runtime_capabilities) = local_runtime();
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         auth_manager.clone(),
         SessionSource::Exec,
         environment_manager,

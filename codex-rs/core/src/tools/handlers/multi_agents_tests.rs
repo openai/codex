@@ -3732,6 +3732,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let manager = ThreadManager::new(
         &config,
+        config.prepared_instructions(),
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
         SessionSource::Exec,
         environment_manager,

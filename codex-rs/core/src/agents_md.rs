@@ -16,6 +16,7 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
+use crate::config::PreparedInstructions;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
@@ -85,20 +86,43 @@ impl<'a> AgentsMdManager<'a> {
         &self,
         environment: Option<&Environment>,
     ) -> Option<String> {
+        let prepared_instructions = self.config.prepared_instructions();
+        self.user_instructions_from_prepared(&prepared_instructions, environment)
+            .await
+    }
+
+    /// Combines prepared ambient/global instructions with AGENTS.md content
+    /// read from the selected environment.
+    pub(crate) async fn user_instructions_from_prepared(
+        &self,
+        prepared_instructions: &PreparedInstructions,
+        environment: Option<&Environment>,
+    ) -> Option<String> {
         let fs = environment?.get_filesystem();
-        self.user_instructions_with_fs(fs.as_ref()).await
+        self.user_instructions_from_prepared_with_fs(prepared_instructions, fs.as_ref())
+            .await
     }
 
     pub(crate) async fn user_instructions_with_fs(
         &self,
         fs: &dyn ExecutorFileSystem,
     ) -> Option<String> {
+        let prepared_instructions = self.config.prepared_instructions();
+        self.user_instructions_from_prepared_with_fs(&prepared_instructions, fs)
+            .await
+    }
+
+    async fn user_instructions_from_prepared_with_fs(
+        &self,
+        prepared_instructions: &PreparedInstructions,
+        fs: &dyn ExecutorFileSystem,
+    ) -> Option<String> {
         let agents_md_docs = self.read_agents_md(fs).await;
 
         let mut output = String::new();
 
-        if let Some(instructions) = self.config.user_instructions.clone() {
-            output.push_str(&instructions);
+        if let Some(instructions) = prepared_instructions.global_agents_md.as_deref() {
+            output.push_str(instructions);
         }
 
         match agents_md_docs {

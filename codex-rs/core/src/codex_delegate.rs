@@ -75,6 +75,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
+        prepared_instructions: parent_session.services.prepared_instructions.clone(),
         config,
         installation_id: parent_session.installation_id.clone(),
         auth_manager,

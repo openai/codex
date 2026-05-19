@@ -5,6 +5,7 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
+use crate::config::PreparedInstructions;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
@@ -80,4 +81,6 @@ pub(crate) struct SessionServices {
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     /// Startup-selected runtime authority bundle reused by session-owned child spawn paths.
     pub(crate) runtime_capabilities: Arc<RuntimeCapabilities>,
+    /// Ambient/global instruction payload prepared before selected-environment project-doc reads.
+    pub(crate) prepared_instructions: PreparedInstructions,
 }

@@ -174,6 +174,7 @@ use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::PermissionProfileState;
+use crate::config::PreparedInstructions;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
@@ -388,6 +389,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) prepared_instructions: PreparedInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
@@ -453,6 +455,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            prepared_instructions,
             installation_id,
             auth_manager,
             models_manager,
@@ -506,7 +509,7 @@ impl Codex {
 
         let primary_environment = environment_selections.primary_environment();
         let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(primary_environment.as_deref())
+            .user_instructions_from_prepared(&prepared_instructions, primary_environment.as_deref())
             .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -661,6 +664,7 @@ impl Codex {
             agent_control,
             environment_manager,
             runtime_capabilities,
+            prepared_instructions,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
