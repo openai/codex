@@ -111,14 +111,10 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::SystemOverride { .. } => 11,
-            ConfigLayerSource::User { profile, .. } => {
-                if profile.is_some() {
-                    21
-                } else {
-                    20
-                }
-            }
-            ConfigLayerSource::UserOverride { .. } => 20,
+            ConfigLayerSource::User {
+                profile: Some(_), ..
+            } => 21,
+            ConfigLayerSource::User { .. } | ConfigLayerSource::UserOverride { .. } => 20,
             ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,

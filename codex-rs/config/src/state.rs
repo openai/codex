@@ -409,19 +409,18 @@ impl ConfigLayerStack {
     /// Returns a new stack with the user layer copied from `other`, preserving
     /// every non-user layer already present in this stack.
     pub fn with_user_layer_from(&self, other: &Self) -> Self {
-        let user_layers = other
-            .layers
-            .iter()
-            .filter(|layer| is_user_config_layer(&layer.name))
-            .cloned()
-            .collect::<Vec<_>>();
         let mut layers = self
             .layers
             .iter()
             .filter(|layer| !is_user_config_layer(&layer.name))
             .cloned()
             .collect::<Vec<_>>();
-        for user_layer in user_layers {
+        for user_layer in other
+            .layers
+            .iter()
+            .filter(|layer| is_user_config_layer(&layer.name))
+            .cloned()
+        {
             insert_user_layer(&mut layers, user_layer);
         }
         self.with_layers(layers)
@@ -526,31 +525,29 @@ fn is_user_config_layer(layer: &ConfigLayerSource) -> bool {
 
 fn insert_user_layer(layers: &mut Vec<ConfigLayerEntry>, user_layer: ConfigLayerEntry) {
     let index = layers.iter().position(|layer| {
+        let sibling_override_should_insert_before = match (&user_layer.name, &layer.name) {
+            (
+                ConfigLayerSource::User {
+                    file,
+                    profile: None,
+                },
+                ConfigLayerSource::UserOverride {
+                    file: override_file,
+                },
+            ) => user_base_file_has_sibling_override(file, override_file),
+            (
+                ConfigLayerSource::UserOverride {
+                    file: override_file,
+                },
+                ConfigLayerSource::User {
+                    file,
+                    profile: None,
+                },
+            ) => !user_base_file_has_sibling_override(file, override_file),
+            _ => false,
+        };
         layer.name.precedence() > user_layer.name.precedence()
-            || matches!(
-                (&user_layer.name, &layer.name),
-                (
-                    ConfigLayerSource::User {
-                        file,
-                        profile: None,
-                    },
-                    ConfigLayerSource::UserOverride {
-                        file: override_file,
-                    }
-                ) if user_base_file_has_sibling_override(file, override_file)
-            )
-            || matches!(
-                (&user_layer.name, &layer.name),
-                (
-                    ConfigLayerSource::UserOverride {
-                        file: override_file,
-                    },
-                    ConfigLayerSource::User {
-                        file,
-                        profile: None,
-                    }
-                ) if !user_base_file_has_sibling_override(file, override_file)
-            )
+            || sibling_override_should_insert_before
     });
     match index {
         Some(index) => layers.insert(index, user_layer),
@@ -569,9 +566,9 @@ fn user_base_file_has_sibling_override(
 }
 
 fn active_user_layer_index(layers: &[ConfigLayerEntry]) -> Option<usize> {
-    layers.iter().enumerate().rev().find_map(|(index, layer)| {
-        matches!(layer.name, ConfigLayerSource::User { .. }).then_some(index)
-    })
+    layers
+        .iter()
+        .rposition(|layer| matches!(layer.name, ConfigLayerSource::User { .. }))
 }
 
 /// Ensures precedence ordering of config layers is correct. Returns the index

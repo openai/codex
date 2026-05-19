@@ -593,10 +593,9 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         {
             continue;
         }
-        if let Some(config_folder) = layer.config_folder() {
-            if !policy_folders.insert(config_folder.clone()) {
-                continue;
-            }
+        if let Some(config_folder) = layer.config_folder()
+            && policy_folders.insert(config_folder.clone())
+        {
             let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;
             policy_paths.extend(layer_policy_paths);
