@@ -285,7 +285,8 @@ impl MessageProcessor {
         // keep a Codex-side backstop so no-local app-server modes fail safely
         // if a client still invokes one directly.
         self.environment_manager
-            .has_local_environment()
+            .try_local_environment()
+            .is_some()
             .then_some(())
             .ok_or_else(|| internal_error("local environment is not configured"))
     }

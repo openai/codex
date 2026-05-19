@@ -225,21 +225,9 @@ impl EnvironmentManager {
         environment_ids
     }
 
-    /// Returns the configured local environment or a structured runtime error.
-    pub fn require_local_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
-        self.try_local_environment().ok_or_else(|| {
-            ExecServerError::Protocol("local environment is not configured".to_string())
-        })
-    }
-
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)
-    }
-
-    /// Returns whether a local environment is configured.
-    pub fn has_local_environment(&self) -> bool {
-        self.local_environment.is_some()
     }
 
     /// Returns the default environment or local environment when either exists.
@@ -461,13 +449,6 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
-        let err = manager
-            .require_local_environment()
-            .expect_err("local environment should be unavailable");
-        assert_eq!(
-            err.to_string(),
-            "exec-server protocol error: local environment is not configured"
-        );
     }
 
     #[tokio::test]
@@ -495,9 +476,7 @@ mod tests {
         ));
         assert!(Arc::ptr_eq(
             &environment,
-            &manager
-                .require_local_environment()
-                .expect("local environment")
+            &manager.try_local_environment().expect("local environment")
         ));
         assert!(manager.try_local_environment().is_some());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
@@ -659,9 +638,7 @@ mod tests {
             &manager
                 .get_environment(LOCAL_ENVIRONMENT_ID)
                 .expect("local environment"),
-            &manager
-                .require_local_environment()
-                .expect("local environment")
+            &manager.try_local_environment().expect("local environment")
         ));
     }
 
@@ -703,9 +680,7 @@ mod tests {
         ));
         assert!(Arc::ptr_eq(
             &environment,
-            &manager
-                .require_local_environment()
-                .expect("local environment")
+            &manager.try_local_environment().expect("local environment")
         ));
         assert!(!environment.is_remote());
     }
@@ -719,9 +694,7 @@ mod tests {
         )
         .await;
 
-        let environment = manager
-            .require_local_environment()
-            .expect("local environment");
+        let environment = manager.try_local_environment().expect("local environment");
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::create_for_tests(
@@ -734,9 +707,7 @@ mod tests {
             ),
         )
         .await;
-        let environment = manager
-            .require_local_environment()
-            .expect("local environment");
+        let environment = manager.try_local_environment().expect("local environment");
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
     }
 
