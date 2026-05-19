@@ -238,7 +238,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_provider_requires_runtime_paths_for_local_environment() {
-        let provider = DefaultEnvironmentProvider::new(/*exec_server_url*/ None, None);
+        let provider = DefaultEnvironmentProvider::new(
+            /*exec_server_url*/ None, /*local_runtime_paths*/ None,
+        );
         let err = provider
             .snapshot()
             .await

@@ -114,11 +114,7 @@ impl EnvironmentManager {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
         let provider = DefaultEnvironmentProvider::new(exec_server_url, local_runtime_paths);
-        match Self::from_snapshot(
-            provider
-                .snapshot_inner()
-                .expect("default provider should create valid environments"),
-        ) {
+        match provider.snapshot_inner().and_then(Self::from_snapshot) {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
@@ -132,9 +128,10 @@ impl EnvironmentManager {
     ) -> Self {
         let local_environment = Environment::local(local_runtime_paths.clone());
         let provider = DefaultEnvironmentProvider::new(exec_server_url, Some(local_runtime_paths));
-        let mut snapshot = provider
-            .snapshot_inner()
-            .expect("default provider should create valid environments");
+        let mut snapshot = match provider.snapshot_inner() {
+            Ok(snapshot) => snapshot,
+            Err(err) => panic!("default provider should create valid environments: {err}"),
+        };
         if snapshot.local_environment.is_none() {
             snapshot.local_environment = Some(local_environment);
         }

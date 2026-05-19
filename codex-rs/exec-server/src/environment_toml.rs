@@ -489,9 +489,12 @@ mod tests {
 
     #[tokio::test]
     async fn toml_provider_requires_runtime_paths_for_local_environment() {
-        let provider =
-            TomlEnvironmentProvider::new_with_config_dir(EnvironmentsToml::default(), None, None)
-                .expect("provider");
+        let provider = TomlEnvironmentProvider::new_with_config_dir(
+            EnvironmentsToml::default(),
+            /*config_dir*/ None,
+            /*local_runtime_paths*/ None,
+        )
+        .expect("provider");
         let err = provider
             .snapshot()
             .await
