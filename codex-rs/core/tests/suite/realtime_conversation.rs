@@ -2,7 +2,13 @@ use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_core::NewThread;
+use codex_core::RuntimeCapabilities;
+use codex_core::ThreadManager;
+use codex_core::resolve_installation_id;
 use codex_core::test_support::auth_manager_from_auth;
+use codex_core::thread_store_from_config;
+use codex_extension_api::empty_extension_registry;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
@@ -28,6 +34,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_token_count;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::start_mock_server;
@@ -48,6 +55,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Match;
@@ -463,6 +471,52 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
     );
 
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn isolated_runtime_rejects_conversation_start_at_core_boundary() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = load_default_config_for_test(&codex_home).await;
+    let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let thread_manager = ThreadManager::new(
+        &config,
+        auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
+        SessionSource::Exec,
+        environment_manager,
+        Arc::new(RuntimeCapabilities::isolated()),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        installation_id,
+        /*attestation_provider*/ None,
+    );
+    let NewThread { thread: codex, .. } = thread_manager.start_thread(config).await?;
+
+    codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(err),
+        }) => Some(err.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        err,
+        "unsupported operation: realtime conversation requires local Codex runtime"
+    );
+
     Ok(())
 }
 

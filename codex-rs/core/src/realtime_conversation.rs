@@ -1,6 +1,7 @@
 use crate::client::ModelClient;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
+use crate::runtime_capabilities::RuntimeMode;
 use crate::session::session::Session;
 use anyhow::Context;
 use async_channel::Receiver;
@@ -610,6 +611,12 @@ async fn prepare_realtime_start(
     sess: &Arc<Session>,
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
+    if sess.services.runtime_capabilities.mode() == RuntimeMode::Isolated {
+        return Err(CodexErr::UnsupportedOperation(
+            "realtime conversation requires local Codex runtime".to_string(),
+        ));
+    }
+
     let provider = sess.provider().await;
     let auth_manager = sess
         .services
