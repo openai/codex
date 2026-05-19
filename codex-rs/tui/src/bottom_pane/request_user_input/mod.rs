@@ -4,7 +4,7 @@
 //! - Each question can be answered by selecting one option and/or providing notes.
 //! - Notes are stored per question and appended as extra answers.
 //! - Typing while focused on options jumps into notes to keep freeform input fast.
-//! - Enter advances to the next question; the last question submits all answers.
+//! - The composer submit binding advances to the next question; the last question submits all answers.
 //! - Freeform-only questions submit an empty answer list when empty.
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -29,8 +29,10 @@ use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::history_cell;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ListKeymap;
+use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
 
 #[cfg(test)]
@@ -140,6 +142,7 @@ pub(crate) struct RequestUserInputOverlay {
     done: bool,
     pending_submission_draft: Option<ComposerDraft>,
     confirm_unanswered: Option<ScrollState>,
+    composer_submit_keys: Vec<KeyBinding>,
     list_keymap: ListKeymap,
 }
 
@@ -158,7 +161,7 @@ impl RequestUserInputOverlay {
             has_input_focus,
             enhanced_keys_supported,
             disable_paste_burst,
-            crate::keymap::RuntimeKeymap::defaults().list,
+            RuntimeKeymap::defaults(),
         )
     }
 
@@ -168,7 +171,7 @@ impl RequestUserInputOverlay {
         has_input_focus: bool,
         enhanced_keys_supported: bool,
         disable_paste_burst: bool,
-        list_keymap: ListKeymap,
+        keymap: RuntimeKeymap,
     ) -> Self {
         // Use the same composer widget, but disable popups/slash-commands and
         // image-path attachment so it behaves like a focused notes field.
@@ -180,6 +183,7 @@ impl RequestUserInputOverlay {
             disable_paste_burst,
             ChatComposerConfig::plain_text(),
         );
+        composer.set_keymap_bindings(&keymap);
         // The overlay renders its own footer hints, so keep the composer footer empty.
         composer.set_footer_hint_override(Some(Vec::new()));
         let mut overlay = Self {
@@ -193,7 +197,8 @@ impl RequestUserInputOverlay {
             done: false,
             pending_submission_draft: None,
             confirm_unanswered: None,
-            list_keymap,
+            composer_submit_keys: keymap.composer.submit.clone(),
+            list_keymap: keymap.list,
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -1201,7 +1206,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     self.sync_composer_placeholder();
                     return;
                 }
-                if matches!(key_event.code, KeyCode::Enter) {
+                if self.composer_submit_keys.is_pressed(key_event) {
                     self.ensure_selected_for_notes();
                     self.pending_submission_draft = Some(self.capture_composer_draft());
                     let (result, _) = self.composer.handle_key_event(key_event);
@@ -2372,6 +2377,66 @@ mod tests {
 
         assert_eq!(overlay.answers[0].answer_committed, false);
         assert_eq!(overlay.unanswered_count(), 2);
+    }
+
+    #[test]
+    fn freeform_shift_enter_inserts_newline_without_advancing() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_without_options("q2", "More"),
+                ],
+            ),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ true,
+            /*disable_paste_burst*/ false,
+        );
+
+        overlay
+            .composer
+            .set_text_content("Draft".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+        assert_eq!(overlay.current_index(), 0);
+        assert_eq!(overlay.composer.current_text_with_pending(), "Draft\n");
+        assert_eq!(overlay.answers[0].answer_committed, false);
+    }
+
+    #[test]
+    fn freeform_uses_configured_composer_submit_binding() {
+        let (tx, _rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![crate::key_hint::ctrl(KeyCode::Char('j'))];
+        let mut overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_without_options("q2", "More"),
+                ],
+            ),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+
+        overlay
+            .composer
+            .set_text_content("Draft".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+
+        assert_eq!(overlay.current_index(), 1);
+        assert_eq!(overlay.answers[0].answer_committed, true);
     }
 
     #[test]
