@@ -405,8 +405,9 @@ fn format_config_layer_source(source: &ConfigLayerSource) -> String {
         }
         ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
             format!(
-                "project override ({}/config.override.toml)",
-                dot_codex_folder.as_path().display()
+                "project override ({}/{})",
+                dot_codex_folder.as_path().display(),
+                codex_config::CONFIG_OVERRIDE_TOML_FILE,
             )
         }
         ConfigLayerSource::SessionFlags => "session-flags".to_string(),
@@ -560,6 +561,7 @@ mod tests {
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use insta::assert_snapshot;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
     use toml::Value as TomlValue;
@@ -624,6 +626,48 @@ mod tests {
         assert!(rendered.contains("reason: project is untrusted"));
         assert!(rendered.contains("Requirements:"));
         assert!(rendered.contains("  <none>"));
+    }
+
+    #[test]
+    fn debug_config_output_lists_override_layers() {
+        let system_file = if cfg!(windows) {
+            absolute_path("C:\\etc\\codex\\config.override.toml")
+        } else {
+            absolute_path("/etc/codex/config.override.toml")
+        };
+        let user_file = if cfg!(windows) {
+            absolute_path("C:\\Users\\brent\\.codex\\config.override.toml")
+        } else {
+            absolute_path("/home/brent/.codex/config.override.toml")
+        };
+        let project_folder = if cfg!(windows) {
+            absolute_path("C:\\repo\\.codex")
+        } else {
+            absolute_path("/repo/.codex")
+        };
+        let stack = ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SystemOverride { file: system_file },
+                    empty_toml_table(),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::UserOverride { file: user_file },
+                    empty_toml_table(),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::ProjectOverride {
+                        dot_codex_folder: project_folder,
+                    },
+                    empty_toml_table(),
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        assert_snapshot!(render_to_text(&render_debug_config_lines(&stack)));
     }
 
     #[test]
