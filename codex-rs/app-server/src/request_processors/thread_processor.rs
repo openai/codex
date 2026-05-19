@@ -1,5 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -54,6 +56,25 @@ fn collect_resume_override_mismatches(
                 "cwd requested={} active={}",
                 requested_cwd_path.display(),
                 config_snapshot.cwd.display()
+            ));
+        }
+    }
+    if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
+        let base_cwd = request
+            .cwd
+            .as_deref()
+            .map(|cwd| {
+                AbsolutePathBuf::resolve_path_against_base(cwd, config_snapshot.cwd.as_path())
+            })
+            .unwrap_or_else(|| config_snapshot.cwd.clone());
+        let requested_runtime_workspace_roots = requested_runtime_workspace_roots
+            .iter()
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path()))
+            .collect::<Vec<_>>();
+        if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
+            mismatch_details.push(format!(
+                "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
+                config_snapshot.workspace_roots
             ));
         }
     }
@@ -802,6 +823,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -835,6 +857,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -975,7 +998,7 @@ impl ThreadRequestProcessor {
         let requested_permissions_trust_project =
             requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
         let effective_permissions_trust_project = permission_profile_trusts_project(
-            &config.permissions.permission_profile(),
+            &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
 
@@ -1171,11 +1194,11 @@ impl ThreadRequestProcessor {
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
             cwd: config_snapshot.cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -1212,19 +1235,22 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
+        runtime_workspace_roots: Option<Vec<PathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
-        let mut overrides = ConfigOverrides {
+        ConfigOverrides {
             model,
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
+            workspace_roots: runtime_workspace_roots,
+            default_permissions: permissions,
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -1236,9 +1262,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             ..Default::default()
-        };
-        apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
-        overrides
+        }
     }
 
     fn parse_environment_selections(
@@ -2349,6 +2373,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2384,6 +2409,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2521,11 +2547,11 @@ impl ThreadRequestProcessor {
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
+                    runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -2985,6 +3011,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3050,6 +3077,7 @@ impl ThreadRequestProcessor {
             model_provider,
             service_tier,
             cwd,
+            runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -3179,11 +3207,11 @@ impl ThreadRequestProcessor {
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
@@ -3903,7 +3931,9 @@ fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) 
 
     if matches!(
         overrides.default_permissions.as_deref(),
-        Some(":workspace" | ":danger-no-sandbox")
+        Some(
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE | BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS
+        )
     ) {
         return true;
     }

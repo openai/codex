@@ -20,6 +20,16 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
+    /// Returns the tool call id exposed to `PostToolUse` hooks for this output.
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        call_id.to_string()
+    }
+
+    /// Returns the tool input exposed to `PostToolUse` hooks for this output.
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        None
+    }
+
     /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
     ///
     /// Tool handlers decide whether a tool participates in `PostToolUse`, but
@@ -50,6 +60,14 @@ where
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         (**self).to_response_item(call_id, payload)
+    }
+
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        (**self).post_tool_use_id(call_id)
+    }
+
+    fn post_tool_use_input(&self, payload: &ToolPayload) -> Option<JsonValue> {
+        (**self).post_tool_use_input(payload)
     }
 
     fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {

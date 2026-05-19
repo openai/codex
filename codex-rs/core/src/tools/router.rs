@@ -6,19 +6,19 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
-use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::build_specs_with_discoverable_tools;
-use codex_extension_api::ExtensionToolExecutor;
+use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::ToolsConfig;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -40,33 +40,16 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
-    pub(crate) extension_tool_executors: Vec<Arc<dyn ExtensionToolExecutor>>,
+    pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
 impl ToolRouter {
-    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
-        let ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            discoverable_tools,
-            extension_tool_executors,
-            dynamic_tools,
-        } = params;
-        let builder = build_specs_with_discoverable_tools(
-            config,
-            mcp_tools,
-            deferred_mcp_tools,
-            discoverable_tools,
-            &extension_tool_executors,
-            dynamic_tools,
-        );
-        let (specs, registry) = builder.build();
-        let model_visible_specs = specs
-            .into_iter()
-            .filter(|spec| !is_hidden_by_code_mode_only(config, &registry, spec))
-            .collect();
+    pub fn from_turn_context(turn_context: &TurnContext, params: ToolRouterParams<'_>) -> Self {
+        build_tool_router(turn_context, params)
+    }
 
+    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
             model_visible_specs,
@@ -75,6 +58,19 @@ impl ToolRouter {
 
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_tool_names_for_test(&self) -> Vec<ToolName> {
+        self.registry.tool_names_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_exposure_for_test(
+        &self,
+        name: &ToolName,
+    ) -> Option<crate::tools::registry::ToolExposure> {
+        self.registry.tool_exposure(name)
     }
 
     pub(crate) fn create_diff_consumer(
@@ -140,6 +136,7 @@ impl ToolRouter {
         }
     }
 
+    #[allow(dead_code)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
@@ -149,6 +146,53 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            /*terminal_outcome_reached*/ None,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Arc<AtomicBool>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            Some(terminal_outcome_reached),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_tool_call_with_code_mode_result_inner(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -167,26 +211,15 @@ impl ToolRouter {
             payload,
         };
 
-        self.registry.dispatch_any(invocation).await
+        self.registry
+            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
+            .await
     }
 }
 
-fn is_hidden_by_code_mode_only(
-    config: &ToolsConfig,
-    registry: &ToolRegistry,
-    spec: &ToolSpec,
-) -> bool {
-    if !config.code_mode_only_enabled || !codex_code_mode::is_code_mode_nested_tool(spec.name()) {
-        return false;
-    }
-
-    let exposure = registry
-        .tool_exposure(&ToolName::plain(spec.name()))
-        .unwrap_or(ToolExposure::Direct);
-    exposure != ToolExposure::DirectModelOnly
-}
-
-pub(crate) fn extension_tool_executors(session: &Session) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+pub(crate) fn extension_tool_executors(
+    session: &Session,
+) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
         .extensions

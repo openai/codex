@@ -247,7 +247,7 @@ fn active_plugin_version_prefers_default_local_version_when_multiple_versions_ex
 }
 
 #[test]
-fn active_plugin_version_returns_last_sorted_version_when_default_is_missing() {
+fn active_plugin_version_returns_latest_version_when_default_is_missing() {
     let tmp = tempdir().unwrap();
     write_plugin(
         &tmp.path().join("plugins/cache/debug"),
@@ -266,6 +266,76 @@ fn active_plugin_version_returns_last_sorted_version_when_default_is_missing() {
         store.active_plugin_version(&plugin_id),
         Some("fedcba9876543210".to_string())
     );
+}
+
+#[test]
+fn active_plugin_version_compares_semver_versions_semantically() {
+    let tmp = tempdir().unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/9.0.0",
+        "sample-plugin",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/10.0.0",
+        "sample-plugin",
+    );
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("10.0.0".to_string())
+    );
+}
+
+#[test]
+fn install_with_new_version_keeps_existing_plugin_root_and_prunes_old_versions() {
+    let tmp = tempdir().unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    write_plugin_with_version(tmp.path(), "v1", "sample-plugin", Some("1.0.0"));
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("v1")).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    write_plugin_with_version(tmp.path(), "v2", "sample-plugin", Some("2.0.0"));
+    store
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("v2")).unwrap(),
+            plugin_id.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.active_plugin_version(&plugin_id),
+        Some("2.0.0".to_string())
+    );
+    assert!(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/2.0.0")
+            .is_dir()
+    );
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/debug/sample-plugin/1.0.0")
+            .exists()
+    );
+}
+
+#[test]
+fn old_plugin_version_would_stay_active_for_local_or_later_versions() {
+    assert!(old_plugin_version_would_stay_active(
+        DEFAULT_PLUGIN_VERSION,
+        "1.0.0"
+    ));
+    assert!(old_plugin_version_would_stay_active("10.0.0", "9.0.0"));
+    assert!(!old_plugin_version_would_stay_active("1.0.0", "2.0.0"));
 }
 
 #[test]

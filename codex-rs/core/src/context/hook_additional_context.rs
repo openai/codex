@@ -23,9 +23,17 @@ impl StickyHookAdditionalContext {
 }
 
 impl ContextualUserFragment for HookAdditionalContext {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<hook_context>";
-    const END_MARKER: &'static str = "</hook_context>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<hook_context>", "</hook_context>")
+    }
 
     fn body(&self) -> String {
         self.text.clone()
@@ -33,9 +41,17 @@ impl ContextualUserFragment for HookAdditionalContext {
 }
 
 impl ContextualUserFragment for StickyHookAdditionalContext {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<hook_context_sticky>";
-    const END_MARKER: &'static str = "</hook_context_sticky>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<hook_context_sticky>", "</hook_context_sticky>")
+    }
 
     fn body(&self) -> String {
         self.text.clone()

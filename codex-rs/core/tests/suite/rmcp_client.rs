@@ -105,24 +105,29 @@ fn read_only_user_turn_with_model(
     let cwd = fixture.cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
-    Op::UserTurn {
+    Op::UserInput {
         items: vec![UserInput::Text {
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        final_output_json_schema: None,
-        cwd,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: None,
-        sandbox_policy,
-        permission_profile,
-        model,
-        effort: None,
-        summary: None,
-        service_tier: None,
-        collaboration_mode: None,
-        personality: None,
         environments: None,
+        final_output_json_schema: None,
+        responsesapi_client_metadata: None,
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd: Some(cwd),
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: Some(sandbox_policy),
+            permission_profile,
+            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Default,
+                settings: codex_protocol::config_types::Settings {
+                    model,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -332,6 +337,7 @@ fn insert_mcp_server(
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth: None,
             oauth_resource: None,
             tools: HashMap::new(),
         },
@@ -479,7 +485,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -602,7 +608,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     let expected_cwd = expected_cwd
@@ -655,7 +661,7 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     let expected_cwd = expected_cwd
@@ -774,7 +780,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     wait_for_mcp_server(&fixture, server_name).await?;
@@ -872,7 +878,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -989,7 +995,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -1070,7 +1076,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     wait_for_mcp_server(&fixture, server_name).await?;
 
@@ -1202,7 +1208,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     wait_for_mcp_server(&fixture, server_name).await?;
 
@@ -1337,7 +1343,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1439,7 +1445,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     fixture
         .codex
@@ -1557,7 +1563,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1649,7 +1655,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
 
     fixture
@@ -1832,7 +1838,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     // Phase 4: submit the user turn that should trigger the MCP tool call.
     fixture
@@ -2018,7 +2024,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                 },
             );
         })
-        .build_remote_aware(&server)
+        .build_with_remote_env(&server)
         .await?;
     // Phase 5: wait for MCP startup before the turn is submitted, which keeps
     // failures tied to server startup/discovery.

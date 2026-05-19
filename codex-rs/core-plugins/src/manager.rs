@@ -37,6 +37,7 @@ use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -494,7 +495,7 @@ impl PluginsManager {
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_enabled,
@@ -542,7 +543,7 @@ impl PluginsManager {
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
             plugin_hooks_feature_enabled,
@@ -585,14 +586,7 @@ impl PluginsManager {
         }
     }
 
-    fn remote_installed_plugin_configs(
-        &self,
-        config: &PluginsConfigInput,
-    ) -> HashMap<String, PluginConfig> {
-        if !config.remote_plugin_enabled {
-            return HashMap::new();
-        }
-
+    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -602,6 +596,39 @@ impl PluginsManager {
         };
 
         remote_installed_plugins_to_config(plugins, &self.store)
+    }
+
+    pub fn build_remote_installed_plugin_marketplaces_from_cache(
+        &self,
+        visible_scopes: &[RemotePluginScope],
+    ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let plugins = cache.as_ref()?;
+        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
+    }
+
+    pub async fn build_and_cache_remote_installed_plugin_marketplaces(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let plugins = crate::remote::fetch_remote_installed_plugins(
+            &remote_plugin_service_config(config),
+            auth,
+        )
+        .await?;
+        let marketplaces =
+            crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
+        let changed = self.write_remote_installed_plugins_cache(plugins);
+        if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
+            on_effective_plugins_changed();
+        }
+        Ok(marketplaces)
     }
 
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
@@ -667,7 +694,7 @@ impl PluginsManager {
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -681,13 +708,13 @@ impl PluginsManager {
         );
     }
 
-    fn maybe_start_remote_installed_plugin_bundle_sync(
+    pub fn maybe_start_remote_installed_plugin_bundle_sync(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -1504,25 +1531,23 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            if config.remote_plugin_enabled {
-                let config = config.clone();
-                let manager = Arc::clone(self);
-                let auth_manager = auth_manager.clone();
-                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
-                tokio::spawn(async move {
-                    let auth = auth_manager.auth().await;
-                    manager.maybe_start_remote_installed_plugins_cache_refresh(
-                        &config,
-                        auth.clone(),
-                        on_effective_plugins_changed.clone(),
-                    );
-                    manager.maybe_start_remote_installed_plugin_bundle_sync(
-                        &config,
-                        auth,
-                        on_effective_plugins_changed,
-                    );
-                });
-            }
+            let config_for_remote_sync = config.clone();
+            let manager = Arc::clone(self);
+            let auth_manager_for_remote_sync = auth_manager.clone();
+            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+            tokio::spawn(async move {
+                let auth = auth_manager_for_remote_sync.auth().await;
+                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                    &config_for_remote_sync,
+                    auth.clone(),
+                    on_effective_plugins_changed.clone(),
+                );
+                manager.maybe_start_remote_installed_plugin_bundle_sync(
+                    &config_for_remote_sync,
+                    auth,
+                    on_effective_plugins_changed,
+                );
+            });
 
             let config = config.clone();
             let manager = Arc::clone(self);
@@ -2006,10 +2031,10 @@ pub(crate) fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
     // Plugin entries remain persisted user config only.
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn configured_plugins_from_user_config_value(

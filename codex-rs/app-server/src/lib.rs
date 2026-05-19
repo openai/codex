@@ -8,7 +8,6 @@ use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
@@ -42,7 +41,6 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -401,12 +399,16 @@ pub enum PluginStartupTasks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
+    pub remote_control_enabled: bool,
+    pub install_shutdown_signal_handler: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
     fn default() -> Self {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
+            remote_control_enabled: false,
+            install_shutdown_signal_handler: true,
         }
     }
 }
@@ -514,9 +516,15 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let state_db_result = rollout_state_db::try_init(&config).await;
-    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
-    let state_db = state_db_result.ok();
+    let state_db = match rollout_state_db::try_init(&config).await {
+        Ok(state_db) => Some(state_db),
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to initialize sqlite state runtime under {}: {err}",
+                config.sqlite_home.display()
+            )));
+        }
+    };
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -581,7 +589,7 @@ pub async fn run_main_with_transport_options(
         });
     }
     if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+        codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
@@ -633,16 +641,13 @@ pub async fn run_main_with_transport_options(
         }
     }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    if let Some(err) = &state_db_init_error {
-        error!("failed to initialize sqlite state db: {err}");
-    }
-
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
+    let graceful_signal_restart_enabled =
+        runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
 
     match &transport {
@@ -681,15 +686,15 @@ pub async fn run_main_with_transport_options(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    let remote_control_config_enabled = config.features.enabled(Feature::RemoteControl);
-    let remote_control_enabled = remote_control_config_enabled && state_db.is_some();
-    if remote_control_config_enabled && state_db.is_none() {
+    let remote_control_requested = runtime_options.remote_control_enabled;
+    let remote_control_enabled = remote_control_requested && state_db.is_some();
+    if remote_control_requested && state_db.is_none() {
         error!("remote control disabled because sqlite state db is unavailable");
     }
     if transport_accept_handles.is_empty() && !remote_control_enabled {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            if remote_control_config_enabled && state_db.is_none() {
+            if remote_control_requested && state_db.is_none() {
                 "no transport configured; remote control disabled because sqlite state db is unavailable"
             } else {
                 "no transport configured; use --listen or enable remote control"
@@ -999,14 +1004,9 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         remote_control_status = status.clone();
+                        let notification = ServerNotification::RemoteControlStatusChanged(status);
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
-                                RemoteControlStatusChangedNotification {
-                                    status: status.status,
-                                    installation_id: status.installation_id,
-                                    environment_id: status.environment_id,
-                                },
-                            ))
+                            .send_server_notification(notification)
                             .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
