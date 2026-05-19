@@ -46,9 +46,7 @@ impl AttestationProvider for AppServerAttestationProvider {
         let outgoing = self.outgoing.upgrade();
         let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
-            let Some(outgoing) = outgoing else {
-                return None;
-            };
+            let outgoing = outgoing?;
             request_attestation_header_value_with_timeout(
                 outgoing,
                 thread_state_manager,
