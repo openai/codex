@@ -63,6 +63,11 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
+pub(crate) struct InitializedTerminal {
+    pub(crate) terminal: Terminal,
+    pub(crate) enhanced_keys_supported: bool,
+}
+
 pub(crate) fn running_in_vscode_terminal() -> bool {
     keyboard_modes::running_in_vscode_terminal()
 }
@@ -334,7 +339,7 @@ fn flush_terminal_input_buffer() {
 pub(crate) fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub fn init() -> Result<Terminal> {
+pub(crate) fn init() -> Result<InitializedTerminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
     }
@@ -351,20 +356,57 @@ pub fn init() -> Result<Terminal> {
     let backend = CrosstermBackend::new(stdout());
 
     #[cfg(unix)]
-    let cursor_pos =
-        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
-            Ok(Some(pos)) => pos,
-            Ok(None) => {
-                tracing::warn!("initial cursor position probe timed out; defaulting to origin");
-                Position { x: 0, y: 0 }
+    let startup_probe = {
+        use crate::terminal_probe::StartupKeyboardEnhancementProbe;
+
+        let started_at = std::time::Instant::now();
+        let keyboard_probe = if keyboard_modes::keyboard_enhancement_disabled() {
+            StartupKeyboardEnhancementProbe::Skip
+        } else {
+            StartupKeyboardEnhancementProbe::Query
+        };
+        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
+        {
+            Ok(probe) => {
+                tracing::info!(
+                    duration_ms = %started_at.elapsed().as_millis(),
+                    cursor_position = probe.cursor_position.is_some(),
+                    default_colors = probe.default_colors.is_some(),
+                    keyboard_enhancement_supported = ?probe.keyboard_enhancement_supported,
+                    "terminal startup probes completed"
+                );
+                probe
             }
             Err(err) => {
                 tracing::warn!(
-                    "failed to read initial cursor position; defaulting to origin: {err}"
+                    duration_ms = %started_at.elapsed().as_millis(),
+                    "terminal startup probes failed: {err}"
                 );
-                Position { x: 0, y: 0 }
+                crate::terminal_probe::StartupProbe {
+                    cursor_position: None,
+                    default_colors: None,
+                    keyboard_enhancement_supported: None,
+                }
             }
-        };
+        }
+    };
+
+    #[cfg(unix)]
+    crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
+
+    #[cfg(unix)]
+    let cursor_pos = match startup_probe.cursor_position {
+        Some(pos) => pos,
+        None => {
+            tracing::warn!("initial cursor position probe timed out; defaulting to origin");
+            Position { x: 0, y: 0 }
+        }
+    };
+
+    #[cfg(unix)]
+    let enhanced_keys_supported = startup_probe
+        .keyboard_enhancement_supported
+        .unwrap_or(/*default*/ false);
 
     #[cfg(not(unix))]
     let mut backend = CrosstermBackend::new(stdout());
@@ -372,8 +414,15 @@ pub fn init() -> Result<Terminal> {
     #[cfg(not(unix))]
     let cursor_pos = cursor_position_with_crossterm(&mut backend);
 
+    #[cfg(not(unix))]
+    let enhanced_keys_supported =
+        !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
+
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
-    Ok(tui)
+    Ok(InitializedTerminal {
+        terminal: tui,
+        enhanced_keys_supported,
+    })
 }
 
 #[cfg(not(unix))]
@@ -382,13 +431,6 @@ fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Pos
         tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
         Position { x: 0, y: 0 }
     })
-}
-
-#[cfg(unix)]
-fn detect_keyboard_enhancement_supported() -> bool {
-    crate::terminal_probe::keyboard_enhancement_supported(crate::terminal_probe::DEFAULT_TIMEOUT)
-        .unwrap_or(/*default*/ None)
-        .unwrap_or(/*default*/ false)
 }
 
 #[cfg(not(unix))]
@@ -461,14 +503,10 @@ where
 }
 
 impl Tui {
-    pub fn new(terminal: Terminal) -> Self {
+    pub fn new(terminal: Terminal, enhanced_keys_supported: bool) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
-        // Detect keyboard enhancement support before any EventStream is created so the
-        // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = !keyboard_modes::keyboard_enhancement_disabled()
-            && detect_keyboard_enhancement_supported();
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();

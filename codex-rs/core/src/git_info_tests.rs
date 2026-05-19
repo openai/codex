@@ -2,6 +2,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
+use codex_git_utils::get_git_repo_root_with_fs;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::recent_commits;
@@ -523,6 +524,20 @@ async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp.path().abs())
             .await
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn get_git_repo_root_with_fs_detects_gitdir_pointer() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proj = tmp.path().join("proj");
+    let nested = proj.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(proj.join(".git"), "gitdir: /tmp/fake-worktree\n").unwrap();
+
+    assert_eq!(
+        get_git_repo_root_with_fs(LOCAL_FS.as_ref(), &nested.abs()).await,
+        Some(proj.abs())
     );
 }
 

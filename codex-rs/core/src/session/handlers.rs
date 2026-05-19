@@ -298,7 +298,9 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
-    sess.enqueue_mailbox_communication(communication);
+    sess.input_queue
+        .enqueue_mailbox_communication(communication)
+        .await;
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -617,12 +619,14 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.guardian_review_session.shutdown().await;
 }
 
-fn emit_thread_stop_lifecycle(sess: &Session) {
+async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
-        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
-            session_store: &sess.services.session_extension_data,
-            thread_store: &sess.services.thread_extension_data,
-        });
+        contributor
+            .on_thread_stop(codex_extension_api::ThreadStopInput {
+                session_store: &sess.services.session_extension_data,
+                thread_store: &sess.services.thread_extension_data,
+            })
+            .await;
     }
 }
 
@@ -641,7 +645,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
-    emit_thread_stop_lifecycle(sess.as_ref());
+    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -854,7 +858,7 @@ pub(super) async fn submission_loop(
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref());
+        emit_thread_stop_lifecycle(sess.as_ref()).await;
     }
     debug!("Agent loop exited");
 }
@@ -896,7 +900,9 @@ Approved action:
     }];
 
     if let Err(items) = sess.inject_response_items(items).await {
-        sess.queue_response_items_for_next_turn(items).await;
+        sess.input_queue
+            .queue_response_items_for_next_turn(items)
+            .await;
     }
 }
 
