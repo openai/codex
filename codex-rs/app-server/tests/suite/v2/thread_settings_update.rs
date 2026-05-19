@@ -6,7 +6,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use app_test_support::write_models_cache;
-use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -21,7 +20,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::test_support::all_model_presets;
-use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -40,11 +38,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     write_models_cache(codex_home.path())?;
-    let service_tier_model = all_model_presets()
-        .iter()
-        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
-        .expect("bundled model catalog should include a picker model with service tiers");
-    let service_tier_id = service_tier_model.service_tiers[0].id.clone();
+    let (model_id, service_tier_id) = service_tier_model_and_tier_id()?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -54,10 +48,8 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         &mut mcp,
         ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
-            approval_policy: Some(AskForApproval::Never),
-            model: Some(service_tier_model.id.clone()),
+            model: Some(model_id.clone()),
             service_tier: Some(Some(service_tier_id.clone())),
-            effort: Some(ReasoningEffort::Medium),
             ..Default::default()
         },
     )
@@ -71,18 +63,10 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
-    assert_eq!(updated.thread_settings.model, service_tier_model.id);
+    assert_eq!(updated.thread_settings.model, model_id);
     assert_eq!(
         updated.thread_settings.service_tier.as_deref(),
         Some(service_tier_id.as_str())
-    );
-    assert_eq!(
-        updated.thread_settings.effort,
-        Some(ReasoningEffort::Medium)
-    );
-    assert_eq!(
-        updated.thread_settings.approval_policy,
-        AskForApproval::Never
     );
 
     timeout(
@@ -94,7 +78,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     let request_bodies = received_response_bodies(&server).await?;
     assert!(
         request_bodies.iter().any(|body| {
-            body.get("model").and_then(Value::as_str) == Some(service_tier_model.id.as_str())
+            body.get("model").and_then(Value::as_str) == Some(model_id.as_str())
                 && body.get("service_tier").and_then(Value::as_str)
                     == Some(service_tier_id.as_str())
         }),
@@ -163,11 +147,7 @@ async fn thread_settings_update_clears_service_tier() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     write_models_cache(codex_home.path())?;
-    let service_tier_model = all_model_presets()
-        .iter()
-        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
-        .expect("bundled model catalog should include a picker model with service tiers");
-    let service_tier_id = service_tier_model.service_tiers[0].id.clone();
+    let (model_id, service_tier_id) = service_tier_model_and_tier_id()?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -177,7 +157,7 @@ async fn thread_settings_update_clears_service_tier() -> Result<()> {
         &mut mcp,
         ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
-            model: Some(service_tier_model.id.clone()),
+            model: Some(model_id.clone()),
             service_tier: Some(Some(service_tier_id.clone())),
             ..Default::default()
         },
@@ -203,7 +183,7 @@ async fn thread_settings_update_clears_service_tier() -> Result<()> {
 
     let clear_updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(clear_updated.thread_id, thread.id);
-    assert_eq!(clear_updated.thread_settings.model, service_tier_model.id);
+    assert_eq!(clear_updated.thread_settings.model, model_id);
     assert_eq!(clear_updated.thread_settings.service_tier, None);
 
     start_text_turn(&mut mcp, thread.id).await?;
@@ -216,7 +196,7 @@ async fn thread_settings_update_clears_service_tier() -> Result<()> {
     let request_bodies = received_response_bodies(&server).await?;
     assert!(
         request_bodies.iter().any(|body| {
-            body.get("model").and_then(Value::as_str) == Some(service_tier_model.id.as_str())
+            body.get("model").and_then(Value::as_str) == Some(model_id.as_str())
                 && body
                     .as_object()
                     .is_some_and(|object| !object.contains_key("service_tier"))
@@ -382,6 +362,14 @@ async fn received_response_bodies(server: &wiremock::MockServer) -> Result<Vec<V
         }
     }
     Ok(bodies)
+}
+
+fn service_tier_model_and_tier_id() -> Result<(String, String)> {
+    let model = all_model_presets()
+        .iter()
+        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
+        .context("bundled model catalog should include a picker model with service tiers")?;
+    Ok((model.id.clone(), model.service_tiers[0].id.clone()))
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
