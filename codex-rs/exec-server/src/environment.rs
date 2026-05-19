@@ -753,8 +753,9 @@ mod tests {
         };
         snapshot.include_local = false;
         snapshot.default = EnvironmentDefault::Disabled;
-        let manager = EnvironmentManager::from_snapshot(snapshot, /*local_runtime_paths*/ None)
-            .expect("environment manager");
+        let manager =
+            EnvironmentManager::from_snapshot(snapshot, /*local_runtime_paths*/ None)
+                .expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);
