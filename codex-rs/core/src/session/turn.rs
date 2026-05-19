@@ -142,10 +142,6 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() && !sess.input_queue.has_pending_input(&sess.active_turn).await {
-        return None;
-    }
-
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let mut client_session =
@@ -204,16 +200,11 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    if !input.is_empty() {
-        // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review) cannot suppress future
-        // model/realtime injections.
-        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
-            realtime_active: Some(turn_context.realtime_active),
-        }))
-        .await;
-    }
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: turn_context.model_info.slug.clone(),
+        realtime_active: Some(turn_context.realtime_active),
+    }))
+    .await;
     for response_item in injection_items {
         sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
             .await;
