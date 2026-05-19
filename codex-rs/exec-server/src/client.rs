@@ -244,15 +244,17 @@ impl LazyRemoteExecServerClient {
                         *state = LazyRemoteExecServerClientState::Connected(client.clone());
                         return Ok(client);
                     }
-                    Err(ExecServerError::Server { code, message }) => {
-                        debug!("caching terminal exec-server websocket resume failure");
-                        *state = LazyRemoteExecServerClientState::TerminalResumeError {
-                            code,
-                            message: message.clone(),
-                        };
-                        return Err(ExecServerError::Server { code, message });
+                    Err(err) => {
+                        if let Some((code, message)) = terminal_resume_error(&err) {
+                            debug!("caching terminal exec-server websocket resume failure");
+                            *state = LazyRemoteExecServerClientState::TerminalResumeError {
+                                code,
+                                message: message.clone(),
+                            };
+                            return Err(ExecServerError::Server { code, message });
+                        }
+                        return Err(err);
                     }
-                    Err(err) => return Err(err),
                 }
             }
             LazyRemoteExecServerClientState::Uninitialized => {}
@@ -868,6 +870,13 @@ fn is_retryable_reconnect_error(error: &ExecServerError) -> bool {
             | ExecServerError::WebSocketConnect { .. }
             | ExecServerError::InitializeTimedOut { .. }
     )
+}
+
+fn terminal_resume_error(error: &ExecServerError) -> Option<(i64, String)> {
+    let ExecServerError::Server { code, message } = error else {
+        return None;
+    };
+    (!is_transport_closed_error(error)).then(|| (*code, message.clone()))
 }
 
 fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {
