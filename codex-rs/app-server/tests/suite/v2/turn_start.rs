@@ -18,12 +18,14 @@ use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -949,6 +951,117 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
     assert!(
         turn_started.is_err(),
         "did not expect a turn/started notification for rejected input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_oversized_input_emits_input_too_large_error_notification_v2() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("unexpected model request")?,
+    ])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_toml = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config_toml.replace(
+            "model_provider = \"mock_provider\"\n",
+            "model_provider = \"mock_provider\"\nmodel_context_window = 100\n",
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: format!("oversized app-server sentinel {}", "x ".repeat(1_000)),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn_start: TurnStartResponse = to_response(turn_resp)?;
+
+    let expected_message =
+        "This message is too large to send. Split it into smaller chunks before retrying.";
+    let mut error = None;
+    let completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let message = mcp.read_next_message().await?;
+            let JSONRPCMessage::Notification(notification) = message else {
+                continue;
+            };
+            match notification.method.as_str() {
+                "error" => {
+                    let params = notification.params.ok_or_else(|| {
+                        anyhow::anyhow!("error notifications must include params")
+                    })?;
+                    error = Some(serde_json::from_value::<ErrorNotification>(params)?);
+                }
+                "turn/completed" => {
+                    let params = notification.params.ok_or_else(|| {
+                        anyhow::anyhow!("turn/completed notifications must include params")
+                    })?;
+                    let completed: TurnCompletedNotification = serde_json::from_value(params)?;
+                    if completed.thread_id == thread.id && completed.turn.id == turn_start.turn.id {
+                        return Ok::<TurnCompletedNotification, anyhow::Error>(completed);
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await??;
+
+    let error = error.expect("expected error notification before turn/completed");
+    assert_eq!(error.thread_id, thread.id);
+    assert_eq!(error.turn_id, turn_start.turn.id);
+    assert!(!error.will_retry);
+    assert_eq!(error.error.message, expected_message);
+    assert_eq!(
+        error.error.codex_error_info,
+        Some(CodexErrorInfo::ContextWindowExceeded)
+    );
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    let completed_error = completed
+        .turn
+        .error
+        .expect("failed turn should carry error");
+    assert_eq!(completed_error.message, expected_message);
+    assert_eq!(
+        completed_error.codex_error_info,
+        Some(CodexErrorInfo::ContextWindowExceeded)
     );
 
     Ok(())

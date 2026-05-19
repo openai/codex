@@ -508,7 +508,7 @@ fn estimate_encrypted_function_output_length(encoded_len: usize) -> usize {
     encoded_len.saturating_mul(9).div_ceil(16)
 }
 
-fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+pub(crate) fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
     approx_tokens_from_byte_count_i64(model_visible_bytes)
 }

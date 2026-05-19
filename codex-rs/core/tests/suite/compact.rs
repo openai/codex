@@ -13,6 +13,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -75,6 +76,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
+const PRETURN_INCOMING_COMPACT_MSG: &str = "incoming pushes compaction";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
@@ -1692,6 +1694,217 @@ async fn auto_compact_runs_after_token_limit_hit() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_turn_auto_compact_accounts_for_incoming_user_input() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 190),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m2", "PRETURN_INCOMING_SUMMARY"),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 80),
+    ]);
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 90),
+    ]);
+    let request_log =
+        mount_sse_sequence(&server, vec![first_turn, compact_turn, follow_up_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit first user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: format!("{} {}", PRETURN_INCOMING_COMPACT_MSG, "x ".repeat(100)),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit incoming user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first turn, pre-turn compact, and post-compact follow-up"
+    );
+    let compact_body = requests[1].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "incoming input should trigger pre-turn compaction"
+    );
+    assert!(
+        !compact_body.contains(PRETURN_INCOMING_COMPACT_MSG),
+        "incoming user message should not be included in the compaction request"
+    );
+
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        follow_up_body.contains(PRETURN_INCOMING_COMPACT_MSG),
+        "incoming user message should be sent after pre-turn compaction"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_turn_auto_compact_skips_empty_history_for_large_first_prompt() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 90),
+    ]);
+    let request_log = mount_sse_once(&server, first_turn).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+            config.model_context_window = Some(10_000);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    let large_first_prompt = format!("large-first-prompt-sentinel {}", "x ".repeat(2_000));
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: large_first_prompt.clone(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit large first user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "large first prompt should sample directly without empty-history compaction"
+    );
+    let request_body = requests[0].body_json().to_string();
+    assert!(
+        body_contains_text(&request_body, &large_first_prompt),
+        "large first prompt should be included in the sampling request"
+    );
+    assert!(
+        !body_contains_text(&request_body, SUMMARIZATION_PROMPT),
+        "empty history should not trigger a pre-turn compaction request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_incoming_user_input_is_rejected_before_persistence() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "EMPTY_COMPACT_SUMMARY"),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 10),
+    ]);
+    let request_log = mount_sse_once(&server, compact_turn).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let oversized_text = format!("oversized-input-sentinel {}", "x ".repeat(1_000));
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: oversized_text.clone(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit oversized user input");
+
+    let error = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error) => Some(error.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        error.codex_error_info,
+        Some(CodexErrorInfo::ContextWindowExceeded)
+    );
+    assert_eq!(
+        error.message,
+        "This message is too large to send. Split it into smaller chunks before retrying."
+    );
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        0,
+        "oversized input should reject before pre-turn compaction or sampling"
+    );
+    let rollout = fs::read_to_string(&rollout_path).unwrap_or_default();
+    assert!(
+        !rollout.contains(&oversized_text),
+        "oversized input should not be persisted to rollout"
+    );
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -2961,7 +3174,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 
     let server = start_mock_server().await;
 
-    let context_window = 100;
+    let context_window = 8_000;
     let limit = context_window * 90 / 100;
     let over_limit_tokens = context_window * 95 / 100 + 1;
 
@@ -3068,8 +3281,8 @@ async fn auto_compact_clamps_config_limit_to_context_window() {
 
     let server = start_mock_server().await;
 
-    let context_window = 100;
-    let config_limit = 200;
+    let context_window = 8_000;
+    let config_limit = 20_000;
     let over_limit_tokens = context_window * 90 / 100 + 1;
 
     let first_turn = sse(vec![
@@ -3155,7 +3368,7 @@ async fn auto_compact_body_after_prefix_ignores_starting_window_prefix() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.model_context_window = Some(1_000);
+            config.model_context_window = Some(8_000);
             config.model_auto_compact_token_limit = Some(100);
             config.model_auto_compact_token_limit_scope =
                 AutoCompactTokenLimitScope::BodyAfterPrefix;
@@ -3306,7 +3519,7 @@ async fn auto_compact_body_after_prefix_still_caps_at_context_window() {
     ]);
     let second_turn = sse(vec![
         ev_assistant_message("m2", SECOND_LARGE_REPLY),
-        ev_completed_with_usage("r2", /*input_tokens*/ 98, /*output_tokens*/ 1),
+        ev_completed_with_usage("r2", /*input_tokens*/ 7_998, /*output_tokens*/ 1),
     ]);
     let auto_compact_turn = sse(vec![
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
@@ -3327,8 +3540,8 @@ async fn auto_compact_body_after_prefix_still_caps_at_context_window() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.model_context_window = Some(100);
-            config.model_auto_compact_token_limit = Some(200);
+            config.model_context_window = Some(8_000);
+            config.model_auto_compact_token_limit = Some(20_000);
             config.model_auto_compact_token_limit_scope =
                 AutoCompactTokenLimitScope::BodyAfterPrefix;
         })

@@ -1091,7 +1091,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(2_000);
+                config.model_context_window = Some(8_000);
                 config.model_auto_compact_token_limit = Some(200_000);
             }),
     )
@@ -1213,7 +1213,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(2_000);
+                config.model_context_window = Some(8_000);
                 config.model_auto_compact_token_limit = Some(200_000);
             }),
     )
