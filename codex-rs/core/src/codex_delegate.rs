@@ -80,7 +80,7 @@ pub(crate) async fn run_codex_thread_interactive(
         auth_manager,
         models_manager,
         environment_manager: Arc::clone(&parent_session.services.environment_manager),
-        runtime_capabilities: Arc::clone(&parent_session.runtime_capabilities),
+        runtime_capabilities: Arc::clone(&parent_session.services.runtime_capabilities),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),

@@ -4281,6 +4281,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
             .expect("create environment"),
     );
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
 
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
@@ -4348,7 +4350,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
     };
 
     let plugin_outcome = services
@@ -4387,13 +4390,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*goal_tools_supported*/ true,
     );
 
-    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(
-        services.environment_manager.as_ref(),
-    ));
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        runtime_capabilities,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -6118,6 +6117,8 @@ where
         codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
             .expect("create environment"),
     );
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
 
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
@@ -6185,7 +6186,8 @@ where
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
     };
 
     let plugin_outcome = services
@@ -6224,13 +6226,9 @@ where
         /*goal_tools_supported*/ true,
     ));
 
-    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(
-        services.environment_manager.as_ref(),
-    ));
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        runtime_capabilities,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
