@@ -1879,18 +1879,14 @@ impl ThreadRequestProcessor {
             limit,
             sort_key,
             sort_direction,
-            model_providers,
             source_kinds,
             archived,
-            cwd,
-            use_state_db_only,
             search_term,
         } = params;
         let search_term = search_term.trim().to_string();
         let search_term = (!search_term.is_empty())
             .then_some(search_term)
             .ok_or_else(|| invalid_request("thread/search requires a non-empty searchTerm"))?;
-        let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
         let requested_page_size = limit
             .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
@@ -1900,63 +1896,37 @@ impl ThreadRequestProcessor {
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
-        let store_params = StoreListThreadsParams {
-            page_size: requested_page_size,
-            cursor: cursor.clone(),
-            sort_key: store_sort_key,
-            sort_direction: match store_sort_direction {
-                SortDirection::Asc => StoreSortDirection::Asc,
-                SortDirection::Desc => StoreSortDirection::Desc,
-            },
-            allowed_sources: compute_source_filters(source_kinds.clone()).0,
-            model_providers: match model_providers.clone() {
-                Some(providers) if providers.is_empty() => None,
-                Some(providers) => Some(providers),
-                None => Some(vec![self.config.model_provider_id.clone()]),
-            },
-            cwd_filters: cwd_filters.clone(),
-            archived: archived.unwrap_or(false),
-            search_term: Some(search_term.clone()),
-            use_state_db_only,
+        let Some(local_store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        else {
+            return Ok(ThreadSearchResponse {
+                data: Vec::new(),
+                next_cursor: None,
+                backwards_cursor: None,
+            });
         };
-        let (search_results, next_cursor) = if let Some(local_store) =
-            self.thread_store
-                .as_any()
-                .downcast_ref::<LocalThreadStore>()
-        {
-            let page = local_store
-                .search_threads(store_params)
-                .await
-                .map_err(thread_store_list_error)?;
-            (page.items, page.next_cursor)
-        } else {
-            let (stored_threads, next_cursor) = self
-                .list_threads_common(
-                    requested_page_size,
-                    cursor,
-                    store_sort_key,
-                    store_sort_direction,
-                    ThreadListFilters {
-                        model_providers,
-                        source_kinds,
-                        archived: archived.unwrap_or(false),
-                        cwd_filters,
-                        search_term: Some(search_term),
-                        use_state_db_only,
-                    },
-                )
-                .await?;
-            (
-                stored_threads
-                    .into_iter()
-                    .map(|thread| StoredThreadSearchResult {
-                        thread,
-                        search_preview: None,
-                    })
-                    .collect::<Vec<_>>(),
-                next_cursor,
-            )
-        };
+        let page = local_store
+            .search_threads(StoreListThreadsParams {
+                page_size: requested_page_size,
+                cursor,
+                sort_key: store_sort_key,
+                sort_direction: match store_sort_direction {
+                    SortDirection::Asc => StoreSortDirection::Asc,
+                    SortDirection::Desc => StoreSortDirection::Desc,
+                },
+                allowed_sources: compute_source_filters(source_kinds).0,
+                model_providers: None,
+                cwd_filters: None,
+                archived: archived.unwrap_or(false),
+                search_term: Some(search_term),
+                use_state_db_only: false,
+            })
+            .await
+            .map_err(thread_store_list_error)?;
+        let search_results = page.items;
+        let next_cursor = page.next_cursor;
         let backwards_cursor = search_results.first().and_then(|result| {
             thread_backwards_cursor_for_sort_key(
                 &result.thread,
@@ -1988,7 +1958,7 @@ impl ThreadRequestProcessor {
                 }
                 ThreadSearchResult {
                     thread,
-                    search_preview: search_preview.map(thread_search_preview_from_rollout),
+                    search_preview: thread_search_preview_from_rollout(search_preview),
                 }
             })
             .collect();
@@ -3925,13 +3895,6 @@ fn thread_search_preview_from_rollout(
     preview: codex_rollout::ThreadSearchPreview,
 ) -> codex_app_server_protocol::ThreadSearchPreview {
     match preview {
-        codex_rollout::ThreadSearchPreview::Conversation {
-            user_message,
-            assistant_message,
-        } => codex_app_server_protocol::ThreadSearchPreview::Conversation {
-            user_message,
-            assistant_message,
-        },
         codex_rollout::ThreadSearchPreview::ContentMatch { snippet } => {
             codex_app_server_protocol::ThreadSearchPreview::ContentMatch { snippet }
         }

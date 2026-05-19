@@ -86,14 +86,7 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
-        matching_items.extend(
-            search_matches
-                .matching_items(store.config.codex_home.as_path(), page.items)
-                .await
-                .map_err(|err| ThreadStoreError::Internal {
-                    message: format!("failed to prepare thread search previews: {err}"),
-                })?,
-        );
+        matching_items.extend(search_matches.matching_items(page.items));
         page_cursor = page.next_cursor;
         if matching_items.len() > params.page_size || page_cursor.is_none() {
             break;

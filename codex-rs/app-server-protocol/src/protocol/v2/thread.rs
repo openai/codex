@@ -990,10 +990,6 @@ pub struct ThreadSearchParams {
     /// Optional sort direction; defaults to descending (newest first).
     #[ts(optional = nullable)]
     pub sort_direction: Option<SortDirection>,
-    /// Optional provider filter; when set, only sessions recorded under these
-    /// providers are returned. When present but empty, includes all providers.
-    #[ts(optional = nullable)]
-    pub model_providers: Option<Vec<String>>,
     /// Optional source filter; when set, only sessions from these source kinds
     /// are returned. When omitted or empty, defaults to interactive sources.
     #[ts(optional = nullable)]
@@ -1002,15 +998,6 @@ pub struct ThreadSearchParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
-    /// Optional cwd filter or filters; when set, only threads whose session cwd
-    /// exactly matches one of these paths are returned.
-    #[ts(optional = nullable, type = "string | Array<string> | null")]
-    pub cwd: Option<ThreadListCwdFilter>,
-    /// If true, return from the state DB without scanning JSONL rollouts to
-    /// repair thread metadata. Omitted or false preserves scan-and-repair
-    /// behavior.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub use_state_db_only: bool,
     /// Required substring/full-text query for thread search.
     pub search_term: String,
 }
@@ -1076,7 +1063,7 @@ pub struct ThreadListResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchResult {
     pub thread: Thread,
-    pub search_preview: Option<ThreadSearchPreview>,
+    pub search_preview: ThreadSearchPreview,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

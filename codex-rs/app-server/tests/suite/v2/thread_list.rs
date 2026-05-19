@@ -30,7 +30,6 @@ use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -576,7 +575,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_search_returns_content_and_title_matches() -> Result<()> {
+async fn thread_search_returns_content_matches() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -598,36 +597,6 @@ sqlite = true
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-    let title_match = create_fake_rollout(
-        codex_home.path(),
-        "2025-01-02T11-00-00",
-        "2025-01-02T11:00:00Z",
-        "opening title-only conversation",
-        Some("mock_provider"),
-        /*git_info*/ None,
-    )?;
-    append_rollout_item(
-        rollout_path(
-            codex_home.path(),
-            "2025-01-02T11-00-00",
-            title_match.as_str(),
-        )
-        .as_path(),
-        "2025-01-02T11:01:00Z",
-        RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "opening title-only answer".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        )),
-    )?;
-    codex_rollout::append_thread_name(
-        codex_home.path(),
-        ThreadId::from_string(title_match.as_str())?,
-        "needle custom title",
-    )
-    .await?;
     let newer_match = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T12-00-00",
@@ -661,11 +630,8 @@ sqlite = true
             limit: Some(10),
             sort_key: None,
             sort_direction: None,
-            model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
-            cwd: None,
-            use_state_db_only: false,
             search_term: "needle".to_string(),
         })
         .await?;
@@ -683,19 +649,12 @@ sqlite = true
         .iter()
         .map(|result| result.thread.id.as_str())
         .collect();
-    assert_eq!(ids, vec![newer_match, title_match, older_match]);
+    assert_eq!(ids, vec![newer_match, older_match]);
     assert_eq!(
         data[0].search_preview,
-        Some(ThreadSearchPreview::ContentMatch {
+        ThreadSearchPreview::ContentMatch {
             snippet: "later message with needle suffix".to_string(),
-        })
-    );
-    assert_eq!(
-        data[1].search_preview,
-        Some(ThreadSearchPreview::Conversation {
-            user_message: "opening title-only conversation".to_string(),
-            assistant_message: Some("opening title-only answer".to_string()),
-        })
+        }
     );
 
     Ok(())

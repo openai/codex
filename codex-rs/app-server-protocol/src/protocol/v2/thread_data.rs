@@ -151,17 +151,7 @@ pub struct Thread {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(tag = "kind", rename_all = "camelCase", export_to = "v2/")]
 pub enum ThreadSearchPreview {
-    Conversation {
-        #[serde(rename = "userMessage")]
-        #[ts(rename = "userMessage")]
-        user_message: String,
-        #[serde(rename = "assistantMessage")]
-        #[ts(rename = "assistantMessage")]
-        assistant_message: Option<String>,
-    },
-    ContentMatch {
-        snippet: String,
-    },
+    ContentMatch { snippet: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

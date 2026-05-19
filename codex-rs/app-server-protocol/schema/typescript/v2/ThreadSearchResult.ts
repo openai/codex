@@ -4,4 +4,4 @@
 import type { Thread } from "./Thread";
 import type { ThreadSearchPreview } from "./ThreadSearchPreview";
 
-export type ThreadSearchResult = { thread: Thread, searchPreview: ThreadSearchPreview | null, };
+export type ThreadSearchResult = { thread: Thread, searchPreview: ThreadSearchPreview, };

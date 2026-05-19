@@ -414,7 +414,6 @@ use codex_thread_store::ReadThreadByRolloutPathParams as StoreReadThreadByRollou
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
-use codex_thread_store::StoredThreadSearchResult;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;

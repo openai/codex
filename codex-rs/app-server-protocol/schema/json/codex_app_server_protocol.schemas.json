@@ -17444,30 +17444,6 @@
         "oneOf": [
           {
             "properties": {
-              "assistantMessage": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "conversation"
-                ],
-                "type": "string"
-              },
-              "userMessage": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "userMessage"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
               "kind": {
                 "enum": [
                   "contentMatch"
@@ -17489,20 +17465,14 @@
       "ThreadSearchResult": {
         "properties": {
           "searchPreview": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ThreadSearchPreview"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/definitions/v2/ThreadSearchPreview"
           },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           }
         },
         "required": [
+          "searchPreview",
           "thread"
         ],
         "type": "object"

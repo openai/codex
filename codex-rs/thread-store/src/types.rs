@@ -214,7 +214,7 @@ pub struct StoredThreadSearchResult {
     /// Matching stored thread.
     pub thread: StoredThread,
     /// Search-specific preview context for result rendering.
-    pub search_preview: Option<codex_rollout::ThreadSearchPreview>,
+    pub search_preview: codex_rollout::ThreadSearchPreview,
 }
 
 /// A page of thread-search results.
