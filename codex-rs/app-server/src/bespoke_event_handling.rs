@@ -1155,6 +1155,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
                     Ok(permit) => permit,
                     Err(err) => {
+                        thread_state
+                            .lock()
+                            .await
+                            .pending_terminal_plan_cleanups
+                            .clear();
                         outgoing
                             .send_error(
                                 request_id,
@@ -1175,6 +1180,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     Ok(stored_thread) => stored_thread,
                     Err(err) => {
+                        thread_state
+                            .lock()
+                            .await
+                            .pending_terminal_plan_cleanups
+                            .clear();
                         outgoing
                             .send_error(
                                 request_id.clone(),
@@ -1198,6 +1208,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ) {
                     Ok(response) => response,
                     Err(err) => {
+                        thread_state
+                            .lock()
+                            .await
+                            .pending_terminal_plan_cleanups
+                            .clear();
                         outgoing
                             .send_error(request_id.clone(), internal_error(err))
                             .await;
