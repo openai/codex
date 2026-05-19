@@ -128,9 +128,9 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
-    /// Experimental environment selector for where Codex should start this MCP server.
+    /// Explicit environment id for where Codex should start this MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experimental_environment: Option<String>,
+    pub environment_id: Option<String>,
 
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
@@ -231,7 +231,7 @@ pub struct RawMcpServerConfig {
 
     // shared
     #[serde(default)]
-    pub experimental_environment: Option<String>,
+    pub environment_id: Option<String>,
     #[serde(default)]
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
@@ -279,7 +279,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             url,
             bearer_token,
             bearer_token_env_var,
-            experimental_environment,
+            environment_id,
             startup_timeout_sec,
             startup_timeout_ms,
             tool_timeout_sec,
@@ -352,7 +352,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
-            experimental_environment,
+            environment_id,
             startup_timeout_sec,
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),

@@ -35,7 +35,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -272,11 +272,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.
-        McpRuntimeEnvironment::new(
-            environment_manager.default_or_local_environment(),
-            environment_manager.try_local_environment(),
-            config.cwd.to_path_buf(),
-        ),
+        McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,

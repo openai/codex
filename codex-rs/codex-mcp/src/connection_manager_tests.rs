@@ -18,6 +18,7 @@ use crate::tools::normalize_tools_for_model;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::ToolName;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -864,7 +865,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
-                experimental_environment: None,
+                environment_id: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -889,7 +890,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                     http_headers: None,
                     env_http_headers: None,
                 },
-                experimental_environment: None,
+                environment_id: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -915,9 +916,8 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         String::new(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(
-            /*environment*/ None,
-            /*local_environment*/ None,
+        McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
             PathBuf::from("/tmp"),
         ),
         codex_home.path().to_path_buf(),
@@ -988,7 +988,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: None,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -1041,7 +1041,7 @@ fn mcp_init_error_display_reports_generic_errors() {
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: None,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,

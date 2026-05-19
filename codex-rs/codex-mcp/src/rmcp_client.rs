@@ -28,7 +28,8 @@ use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::McpRuntimeContext;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerLaunch;
@@ -142,7 +143,7 @@ impl AsyncManagedClient {
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
     ) -> Self {
@@ -170,7 +171,7 @@ impl AsyncManagedClient {
                         &server_name,
                         server.clone(),
                         store_mode,
-                        runtime_environment,
+                        runtime_context,
                         runtime_auth_provider,
                     )
                     .await?,
@@ -560,29 +561,16 @@ async fn make_rmcp_client(
     server_name: &str,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
-    runtime_environment: McpRuntimeEnvironment,
+    runtime_context: McpRuntimeContext,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
-    if let Some(reason) = runtime_environment.startup_unavailable_reason(server_name, &config) {
-        return Err(StartupOutcomeError::from(anyhow!(reason)));
-    }
-    let McpServerConfig {
-        transport,
-        experimental_environment,
-        ..
-    } = config;
-    let remote_environment = match experimental_environment.as_deref() {
-        None | Some("local") => false,
-        Some("remote") => true,
-        Some(environment) => {
-            return Err(StartupOutcomeError::from(anyhow!(
-                "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
-            )));
-        }
-    };
+    let resolved_environment = runtime_context
+        .resolve_server_environment(server_name, &config)
+        .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
+    let McpServerConfig { transport, .. } = config;
 
     match transport {
         McpServerTransportConfig::Stdio {
@@ -599,22 +587,20 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = if remote_environment {
-                // Preflight should reject this first, but keep client startup
-                // defensive if optional runtime placement is mis-threaded.
-                let Some(environment) = runtime_environment.environment() else {
+            let launcher = if resolved_environment.environment_id == LOCAL_ENVIRONMENT_ID {
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_context.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
+            } else {
+                let Some(environment) = resolved_environment.environment else {
                     return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server requires a runtime environment"
+                        "MCP server `{server_name}` resolved without an execution environment"
                     )));
                 };
                 Arc::new(ExecutorStdioServerLauncher::new(
                     environment.get_exec_backend(),
-                    runtime_environment.fallback_cwd(),
+                    runtime_context.fallback_cwd(),
                 ))
-            } else {
-                Arc::new(LocalStdioServerLauncher::new(
-                    runtime_environment.fallback_cwd(),
-                )) as Arc<dyn StdioServerLauncher>
             };
 
             // `RmcpClient` always sees a launched MCP stdio server. The
@@ -630,16 +616,17 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            let http_client: Arc<dyn HttpClient> = if remote_environment {
-                let Some(environment) = runtime_environment.environment() else {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server requires a runtime environment"
-                    )));
+            let http_client: Arc<dyn HttpClient> =
+                if resolved_environment.environment_id == LOCAL_ENVIRONMENT_ID {
+                    Arc::new(ReqwestHttpClient)
+                } else {
+                    let Some(environment) = resolved_environment.environment else {
+                        return Err(StartupOutcomeError::from(anyhow!(
+                            "MCP server `{server_name}` resolved without an HTTP environment"
+                        )));
+                    };
+                    environment.get_http_client()
                 };
-                environment.get_http_client()
-            } else {
-                Arc::new(ReqwestHttpClient)
-            };
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

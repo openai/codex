@@ -205,12 +205,10 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Status listing has no turn cwd. Prefer the configured default env,
-        // then configured local if present; do not manufacture a hidden local
-        // env in no-local modes.
-        let runtime_environment = McpRuntimeEnvironment::new(
-            environment_manager.default_or_local_environment(),
-            environment_manager.try_local_environment(),
+        // Status listing has no turn cwd. Use config cwd as the stdio fallback
+        // and resolve each server against the configured environment registry.
+        let runtime_context = McpRuntimeContext::new(
+            Arc::clone(&environment_manager),
             config.cwd.to_path_buf(),
         );
 
@@ -222,7 +220,7 @@ impl McpRequestProcessor {
                 config,
                 mcp_config,
                 auth,
-                runtime_environment,
+                runtime_context,
             )
             .await;
         });
@@ -236,7 +234,7 @@ impl McpRequestProcessor {
         config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
@@ -244,7 +242,7 @@ impl McpRequestProcessor {
             config,
             mcp_config,
             auth,
-            runtime_environment,
+            runtime_context,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -256,7 +254,7 @@ impl McpRequestProcessor {
         config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -267,7 +265,7 @@ impl McpRequestProcessor {
             &mcp_config,
             auth.as_ref(),
             request_id,
-            runtime_environment,
+            runtime_context,
             detail,
         )
         .await;
@@ -278,6 +276,7 @@ impl McpRequestProcessor {
             resources,
             resource_templates,
             auth_statuses,
+            environment_ids,
         } = snapshot;
 
         let mut server_names: Vec<String> = config
@@ -326,6 +325,10 @@ impl McpRequestProcessor {
                     .cloned()
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)
                     .into(),
+                environment_id: environment_ids
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
             })
             .collect();
 
@@ -367,12 +370,11 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Resource reads without a thread have no turn cwd. Prefer the
-        // configured default env, then configured local if present; do not
-        // manufacture a hidden local env in no-local modes.
-        let runtime_environment = McpRuntimeEnvironment::new(
-            environment_manager.default_or_local_environment(),
-            environment_manager.try_local_environment(),
+        // Resource reads without a thread have no turn cwd. Use config cwd as
+        // the stdio fallback and resolve each server against the configured
+        // environment registry.
+        let runtime_context = McpRuntimeContext::new(
+            Arc::clone(&environment_manager),
             config.cwd.to_path_buf(),
         );
         let request_id = request_id.clone();
@@ -381,7 +383,7 @@ impl McpRequestProcessor {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
-                runtime_environment,
+                runtime_context,
                 &server,
                 &uri,
             )

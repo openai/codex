@@ -139,7 +139,7 @@ enum McpCallEvent {
 
 const REMOTE_MCP_ENVIRONMENT: &str = "remote";
 
-fn remote_aware_experimental_environment() -> Option<String> {
+fn remote_aware_environment_id() -> Option<String> {
     // These tests run locally in normal CI and against the Docker-backed
     // executor in full-ci. Match that shared test environment instead of
     // parameterizing each stdio MCP test with its own local/remote cases.
@@ -287,7 +287,7 @@ async fn wait_for_mcp_server(fixture: &TestCodex, server_name: &str) -> anyhow::
 
 #[derive(Default)]
 struct TestMcpServerOptions {
-    experimental_environment: Option<String>,
+    environment_id: Option<String>,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
 }
@@ -326,7 +326,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
-            experimental_environment: options.experimental_environment,
+            environment_id: options.environment_id,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
@@ -480,7 +480,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -603,7 +603,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
                     Some(configured_cwd),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -656,7 +656,7 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -775,7 +775,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -872,7 +872,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                     ..Default::default()
                 },
@@ -989,7 +989,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
@@ -1071,7 +1071,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1204,7 +1204,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1340,7 +1340,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1442,7 +1442,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     vec!["MCP_TEST_VALUE".into()],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1560,7 +1560,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
                     }],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1652,7 +1652,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
                     }],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1835,7 +1835,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -2021,7 +2021,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );

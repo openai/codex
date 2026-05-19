@@ -175,8 +175,8 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if !config.enabled {
         entry["enabled"] = value(false);
     }
-    if let Some(environment) = &config.experimental_environment {
-        entry["experimental_environment"] = value(environment.clone());
+    if let Some(environment_id) = &config.environment_id {
+        entry["environment_id"] = value(environment_id.clone());
     }
     if config.required {
         entry["required"] = value(true);

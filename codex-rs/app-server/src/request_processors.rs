@@ -340,7 +340,7 @@ use codex_login::complete_device_code_login;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
