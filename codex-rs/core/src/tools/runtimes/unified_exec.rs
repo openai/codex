@@ -52,6 +52,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+fn startup_failure(message: impl Into<String>) -> ToolError {
+    ToolError::Failed(message.into())
+}
+
+fn startup_failure_from_unified_exec_error(err: UnifiedExecError) -> ToolError {
+    match err {
+        UnifiedExecError::SandboxDenied { output, .. } => {
+            ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                output: Box::new(output),
+                network_policy_decision: None,
+            }))
+        }
+        other => startup_failure(other.to_string()),
+    }
+}
+
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
 #[derive(Clone, Debug)]
@@ -288,7 +304,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                    .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+                    .map_err(|_| startup_failure("missing command line for PTY"))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
@@ -305,9 +321,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             {
                 Some(prepared) => {
                     if req.environment.is_remote() {
-                        return Err(ToolError::Rejected(
-                            "unified_exec zsh-fork is not supported for remote environments"
-                                .to_string(),
+                        return Err(startup_failure(
+                            "unified_exec zsh-fork is not supported for remote environments",
                         ));
                     }
                     return self
@@ -320,15 +335,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.environment.as_ref(),
                         )
                         .await
-                        .map_err(|err| match err {
-                            UnifiedExecError::SandboxDenied { output, .. } => {
-                                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                                    output: Box::new(output),
-                                    network_policy_decision: None,
-                                }))
-                            }
-                            other => ToolError::Rejected(other.to_string()),
-                        });
+                        .map_err(startup_failure_from_unified_exec_error);
                 }
                 None => {
                     tracing::warn!(
@@ -339,7 +346,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         }
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+                .map_err(|_| startup_failure("missing command line for PTY"))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
@@ -354,15 +361,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req.environment.as_ref(),
             )
             .await
-            .map_err(|err| match err {
-                UnifiedExecError::SandboxDenied { output, .. } => {
-                    ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output: Box::new(output),
-                        network_policy_decision: None,
-                    }))
-                }
-                other => ToolError::Rejected(other.to_string()),
-            })
+            .map_err(startup_failure_from_unified_exec_error)
     }
 }
 
@@ -395,6 +394,17 @@ mod tests {
             }
             other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn startup_failures_do_not_use_rejected_tool_errors() {
+        let err = startup_failure_from_unified_exec_error(UnifiedExecError::create_process(
+            "missing command line for PTY".to_string(),
+        ));
+
+        assert!(
+            matches!(err, ToolError::Failed(message) if message == "Failed to create unified exec process: missing command line for PTY")
+        );
     }
 
     #[tokio::test]

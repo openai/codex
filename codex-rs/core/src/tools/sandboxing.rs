@@ -359,6 +359,7 @@ pub(crate) struct ToolCtx {
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
+    Failed(String),
     Codex(CodexErr),
 }
 

@@ -384,16 +384,14 @@ impl ToolEmitter {
                 let result = Err(FunctionCallError::RespondToModel(message));
                 (event, result)
             }
+            Err(ToolError::Failed(message)) => {
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
+                let result = Err(FunctionCallError::RespondToModel(message));
+                (event, result)
+            }
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
-                //
-                // NOTE: ToolError::Rejected is currently used for both user-declined approvals
-                // and some operational/runtime rejection paths (for example setup failures).
-                // We intentionally map all of them through the "rejected" event path for now,
-                // which means a subset of non-user failures may be reported as Declined.
-                //
-                // TODO: We should add a new ToolError variant for user-declined approvals.
                 let normalized = if msg == "rejected by user" {
                     match self {
                         Self::Shell { .. } | Self::UnifiedExec { .. } => {

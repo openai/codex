@@ -1088,6 +1088,7 @@ impl UnifiedExecProcessManager {
                     };
                     UnifiedExecError::sandbox_denied(message, output)
                 }
+                ToolError::Failed(message) => UnifiedExecError::create_process(message),
                 ToolError::Rejected(message) => UnifiedExecError::rejected(message),
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
