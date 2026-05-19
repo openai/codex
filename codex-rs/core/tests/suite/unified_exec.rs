@@ -916,7 +916,7 @@ allow_local_binding = true
                 ))
                 .expect("set permission profile");
         });
-    let test = builder.build(server).await?;
+    let test = builder.build_with_remote_env(server).await?;
     assert!(
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
