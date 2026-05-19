@@ -23,6 +23,7 @@ use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -530,6 +531,14 @@ impl Session {
                 })?
         };
 
+        if objective.is_some() {
+            set_thread_preview_from_goal_objective(
+                &state_db,
+                self.conversation_id,
+                goal.objective.as_str(),
+            )
+            .await;
+        }
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let previous_status_for_goal = if replacing_goal {
@@ -611,6 +620,12 @@ impl Session {
                 )
             })?;
 
+        set_thread_preview_from_goal_objective(
+            &state_db,
+            self.conversation_id,
+            goal.objective.as_str(),
+        )
+        .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
@@ -1505,6 +1520,21 @@ impl Session {
         self.state_db_for_thread_goals().await?.ok_or_else(|| {
             anyhow::anyhow!("thread goals require a persisted thread; this thread is ephemeral")
         })
+    }
+}
+
+async fn set_thread_preview_from_goal_objective(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    objective: &str,
+) {
+    if let Err(err) = state_db
+        .set_thread_preview_if_empty(thread_id, objective)
+        .await
+    {
+        tracing::warn!(
+            "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+        );
     }
 }
 
