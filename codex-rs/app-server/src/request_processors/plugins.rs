@@ -1506,7 +1506,7 @@ impl PluginRequestProcessor {
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,
-                &environment_manager
+                Arc::clone(&environment_manager)
             ),
         );
 
@@ -1795,7 +1795,7 @@ async fn load_plugin_app_summaries(
         match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
             config,
             /*force_refetch*/ false,
-            environment_manager,
+            Arc::clone(&environment_manager),
         )
         .await
         {
