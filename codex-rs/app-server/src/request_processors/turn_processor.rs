@@ -352,6 +352,113 @@ impl TurnRequestProcessor {
         Ok(())
     }
 
+    async fn turn_start_inner(
+        &self,
+        request_id: ConnectionRequestId,
+        params: TurnStartParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
+            return Err(error);
+        }
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(&request_id, error, /*error_type*/ None);
+                })?;
+        Self::set_app_server_client_info(
+            thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+        )
+        .await
+        .inspect_err(|error| {
+            self.track_error_response(&request_id, error, /*error_type*/ None);
+        })?;
+
+        let environment_selections = self.parse_environment_selections(params.environments)?;
+
+        // Map v2 input items to core input items.
+        let mapped_items: Vec<CoreInputItem> = params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+        let turn_has_input = !mapped_items.is_empty();
+        let thread_settings = self
+            .build_thread_settings_overrides(
+                thread.as_ref(),
+                ThreadSettingsBuildParams {
+                    method: "turn/start",
+                    cwd: params.cwd,
+                    runtime_workspace_roots: params.runtime_workspace_roots,
+                    approval_policy: params.approval_policy,
+                    approvals_reviewer: params.approvals_reviewer,
+                    sandbox_policy: params.sandbox_policy,
+                    permissions: params.permissions,
+                    model: params.model,
+                    service_tier: params.service_tier,
+                    effort: params.effort,
+                    summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
+                    personality: params.personality,
+                },
+            )
+            .await?;
+
+        // Start the turn by submitting the user input. Return its submission id as turn_id.
+        let turn_op = Op::UserInput {
+            items: mapped_items,
+            environments: environment_selections,
+            final_output_json_schema: params.output_schema,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            thread_settings,
+        };
+        let turn_id = self
+            .submit_core_op(&request_id, thread.as_ref(), turn_op)
+            .await
+            .map_err(|err| {
+                let error = internal_error(format!("failed to start turn: {err}"));
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
+                error
+            })?;
+
+        if turn_has_input {
+            let config_snapshot = thread.config_snapshot().await;
+            codex_memories_write::start_memories_startup_task(
+                Arc::clone(&self.thread_manager),
+                Arc::clone(&self.auth_manager),
+                thread_id,
+                Arc::clone(&thread),
+                thread.config().await,
+                &config_snapshot.session_source,
+            );
+        }
+
+        self.outgoing
+            .record_request_turn_id(&request_id, &turn_id)
+            .await;
+        let turn = Turn {
+            id: turn_id,
+            items: vec![],
+            items_view: TurnItemsView::NotLoaded,
+            error: None,
+            status: TurnStatus::InProgress,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+
+        Ok(TurnStartResponse { turn })
+    }
+
     async fn build_thread_settings_overrides(
         &self,
         thread: &CodexThread,
@@ -516,113 +623,6 @@ impl TurnRequestProcessor {
             collaboration_mode,
             personality,
         })
-    }
-
-    async fn turn_start_inner(
-        &self,
-        request_id: ConnectionRequestId,
-        params: TurnStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-    ) -> Result<TurnStartResponse, JSONRPCErrorError> {
-        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
-            self.track_error_response(
-                &request_id,
-                &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
-            );
-            return Err(error);
-        }
-        let (thread_id, thread) =
-            self.load_thread(&params.thread_id)
-                .await
-                .inspect_err(|error| {
-                    self.track_error_response(&request_id, error, /*error_type*/ None);
-                })?;
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await
-        .inspect_err(|error| {
-            self.track_error_response(&request_id, error, /*error_type*/ None);
-        })?;
-
-        let environment_selections = self.parse_environment_selections(params.environments)?;
-
-        // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
-        let turn_has_input = !mapped_items.is_empty();
-        let thread_settings = self
-            .build_thread_settings_overrides(
-                thread.as_ref(),
-                ThreadSettingsBuildParams {
-                    method: "turn/start",
-                    cwd: params.cwd,
-                    runtime_workspace_roots: params.runtime_workspace_roots,
-                    approval_policy: params.approval_policy,
-                    approvals_reviewer: params.approvals_reviewer,
-                    sandbox_policy: params.sandbox_policy,
-                    permissions: params.permissions,
-                    model: params.model,
-                    service_tier: params.service_tier,
-                    effort: params.effort,
-                    summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
-                    personality: params.personality,
-                },
-            )
-            .await?;
-
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = Op::UserInput {
-            items: mapped_items,
-            environments: environment_selections,
-            final_output_json_schema: params.output_schema,
-            responsesapi_client_metadata: params.responsesapi_client_metadata,
-            thread_settings,
-        };
-        let turn_id = self
-            .submit_core_op(&request_id, thread.as_ref(), turn_op)
-            .await
-            .map_err(|err| {
-                let error = internal_error(format!("failed to start turn: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
-
-        if turn_has_input {
-            let config_snapshot = thread.config_snapshot().await;
-            codex_memories_write::start_memories_startup_task(
-                Arc::clone(&self.thread_manager),
-                Arc::clone(&self.auth_manager),
-                thread_id,
-                Arc::clone(&thread),
-                thread.config().await,
-                &config_snapshot.session_source,
-            );
-        }
-
-        self.outgoing
-            .record_request_turn_id(&request_id, &turn_id)
-            .await;
-        let turn = Turn {
-            id: turn_id,
-            items: vec![],
-            items_view: TurnItemsView::NotLoaded,
-            error: None,
-            status: TurnStatus::InProgress,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        };
-
-        Ok(TurnStartResponse { turn })
     }
 
     async fn thread_settings_update_inner(
