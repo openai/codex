@@ -290,8 +290,8 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         codex_home,
         server_uri,
         &BTreeMap::default(),
-        200_000,
-        None,
+        /*auto_compact_limit*/ 200_000,
+        /*requires_openai_auth*/ None,
         "mock_provider",
         "compact",
     )
