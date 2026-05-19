@@ -900,16 +900,14 @@ Approved action:
         phase: None,
     }];
 
-    if let Err(items) = sess.inject_response_items(items).await {
-        sess.input_queue
-            .inject(
-                items
-                    .into_iter()
-                    .map(TurnInput::ResponseInputItem)
-                    .collect(),
-            )
-            .await;
-    }
+    sess.input_queue
+        .inject(
+            items
+                .into_iter()
+                .map(TurnInput::ResponseInputItem)
+                .collect(),
+        )
+        .await;
 }
 
 pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {

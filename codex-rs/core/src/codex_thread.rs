@@ -386,24 +386,12 @@ impl CodexThread {
     pub(crate) async fn append_message(&self, message: ResponseItem) -> CodexResult<String> {
         let submission_id = uuid::Uuid::new_v4().to_string();
         let pending_item = pending_message_input_item(&message)?;
-        if let Err(items) = self
-            .codex
+        self.codex
             .session
-            .inject_response_items(vec![pending_item])
-            .await
-        {
-            self.codex
-                .session
-                .input_queue
-                .inject(
-                    items
-                        .into_iter()
-                        .map(TurnInput::ResponseInputItem)
-                        .collect(),
-                )
-                .await;
-            self.codex.session.maybe_start_turn_for_pending_work().await;
-        }
+            .input_queue
+            .inject(vec![TurnInput::ResponseInputItem(pending_item)])
+            .await;
+        self.codex.session.maybe_start_turn_for_pending_work().await;
 
         Ok(submission_id)
     }
