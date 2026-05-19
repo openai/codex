@@ -578,6 +578,77 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
 }
 
 #[test]
+fn test_build_specs_multi_agent_v2_uses_configured_tool_namespace() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_multi_agent_v2_tool_namespace(Some("agents".to_string()));
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &["agents"]);
+    for tool_name in [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+        assert!(registry.has_tool(&ToolName::namespaced("agents", tool_name)));
+        assert!(!registry.has_tool(&ToolName::plain(tool_name)));
+        assert_namespace_contains_function(&tools, "agents", tool_name);
+    }
+}
+
+#[test]
+fn test_build_specs_multi_agent_v2_ignores_tool_namespace_without_namespace_support() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_multi_agent_v2_tool_namespace(Some("agents".to_string()));
+    tools_config.namespace_tools = false;
+    let (tools, registry) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &["spawn_agent", "send_message", "list_agents"]);
+    assert_lacks_tool_name(&tools, "agents");
+    assert!(registry.has_tool(&ToolName::plain("spawn_agent")));
+    assert!(!registry.has_tool(&ToolName::namespaced("agents", "spawn_agent")));
+}
+
+#[test]
 fn test_build_specs_multi_agent_v2_does_not_require_collab_feature() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -1582,7 +1653,6 @@ fn search_tool_description_lists_each_mcp_source_once() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
-    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1655,7 +1725,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
-fn search_tool_requires_model_capability_and_enabled_feature() {
+fn search_tool_requires_model_capability() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
         "_create_event",
@@ -1674,26 +1744,6 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
         },
         available_models: &available_models,
         features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        permission_profile: &PermissionProfile::Disabled,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        deferred_mcp_tools.clone(),
-        &[],
-    );
-    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-
-    let mut features_without_tool_search = Features::with_defaults();
-    features_without_tool_search.disable(Feature::ToolSearch);
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features_without_tool_search,
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1730,8 +1780,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 #[test]
 fn no_search_tool_when_namespaces_disabled() {
     let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    let features = Features::with_defaults();
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1765,8 +1814,7 @@ fn no_search_tool_when_namespaces_disabled() {
 #[test]
 fn search_tool_registers_for_deferred_dynamic_tools() {
     let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1825,8 +1873,7 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
 #[test]
 fn search_tool_is_hidden_for_deferred_dynamic_tools_when_namespace_tools_are_disabled() {
     let model_info = search_capable_model_info();
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
+    let features = Features::with_defaults();
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1875,7 +1922,6 @@ fn search_tool_is_hidden_for_deferred_dynamic_tools_when_namespace_tools_are_dis
 fn request_plugin_install_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
     features.disable(Feature::ToolSuggest);
@@ -1965,7 +2011,6 @@ fn request_plugin_install_description_lists_discoverable_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
-    features.enable(Feature::ToolSearch);
     features.enable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2655,6 +2700,23 @@ fn find_tool<'a>(tools: &'a [ToolSpec], expected_name: &str) -> &'a ToolSpec {
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+}
+
+fn assert_namespace_contains_function(
+    tools: &[ToolSpec],
+    expected_namespace: &str,
+    expected_name: &str,
+) {
+    let namespace_tool = find_tool(tools, expected_namespace);
+    let ToolSpec::Namespace(namespace) = namespace_tool else {
+        panic!("expected namespace tool {expected_namespace}");
+    };
+    assert!(
+        namespace.tools.iter().any(|tool| {
+            matches!(tool, ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name)
+        }),
+        "expected tool {expected_name} in namespace {expected_namespace}"
+    );
 }
 
 fn assert_process_tool_environment_id(

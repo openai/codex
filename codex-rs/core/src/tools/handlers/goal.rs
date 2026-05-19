@@ -1,8 +1,8 @@
 //! Built-in model tool handlers for persisted thread goals.
 //!
-//! The public tool contract intentionally splits goal creation from completion:
-//! `create_goal` starts an active objective, while `update_goal` can only mark
-//! the existing goal complete.
+//! The public tool contract intentionally splits goal creation from stopped
+//! status updates: `create_goal` starts an active objective, while
+//! `update_goal` can only mark the existing goal complete or blocked.
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;

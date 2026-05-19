@@ -974,6 +974,7 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
+    plugin_id: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
@@ -983,6 +984,7 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
 async fn custom_mcp_tool_approval_mode(
@@ -1066,6 +1068,12 @@ fn build_mcp_tool_call_request_meta(
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
+        );
+    }
+    if let Some(plugin_id) = metadata.and_then(|metadata| metadata.plugin_id.as_ref()) {
+        request_meta.insert(
+            MCP_TOOL_PLUGIN_ID_META_KEY.to_string(),
+            serde_json::Value::String(plugin_id.clone()),
         );
     }
 
@@ -1480,13 +1488,11 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
-    let tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
+    let manager = sess.services.mcp_connection_manager.read().await;
+    let plugin_id = manager
+        .plugin_id_for_mcp_server_name(server)
+        .map(str::to_string);
+    let tools = manager.list_all_tools().await;
     let tool_info = tools
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
@@ -1519,6 +1525,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_id: tool_info.connector_id,
         connector_name: tool_info.connector_name,
         connector_description,
+        plugin_id,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),

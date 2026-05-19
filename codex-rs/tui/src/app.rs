@@ -410,17 +410,18 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
-    let thread_id =
-        resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
-    let resume_command = codex_utils_cli::resume_command(/*thread_name*/ None, thread_id);
+    let resumable_thread = resumable_thread(thread_id, thread_name, rollout_path);
+    let resume_hint = resumable_thread.as_ref().and_then(|thread| {
+        codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
+    });
 
-    if usage_line.is_none() && resume_command.is_none() {
+    if usage_line.is_none() && resume_hint.is_none() {
         return None;
     }
 
     Some(SessionSummary {
         usage_line,
-        resume_command,
+        resume_hint,
     })
 }
 
@@ -459,7 +460,7 @@ fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorIn
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: Option<String>,
-    resume_command: Option<String>,
+    resume_hint: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -660,6 +661,7 @@ impl App {
         startup_hooks_browser: Option<HooksListEntry>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
+        let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
@@ -703,7 +705,9 @@ impl App {
                 });
             }
         };
+        let bootstrap_started_at = Instant::now();
         let bootstrap = app_server.bootstrap(&config).await?;
+        let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
         let exit_info = handle_model_migration_prompt_if_needed(
@@ -760,8 +764,10 @@ impl App {
         let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
             AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
         );
+        let runtime_model_provider_started_at = Instant::now();
         let runtime_model_provider_base_url =
             resolve_runtime_model_provider_base_url(&config.model_provider).await;
+        let runtime_model_provider_ms = runtime_model_provider_started_at.elapsed().as_millis();
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -772,6 +778,7 @@ impl App {
                 &initial_prompt,
                 &initial_images,
             );
+        let thread_and_widget_started_at = Instant::now();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&config).await?;
@@ -888,6 +895,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);
         }
@@ -958,6 +966,7 @@ See the Codex keymap documentation for supported actions and examples."
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }
+        let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -967,6 +976,7 @@ See the Codex keymap documentation for supported actions and examples."
                     .await;
             }
         }
+        let initial_session_ms = initial_session_started_at.elapsed().as_millis();
 
         // On startup, if a managed filesystem sandbox is active, warn about
         // world-writable dirs on Windows.
@@ -996,10 +1006,20 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        let event_stream_started_at = Instant::now();
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        tracing::info!(
+            duration_ms = %startup_started_at.elapsed().as_millis(),
+            bootstrap_ms = %bootstrap_ms,
+            runtime_model_provider_ms = %runtime_model_provider_ms,
+            thread_and_widget_ms = %thread_and_widget_ms,
+            initial_session_ms = %initial_session_ms,
+            event_stream_ms = %event_stream_started_at.elapsed().as_millis(),
+            "tui startup initial frame scheduled"
+        );
         app.refresh_startup_skills(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
@@ -1176,30 +1196,8 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    let desired_height =
-                        self.chat_widget.desired_height(tui.terminal.size()?.width);
-                    let mut rendered_area = Rect::default();
-                    if terminal_resize_reflow_enabled {
-                        tui.draw_with_resize_reflow(desired_height, |frame| {
-                            let area = frame.area();
-                            rendered_area = area;
-                            self.chat_widget.render(area, frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                                frame.set_cursor_position((x, y));
-                            }
-                        })?;
-                    } else {
-                        tui.draw(desired_height, |frame| {
-                            let area = frame.area();
-                            rendered_area = area;
-                            self.chat_widget.render(area, frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                                frame.set_cursor_position((x, y));
-                            }
-                        })?;
-                    }
+                    let rendered_area =
+                        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
                     if self.chat_widget.ambient_pet_image_enabled() {
                         let terminal_size = tui.terminal.size()?;
                         let ambient_pet_area = Rect::new(
@@ -1233,6 +1231,49 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.disable_ambient_pet_before_shutdown(tui)?;
+        self.chat_widget.show_shutdown_in_progress();
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled {
+            self.handle_draw_pre_render(tui)?;
+        }
+        self.chat_widget.pre_draw_tick();
+        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
+        Ok(())
+    }
+
+    fn render_chat_widget_frame(
+        &mut self,
+        tui: &mut tui::Tui,
+        terminal_resize_reflow_enabled: bool,
+    ) -> Result<Rect> {
+        let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
+        let mut rendered_area = Rect::default();
+        if terminal_resize_reflow_enabled {
+            tui.draw_with_resize_reflow(desired_height, |frame| {
+                let area = frame.area();
+                rendered_area = area;
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })?;
+        } else {
+            tui.draw(desired_height, |frame| {
+                let area = frame.area();
+                rendered_area = area;
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })?;
+        }
+        Ok(rendered_area)
     }
 }
 

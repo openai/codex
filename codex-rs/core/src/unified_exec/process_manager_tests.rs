@@ -71,16 +71,10 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         .expect("current dir")
         .try_into()
         .expect("absolute path");
-    let sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
     let file_system_sandbox_policy =
-        codex_protocol::permissions::FileSystemSandboxPolicy::from(&sandbox_policy);
+        codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
     let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Restricted;
-    let permission_profile =
-        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
-            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
+    let permission_profile = codex_protocol::models::PermissionProfile::Disabled;
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
         cwd: cwd.clone(),

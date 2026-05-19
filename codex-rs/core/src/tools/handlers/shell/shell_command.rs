@@ -197,7 +197,6 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             turn,
             tracker,
             call_id,
-            freeform: true,
             shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await

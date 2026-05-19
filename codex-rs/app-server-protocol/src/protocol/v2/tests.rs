@@ -14,6 +14,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::MessagePhase;
@@ -614,57 +615,49 @@ fn permissions_request_approval_response_accepts_strict_auto_review() {
 }
 
 #[test]
-fn permission_profile_selection_accepts_legacy_object_shape() {
-    let additional_root = absolute_path("additional-root");
-    let params = json!({
-        "permissions": {
-            "type": "profile",
-            "id": ":workspace",
-            "modifications": [
-                {
-                    "type": "additionalWritableRoot",
-                    "path": additional_root,
-                }
-            ],
-        },
-    });
-
-    let start: ThreadStartParams =
-        serde_json::from_value(params.clone()).expect("thread/start params deserialize");
-    assert_legacy_permission_profile_selection(start.permissions, &additional_root);
-
-    let resume: ThreadResumeParams = serde_json::from_value(json!({
-        "threadId": "thread-1",
-        "permissions": params["permissions"].clone(),
+fn permission_profile_selection_uses_id_string() {
+    let start: ThreadStartParams = serde_json::from_value(json!({
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
     }))
-    .expect("thread/resume params deserialize");
-    assert_legacy_permission_profile_selection(resume.permissions, &additional_root);
-
-    let fork: ThreadForkParams = serde_json::from_value(json!({
-        "threadId": "thread-1",
-        "permissions": params["permissions"].clone(),
-    }))
-    .expect("thread/fork params deserialize");
-    assert_legacy_permission_profile_selection(fork.permissions, &additional_root);
+    .expect("thread/start params deserialize");
+    assert_eq!(
+        start.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
 
     let turn: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread-1",
         "input": [],
-        "permissions": params["permissions"].clone(),
+        "permissions": "dev",
     }))
     .expect("turn/start params deserialize");
-    assert_legacy_permission_profile_selection(turn.permissions, &additional_root);
-}
+    assert_eq!(turn.permissions, Some("dev".to_string()));
 
-fn assert_legacy_permission_profile_selection(
-    selection: Option<PermissionProfileSelectionParams>,
-    additional_root: &AbsolutePathBuf,
-) {
-    let selection = selection.expect("permissions should be present");
-    assert_eq!(selection.id(), ":workspace");
+    let command: CommandExecParams = serde_json::from_value(json!({
+        "command": ["echo", "hello"],
+        "permissionProfile": "dev",
+    }))
+    .expect("command/exec params deserialize");
+    assert_eq!(command.permission_profile, Some("dev".to_string()));
+
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/resume params deserialize");
     assert_eq!(
-        selection.legacy_additional_writable_roots(),
-        std::slice::from_ref(additional_root)
+        resume.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(
+        fork.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
     );
 }
 
@@ -2785,6 +2778,27 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 "local",
                 "workspace-directory",
                 "shared-with-me",
+            ],
+        }),
+    );
+}
+
+#[test]
+fn plugin_installed_params_serializes_install_suggestion_names() {
+    assert_eq!(
+        serde_json::to_value(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: Some(vec![
+                "computer-use".to_string(),
+                "chrome".to_string(),
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "installSuggestionPluginNames": [
+                "computer-use",
+                "chrome",
             ],
         }),
     );

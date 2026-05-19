@@ -265,6 +265,8 @@ export type { PluginHookSummary } from "./PluginHookSummary";
 export type { PluginInstallParams } from "./PluginInstallParams";
 export type { PluginInstallPolicy } from "./PluginInstallPolicy";
 export type { PluginInstallResponse } from "./PluginInstallResponse";
+export type { PluginInstalledParams } from "./PluginInstalledParams";
+export type { PluginInstalledResponse } from "./PluginInstalledResponse";
 export type { PluginInterface } from "./PluginInterface";
 export type { PluginListMarketplaceKind } from "./PluginListMarketplaceKind";
 export type { PluginListParams } from "./PluginListParams";
