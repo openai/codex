@@ -42,7 +42,6 @@ pub struct EnvironmentManager {
     default_environment: Option<String>,
     environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
-    local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -51,14 +50,14 @@ pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
 impl EnvironmentManager {
     /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
+        let local_environment = Arc::new(Environment::default_for_tests());
         Self {
             default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::from([(
                 LOCAL_ENVIRONMENT_ID.to_string(),
-                Arc::new(Environment::default_for_tests()),
+                Arc::clone(&local_environment),
             )])),
-            local_environment: Some(Arc::new(Environment::default_for_tests())),
-            local_runtime_paths: None,
+            local_environment: Some(local_environment),
         }
     }
 
@@ -68,7 +67,6 @@ impl EnvironmentManager {
             default_environment: None,
             environments: RwLock::new(HashMap::new()),
             local_environment: None,
-            local_runtime_paths: None,
         }
     }
 
@@ -90,8 +88,9 @@ impl EnvironmentManager {
         codex_home: impl AsRef<std::path::Path>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
-        let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
-        Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
+        let provider =
+            environment_provider_from_codex_home(codex_home.as_ref(), local_runtime_paths)?;
+        Self::from_provider(provider.as_ref()).await
     }
 
     /// Builds a manager from the legacy environment-variable provider without
@@ -99,16 +98,27 @@ impl EnvironmentManager {
     pub async fn from_env(
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
-        let provider = DefaultEnvironmentProvider::from_env();
-        Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
+        let provider = DefaultEnvironmentProvider::from_env(local_runtime_paths);
+        Self::from_provider(&provider).await
+    }
+
+    pub async fn from_provider<P>(provider: &P) -> Result<Self, ExecServerError>
+    where
+        P: EnvironmentProvider + ?Sized,
+    {
+        Self::from_snapshot(provider.snapshot().await?)
     }
 
     async fn from_default_provider_url(
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let provider = DefaultEnvironmentProvider::new(exec_server_url);
-        match Self::from_snapshot(provider.snapshot_inner(), local_runtime_paths) {
+        let provider = DefaultEnvironmentProvider::new(exec_server_url, local_runtime_paths);
+        match Self::from_snapshot(
+            provider
+                .snapshot_inner()
+                .expect("default provider should create valid environments"),
+        ) {
             Ok(manager) => manager,
             Err(err) => panic!("default provider should create valid environments: {err}"),
         }
@@ -120,40 +130,36 @@ impl EnvironmentManager {
         exec_server_url: Option<String>,
         local_runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
-        let mut snapshot = DefaultEnvironmentProvider::new(exec_server_url).snapshot_inner();
-        snapshot.include_local = true;
-        match Self::from_snapshot(snapshot, Some(local_runtime_paths)) {
+        let local_environment = Environment::local(local_runtime_paths.clone());
+        let provider = DefaultEnvironmentProvider::new(exec_server_url, Some(local_runtime_paths));
+        let mut snapshot = provider
+            .snapshot_inner()
+            .expect("default provider should create valid environments");
+        if snapshot.local_environment.is_none() {
+            snapshot.local_environment = Some(local_environment);
+        }
+        match Self::from_snapshot(snapshot) {
             Ok(manager) => manager,
             Err(err) => panic!("test provider with local should create valid environments: {err}"),
         }
     }
 
-    fn from_snapshot(
-        snapshot: EnvironmentProviderSnapshot,
-        local_runtime_paths: Option<ExecServerRuntimePaths>,
-    ) -> Result<Self, ExecServerError> {
+    fn from_snapshot(snapshot: EnvironmentProviderSnapshot) -> Result<Self, ExecServerError> {
         let EnvironmentProviderSnapshot {
             environments,
+            local_environment,
             default,
-            include_local,
         } = snapshot;
         let mut environment_map =
-            HashMap::with_capacity(environments.len() + usize::from(include_local));
-        let local_environment = if include_local {
-            let local_runtime_paths = local_runtime_paths.clone().ok_or_else(|| {
-                ExecServerError::Protocol(
-                    "local environment requires configured runtime paths".to_string(),
-                )
-            })?;
-            let local_environment = Arc::new(Environment::local(local_runtime_paths));
+            HashMap::with_capacity(environments.len() + usize::from(local_environment.is_some()));
+        let local_environment = local_environment.map(|local_environment| {
+            let local_environment = Arc::new(local_environment);
             environment_map.insert(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::clone(&local_environment),
             );
-            Some(local_environment)
-        } else {
-            None
-        };
+            local_environment
+        });
         for (id, environment) in environments {
             if id.is_empty() {
                 return Err(ExecServerError::Protocol(
@@ -189,7 +195,6 @@ impl EnvironmentManager {
             default_environment,
             environments: RwLock::new(environment_map),
             local_environment,
-            local_runtime_paths,
         })
     }
 
@@ -269,7 +274,7 @@ impl EnvironmentManager {
             ));
         };
         let environment =
-            Environment::remote_inner(exec_server_url, self.local_runtime_paths.clone());
+            Environment::remote_inner(exec_server_url, /*local_runtime_paths*/ None);
         self.environments
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -541,11 +546,10 @@ mod tests {
                 Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                     .expect("remote environment"),
             )],
+            local_environment: None,
             default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
-            include_local: false,
         };
-        let manager = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(snapshot).expect("environment manager");
 
         assert_eq!(
             manager.default_environment_id(),
@@ -565,11 +569,10 @@ mod tests {
     async fn environment_manager_rejects_empty_environment_id() {
         let snapshot = EnvironmentProviderSnapshot {
             environments: vec![("".to_string(), Environment::default_for_tests())],
+            local_environment: None,
             default: EnvironmentDefault::Disabled,
-            include_local: false,
         };
-        let err = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect_err("empty id should fail");
+        let err = EnvironmentManager::from_snapshot(snapshot).expect_err("empty id should fail");
 
         assert_eq!(
             err.to_string(),
@@ -584,11 +587,10 @@ mod tests {
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Environment::default_for_tests(),
             )],
+            local_environment: None,
             default: EnvironmentDefault::Disabled,
-            include_local: false,
         };
-        let err = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect_err("local id should fail");
+        let err = EnvironmentManager::from_snapshot(snapshot).expect_err("local id should fail");
 
         assert_eq!(
             err.to_string(),
@@ -604,11 +606,10 @@ mod tests {
                 Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                     .expect("remote environment"),
             )],
+            local_environment: Some(Environment::local(test_runtime_paths())),
             default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
-            include_local: true,
         };
-        let manager = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect("manager");
+        let manager = EnvironmentManager::from_snapshot(snapshot).expect("manager");
 
         assert_eq!(manager.default_environment_id(), Some("devbox"));
         assert_eq!(
@@ -626,11 +627,10 @@ mod tests {
                 Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                     .expect("remote environment"),
             )],
+            local_environment: Some(Environment::local(test_runtime_paths())),
             default: EnvironmentDefault::Disabled,
-            include_local: true,
         };
-        let manager = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect("manager");
+        let manager = EnvironmentManager::from_snapshot(snapshot).expect("manager");
 
         assert_eq!(manager.default_environment_id(), None);
         assert!(manager.default_environment().is_none());
@@ -650,11 +650,11 @@ mod tests {
                 Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                     .expect("remote environment"),
             )],
+            local_environment: Some(Environment::local(test_runtime_paths())),
             default: EnvironmentDefault::EnvironmentId("missing".to_string()),
-            include_local: true,
         };
-        let err = EnvironmentManager::from_snapshot(snapshot, Some(test_runtime_paths()))
-            .expect_err("unknown default should fail");
+        let err =
+            EnvironmentManager::from_snapshot(snapshot).expect_err("unknown default should fail");
 
         assert_eq!(
             err.to_string(),
@@ -728,16 +728,12 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_snapshot_without_local_environment_disables_local_default() {
-        let mut snapshot = EnvironmentProviderSnapshot {
+        let snapshot = EnvironmentProviderSnapshot {
             environments: Vec::new(),
-            default: EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string()),
-            include_local: true,
+            local_environment: None,
+            default: EnvironmentDefault::Disabled,
         };
-        snapshot.include_local = false;
-        snapshot.default = EnvironmentDefault::Disabled;
-        let manager =
-            EnvironmentManager::from_snapshot(snapshot, /*local_runtime_paths*/ None)
-                .expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(snapshot).expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);

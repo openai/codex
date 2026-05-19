@@ -12,6 +12,7 @@ use crate::DefaultEnvironmentProvider;
 use crate::Environment;
 use crate::EnvironmentProvider;
 use crate::ExecServerError;
+use crate::ExecServerRuntimePaths;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
@@ -53,17 +54,28 @@ struct TomlEnvironmentProvider {
     default: EnvironmentDefault,
     include_local: bool,
     environments: Vec<(String, ExecServerTransportParams)>,
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+#[cfg(test)]
+fn test_runtime_paths() -> ExecServerRuntimePaths {
+    ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths")
 }
 
 impl TomlEnvironmentProvider {
     #[cfg(test)]
     fn new(config: EnvironmentsToml) -> Result<Self, ExecServerError> {
-        Self::new_with_config_dir(config, /*config_dir*/ None)
+        Self::new_with_config_dir(config, /*config_dir*/ None, Some(test_runtime_paths()))
     }
 
     fn new_with_config_dir(
         config: EnvironmentsToml,
         config_dir: Option<&Path>,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
         let EnvironmentsToml {
             default,
@@ -90,6 +102,7 @@ impl TomlEnvironmentProvider {
             default,
             include_local,
             environments: parsed_environments,
+            local_runtime_paths,
         })
     }
 }
@@ -108,10 +121,22 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
             ));
         }
 
+        let local_environment = if self.include_local {
+            Some(Environment::local(
+                self.local_runtime_paths.clone().ok_or_else(|| {
+                    ExecServerError::Protocol(
+                        "local environment requires configured runtime paths".to_string(),
+                    )
+                })?,
+            ))
+        } else {
+            None
+        };
+
         Ok(EnvironmentProviderSnapshot {
             environments,
+            local_environment,
             default: self.default.clone(),
-            include_local: self.include_local,
         })
     }
 }
@@ -204,6 +229,7 @@ fn normalize_stdio_cwd(
 
 pub(crate) fn environment_provider_from_codex_home(
     codex_home: &Path,
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
 ) -> Result<Box<dyn EnvironmentProvider>, ExecServerError> {
     let path = codex_home.join(ENVIRONMENTS_TOML_FILE);
     if !path.try_exists().map_err(|err| {
@@ -212,13 +238,16 @@ pub(crate) fn environment_provider_from_codex_home(
             path.display()
         ))
     })? {
-        return Ok(Box::new(DefaultEnvironmentProvider::from_env()));
+        return Ok(Box::new(DefaultEnvironmentProvider::from_env(
+            local_runtime_paths,
+        )));
     }
 
     let environments = load_environments_toml(&path)?;
     Ok(Box::new(TomlEnvironmentProvider::new_with_config_dir(
         environments,
         Some(codex_home),
+        local_runtime_paths,
     )?))
 }
 
@@ -374,8 +403,8 @@ mod tests {
         let snapshot = provider.snapshot().await.expect("environments");
         let EnvironmentProviderSnapshot {
             environments,
+            local_environment,
             default,
-            include_local,
         } = snapshot;
         let environment_ids: Vec<_> = environments
             .iter()
@@ -384,7 +413,7 @@ mod tests {
         assert_eq!(environment_ids, vec!["devbox", "ssh-dev"]);
         let environments: HashMap<_, _> = environments.into_iter().collect();
 
-        assert!(include_local);
+        assert!(local_environment.is_some());
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
         assert_eq!(
             environments["devbox"].exec_server_url(),
@@ -403,7 +432,7 @@ mod tests {
         let provider = TomlEnvironmentProvider::new(EnvironmentsToml::default()).expect("provider");
         let snapshot = provider.snapshot().await.expect("environments");
 
-        assert!(snapshot.include_local);
+        assert!(snapshot.local_environment.is_some());
         assert_eq!(
             snapshot.default,
             EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
@@ -420,7 +449,7 @@ mod tests {
         .expect("provider");
         let snapshot = provider.snapshot().await.expect("environments");
 
-        assert!(snapshot.include_local);
+        assert!(snapshot.local_environment.is_some());
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
 
@@ -438,7 +467,7 @@ mod tests {
         .expect("provider");
         let snapshot = provider.snapshot().await.expect("environments");
 
-        assert!(!snapshot.include_local);
+        assert!(snapshot.local_environment.is_none());
         assert_eq!(
             snapshot.default,
             EnvironmentDefault::EnvironmentId("ssh-dev".to_string())
@@ -454,8 +483,24 @@ mod tests {
         .expect("provider");
         let snapshot = provider.snapshot().await.expect("environments");
 
-        assert!(!snapshot.include_local);
+        assert!(snapshot.local_environment.is_none());
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
+    }
+
+    #[tokio::test]
+    async fn toml_provider_requires_runtime_paths_for_local_environment() {
+        let provider =
+            TomlEnvironmentProvider::new_with_config_dir(EnvironmentsToml::default(), None, None)
+                .expect("provider");
+        let err = provider
+            .snapshot()
+            .await
+            .expect_err("local environment should require runtime paths");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: local environment requires configured runtime paths"
+        );
     }
 
     #[test]
@@ -574,6 +619,7 @@ mod tests {
                 }],
             },
             Some(config_dir.path()),
+            Some(test_runtime_paths()),
         )
         .expect("provider");
 
@@ -842,7 +888,8 @@ include_local = false
         .expect("write environments.toml");
 
         let provider =
-            environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
+            environment_provider_from_codex_home(codex_home.path(), Some(test_runtime_paths()))
+                .expect("environment provider");
 
         let snapshot = provider.snapshot().await.expect("environments");
         let environment_ids: Vec<_> = snapshot
@@ -851,7 +898,7 @@ include_local = false
             .map(|(id, _environment)| id)
             .collect();
 
-        assert!(!snapshot.include_local);
+        assert!(snapshot.local_environment.is_none());
         assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
         assert_eq!(snapshot.default, EnvironmentDefault::Disabled);
     }
@@ -861,7 +908,8 @@ include_local = false
         let codex_home = tempdir().expect("tempdir");
 
         let provider =
-            environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
+            environment_provider_from_codex_home(codex_home.path(), Some(test_runtime_paths()))
+                .expect("environment provider");
 
         let snapshot = provider.snapshot().await.expect("environments");
         let environment_ids: Vec<_> = snapshot
@@ -870,7 +918,7 @@ include_local = false
             .map(|(id, _environment)| id)
             .collect();
 
-        assert!(snapshot.include_local);
+        assert!(snapshot.local_environment.is_some());
         assert!(!environment_ids.contains(&LOCAL_ENVIRONMENT_ID.to_string()));
         assert_eq!(
             snapshot.default,
