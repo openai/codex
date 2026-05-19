@@ -50,22 +50,24 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let thread = start_thread(&mut mcp).await?.thread;
 
-    let request_id = mcp
-        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
             approval_policy: Some(AskForApproval::Never),
             model: Some(service_tier_model.id.clone()),
             service_tier: Some(Some(service_tier_id.clone())),
             effort: Some(ReasoningEffort::Medium),
             ..Default::default()
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        },
     )
-    .await??;
-    let _: ThreadSettingsUpdateResponse = to_response(response)?;
+    .await?;
+    assert!(
+        received_response_bodies(&server).await?.is_empty(),
+        "settings-only update should not start a model request"
+    );
+
+    start_text_turn(&mut mcp, thread.id.clone()).await?;
 
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
@@ -82,28 +84,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         updated.thread_settings.approval_policy,
         AskForApproval::Never
     );
-    assert!(
-        received_response_bodies(&server).await?.is_empty(),
-        "settings-only update should not start a model request"
-    );
 
-    let turn_request_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: updated.thread_id,
-            input: vec![V2UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response(turn_response)?;
-    assert!(!turn.id.is_empty());
     timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -123,7 +104,7 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 }
 
 #[tokio::test]
-async fn thread_settings_update_empty_noop_does_not_emit_notification() -> Result<()> {
+async fn thread_settings_update_same_effective_settings_does_not_emit_notification() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -137,18 +118,29 @@ async fn thread_settings_update_empty_noop_does_not_emit_notification() -> Resul
     )
     .await??;
 
-    let request_id = mcp
-        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
-            thread_id: thread.id,
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            model: Some("mock-model-2".to_string()),
             ..Default::default()
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        },
     )
-    .await??;
-    let _: ThreadSettingsUpdateResponse = to_response(response)?;
+    .await?;
+
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(updated.thread_settings.model, "mock-model-2");
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            model: Some("mock-model-2".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let unexpected = timeout(
         Duration::from_millis(300),
@@ -157,7 +149,79 @@ async fn thread_settings_update_empty_noop_does_not_emit_notification() -> Resul
     .await;
     assert!(
         unexpected.is_err(),
-        "empty settings update should not emit thread/settings/updated"
+        "same effective settings update should not emit thread/settings/updated"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_clears_service_tier() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("done")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    write_models_cache(codex_home.path())?;
+    let service_tier_model = all_model_presets()
+        .iter()
+        .find(|preset| preset.show_in_picker && !preset.service_tiers.is_empty())
+        .expect("bundled model catalog should include a picker model with service tiers");
+    let service_tier_id = service_tier_model.service_tiers[0].id.clone();
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            model: Some(service_tier_model.id.clone()),
+            service_tier: Some(Some(service_tier_id.clone())),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let set_updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(set_updated.thread_id, thread.id);
+    assert_eq!(
+        set_updated.thread_settings.service_tier.as_deref(),
+        Some(service_tier_id.as_str())
+    );
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            service_tier: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let clear_updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(clear_updated.thread_id, thread.id);
+    assert_eq!(clear_updated.thread_settings.model, service_tier_model.id);
+    assert_eq!(clear_updated.thread_settings.service_tier, None);
+
+    start_text_turn(&mut mcp, thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request_bodies = received_response_bodies(&server).await?;
+    assert!(
+        request_bodies.iter().any(|body| {
+            body.get("model").and_then(Value::as_str) == Some(service_tier_model.id.as_str())
+                && body
+                    .as_object()
+                    .is_some_and(|object| !object.contains_key("service_tier"))
+        }),
+        "future turn did not clear service tier: {request_bodies:#?}"
     );
     Ok(())
 }
@@ -239,6 +303,41 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    Ok(())
+}
+
+async fn send_thread_settings_update(
+    mcp: &mut McpProcess,
+    params: ThreadSettingsUpdateParams,
+) -> Result<()> {
+    let request_id = mcp.send_thread_settings_update_request(params).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadSettingsUpdateResponse = to_response(response)?;
+    Ok(())
+}
+
+async fn start_text_turn(mcp: &mut McpProcess, thread_id: String) -> Result<()> {
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response(turn_response)?;
+    assert!(!turn.id.is_empty());
     Ok(())
 }
 
