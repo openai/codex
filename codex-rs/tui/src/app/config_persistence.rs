@@ -154,13 +154,6 @@ impl App {
         let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
-        let scoped_key_path = |key: &str| {
-            if let Some(profile) = active_profile.as_deref() {
-                format!("profiles.{profile}.{key}")
-            } else {
-                key.to_string()
-            }
-        };
         let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
             matches!(
                 feature,
@@ -229,7 +222,10 @@ impl App {
                     // changes it explicitly.
                     feature_config.approvals_reviewer = auto_review_preset.approvals_reviewer;
                     feature_edits.push(crate::config_update::replace_config_value(
-                        scoped_key_path("approvals_reviewer"),
+                        crate::config_update::profile_scoped_key_path(
+                            active_profile.as_deref(),
+                            "approvals_reviewer",
+                        ),
                         serde_json::json!(auto_review_preset.approvals_reviewer.to_string()),
                     ));
                     if previous_approvals_reviewer != auto_review_preset.approvals_reviewer {
@@ -238,7 +234,10 @@ impl App {
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
                         feature_edits.push(crate::config_update::clear_config_value(
-                            scoped_key_path("approvals_reviewer"),
+                            crate::config_update::profile_scoped_key_path(
+                                active_profile.as_deref(),
+                                "approvals_reviewer",
+                            ),
                         ));
                     }
                     feature_config.approvals_reviewer = ApprovalsReviewer::User;
@@ -273,11 +272,17 @@ impl App {
                 };
                 feature_edits.extend([
                     crate::config_update::replace_config_value(
-                        scoped_key_path("approval_policy"),
+                        crate::config_update::profile_scoped_key_path(
+                            active_profile.as_deref(),
+                            "approval_policy",
+                        ),
                         serde_json::json!("on-request"),
                     ),
                     crate::config_update::replace_config_value(
-                        scoped_key_path("sandbox_mode"),
+                        crate::config_update::profile_scoped_key_path(
+                            active_profile.as_deref(),
+                            "sandbox_mode",
+                        ),
                         serde_json::json!("workspace-write"),
                     ),
                 ]);
