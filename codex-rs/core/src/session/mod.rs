@@ -179,6 +179,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
@@ -1488,6 +1489,11 @@ impl Session {
         //
         // Prefer `refresh_runtime_config()` when the host can already provide a materialized
         // config snapshot. This file-based path exists for legacy local reload flows.
+        enum UserConfigReloadLayer {
+            Base(AbsolutePathBuf),
+            Override(AbsolutePathBuf),
+        }
+
         let config_toml_paths = {
             let state = self.state.lock().await;
             let config = &state.session_configuration.original_config_do_not_use;
@@ -1499,25 +1505,47 @@ impl Session {
                 )
                 .into_iter()
                 .filter_map(|layer| match &layer.name {
-                    ConfigLayerSource::User { file, .. } => Some(file.clone()),
+                    ConfigLayerSource::User { file, .. } => {
+                        Some(UserConfigReloadLayer::Base(file.clone()))
+                    }
+                    ConfigLayerSource::UserOverride { file } => {
+                        Some(UserConfigReloadLayer::Override(file.clone()))
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let override_path = state
+                .session_configuration
+                .codex_home
+                .join(CONFIG_OVERRIDE_TOML_FILE);
+            let has_override_path = user_config_paths.iter().any(|layer| {
+                matches!(
+                    layer,
+                    UserConfigReloadLayer::Override(path) if path == &override_path
+                )
+            });
+            let mut user_config_paths = user_config_paths;
+            if !has_override_path && override_path.as_path().exists() {
+                user_config_paths.push(UserConfigReloadLayer::Override(override_path));
+            }
             if user_config_paths.is_empty() {
-                vec![
+                vec![UserConfigReloadLayer::Base(
                     state
                         .session_configuration
                         .codex_home
                         .join(CONFIG_TOML_FILE),
-                ]
+                )]
             } else {
                 user_config_paths
             }
         };
 
         let mut reloaded_user_configs = Vec::with_capacity(config_toml_paths.len());
-        for config_toml_path in config_toml_paths {
-            let user_config = match std::fs::read_to_string(&config_toml_path) {
+        for reload_layer in config_toml_paths {
+            let config_toml_path = match &reload_layer {
+                UserConfigReloadLayer::Base(path) | UserConfigReloadLayer::Override(path) => path,
+            };
+            let user_config = match std::fs::read_to_string(config_toml_path.as_path()) {
                 Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
                     Ok(config) => config,
                     Err(err) => {
@@ -1533,16 +1561,21 @@ impl Session {
                     return;
                 }
             };
-            reloaded_user_configs.push((config_toml_path, user_config));
+            reloaded_user_configs.push((reload_layer, user_config));
         }
 
         let next_config = {
             let state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-            for (config_toml_path, user_config) in reloaded_user_configs {
-                config.config_layer_stack = config
-                    .config_layer_stack
-                    .with_user_config(&config_toml_path, user_config);
+            for (reload_layer, user_config) in reloaded_user_configs {
+                config.config_layer_stack = match reload_layer {
+                    UserConfigReloadLayer::Base(config_toml_path) => config
+                        .config_layer_stack
+                        .with_user_config(&config_toml_path, user_config),
+                    UserConfigReloadLayer::Override(config_toml_path) => config
+                        .config_layer_stack
+                        .with_user_override_config(&config_toml_path, user_config),
+                };
             }
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);

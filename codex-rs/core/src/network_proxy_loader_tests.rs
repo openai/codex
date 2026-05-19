@@ -3,7 +3,36 @@ use super::*;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use tempfile::tempdir;
+
+#[tokio::test]
+async fn network_proxy_reloader_notices_new_user_override_files() {
+    let temp = tempdir().expect("create temp dir");
+    let base_file =
+        AbsolutePathBuf::try_from(temp.path().join(CONFIG_TOML_FILE)).expect("base path");
+    let override_file = AbsolutePathBuf::try_from(temp.path().join(CONFIG_OVERRIDE_TOML_FILE))
+        .expect("override path");
+    std::fs::write(base_file.as_path(), "").expect("write base config");
+    let stack = ConfigLayerStack::new(
+        vec![codex_config::ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: base_file,
+                profile: None,
+            },
+            toml::Value::Table(Default::default()),
+        )],
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml::default(),
+    )
+    .expect("stack");
+    let reloader = MtimeConfigReloader::new(collect_layer_mtimes(&stack));
+
+    assert!(!reloader.needs_reload().await);
+    std::fs::write(override_file.as_path(), "[network_proxy]\n").expect("write override");
+    assert!(reloader.needs_reload().await);
+}
 
 #[test]
 fn higher_precedence_profile_network_overlays_domain_entries() {
