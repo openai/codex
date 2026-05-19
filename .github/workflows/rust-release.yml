@@ -533,10 +533,10 @@ jobs:
               platform_tag="macosx_10_9_x86_64"
               ;;
             aarch64-unknown-linux-musl)
-              platform_tag="musllinux_1_1_aarch64"
+              platform_tag="manylinux_2_17_aarch64"
               ;;
             x86_64-unknown-linux-musl)
-              platform_tag="musllinux_1_1_x86_64"
+              platform_tag="manylinux_2_17_x86_64"
               ;;
             *)
               echo "No Python runtime wheel platform tag for ${{ matrix.target }}"

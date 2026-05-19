@@ -1228,7 +1228,7 @@ impl ThreadManagerState {
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread {
-            new_thread.thread.emit_thread_resume_lifecycle();
+            new_thread.thread.emit_thread_resume_lifecycle().await;
             if let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await {
                 warn!("failed to apply goal resume runtime effects: {err}");
             }

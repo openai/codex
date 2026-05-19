@@ -51,9 +51,12 @@ impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
         };
 
         let args: UpdateGoalArgs = parse_arguments(&arguments)?;
-        if args.status != ThreadGoalStatus::Complete {
+        if !matches!(
+            args.status,
+            ThreadGoalStatus::Complete | ThreadGoalStatus::Blocked
+        ) {
             return Err(FunctionCallError::RespondToModel(
-                "update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system"
+                "update_goal can only mark the existing goal complete or blocked; pause, resume, budget-limited, and usage-limited status changes are controlled by the user or system"
                     .to_string(),
             ));
         }
@@ -68,13 +71,18 @@ impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
                 turn.as_ref(),
                 SetGoalRequest {
                     objective: None,
-                    status: Some(ThreadGoalStatus::Complete),
+                    status: Some(args.status),
                     token_budget: None,
                 },
             )
             .await
             .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        goal_response(Some(goal), CompletionBudgetReport::Include).map(boxed_tool_output)
+        let completion_budget_report = if args.status == ThreadGoalStatus::Complete {
+            CompletionBudgetReport::Include
+        } else {
+            CompletionBudgetReport::Omit
+        };
+        goal_response(Some(goal), completion_budget_report).map(boxed_tool_output)
     }
 }
 

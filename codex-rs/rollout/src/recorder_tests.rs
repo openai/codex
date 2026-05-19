@@ -4,7 +4,6 @@ use super::*;
 use crate::config::RolloutConfig;
 use chrono::TimeZone;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -1127,7 +1126,6 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         timestamp: "2025-01-03T13:00:01Z".to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
-            trace_id: None,
             cwd: latest_cwd.clone(),
             current_date: None,
             timezone: None,
@@ -1141,11 +1139,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             collaboration_mode: None,
             realtime_active: None,
             effort: None,
-            summary: ReasoningSummaryConfig::Auto,
-            user_instructions: None,
-            developer_instructions: None,
-            final_output_json_schema: None,
-            truncation_policy: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
         }),
     };
     writeln!(file, "{}", serde_json::to_string(&turn_context)?)?;

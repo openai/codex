@@ -3849,6 +3849,63 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         mcp_config.configured_mcp_servers.get("sample"),
         Some(&http_mcp("https://sample.example/mcp"))
     );
+    assert_eq!(
+        mcp_config.plugin_ids_by_mcp_server_name,
+        HashMap::from([("sample".to_string(), "sample@test".to_string())])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_omits_plugin_id_when_user_server_shadows_plugin_mcp() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://plugin.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[mcp_servers.sample]
+url = "https://user.example/mcp"
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config.configured_mcp_servers.get("sample"),
+        Some(&http_mcp("https://user.example/mcp"))
+    );
+    assert!(mcp_config.plugin_ids_by_mcp_server_name.is_empty());
 
     Ok(())
 }
@@ -10112,6 +10169,7 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
 "#,
@@ -10142,6 +10200,10 @@ non_code_mode_only = true
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
     );
+    assert_eq!(
+        config.multi_agent_v2.tool_namespace.as_deref(),
+        Some("agents")
+    );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
@@ -10164,6 +10226,7 @@ usage_hint_enabled = true
 usage_hint_text = "base hint"
 root_agent_usage_hint_text = "base root hint"
 subagent_usage_hint_text = "base subagent hint"
+tool_namespace = "base_agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = false
 
@@ -10176,6 +10239,7 @@ usage_hint_enabled = false
 usage_hint_text = "profile hint"
 root_agent_usage_hint_text = "profile root hint"
 subagent_usage_hint_text = "profile subagent hint"
+tool_namespace = "profile_agents"
 hide_spawn_agent_metadata = false
 non_code_mode_only = true
 "#,
@@ -10203,6 +10267,10 @@ non_code_mode_only = true
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("profile subagent hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.tool_namespace.as_deref(),
+        Some("profile_agents")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
@@ -10460,6 +10528,42 @@ default_wait_timeout_ms = 2500
         err.to_string(),
         "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_invalid_tool_namespace() -> std::io::Result<()> {
+    for (namespace, expected_message) in [
+        (
+            "bad namespace",
+            "features.multi_agent_v2.tool_namespace must match ^[a-zA-Z0-9_-]+$",
+        ),
+        (
+            "functions",
+            "features.multi_agent_v2.tool_namespace uses a reserved namespace: functions",
+        ),
+    ] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"[features.multi_agent_v2]
+enabled = true
+tool_namespace = "{namespace}"
+"#
+            ),
+        )?;
+
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await
+            .expect_err("invalid multi_agent_v2 tool namespace should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), expected_message);
+    }
 
     Ok(())
 }
