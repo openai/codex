@@ -717,6 +717,35 @@ async fn token_invalidated_error_type_401_clears_auth_and_requires_relogin() {
 }
 
 #[tokio::test]
+async fn token_revoked_error_code_401_clears_auth_and_requires_relogin() {
+    let (_codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    let mut recovery = Some(manager.unauthorized_recovery());
+
+    let err = handle_unauthorized(
+        TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"code":"token_revoked"}}"#.to_string()),
+        },
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("revoked access tokens should force relogin");
+
+    let CodexErr::RefreshTokenFailed(failed) = err else {
+        panic!("expected revoked access token to force relogin, got {err:?}");
+    };
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
 async fn token_invalidated_401_retries_when_persisted_auth_changed() {
     let (codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
     write_managed_chatgpt_auth(codex_home.path(), "replacement-access-token");

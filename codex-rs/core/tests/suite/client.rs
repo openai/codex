@@ -1067,6 +1067,95 @@ async fn chatgpt_auth_sends_correct_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_chatgpt_auth_user_turn_clears_auth_and_requests_relogin() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/responses"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "token_revoked",
+                "message": "revoked",
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let _jwt = write_auth_json(
+        codex_home.as_ref(),
+        /*openai_api_key*/ None,
+        "pro",
+        "revoked-access-token",
+        Some("account_id"),
+    );
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await?
+    .expect("managed ChatGPT auth should load");
+
+    let mut model_provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
+    model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
+    model_provider.supports_websockets = false;
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+        });
+    let test = builder.build(&server).await?;
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err)
+                if err.message.contains(
+                    "Your ChatGPT session is no longer valid. Please sign in again."
+                )
+        ),
+        "expected invalidated-session relogin error; got {error_event:?}"
+    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        !test.codex_home_path().join("auth.json").exists(),
+        "revoked managed ChatGPT auth should be removed"
+    );
+    let response_attempts = server
+        .received_requests()
+        .await
+        .expect("mock server should capture requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/api/codex/responses")
+        .count();
+    assert_eq!(
+        response_attempts, 1,
+        "revoked managed auth should fail without retrying /responses"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     skip_if_no_network!();
 

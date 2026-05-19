@@ -339,7 +339,7 @@ impl ThreadManager {
         state_db: Option<StateDbHandle>,
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
-        let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let auth_manager = AuthManager::from_auth_for_testing_with_home(auth, codex_home.clone());
         let installation_id = uuid::Uuid::new_v4().to_string();
         let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
             Ok(codex_home) => codex_home,
