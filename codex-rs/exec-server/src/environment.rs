@@ -744,13 +744,15 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_snapshot_without_local_environment_disables_local_default() {
-        let snapshot = EnvironmentProviderSnapshot {
+        let mut snapshot = EnvironmentProviderSnapshot {
             environments: Vec::new(),
             default: EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string()),
             include_local: true,
         };
-        let manager = EnvironmentManager::from_snapshot(snapshot.without_local_environment(), None)
-            .expect("environment manager");
+        snapshot.include_local = false;
+        snapshot.default = EnvironmentDefault::Disabled;
+        let manager =
+            EnvironmentManager::from_snapshot(snapshot, None).expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);

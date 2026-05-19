@@ -566,9 +566,6 @@ async fn make_rmcp_client(
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
-    if let Some(reason) = runtime_environment.startup_unavailable_reason(server_name, &config) {
-        return Err(StartupOutcomeError::from(anyhow!(reason)));
-    }
     let McpServerConfig {
         transport,
         experimental_environment,
@@ -577,7 +574,11 @@ async fn make_rmcp_client(
     let remote_environment = match experimental_environment.as_deref() {
         None | Some("local") => false,
         Some("remote") => true,
-        Some(_) => unreachable!("startup_unavailable_reason validated experimental environment"),
+        Some(environment) => {
+            return Err(StartupOutcomeError::from(anyhow!(
+                "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
+            )));
+        }
     };
 
     match transport {

@@ -39,19 +39,19 @@ pub struct SandboxState {
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Option<Arc<Environment>>,
-    local_environment_available: bool,
+    local_environment: Option<Arc<Environment>>,
     fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeEnvironment {
     pub fn new(
         environment: Option<Arc<Environment>>,
-        local_environment_available: bool,
+        local_environment: Option<Arc<Environment>>,
         fallback_cwd: PathBuf,
     ) -> Self {
         Self {
             environment,
-            local_environment_available,
+            local_environment,
             fallback_cwd,
         }
     }
@@ -71,7 +71,7 @@ impl McpRuntimeEnvironment {
     ) -> Option<String> {
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
-                if !self.local_environment_available
+                if self.local_environment.is_none()
                     && matches!(
                         config.transport,
                         codex_config::McpServerTransportConfig::Stdio { .. }

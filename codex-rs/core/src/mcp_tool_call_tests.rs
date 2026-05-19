@@ -1245,7 +1245,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.sub_id.clone(),
         session.get_tx_event(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeEnvironment::new(Some(environment), true, {
+        codex_mcp::McpRuntimeEnvironment::new(Some(environment.clone()), Some(environment), {
             #[allow(deprecated)]
             turn_context.cwd.to_path_buf()
         }),
