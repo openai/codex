@@ -103,7 +103,7 @@ pub async fn update_thread_settings(
         Ok(()) => thread_settings_applied_event(sess).await,
         Err(err) => EventMsg::Error(ErrorEvent {
             message: format!("invalid thread settings override: {err}"),
-            codex_error_info: Some(CodexErrorInfo::Other),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
         }),
     };
     sess.send_event_raw(Event { id: sub_id, msg }).await;
