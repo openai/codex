@@ -13,6 +13,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionToml;
 use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::NetworkProxyDomainPermissionToml;
@@ -33,6 +34,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::project_roots_glob_pattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ProjectConfig;
@@ -72,12 +74,12 @@ pub(crate) fn builtin_permission_profile(
         BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
         BUILT_IN_WORKSPACE_PROFILE => Some(match workspace_write {
             Some(SandboxWorkspaceWrite {
-                writable_roots,
+                writable_roots: _,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             }) => PermissionProfile::workspace_write_with(
-                writable_roots,
+                &[],
                 if *network_access {
                     NetworkSandboxPolicy::Enabled
                 } else {
@@ -303,6 +305,41 @@ pub(crate) fn compile_permission_profile_selection(
     compile_permission_profile(permissions, profile_name, policy_cwd, startup_warnings)
 }
 
+pub(crate) fn compile_permission_profile_workspace_roots(
+    permissions: Option<&PermissionsToml>,
+    profile_name: &str,
+    policy_cwd: &Path,
+) -> io::Result<Vec<AbsolutePathBuf>> {
+    if is_builtin_permission_profile_name(profile_name) {
+        return Ok(Vec::new());
+    }
+    reject_unknown_builtin_permission_profile(profile_name)?;
+
+    let permissions = permissions.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        )
+    })?;
+    let profile = resolve_permission_profile(permissions, profile_name)?;
+    Ok(compile_workspace_roots(
+        profile.workspace_roots.as_ref(),
+        policy_cwd,
+    ))
+}
+
+fn compile_workspace_roots(
+    workspace_roots: Option<&WorkspaceRootsToml>,
+    policy_cwd: &Path,
+) -> Vec<AbsolutePathBuf> {
+    workspace_roots.map_or_else(Vec::new, |workspace_roots| {
+        workspace_roots
+            .enabled_roots()
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, policy_cwd))
+            .collect()
+    })
+}
+
 fn reject_unknown_builtin_permission_profile(profile_name: &str) -> io::Result<()> {
     if profile_name.starts_with(':') {
         return Err(io::Error::new(
@@ -478,7 +515,7 @@ fn compile_scoped_filesystem_pattern(
     path: &str,
     subpath: &str,
     access: FileSystemAccessMode,
-    policy_cwd: &Path,
+    _policy_cwd: &Path,
 ) -> io::Result<String> {
     // Pattern entries currently mean deny-read only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
@@ -493,15 +530,10 @@ fn compile_scoped_filesystem_pattern(
 
     match parse_special_path(path) {
         Some(FileSystemSpecialPath::ProjectRoots { .. }) => {
-            // `:workspace_roots` is represented as a special path, but current
-            // filesystem-policy resolution defines it relative to the session
-            // cwd. Use the same policy cwd here so glob entries and exact
-            // scoped entries resolve consistently.
-            Ok(
-                AbsolutePathBuf::resolve_path_against_base(&subpath, policy_cwd)
-                    .to_string_lossy()
-                    .to_string(),
-            )
+            // Keep `:workspace_roots` glob patterns symbolic until the active
+            // workspace roots are known, then materialize them for cwd and any
+            // runtime/profile-added workspace roots together.
+            Ok(project_roots_glob_pattern(&subpath))
         }
         Some(_) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,

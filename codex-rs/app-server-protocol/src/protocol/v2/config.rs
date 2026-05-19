@@ -225,6 +225,24 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+/// Backward-compatible API shape for ChatGPT workspace login restrictions.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -242,7 +260,7 @@ pub struct Config {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
@@ -261,6 +279,7 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }

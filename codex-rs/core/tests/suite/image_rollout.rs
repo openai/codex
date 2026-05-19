@@ -118,6 +118,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             items: vec![
                 UserInput::LocalImage {
                     path: abs_path.clone(),
+                    detail: None,
                 },
                 UserInput::Text {
                     text: "pasted image".to_string(),
@@ -208,6 +209,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
+                    detail: None,
                 },
                 UserInput::Text {
                     text: "dropped image".to_string(),

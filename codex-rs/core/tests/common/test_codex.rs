@@ -24,7 +24,6 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::empty_extension_registry;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -185,18 +184,10 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
-/// A collection of different ways the model can output an apply_patch call
+/// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    Freeform,
     ShellCommandViaHeredoc,
-}
-
-/// A collection of different ways the model can output an apply_patch call
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ShellModelOutput {
-    ShellCommand,
-    // UnifiedExec has its own set of tests
 }
 
 /// Returns the permission fields required by `Op::UserTurn` for tests that
@@ -580,12 +571,6 @@ impl TestCodexBuilder {
             mutator(&mut config);
         }
         ensure_test_model_catalog(&mut config)?;
-
-        if config.include_apply_patch_tool {
-            config.features.enable(Feature::ApplyPatchFreeform)?;
-        } else {
-            config.features.disable(Feature::ApplyPatchFreeform)?;
-        }
 
         Ok((config, cwd))
     }
@@ -984,21 +969,8 @@ impl TestCodexHarness {
         custom_tool_call_output_text(&bodies, call_id)
     }
 
-    pub async fn apply_patch_output(
-        &self,
-        call_id: &str,
-        output_type: ApplyPatchModelOutput,
-    ) -> String {
-        // Box the awaited output helpers so callers do not inline request
-        // capture and response parsing into their own async state.
-        match output_type {
-            ApplyPatchModelOutput::Freeform => {
-                Box::pin(self.custom_tool_call_output(call_id)).await
-            }
-            ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                Box::pin(self.function_call_stdout(call_id)).await
-            }
-        }
+    pub async fn apply_patch_output(&self, call_id: &str) -> String {
+        self.custom_tool_call_output(call_id).await
     }
 }
 

@@ -214,6 +214,7 @@ mod thread_processor_behavior_tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         ))];
         let active_turn = Turn {
@@ -636,6 +637,7 @@ mod thread_processor_behavior_tests {
             model_provider: None,
             service_tier: Some(Some("priority".to_string())),
             cwd: None,
+            runtime_workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
@@ -656,6 +658,8 @@ mod thread_processor_behavior_tests {
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
             cwd,
+            workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
             personality: None,

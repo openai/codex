@@ -116,6 +116,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other,
         ) => false,
@@ -498,13 +499,12 @@ impl AgentControl {
                             agent_nickname: None,
                             agent_role: None,
                         });
-                    match self
-                        .resume_single_agent_from_rollout(
-                            config.clone(),
-                            child_thread_id,
-                            child_session_source,
-                        )
-                        .await
+                    match Box::pin(self.resume_single_agent_from_rollout(
+                        config.clone(),
+                        child_thread_id,
+                        child_session_source,
+                    ))
+                    .await
                     {
                         Ok(_) => true,
                         Err(err) => {
@@ -1234,7 +1234,9 @@ pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
             .map(|item| match item {
                 UserInput::Text { text, .. } => text.clone(),
                 UserInput::Image { .. } => "[image]".to_string(),
-                UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
+                UserInput::LocalImage { path, .. } => {
+                    format!("[local_image:{}]", path.display())
+                }
                 UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
                 UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
                 _ => "[input]".to_string(),

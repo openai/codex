@@ -344,6 +344,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -451,6 +452,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -499,6 +501,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

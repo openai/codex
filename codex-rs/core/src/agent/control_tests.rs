@@ -442,6 +442,7 @@ async fn send_input_submits_user_message() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         },
     );
     let captured = harness
@@ -486,7 +487,13 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     timeout(Duration::from_secs(5), async {
         loop {
-            if thread.codex.session.has_pending_input().await {
+            if thread
+                .codex
+                .session
+                .input_queue
+                .has_pending_input(&thread.codex.session.active_turn)
+                .await
+            {
                 break;
             }
             sleep(Duration::from_millis(10)).await;
@@ -589,6 +596,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         },
     );
     let captured = harness
@@ -737,6 +745,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         },
     );
     let captured = harness

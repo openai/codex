@@ -42,6 +42,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -146,6 +147,8 @@ pub(super) async fn user_input_or_turn_inner(
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
+                    workspace_roots: None,
+                    profile_workspace_roots: None,
                     permission_profile,
                     active_permission_profile: None,
                     windows_sandbox_level: None,
@@ -161,72 +164,22 @@ pub(super) async fn user_input_or_turn_inner(
                 None,
             )
         }
-        Op::UserInputWithTurnContext {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                responsesapi_client_metadata,
-            )
-        }
         Op::UserInput {
             items,
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
-        } => (
-            items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
-                environments,
-                ..Default::default()
-            },
-            responsesapi_client_metadata,
-        ),
+            thread_settings,
+        } => {
+            let mut updates = if thread_settings == ThreadSettingsOverrides::default() {
+                SessionSettingsUpdate::default()
+            } else {
+                thread_settings_update(sess, thread_settings).await
+            };
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (items, updates, responsesapi_client_metadata)
+        }
         _ => unreachable!(),
     };
 
@@ -283,6 +236,56 @@ pub(super) async fn user_input_or_turn_inner(
     }
 }
 
+async fn thread_settings_update(
+    sess: &Session,
+    thread_settings: ThreadSettingsOverrides,
+) -> SessionSettingsUpdate {
+    let ThreadSettingsOverrides {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        model,
+        effort,
+        summary,
+        service_tier,
+        collaboration_mode,
+        personality,
+    } = thread_settings;
+    let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+        collaboration_mode
+    } else {
+        let state = sess.state.lock().await;
+        // Model and reasoning effort live in CollaborationMode settings today, so
+        // partial thread-settings updates refresh those fields on the active mode.
+        state
+            .session_configuration
+            .collaboration_mode
+            .with_updates(model, effort, /*developer_instructions*/ None)
+    };
+    SessionSettingsUpdate {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        collaboration_mode: Some(collaboration_mode),
+        reasoning_summary: summary,
+        service_tier,
+        personality,
+        ..Default::default()
+    }
+}
+
 async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) {
     let text = UserMessageItem::new(items).message();
     if text.is_empty() {
@@ -313,7 +316,9 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
-    sess.enqueue_mailbox_communication(communication);
+    sess.input_queue
+        .enqueue_mailbox_communication(communication)
+        .await;
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -632,12 +637,14 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.guardian_review_session.shutdown().await;
 }
 
-fn emit_thread_stop_lifecycle(sess: &Session) {
+async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
-        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
-            session_store: &sess.services.session_extension_data,
-            thread_store: &sess.services.thread_extension_data,
-        });
+        contributor
+            .on_thread_stop(codex_extension_api::ThreadStopInput {
+                session_store: &sess.services.session_extension_data,
+                thread_store: &sess.services.thread_extension_data,
+            })
+            .await;
     }
 }
 
@@ -656,7 +663,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
-    emit_thread_stop_lifecycle(sess.as_ref());
+    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -819,9 +826,7 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -911,7 +916,7 @@ pub(super) async fn submission_loop(
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref());
+        emit_thread_stop_lifecycle(sess.as_ref()).await;
     }
     debug!("Agent loop exited");
 }
@@ -953,7 +958,9 @@ Approved action:
     }];
 
     if let Err(items) = sess.inject_response_items(items).await {
-        sess.queue_response_items_for_next_turn(items).await;
+        sess.input_queue
+            .queue_response_items_for_next_turn(items)
+            .await;
     }
 }
 

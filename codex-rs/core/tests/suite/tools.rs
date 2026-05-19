@@ -71,7 +71,6 @@ async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> 
             .features
             .enable(Feature::UnifiedExec)
             .expect("unified exec should enable for test");
-        config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;
 

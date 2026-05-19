@@ -19,6 +19,7 @@ use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
+use gethostname::gethostname;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -112,15 +113,8 @@ impl RemoteControlHandle {
         connection_status: RemoteControlConnectionStatus,
     ) -> RemoteControlStatusChangedNotification {
         self.status_tx.send_if_modified(|status| {
-            let next_status = RemoteControlStatusChangedNotification {
-                status: connection_status,
-                installation_id: status.installation_id.clone(),
-                environment_id: if connection_status == RemoteControlConnectionStatus::Disabled {
-                    None
-                } else {
-                    status.environment_id.clone()
-                },
-            };
+            let next_status =
+                remote_control_status_with_connection_status(status, connection_status);
             if *status == next_status {
                 return false;
             }
@@ -129,6 +123,22 @@ impl RemoteControlHandle {
             true
         });
         self.status()
+    }
+}
+
+fn remote_control_status_with_connection_status(
+    status: &RemoteControlStatusChangedNotification,
+    connection_status: RemoteControlConnectionStatus,
+) -> RemoteControlStatusChangedNotification {
+    RemoteControlStatusChangedNotification {
+        status: connection_status,
+        server_name: status.server_name.clone(),
+        installation_id: status.installation_id.clone(),
+        environment_id: if connection_status == RemoteControlConnectionStatus::Disabled {
+            None
+        } else {
+            status.environment_id.clone()
+        },
     }
 }
 
@@ -154,12 +164,14 @@ pub async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let server_name = gethostname().to_string_lossy().trim().to_string();
     let initial_status = RemoteControlStatusChangedNotification {
         status: if initial_enabled {
             RemoteControlConnectionStatus::Connecting
         } else {
             RemoteControlConnectionStatus::Disabled
         },
+        server_name: server_name.clone(),
         installation_id: config.installation_id.clone(),
         environment_id: None,
     };
@@ -171,6 +183,7 @@ pub async fn start_remote_control(
                 remote_control_url: config.remote_control_url,
                 installation_id: config.installation_id,
                 remote_control_target,
+                server_name,
             },
             state_db,
             auth_manager,

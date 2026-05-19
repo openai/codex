@@ -1445,10 +1445,7 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
         "fixed.cycle_collaboration_mode",
         key_hint::shift(KeyCode::Tab),
     ),
-    (
-        "fixed.return_from_side_or_backtrack",
-        key_hint::plain(KeyCode::Esc),
-    ),
+    ("fixed.backtrack", key_hint::plain(KeyCode::Esc)),
     ("fixed.previous_agent", key_hint::alt(KeyCode::Left)),
     ("fixed.next_agent", key_hint::alt(KeyCode::Right)),
     ("fixed.slash_command", key_hint::plain(KeyCode::Char('/'))),

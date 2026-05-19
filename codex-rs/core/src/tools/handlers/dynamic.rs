@@ -4,10 +4,11 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
-use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -62,8 +63,6 @@ impl DynamicToolHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
@@ -76,7 +75,10 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
         self.exposure
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -117,11 +119,14 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(FunctionToolOutput::from_content(body, Some(success)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_content(
+            body,
+            Some(success),
+        )))
     }
 }
 
-impl ToolHandler for DynamicToolHandler {
+impl CoreToolRuntime for DynamicToolHandler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         ToolSearchInfo::from_spec(
             self.search_text.clone(),

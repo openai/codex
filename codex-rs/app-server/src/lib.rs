@@ -41,7 +41,6 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -401,6 +400,7 @@ pub enum PluginStartupTasks {
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
+    pub install_shutdown_signal_handler: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -408,6 +408,7 @@ impl Default for AppServerRuntimeOptions {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
+            install_shutdown_signal_handler: true,
         }
     }
 }
@@ -589,7 +590,7 @@ pub async fn run_main_with_transport_options(
         });
     }
     if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+        codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
@@ -646,7 +647,8 @@ pub async fn run_main_with_transport_options(
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
+    let graceful_signal_restart_enabled =
+        runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
 
     match &transport {
@@ -1003,14 +1005,9 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         remote_control_status = status.clone();
+                        let notification = ServerNotification::RemoteControlStatusChanged(status);
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
-                                RemoteControlStatusChangedNotification {
-                                    status: status.status,
-                                    installation_id: status.installation_id,
-                                    environment_id: status.environment_id,
-                                },
-                            ))
+                            .send_server_notification(notification)
                             .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {

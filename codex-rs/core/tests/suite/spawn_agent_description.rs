@@ -124,6 +124,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                             description: "Quick scan".to_string(),
                         },
                         ReasoningEffortPreset {
+                            effort: ReasoningEffort::Medium,
+                            description: "Balanced".to_string(),
+                        },
+                        ReasoningEffortPreset {
                             effort: ReasoningEffort::High,
                             description: "Deep dive".to_string(),
                         },
@@ -175,7 +179,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         spawn_agent_description(&body).expect("spawn_agent description should be present");
 
     assert!(
-        description.contains("- Visible Model (`visible-model`): Fast and capable"),
+        description.contains("- `visible-model`: Fast and capable"),
         "expected visible model summary in spawn_agent description: {description:?}"
     );
     assert!(
@@ -196,20 +200,15 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected model override usage guidance in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains("Default reasoning effort: medium."),
+        description.contains("Reasoning efforts: low, medium (default), high."),
         "expected default reasoning effort in spawn_agent description: {description:?}"
     );
     assert!(
-        description.contains("low (Quick scan), high (Deep dive)."),
-        "expected reasoning efforts in spawn_agent description: {description:?}"
-    );
-    assert!(
-        description
-            .contains("Supported service tiers: priority (Fast: 1.5x speed, increased usage)."),
+        description.contains("Service tiers: priority."),
         "expected service tier guidance in spawn_agent description: {description:?}"
     );
     assert!(
-        !description.contains("Hidden Model"),
+        !description.contains("hidden-model"),
         "hidden picker model should be omitted from spawn_agent description: {description:?}"
     );
     assert!(

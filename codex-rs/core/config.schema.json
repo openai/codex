@@ -457,9 +457,6 @@
             "in_app_browser": {
               "type": "boolean"
             },
-            "include_apply_patch_tool": {
-              "type": "boolean"
-            },
             "js_repl": {
               "type": "boolean"
             },
@@ -851,6 +848,20 @@
         }
       },
       "type": "object"
+    },
+    "ForcedChatgptWorkspaceIds": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Backward-compatible shape for ChatGPT workspace login restrictions in config.toml."
     },
     "ForcedLoginMethod": {
       "enum": [
@@ -1505,6 +1516,12 @@
         "subagent_usage_hint_text": {
           "type": "string"
         },
+        "tool_namespace": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },
@@ -1954,6 +1971,9 @@
         },
         "network": {
           "$ref": "#/definitions/NetworkToml"
+        },
+        "workspace_roots": {
+          "$ref": "#/definitions/WorkspaceRootsToml"
         }
       },
       "type": "object"
@@ -3949,6 +3969,9 @@
           "type": "string"
         }
       ]
+    },
+    "WorkspaceRootsToml": {
+      "type": "object"
     }
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
@@ -3998,6 +4021,10 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "apps_mcp_product_sku": {
+      "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",
+      "type": "string"
     },
     "audio": {
       "allOf": [
@@ -4055,6 +4082,12 @@
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
+    },
+    "desktop": {
+      "additionalProperties": true,
+      "default": null,
+      "description": "Opaque desktop settings stored alongside the rest of config.toml.",
+      "type": "object"
     },
     "developer_instructions": {
       "default": null,
@@ -4208,9 +4241,6 @@
           "type": "boolean"
         },
         "in_app_browser": {
-          "type": "boolean"
-        },
-        "include_apply_patch_tool": {
           "type": "boolean"
         },
         "js_repl": {
@@ -4383,9 +4413,13 @@
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme."
     },
     "forced_chatgpt_workspace_id": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ForcedChatgptWorkspaceIds"
+        }
+      ],
       "default": null,
-      "description": "When set, restricts ChatGPT login to a specific workspace identifier.",
-      "type": "string"
+      "description": "When set, restricts ChatGPT login to one or more workspace identifiers."
     },
     "forced_login_method": {
       "allOf": [
@@ -4780,10 +4814,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "windows_wsl_setup_acknowledged": {
-      "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
-      "type": "boolean"
     },
     "zsh_path": {
       "allOf": [

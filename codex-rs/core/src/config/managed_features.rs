@@ -348,12 +348,10 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
         let configured_features = Features::from_sources(
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
-                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             },
             FeatureConfigSource {
                 features: profile.features.as_ref(),
-                include_apply_patch_tool: None,
                 experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
             },
             FeatureOverrides::default(),

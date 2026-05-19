@@ -39,6 +39,21 @@ mod imp {
         pub(crate) bg: (u8, u8, u8),
     }
 
+    /// Results from the TUI's one-shot startup terminal probe.
+    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    pub(crate) struct StartupProbe {
+        pub(crate) cursor_position: Option<Position>,
+        pub(crate) default_colors: Option<DefaultColors>,
+        pub(crate) keyboard_enhancement_supported: Option<bool>,
+    }
+
+    /// Whether the startup probe should query keyboard enhancement support.
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    pub(crate) enum StartupKeyboardEnhancementProbe {
+        Query,
+        Skip,
+    }
+
     /// Temporary terminal handle used while a startup probe owns terminal input.
     ///
     /// The preferred path is duplicated stdin/stdout, because terminal replies are delivered to the
@@ -198,19 +213,6 @@ mod imp {
         Ok(unsafe { File::from_raw_fd(duplicated) })
     }
 
-    /// Queries the current cursor position and returns a zero-based Ratatui position.
-    ///
-    /// A timeout or a non-CPR response is not fatal. Callers should treat `Ok(None)` as "terminal
-    /// did not answer this optional query" and choose a conservative fallback.
-    pub(crate) fn cursor_position(timeout: Duration) -> io::Result<Option<Position>> {
-        let mut tty = Tty::open()?;
-        tty.write_all(b"\x1B[6n")?;
-        let Some(response) = read_until(&mut tty, timeout, parse_cursor_position)? else {
-            return Ok(None);
-        };
-        Ok(Some(response))
-    }
-
     /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
     ///
     /// Foreground and background are only useful as a pair for palette calculations, so a missing
@@ -226,16 +228,24 @@ mod imp {
         Ok(Some(colors))
     }
 
-    /// Checks whether the terminal reports support for keyboard enhancement flags.
+    /// Runs the optional terminal queries needed during TUI startup under one shared deadline.
     ///
-    /// The probe sends the kitty keyboard-status query followed by primary-device-attributes as a
-    /// fallback. A PDA response proves that the terminal answered but does not prove that keyboard
-    /// enhancement is unsupported until the bounded wait has expired; flags that arrive later in
-    /// the same deadline must still win.
-    pub(crate) fn keyboard_enhancement_supported(timeout: Duration) -> io::Result<Option<bool>> {
+    /// Keeping these queries batched avoids paying one timeout per unsupported capability before
+    /// the first frame can render.
+    pub(crate) fn startup(
+        timeout: Duration,
+        keyboard_probe: StartupKeyboardEnhancementProbe,
+    ) -> io::Result<StartupProbe> {
         let mut tty = Tty::open()?;
-        tty.write_all(b"\x1B[?u\x1B[c")?;
-        read_keyboard_enhancement_supported(&mut tty, timeout)
+        match keyboard_probe {
+            StartupKeyboardEnhancementProbe::Query => {
+                tty.write_all(b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\\x1B[?u\x1B[c")?;
+            }
+            StartupKeyboardEnhancementProbe::Skip => {
+                tty.write_all(b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
+            }
+        }
+        read_startup_probe(&mut tty, timeout, keyboard_probe)
     }
 
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
@@ -265,39 +275,92 @@ mod imp {
         }
     }
 
-    /// Reads keyboard-enhancement responses while giving flags the full bounded window to arrive.
-    fn read_keyboard_enhancement_supported(
+    fn read_startup_probe(
         tty: &mut Tty,
         timeout: Duration,
-    ) -> io::Result<Option<bool>> {
+        keyboard_probe: StartupKeyboardEnhancementProbe,
+    ) -> io::Result<StartupProbe> {
         let deadline = Instant::now() + timeout;
         let mut buffer = Vec::new();
-        let mut saw_supported = false;
-        let mut saw_unsupported_fallback = false;
+        let mut probe = StartupProbe {
+            cursor_position: None,
+            default_colors: None,
+            keyboard_enhancement_supported: None,
+        };
+        let mut saw_supported_keyboard = false;
         loop {
             tty.read_available(&mut buffer)?;
-            match parse_keyboard_enhancement_support(&buffer) {
-                KeyboardProbeState::SupportedAndFallback => return Ok(Some(true)),
-                KeyboardProbeState::Supported => saw_supported = true,
-                KeyboardProbeState::UnsupportedFallback => saw_unsupported_fallback = true,
-                KeyboardProbeState::Pending => {}
-            }
-            if saw_supported && saw_unsupported_fallback {
-                return Ok(Some(true));
+            update_startup_probe(
+                &mut probe,
+                &mut saw_supported_keyboard,
+                &buffer,
+                keyboard_probe,
+            );
+            if startup_probe_complete(&probe, keyboard_probe) {
+                return Ok(probe);
             }
             let now = Instant::now();
             if now >= deadline {
-                if saw_supported {
-                    return Ok(Some(true));
-                }
-                return Ok(saw_unsupported_fallback.then_some(false));
+                finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
+                return Ok(probe);
             }
             if !tty.poll_readable(deadline.saturating_duration_since(now))? {
-                if saw_supported {
-                    return Ok(Some(true));
-                }
-                return Ok(saw_unsupported_fallback.then_some(false));
+                finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
+                return Ok(probe);
             }
+        }
+    }
+
+    fn update_startup_probe(
+        probe: &mut StartupProbe,
+        saw_supported_keyboard: &mut bool,
+        buffer: &[u8],
+        keyboard_probe: StartupKeyboardEnhancementProbe,
+    ) {
+        if probe.cursor_position.is_none() {
+            probe.cursor_position = parse_cursor_position(buffer);
+        }
+        if probe.default_colors.is_none() {
+            probe.default_colors = parse_default_colors(buffer);
+        }
+        if keyboard_probe == StartupKeyboardEnhancementProbe::Skip
+            || probe.keyboard_enhancement_supported.is_some()
+        {
+            return;
+        }
+        match parse_keyboard_enhancement_support(buffer) {
+            KeyboardProbeState::SupportedAndFallback => {
+                probe.keyboard_enhancement_supported = Some(true);
+            }
+            KeyboardProbeState::Supported => {
+                *saw_supported_keyboard = true;
+            }
+            KeyboardProbeState::UnsupportedFallback => {
+                probe.keyboard_enhancement_supported = Some(false);
+            }
+            KeyboardProbeState::Pending => {}
+        }
+    }
+
+    fn startup_probe_complete(
+        probe: &StartupProbe,
+        keyboard_probe: StartupKeyboardEnhancementProbe,
+    ) -> bool {
+        probe.cursor_position.is_some()
+            && probe.default_colors.is_some()
+            && (keyboard_probe == StartupKeyboardEnhancementProbe::Skip
+                || probe.keyboard_enhancement_supported.is_some())
+    }
+
+    fn finish_startup_probe(
+        probe: &mut StartupProbe,
+        keyboard_probe: StartupKeyboardEnhancementProbe,
+        saw_supported_keyboard: bool,
+    ) {
+        if keyboard_probe == StartupKeyboardEnhancementProbe::Query
+            && probe.keyboard_enhancement_supported.is_none()
+        {
+            probe.keyboard_enhancement_supported = saw_supported_keyboard.then_some(true);
         }
     }
 
@@ -382,11 +445,12 @@ mod imp {
 
     /// Parser state for the keyboard enhancement probe.
     ///
-    /// `UnsupportedFallback` records that a primary-device-attributes response arrived, but the
-    /// caller should keep waiting until the deadline because a later keyboard-flags response is
-    /// more specific. `Supported` records that keyboard flags arrived, but the caller should still
-    /// drain the PDA fallback response if it arrives before the deadline so those bytes do not leak
-    /// into the normal event stream.
+    /// `UnsupportedFallback` records that a primary-device-attributes response arrived without
+    /// keyboard flags. Startup treats that as unsupported immediately, matching crossterm's
+    /// previous behavior and avoiding a fixed delay in terminals without the keyboard protocol.
+    /// `Supported` records that keyboard flags arrived, but the caller should still drain the PDA
+    /// fallback response if it arrives before the deadline so those bytes do not leak into the
+    /// normal event stream.
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
     enum KeyboardProbeState {
         Pending,
@@ -555,6 +619,38 @@ mod imp {
                 parse_keyboard_enhancement_support(b""),
                 KeyboardProbeState::Pending
             );
+        }
+
+        #[test]
+        fn startup_probe_parses_batched_terminal_responses() {
+            let mut probe = StartupProbe {
+                cursor_position: None,
+                default_colors: None,
+                keyboard_enhancement_supported: None,
+            };
+            let mut saw_supported_keyboard = false;
+            update_startup_probe(
+                &mut probe,
+                &mut saw_supported_keyboard,
+                b"\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[?7u",
+                StartupKeyboardEnhancementProbe::Query,
+            );
+
+            assert_eq!(
+                probe,
+                StartupProbe {
+                    cursor_position: Some(Position { x: 9, y: 19 }),
+                    default_colors: Some(DefaultColors {
+                        fg: (238, 238, 238),
+                        bg: (17, 17, 17),
+                    }),
+                    keyboard_enhancement_supported: Some(true),
+                }
+            );
+            assert!(startup_probe_complete(
+                &probe,
+                StartupKeyboardEnhancementProbe::Query
+            ));
         }
     }
 }

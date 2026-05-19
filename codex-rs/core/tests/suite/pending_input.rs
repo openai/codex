@@ -103,6 +103,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap_or_else(|err| panic!("submit user input: {err}"));
@@ -285,6 +286,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -303,6 +305,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
