@@ -1,5 +1,6 @@
 """Supported package targets and default binary discovery."""
 
+import platform
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,29 @@ TARGET_SPECS: dict[str, TargetSpec] = {
 }
 
 
+HOST_TARGETS: dict[tuple[str, str], str] = {
+    ("darwin", "aarch64"): "aarch64-apple-darwin",
+    ("darwin", "x86_64"): "x86_64-apple-darwin",
+    ("linux", "aarch64"): "aarch64-unknown-linux-musl",
+    ("linux", "x86_64"): "x86_64-unknown-linux-musl",
+    ("windows", "aarch64"): "aarch64-pc-windows-msvc",
+    ("windows", "x86_64"): "x86_64-pc-windows-msvc",
+}
+
+
+def default_target() -> str:
+    system = platform.system().lower()
+    machine = normalize_machine(platform.machine())
+    target = HOST_TARGETS.get((system, machine))
+    if target is None:
+        supported = ", ".join(sorted(TARGET_SPECS))
+        raise RuntimeError(
+            f"Unsupported host platform {platform.system()}/{platform.machine()}. "
+            f"Pass --target explicitly. Supported targets: {supported}"
+        )
+    return target
+
+
 def resolve_input_path(
     explicit_path: Path | None,
     description: str,
@@ -96,3 +120,12 @@ def resolve_input_path(
 
 def is_executable(path: Path) -> bool:
     return bool(path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+
+
+def normalize_machine(machine: str) -> str:
+    machine = machine.lower()
+    if machine in ("amd64", "x86_64"):
+        return "x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    return machine
