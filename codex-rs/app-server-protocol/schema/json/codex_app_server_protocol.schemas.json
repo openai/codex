@@ -7089,6 +7089,17 @@
         ],
         "type": "object"
       },
+      "ComputerUseRequirements": {
+        "properties": {
+          "allowLockedComputerUse": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Config": {
         "additionalProperties": true,
         "properties": {
@@ -7635,10 +7646,10 @@
               "null"
             ]
           },
-          "cua": {
+          "computerUse": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/CuaRequirements"
+                "$ref": "#/definitions/v2/ComputerUseRequirements"
               },
               {
                 "type": "null"
@@ -8003,17 +8014,6 @@
           "hasCredits",
           "unlimited"
         ],
-        "type": "object"
-      },
-      "CuaRequirements": {
-        "properties": {
-          "allowLockedComputerUse": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
         "type": "object"
       },
       "DeprecationNoticeNotification": {

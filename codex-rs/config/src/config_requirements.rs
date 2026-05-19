@@ -88,7 +88,7 @@ pub struct ConfigRequirements {
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
-    pub cua: Option<Sourced<CuaRequirementsToml>>,
+    pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -123,7 +123,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             allow_managed_hooks_only: None,
-            cua: None,
+            computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
@@ -591,11 +591,11 @@ impl fmt::Display for WebSearchModeRequirement {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct CuaRequirementsToml {
+pub struct ComputerUseRequirementsToml {
     pub allow_locked_computer_use: Option<bool>,
 }
 
-impl CuaRequirementsToml {
+impl ComputerUseRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allow_locked_computer_use.is_none()
     }
@@ -704,7 +704,7 @@ pub struct ConfigRequirementsToml {
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
-    pub cua: Option<CuaRequirementsToml>,
+    pub computer_use: Option<ComputerUseRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -754,7 +754,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
-    pub cua: Option<Sourced<CuaRequirementsToml>>,
+    pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -792,7 +792,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
-            cua: _,
+            computer_use: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -823,7 +823,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
-                cua,
+                computer_use,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -852,7 +852,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             allow_managed_hooks_only,
-            cua,
+            computer_use,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -871,7 +871,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
-            cua: cua.map(|sourced| sourced.value),
+            computer_use: computer_use.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -956,7 +956,10 @@ impl ConfigRequirementsToml {
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
-            && self.cua.as_ref().is_none_or(CuaRequirementsToml::is_empty)
+            && self
+                .computer_use
+                .as_ref()
+                .is_none_or(ComputerUseRequirementsToml::is_empty)
             && self
                 .feature_requirements
                 .as_ref()
@@ -995,7 +998,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             allow_managed_hooks_only,
-            cua,
+            computer_use,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1232,7 +1235,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permission_profile,
             web_search_mode,
             allow_managed_hooks_only,
-            cua,
+            computer_use,
             feature_requirements,
             managed_hooks,
             mcp_servers,
@@ -1301,7 +1304,7 @@ mod tests {
             remote_sandbox_config: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
-            cua,
+            computer_use,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1324,7 +1327,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_managed_hooks_only: allow_managed_hooks_only
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            cua: cua.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1368,17 +1371,17 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_cua_requirements() -> Result<()> {
+    fn deserialize_computer_use_requirements() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-                [cua]
+                [computer_use]
                 allow_locked_computer_use = false
             "#,
         )?;
 
         assert_eq!(
-            requirements.cua,
-            Some(CuaRequirementsToml {
+            requirements.computer_use,
+            Some(ComputerUseRequirementsToml {
                 allow_locked_computer_use: Some(false),
             })
         );
@@ -1405,7 +1408,7 @@ mod tests {
         let feature_requirements = FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
-        let cua = CuaRequirementsToml {
+        let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
         };
         let enforce_residency = ResidencyRequirement::Us;
@@ -1421,7 +1424,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
-            cua: Some(cua.clone()),
+            computer_use: Some(computer_use.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1456,7 +1459,7 @@ mod tests {
                     /*value*/ true,
                     enforce_source.clone(),
                 )),
-                cua: Some(Sourced::new(cua, enforce_source.clone())),
+                computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
@@ -1500,7 +1503,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
-                cua: None,
+                computer_use: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1549,7 +1552,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
-                cua: None,
+                computer_use: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,

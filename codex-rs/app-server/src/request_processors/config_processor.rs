@@ -9,6 +9,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -19,7 +20,6 @@ use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
-use codex_app_server_protocol::CuaRequirements;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -430,7 +430,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
-        cua: requirements.cua.map(map_cua_requirements_to_api),
+        computer_use: requirements
+            .computer_use
+            .map(map_computer_use_requirements_to_api),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -442,9 +444,11 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
     }
 }
 
-fn map_cua_requirements_to_api(cua: codex_config::CuaRequirementsToml) -> CuaRequirements {
-    CuaRequirements {
-        allow_locked_computer_use: cua.allow_locked_computer_use,
+fn map_computer_use_requirements_to_api(
+    computer_use: codex_config::ComputerUseRequirementsToml,
+) -> ComputerUseRequirements {
+    ComputerUseRequirements {
+        allow_locked_computer_use: computer_use.allow_locked_computer_use,
     }
 }
 
@@ -623,8 +627,8 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
-    use codex_config::CuaRequirementsToml;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -639,9 +643,9 @@ mod tests {
     }
 
     #[test]
-    fn requirements_api_includes_cua_requirements() {
+    fn requirements_api_includes_computer_use_requirements() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
-            cua: Some(CuaRequirementsToml {
+            computer_use: Some(ComputerUseRequirementsToml {
                 allow_locked_computer_use: Some(false),
             }),
             ..ConfigRequirementsToml::default()
@@ -649,7 +653,7 @@ mod tests {
 
         assert_eq!(
             mapped
-                .cua
+                .computer_use
                 .and_then(|requirements| requirements.allow_locked_computer_use),
             Some(false)
         );
