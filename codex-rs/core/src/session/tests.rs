@@ -4412,6 +4412,22 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     (session, turn_context)
 }
 
+#[tokio::test]
+async fn mcp_runtime_environment_preserves_selected_or_default_environment() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.runtime_capabilities = Arc::new(RuntimeCapabilities::isolated());
+
+    #[allow(deprecated)]
+    let default_environment =
+        session.mcp_runtime_environment(/*turn_environment*/ None, &turn_context.cwd);
+    assert!(default_environment.is_ok());
+
+    #[allow(deprecated)]
+    let selected_environment =
+        session.mcp_runtime_environment(turn_context.environments.primary(), &turn_context.cwd);
+    assert!(selected_environment.is_ok());
+}
+
 async fn make_session_with_config(
     mutator: impl FnOnce(&mut Config),
 ) -> anyhow::Result<Arc<Session>> {

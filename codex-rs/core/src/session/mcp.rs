@@ -1,3 +1,4 @@
+use super::turn_context::TurnEnvironment;
 use super::*;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
@@ -59,6 +60,30 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 impl Session {
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
+    }
+
+    pub(super) fn mcp_runtime_environment(
+        &self,
+        turn_environment: Option<&TurnEnvironment>,
+        cwd: &AbsolutePathBuf,
+    ) -> CodexResult<McpRuntimeEnvironment> {
+        let (environment, cwd) = match turn_environment {
+            Some(turn_environment) => (
+                Arc::clone(&turn_environment.environment),
+                turn_environment.cwd.to_path_buf(),
+            ),
+            None => (
+                match self.services.environment_manager.default_environment() {
+                    Some(environment) => environment,
+                    None => self
+                        .services
+                        .runtime_capabilities
+                        .require_local_environment("MCP runtime environment")?,
+                },
+                cwd.to_path_buf(),
+            ),
+        };
+        Ok(McpRuntimeEnvironment::new(environment, cwd))
     }
 
     #[expect(
@@ -289,19 +314,15 @@ impl Session {
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            ),
-            None => McpRuntimeEnvironment::new(
-                self.services
-                    .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                #[allow(deprecated)]
-                turn_context.cwd.to_path_buf(),
-            ),
+        #[allow(deprecated)]
+        let mcp_runtime_environment = match self
+            .mcp_runtime_environment(turn_context.environments.primary(), &turn_context.cwd)
+        {
+            Ok(runtime_environment) => runtime_environment,
+            Err(err) => {
+                warn!("failed to refresh MCP servers: {err}");
+                return;
+            }
         };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;

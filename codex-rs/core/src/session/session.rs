@@ -1050,19 +1050,10 @@ impl Session {
             })?
             .primary()
             .cloned();
-            let mcp_runtime_environment = match turn_environment {
-                Some(turn_environment) => McpRuntimeEnvironment::new(
-                    Arc::clone(&turn_environment.environment),
-                    turn_environment.cwd.to_path_buf(),
-                ),
-                None => McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
-                    session_configuration.cwd.to_path_buf(),
-                ),
-            };
+            let mcp_runtime_environment = sess.mcp_runtime_environment(
+                turn_environment.as_ref(),
+                &session_configuration.cwd,
+            )?;
             let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
