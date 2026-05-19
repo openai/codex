@@ -147,6 +147,11 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
+- `thread/queue/add` — experimental; persist a future `turn/start` request for a loaded thread. The queue stores the original `TurnStartParams`, dispatches the oldest pending row once the thread is idle, and emits `thread/queue/changed`.
+- `thread/queue/list` — experimental; return the visible queued turns for a thread. Pending and failed rows are visible; the short-lived dispatch claim is internal.
+- `thread/queue/delete` — experimental; remove a visible queued turn by id.
+- `thread/queue/reorder` — experimental; replace the visible queue order by queued-turn id.
+- `thread/queue/changed` — experimental notification emitted after visible queue state changes, including restart recovery that surfaces an interrupted dispatch as failed.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -557,6 +562,34 @@ Use `thread/goal/clear` to remove the current goal.
 { "id": 30, "result": { "cleared": true } }
 { "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
 ```
+
+### Example: Queue a follow-up turn
+
+Experimental clients can store a later turn with `thread/queue/add`. The queue item keeps the same `TurnStartParams` object a future `turn/start` would use, then app-server starts it when the thread becomes idle.
+
+```json
+{ "method": "thread/queue/add", "id": 31, "params": {
+    "threadId": "thr_123",
+    "turnStartParams": {
+      "threadId": "thr_123",
+      "input": [{ "type": "text", "text": "Run the follow-up benchmark" }]
+    }
+} }
+{ "id": 31, "result": { "queuedTurn": {
+    "id": "queued_123",
+    "turnStartParams": {
+      "threadId": "thr_123",
+      "input": [{ "type": "text", "text": "Run the follow-up benchmark" }]
+    },
+    "status": { "type": "pending" }
+} } }
+{ "method": "thread/queue/changed", "params": {
+    "threadId": "thr_123",
+    "queuedTurns": []
+} }
+```
+
+If dispatch cannot hand the row to a real turn, the row stays visible with `status.type: "failed"`. Delete or reorder visible queue rows with `thread/queue/delete` and `thread/queue/reorder`; list order is authoritative for rendering.
 
 ### Example: Archive a thread
 

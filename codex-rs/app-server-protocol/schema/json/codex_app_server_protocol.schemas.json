@@ -4035,6 +4035,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/queue/changed"
+              ],
+              "title": "Thread/queue/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadQueueChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/queue/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -13040,6 +13060,215 @@
         },
         "type": "object"
       },
+      "QueuedTurn": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/QueuedTurnStatus"
+          },
+          "turnStartParams": {
+            "$ref": "#/definitions/v2/QueuedTurnStartParams"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "turnStartParams"
+        ],
+        "type": "object"
+      },
+      "QueuedTurnStartParams": {
+        "properties": {
+          "approvalPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AskForApproval"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the approval policy for this turn and subsequent turns."
+          },
+          "approvalsReviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override where approval requests are routed for review on this turn and subsequent turns."
+          },
+          "collaborationMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CollaborationMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EXPERIMENTAL - Set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set.\n\nFor `collaboration_mode.settings.developer_instructions`, `null` means \"use the built-in instructions for the selected mode\"."
+          },
+          "cwd": {
+            "description": "Override the working directory for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning effort for this turn and subsequent turns."
+          },
+          "environments": {
+            "description": "Optional turn-scoped environments.\n\nOmitted uses the thread sticky environments. Empty disables environment access for this turn. Non-empty selects the first environment as the current turn environment for this turn.",
+            "items": {
+              "$ref": "#/definitions/v2/TurnEnvironmentParams"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "model": {
+            "description": "Override the model for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputSchema": {
+            "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileSelectionParams"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Select a named permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`. Use bounded `modifications` for supported turn adjustments instead of replacing the full permissions profile."
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the personality for this turn and subsequent turns."
+          },
+          "responsesapiClientMetadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional turn-scoped Responses API client metadata.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the sandbox policy for this turn and subsequent turns."
+          },
+          "serviceTier": {
+            "description": "Override the service tier for this turn and subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning summary for this turn and subsequent turns."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "input",
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "QueuedTurnStatus": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "pending"
+                ],
+                "title": "PendingQueuedTurnStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "PendingQueuedTurnStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "$ref": "#/definitions/v2/TurnError"
+              },
+              "type": {
+                "enum": [
+                  "failed"
+                ],
+                "title": "FailedQueuedTurnStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "type"
+            ],
+            "title": "FailedQueuedTurnStatus",
+            "type": "object"
+          }
+        ]
+      },
       "RateLimitReachedType": {
         "enum": [
           "rate_limit_reached",
@@ -16614,6 +16843,26 @@
           "threadId"
         ],
         "title": "ThreadNameUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadQueueChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "queuedTurns": {
+            "items": {
+              "$ref": "#/definitions/v2/QueuedTurn"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "queuedTurns",
+          "threadId"
+        ],
+        "title": "ThreadQueueChangedNotification",
         "type": "object"
       },
       "ThreadReadParams": {

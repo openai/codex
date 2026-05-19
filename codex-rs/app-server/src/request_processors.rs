@@ -138,6 +138,8 @@ use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::QueuedTurn;
+use codex_app_server_protocol::QueuedTurnStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -196,6 +198,15 @@ use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadQueueAddParams;
+use codex_app_server_protocol::ThreadQueueAddResponse;
+use codex_app_server_protocol::ThreadQueueChangedNotification;
+use codex_app_server_protocol::ThreadQueueDeleteParams;
+use codex_app_server_protocol::ThreadQueueDeleteResponse;
+use codex_app_server_protocol::ThreadQueueListParams;
+use codex_app_server_protocol::ThreadQueueListResponse;
+use codex_app_server_protocol::ThreadQueueReorderParams;
+use codex_app_server_protocol::ThreadQueueReorderResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -494,6 +505,7 @@ mod config_errors;
 mod request_errors;
 mod thread_goal_processor;
 mod thread_lifecycle;
+mod thread_queue_processor;
 mod thread_resume_redaction;
 mod thread_summary;
 
@@ -506,6 +518,7 @@ use self::thread_summary::*;
 
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;
 pub(crate) use self::thread_processor::thread_from_stored_thread;
+pub(crate) use self::thread_queue_processor::ThreadQueueRequestProcessor;
 #[cfg(test)]
 pub(crate) use self::thread_summary::read_summary_from_rollout;
 #[cfg(test)]

@@ -47,6 +47,8 @@ pub use model::ThreadGoal;
 pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
+pub use model::ThreadQueuedTurn;
+pub use model::ThreadQueuedTurnState;
 pub use model::ThreadsPage;
 pub use runtime::GoalStore;
 pub use runtime::RemoteControlEnrollmentRecord;

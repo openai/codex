@@ -512,6 +512,30 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalClearResponse,
     },
+    #[experimental("thread/queue/add")]
+    ThreadQueueAdd => "thread/queue/add" {
+        params: v2::ThreadQueueAddParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadQueueAddResponse,
+    },
+    #[experimental("thread/queue/list")]
+    ThreadQueueList => "thread/queue/list" {
+        params: v2::ThreadQueueListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadQueueListResponse,
+    },
+    #[experimental("thread/queue/delete")]
+    ThreadQueueDelete => "thread/queue/delete" {
+        params: v2::ThreadQueueDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadQueueDeleteResponse,
+    },
+    #[experimental("thread/queue/reorder")]
+    ThreadQueueReorder => "thread/queue/reorder" {
+        params: v2::ThreadQueueReorderParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadQueueReorderResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         serialization: thread_id(params.thread_id),
@@ -1465,6 +1489,8 @@ server_notification_definitions! {
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     #[experimental("thread/goal/cleared")]
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/queue/changed")]
+    ThreadQueueChanged => "thread/queue/changed" (v2::ThreadQueueChangedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
