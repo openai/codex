@@ -667,7 +667,9 @@ text(JSON.stringify(await tools.exec_command({
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script completed\nWall time \d+\.\d seconds\n",
+            r"Warning: truncated output \(original token count: \d+\)\n",
+            r"Output:\n\z"
         ),
         text_item(&items, /*index*/ 0),
     );
@@ -1731,7 +1733,9 @@ text("token one token two token three token four token five token six token seve
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script completed\nWall time \d+\.\d seconds\n",
+            r"Warning: truncated output \(original token count: \d+\)\n",
+            r"Output:\n\z"
         ),
         text_item(&second_items, /*index*/ 0),
     );

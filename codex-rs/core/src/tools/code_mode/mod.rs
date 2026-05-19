@@ -33,6 +33,7 @@ use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
 use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
@@ -169,16 +170,26 @@ pub(super) async fn handle_runtime_response(
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
-            Ok(FunctionToolOutput::from_content(content_items, Some(true)))
+            let mut result = truncate_code_mode_result(content_items, max_output_tokens);
+            prepend_script_status(
+                &mut result.items,
+                &script_status,
+                started_at.elapsed(),
+                result.original_token_count,
+            );
+            Ok(FunctionToolOutput::from_content(result.items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
-            Ok(FunctionToolOutput::from_content(content_items, Some(true)))
+            let mut result = truncate_code_mode_result(content_items, max_output_tokens);
+            prepend_script_status(
+                &mut result.items,
+                &script_status,
+                started_at.elapsed(),
+                result.original_token_count,
+            );
+            Ok(FunctionToolOutput::from_content(result.items, Some(true)))
         }
         RuntimeResponse::Result {
             content_items,
@@ -199,10 +210,15 @@ pub(super) async fn handle_runtime_response(
                     text: format!("Script error:\n{error_text}"),
                 });
             }
-            content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
+            let mut result = truncate_code_mode_result(content_items, max_output_tokens);
+            prepend_script_status(
+                &mut result.items,
+                &script_status,
+                started_at.elapsed(),
+                result.original_token_count,
+            );
             Ok(FunctionToolOutput::from_content(
-                content_items,
+                result.items,
                 Some(success),
             ))
         }
@@ -233,28 +249,53 @@ fn prepend_script_status(
     content_items: &mut Vec<FunctionCallOutputContentItem>,
     status: &str,
     wall_time: Duration,
+    original_token_count: Option<usize>,
 ) {
     let wall_time_seconds = ((wall_time.as_secs_f32()) * 10.0).round() / 10.0;
-    let header = format!("{status}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n");
+    let truncation_warning = original_token_count
+        .map(|count| format!("Warning: truncated output (original token count: {count})\n"))
+        .unwrap_or_default();
+    let header = format!(
+        "{status}\nWall time {wall_time_seconds:.1} seconds\n{truncation_warning}Output:\n"
+    );
     content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
+}
+
+struct CodeModeTruncationResult {
+    items: Vec<FunctionCallOutputContentItem>,
+    original_token_count: Option<usize>,
 }
 
 fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
-) -> Vec<FunctionCallOutputContentItem> {
+) -> CodeModeTruncationResult {
     let max_output_tokens = resolve_max_tokens(max_output_tokens);
     let policy = TruncationPolicy::Tokens(max_output_tokens);
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
     {
-        let (truncated_items, _) =
+        let (items, original_token_count) =
             formatted_truncate_text_content_items_with_policy(&items, policy);
-        return truncated_items;
+        return CodeModeTruncationResult {
+            items,
+            original_token_count,
+        };
     }
 
-    truncate_function_output_items_with_policy(&items, policy)
+    let mut original_token_count = 0usize;
+    for item in &items {
+        if let FunctionCallOutputContentItem::InputText { text } = item {
+            original_token_count = original_token_count.saturating_add(approx_token_count(text));
+        }
+    }
+    let original_token_count =
+        (original_token_count > max_output_tokens).then_some(original_token_count);
+    CodeModeTruncationResult {
+        items: truncate_function_output_items_with_policy(&items, policy),
+        original_token_count,
+    }
 }
 
 async fn call_nested_tool(
