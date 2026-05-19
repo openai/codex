@@ -454,7 +454,6 @@ impl MessageProcessor {
                     Some(on_effective_plugins_changed),
                 );
         }
-        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
@@ -476,7 +475,10 @@ impl MessageProcessor {
             .environment_manager()
             .try_local_environment()
             .map(|environment| {
-                FsRequestProcessor::new(environment.get_filesystem(), fs_watch_manager)
+                FsRequestProcessor::new(
+                    environment.get_filesystem(),
+                    FsWatchManager::new(outgoing.clone()),
+                )
             });
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),

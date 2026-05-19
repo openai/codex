@@ -566,6 +566,9 @@ async fn make_rmcp_client(
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
+    if let Some(reason) = runtime_environment.startup_unavailable_reason(server_name, &config) {
+        return Err(StartupOutcomeError::from(anyhow!(reason)));
+    }
     let McpServerConfig {
         transport,
         experimental_environment,
@@ -573,24 +576,8 @@ async fn make_rmcp_client(
     } = config;
     let remote_environment = match experimental_environment.as_deref() {
         None | Some("local") => false,
-        Some("remote") => {
-            let Some(environment) = runtime_environment.environment() else {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "remote MCP server `{server_name}` requires a remote environment"
-                )));
-            };
-            if !environment.is_remote() {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "remote MCP server `{server_name}` requires a remote environment"
-                )));
-            }
-            true
-        }
-        Some(environment) => {
-            return Err(StartupOutcomeError::from(anyhow!(
-                "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
-            )));
-        }
+        Some("remote") => true,
+        Some(_) => unreachable!("startup_unavailable_reason validated experimental environment"),
     };
 
     match transport {
@@ -601,11 +588,6 @@ async fn make_rmcp_client(
             env_vars,
             cwd,
         } => {
-            if !remote_environment && runtime_environment.environment().is_none() {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "local stdio MCP server `{server_name}` requires a local environment"
-                )));
-            }
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
             let env_os = env.map(|env| {

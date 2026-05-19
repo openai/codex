@@ -207,7 +207,9 @@ impl McpConnectionManager {
             let configured_server = server
                 .configured_config()
                 .expect("effective MCP servers are configured");
-            if let Some(reason) = runtime_environment.unavailable_reason(configured_server) {
+            if let Some(reason) =
+                runtime_environment.startup_unavailable_reason(&server_name, configured_server)
+            {
                 warn!(server = %server_name, "{reason}; skipping MCP server");
                 continue;
             }

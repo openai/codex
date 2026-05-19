@@ -124,7 +124,6 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
 async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let absolute_file = codex_home.path().join("absolute.txt");
-    std::fs::write(&absolute_file, "hello")?;
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
