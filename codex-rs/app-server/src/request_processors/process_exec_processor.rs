@@ -20,6 +20,7 @@ use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::ProcessWriteStdinParams;
 use codex_app_server_protocol::ProcessWriteStdinResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_core::RuntimeCapabilities;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
@@ -38,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::error_code::invalid_request;
+use crate::error_code::method_not_found;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -48,13 +50,18 @@ const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 #[derive(Clone)]
 pub(crate) struct ProcessExecRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    runtime_capabilities: Arc<RuntimeCapabilities>,
     process_exec_manager: ProcessExecManager,
 }
 
 impl ProcessExecRequestProcessor {
-    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
+    ) -> Self {
         Self {
             outgoing,
+            runtime_capabilities,
             process_exec_manager: ProcessExecManager::default(),
         }
     }
@@ -78,6 +85,9 @@ impl ProcessExecRequestProcessor {
         } = params;
         let method_name = "process/spawn";
         tracing::debug!("{method_name} command: {command:?}");
+        self.runtime_capabilities
+            .require_local_environment(method_name)
+            .map_err(|err| method_not_found(err.to_string()))?;
         if command.is_empty() {
             return Err(invalid_request("command must not be empty"));
         }

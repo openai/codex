@@ -80,6 +80,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
@@ -133,6 +134,8 @@ pub struct InProcessStartArgs {
     pub state_db: Option<StateDbHandle>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
+    /// Ambient worker-local capabilities selected for this app-server runtime.
+    pub runtime_capabilities: Arc<RuntimeCapabilities>,
     /// Startup warnings emitted after initialize succeeds.
     pub config_warnings: Vec<ConfigWarningNotification>,
     /// Session source stamped into thread/session metadata.
@@ -414,6 +417,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.strict_config,
             args.cloud_requirements,
             args.arg0_paths.clone(),
+            Arc::clone(&args.runtime_capabilities),
             args.thread_config_loader,
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
@@ -425,6 +429,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 config: args.config,
                 config_manager,
                 environment_manager: args.environment_manager,
+                runtime_capabilities: args.runtime_capabilities,
                 feedback: args.feedback,
                 log_db: args.log_db,
                 state_db: args.state_db,
@@ -725,7 +730,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
+    use codex_app_server_protocol::CommandExecParams;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::FsReadFileParams;
+    use codex_app_server_protocol::GitDiffToRemoteParams;
+    use codex_app_server_protocol::ProcessSpawnParams;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -734,6 +743,7 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::TempDir;
@@ -758,11 +768,25 @@ mod tests {
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessClientHandle {
+        start_test_client_with_runtime_capabilities(
+            session_source,
+            channel_capacity,
+            RuntimeCapabilities::local,
+        )
+        .await
+    }
+
+    async fn start_test_client_with_runtime_capabilities(
+        session_source: SessionSource,
+        channel_capacity: usize,
+        runtime_capabilities: impl FnOnce(&EnvironmentManager) -> RuntimeCapabilities,
+    ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
         let state_db = codex_rollout::state_db::try_init(config.as_ref())
             .await
             .expect("state db should initialize for in-process test");
+        let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config,
@@ -774,7 +798,8 @@ mod tests {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: Some(state_db),
-            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+            runtime_capabilities: Arc::new(runtime_capabilities(environment_manager.as_ref())),
+            environment_manager,
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -795,6 +820,37 @@ mod tests {
 
     async fn start_test_client(session_source: SessionSource) -> InProcessClientHandle {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    }
+
+    async fn start_isolated_test_client() -> InProcessClientHandle {
+        start_test_client_with_runtime_capabilities(
+            SessionSource::Cli,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            |_| RuntimeCapabilities::isolated(),
+        )
+        .await
+    }
+
+    async fn isolated_request_error(
+        client: &InProcessClientHandle,
+        request: ClientRequest,
+    ) -> JSONRPCErrorError {
+        client
+            .request(request)
+            .await
+            .expect("request transport should work")
+            .expect_err("isolated request should be unsupported")
+    }
+
+    fn assert_method_not_found(error: JSONRPCErrorError, message: &str) {
+        assert_eq!(
+            error,
+            JSONRPCErrorError {
+                code: crate::error_code::METHOD_NOT_FOUND_ERROR_CODE,
+                message: message.to_string(),
+                data: None,
+            }
+        );
     }
 
     #[tokio::test]
@@ -867,6 +923,98 @@ mod tests {
         };
         let _parsed: ConfigRequirementsReadResponse =
             serde_json::from_value(response).expect("response should match v2 schema");
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn isolated_in_process_runtime_rejects_ambient_local_requests() {
+        let client = start_isolated_test_client().await;
+        let cwd = AbsolutePathBuf::try_from(
+            client
+                ._test_codex_home
+                .as_ref()
+                .expect("test codex home")
+                .path()
+                .to_path_buf(),
+        )
+        .expect("test codex home should be absolute");
+
+        assert_method_not_found(
+            isolated_request_error(
+                &client,
+                ClientRequest::FsReadFile {
+                    request_id: RequestId::Integer(5),
+                    params: FsReadFileParams { path: cwd.clone() },
+                },
+            )
+            .await,
+            "fs requests require ambient worker-local filesystem",
+        );
+        assert_method_not_found(
+            isolated_request_error(
+                &client,
+                ClientRequest::CommandExec {
+                    request_id: RequestId::Integer(6),
+                    params: CommandExecParams {
+                        command: vec!["echo".to_string()],
+                        process_id: None,
+                        tty: false,
+                        stream_stdin: false,
+                        stream_stdout_stderr: false,
+                        output_bytes_cap: None,
+                        disable_output_cap: false,
+                        disable_timeout: false,
+                        timeout_ms: None,
+                        cwd: None,
+                        env: None,
+                        size: None,
+                        sandbox_policy: None,
+                        permission_profile: None,
+                    },
+                },
+            )
+            .await,
+            "command/exec requires ambient worker-local environment",
+        );
+        assert_method_not_found(
+            isolated_request_error(
+                &client,
+                ClientRequest::ProcessSpawn {
+                    request_id: RequestId::Integer(7),
+                    params: ProcessSpawnParams {
+                        command: vec!["echo".to_string()],
+                        process_handle: "process-1".to_string(),
+                        cwd: cwd.clone(),
+                        tty: false,
+                        stream_stdin: false,
+                        stream_stdout_stderr: false,
+                        output_bytes_cap: None,
+                        timeout_ms: None,
+                        env: None,
+                        size: None,
+                    },
+                },
+            )
+            .await,
+            "process/spawn requires ambient worker-local environment",
+        );
+        assert_method_not_found(
+            isolated_request_error(
+                &client,
+                ClientRequest::GitDiffToRemote {
+                    request_id: RequestId::Integer(8),
+                    params: GitDiffToRemoteParams {
+                        cwd: cwd.into_path_buf(),
+                    },
+                },
+            )
+            .await,
+            "git diff to remote requires ambient worker-local environment",
+        );
+
         client
             .shutdown()
             .await

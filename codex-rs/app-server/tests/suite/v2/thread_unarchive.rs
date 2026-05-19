@@ -24,6 +24,7 @@ use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::ConfigBuilder;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
@@ -240,6 +241,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
@@ -251,7 +253,8 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
+        environment_manager,
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
         enable_codex_api_key_env: false,

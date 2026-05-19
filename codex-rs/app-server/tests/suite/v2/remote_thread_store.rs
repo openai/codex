@@ -37,6 +37,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
@@ -70,6 +71,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     let thread_store = InMemoryThreadStore::for_id(store_id.clone());
     let _in_memory_store = InMemoryThreadStoreId { store_id };
 
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let mut client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
@@ -81,7 +83,8 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
+        environment_manager,
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli,
         enable_codex_api_key_env: false,

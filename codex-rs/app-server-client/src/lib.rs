@@ -48,6 +48,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+pub use codex_core::RuntimeCapabilities;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimePaths;
@@ -348,6 +349,8 @@ pub struct InProcessClientStartArgs {
     pub state_db: Option<StateDbHandle>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
+    /// Ambient worker-local capabilities selected for this app-server runtime.
+    pub runtime_capabilities: Arc<RuntimeCapabilities>,
     /// Startup warnings emitted after initialize succeeds.
     pub config_warnings: Vec<ConfigWarningNotification>,
     /// Session source recorded in app-server thread metadata.
@@ -411,6 +414,7 @@ impl InProcessClientStartArgs {
             log_db: self.log_db,
             state_db: self.state_db,
             environment_manager: self.environment_manager,
+            runtime_capabilities: self.runtime_capabilities,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
             enable_codex_api_key_env: self.enable_codex_api_key_env,
@@ -1028,6 +1032,7 @@ mod tests {
         let state_db = init_state_db(config.as_ref())
             .await
             .expect("state db should initialize for in-process test");
+        let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config,
@@ -1038,7 +1043,10 @@ mod tests {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: Some(state_db),
-            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+            runtime_capabilities: Arc::new(RuntimeCapabilities::local(
+                environment_manager.as_ref(),
+            )),
+            environment_manager,
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -2197,6 +2205,9 @@ mod tests {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
+            runtime_capabilities: Arc::new(RuntimeCapabilities::local(
+                environment_manager.as_ref(),
+            )),
             environment_manager: environment_manager.clone(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,
@@ -2228,6 +2239,7 @@ mod tests {
         let mut config = build_test_config().await;
         config.experimental_thread_config_endpoint = Some("not-a-valid-endpoint".to_string());
 
+        let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(config),
@@ -2238,7 +2250,10 @@ mod tests {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
-            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+            runtime_capabilities: Arc::new(RuntimeCapabilities::local(
+                environment_manager.as_ref(),
+            )),
+            environment_manager,
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,
             enable_codex_api_key_env: false,

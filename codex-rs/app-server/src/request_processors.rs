@@ -264,6 +264,7 @@ use codex_core::ExternalGoalPreviousStatus;
 use codex_core::ExternalGoalSet;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
+use codex_core::RuntimeCapabilities;
 #[cfg(test)]
 use codex_core::SessionMeta;
 use codex_core::StartThreadOptions;
@@ -480,6 +481,7 @@ pub(crate) use windows_sandbox_processor::WindowsSandboxRequestProcessor;
 
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::error_code::method_not_found;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ConnectionCapabilities;

@@ -43,6 +43,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
@@ -370,6 +371,7 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
@@ -381,7 +383,8 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
+        environment_manager,
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),
         enable_codex_api_key_env: false,
@@ -436,6 +439,7 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
@@ -447,7 +451,8 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
+        environment_manager,
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),
         enable_codex_api_key_env: false,
@@ -522,6 +527,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
@@ -533,7 +539,8 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
+        environment_manager,
         config_warnings: Vec::new(),
         session_source: SessionSource::Cli.into(),
         enable_codex_api_key_env: false,

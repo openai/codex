@@ -594,6 +594,9 @@ mod thread_processor_behavior_tests {
             /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
+            Arc::new(codex_core::RuntimeCapabilities::local(
+                &codex_exec_server::EnvironmentManager::default_for_tests(),
+            )),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
                     model_provider: Some("session".to_string()),

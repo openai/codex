@@ -110,6 +110,7 @@ mod tests {
     use codex_config::ThreadConfigLoadErrorCode;
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_core::RuntimeCapabilities;
     use codex_core::config::ConfigOverrides;
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
@@ -210,6 +211,9 @@ mod tests {
             /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
+            Arc::new(RuntimeCapabilities::local(
+                &EnvironmentManager::default_for_tests(),
+            )),
             loader.clone(),
         );
 
