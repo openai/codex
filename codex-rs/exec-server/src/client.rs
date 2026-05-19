@@ -81,6 +81,8 @@ use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
 
 pub(crate) mod http_client;
+#[cfg(test)]
+mod reconnect_tests;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);

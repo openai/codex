@@ -14,6 +14,60 @@ This crate owns the transport, protocol, and filesystem/process handlers. The
 top-level `codex` binary owns hidden helper dispatch for sandboxed
 filesystem operations and `codex-linux-sandbox`.
 
+## Client And Session Ownership
+
+Remote environments expose one logical exec-server client to the rest of Codex.
+That client is not the same thing as one websocket connection.
+
+```text
+Environment
+  `- RemoteExecServerClient
+       |- RemoteExecServerSession
+       |    |- logical session id
+       |    |- current ExecServerConnection
+       |    |- one in-flight reconnect attempt
+       |    |- durable ProcessSession map
+       |    `- terminal resume error, when reconnect can no longer succeed
+       |- RemoteProcess -> ProcessSessionHandle -> ProcessSession
+       |- RemoteFileSystem
+       `- HttpClient
+```
+
+The main roles are:
+
+- `RemoteExecServerClient`: environment-owned logical client. `Environment`
+  clones this into the remote process backend, remote filesystem, and remote
+  HTTP capability so all remote APIs share one reconnecting session.
+- `RemoteExecServerSession`: durable logical-session state behind the client.
+  It remembers the resumable session id, current live connection, one shared
+  reconnect attempt, tracked process sessions, and any terminal resume error.
+- `ExecServerConnection`: one live JSON-RPC transport binding. It owns
+  connection-local routing for notifications and streamed HTTP response bodies.
+- `ProcessSession`: durable per-process client state. It keeps the local event
+  log, wake cursor, and failure state that must survive connection replacement.
+- `ProcessSessionHandle`: process-facing handle used by `RemoteExecProcess`.
+  It routes reads, writes, terminate, and unregister through either a focused
+  direct connection test path or the logical reconnecting client path.
+- `RemoteProcess`, `RemoteFileSystem`, and `HttpClient`: thin capability
+  adapters. They should not own reconnect state themselves.
+
+Reconnect invariants:
+
+- There is one shared reconnect attempt per `RemoteExecServerClient`, not one
+  reconnect loop per API surface.
+- Reconnect resumes the same logical session id and rebinds tracked
+  `ProcessSession` routes onto the replacement `ExecServerConnection`.
+- `process/read` may retry once after a transport-close race because its
+  `afterSeq` cursor makes the replay read-only and recoverable.
+- `process/start`, `process/write`, `process/terminate`, filesystem RPCs, and
+  `http/request` are not replayed after an ambiguous mid-request disconnect.
+  They reconnect before later calls, but an in-flight call that may already
+  have reached the server returns an error instead of risking duplicate side
+  effects.
+- Streamed HTTP bodies are connection-local. A reconnect can start a later
+  HTTP request, but it cannot resume body-delta delivery for an already-open
+  stream.
+
 ## Transport
 
 The server speaks the shared `codex-app-server-protocol` message envelope on
