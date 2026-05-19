@@ -3,7 +3,6 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_install_context::InstallContext;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -11,59 +10,26 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Deserialize;
-use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
-use super::list::ThreadItem;
 
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 
-/// Compact search-specific context attached only to thread discovery results.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThreadSearchPreview {
-    ContentMatch { snippet: String },
-}
-
-pub struct ThreadSearchItem {
-    pub item: ThreadItem,
-    pub search_preview: ThreadSearchPreview,
-}
-
-pub struct ThreadSearchMatches {
-    content_preview_by_path: HashMap<PathBuf, ThreadSearchPreview>,
-}
-
-impl ThreadSearchMatches {
-    pub async fn load(codex_home: &Path, archived: bool, search_term: &str) -> io::Result<Self> {
-        let root = codex_home.join(if archived {
-            ARCHIVED_SESSIONS_SUBDIR
-        } else {
-            SESSIONS_SUBDIR
-        });
-        let content_preview_by_path = ripgrep_rollout_matches(root.as_path(), search_term).await?;
-        Ok(Self {
-            content_preview_by_path,
-        })
-    }
-
-    pub fn matching_items(&self, items: Vec<ThreadItem>) -> Vec<ThreadSearchItem> {
-        items
-            .into_iter()
-            .filter_map(|item| {
-                self.content_preview_by_path
-                    .get(item.path.as_path())
-                    .cloned()
-                    .map(|search_preview| ThreadSearchItem {
-                        item,
-                        search_preview,
-                    })
-            })
-            .collect()
-    }
+pub async fn search_rollout_snippets(
+    codex_home: &Path,
+    archived: bool,
+    search_term: &str,
+) -> io::Result<HashMap<PathBuf, String>> {
+    let root = codex_home.join(if archived {
+        ARCHIVED_SESSIONS_SUBDIR
+    } else {
+        SESSIONS_SUBDIR
+    });
+    ripgrep_rollout_matches(root.as_path(), search_term).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,12 +56,12 @@ struct RipgrepText {
 async fn ripgrep_rollout_matches(
     root: &Path,
     search_term: &str,
-) -> io::Result<HashMap<PathBuf, ThreadSearchPreview>> {
+) -> io::Result<HashMap<PathBuf, String>> {
     if !tokio::fs::try_exists(root).await.unwrap_or(false) {
         return Ok(HashMap::new());
     }
 
-    let output = match Command::new(InstallContext::current().rg_command())
+    let output = match Command::new("rg")
         .arg("--json")
         .arg("--fixed-strings")
         .arg("--no-ignore")
@@ -141,10 +107,10 @@ async fn ripgrep_rollout_matches(
         if matches.contains_key(path.as_path()) {
             continue;
         }
-        let Some(preview) = content_match_preview(jsonl_line.as_str(), search_term) else {
+        let Some(snippet) = content_match_snippet(jsonl_line.as_str(), search_term) else {
             continue;
         };
-        matches.insert(path, preview);
+        matches.insert(path, snippet);
     }
 
     Ok(matches)
@@ -153,7 +119,7 @@ async fn ripgrep_rollout_matches(
 async fn scan_rollout_matches(
     root: &Path,
     search_term: &str,
-) -> io::Result<HashMap<PathBuf, ThreadSearchPreview>> {
+) -> io::Result<HashMap<PathBuf, String>> {
     let mut matches = HashMap::new();
     let mut dirs = vec![root.to_path_buf()];
 
@@ -175,8 +141,8 @@ async fn scan_rollout_matches(
             {
                 continue;
             }
-            if let Some(preview) = first_matching_preview(path.as_path(), search_term).await? {
-                matches.insert(path, preview);
+            if let Some(snippet) = first_matching_snippet(path.as_path(), search_term).await? {
+                matches.insert(path, snippet);
             }
         }
     }
@@ -184,56 +150,40 @@ async fn scan_rollout_matches(
     Ok(matches)
 }
 
-async fn first_matching_preview(
-    path: &Path,
-    search_term: &str,
-) -> io::Result<Option<ThreadSearchPreview>> {
+async fn first_matching_snippet(path: &Path, search_term: &str) -> io::Result<Option<String>> {
     let file = tokio::fs::File::open(path).await?;
     let mut lines = tokio::io::BufReader::new(file).lines();
     while let Some(line) = lines.next_line().await? {
         if line.contains(search_term)
-            && let Some(preview) = content_match_preview(line.as_str(), search_term)
+            && let Some(snippet) = content_match_snippet(line.as_str(), search_term)
         {
-            return Ok(Some(preview));
+            return Ok(Some(snippet));
         }
     }
     Ok(None)
 }
 
-fn content_match_preview(jsonl_line: &str, search_term: &str) -> Option<ThreadSearchPreview> {
+fn content_match_snippet(jsonl_line: &str, search_term: &str) -> Option<String> {
     let rollout_line = serde_json::from_str::<RolloutLine>(jsonl_line.trim()).ok()?;
-    conversation_text_from_item(&rollout_line.item)
-        .into_iter()
-        .find_map(|text| match text {
-            ConversationText::User(text) | ConversationText::Assistant(text) => {
-                excerpt_around_match(text.as_str(), search_term)
-            }
-        })
-        .map(|snippet| ThreadSearchPreview::ContentMatch { snippet })
+    let text = conversation_text_from_item(&rollout_line.item)?;
+    excerpt_around_match(text.as_str(), search_term)
 }
 
-enum ConversationText {
-    User(String),
-    Assistant(String),
-}
-
-fn conversation_text_from_item(item: &RolloutItem) -> Vec<ConversationText> {
+fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
     match item {
         RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
             let text = strip_user_message_prefix(user.message.as_str());
             if text.is_empty() {
-                Vec::new()
+                None
             } else {
-                vec![ConversationText::User(text.to_string())]
+                Some(text.to_string())
             }
         }
         RolloutItem::EventMsg(EventMsg::AgentMessage(agent)) => {
             if agent.message.trim().is_empty() {
-                Vec::new()
+                None
             } else {
-                vec![ConversationText::Assistant(
-                    agent.message.trim().to_string(),
-                )]
+                Some(agent.message.trim().to_string())
             }
         }
         RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) => {
@@ -242,21 +192,17 @@ fn conversation_text_from_item(item: &RolloutItem) -> Vec<ConversationText> {
                 .filter_map(content_item_text)
                 .collect::<Vec<_>>()
                 .join(" ");
-            if text.trim().is_empty() {
-                Vec::new()
-            } else if role == "user" {
-                vec![ConversationText::User(text)]
-            } else if role == "assistant" {
-                vec![ConversationText::Assistant(text)]
+            if text.trim().is_empty() || (role != "user" && role != "assistant") {
+                None
             } else {
-                Vec::new()
+                Some(text)
             }
         }
         RolloutItem::SessionMeta(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_) => Vec::new(),
+        | RolloutItem::Compacted(_) => None,
     }
 }
 

@@ -215,6 +215,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSearchParams;
+use codex_app_server_protocol::ThreadSearchPreview;
 use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSearchResult;
 use codex_app_server_protocol::ThreadSetNameParams;

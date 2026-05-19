@@ -3,10 +3,9 @@ use std::collections::HashSet;
 
 use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
-use codex_rollout::ThreadSearchItem;
-use codex_rollout::ThreadSearchMatches;
 use codex_rollout::find_thread_names_by_ids;
 use codex_rollout::parse_cursor;
+use codex_rollout::search_rollout_snippets;
 
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
@@ -20,6 +19,11 @@ use crate::ThreadSearchPage;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+
+struct ThreadSearchItem {
+    item: codex_rollout::ThreadItem,
+    snippet: String,
+}
 
 pub(super) async fn search_threads(
     store: &LocalThreadStore,
@@ -57,7 +61,7 @@ pub(super) async fn search_threads(
         model_provider_id: store.config.default_model_provider_id.clone(),
         generate_memories: false,
     };
-    let search_matches = ThreadSearchMatches::load(
+    let snippets_by_path = search_rollout_snippets(
         store.config.codex_home.as_path(),
         params.archived,
         search_term,
@@ -86,7 +90,12 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
-        matching_items.extend(search_matches.matching_items(page.items));
+        matching_items.extend(page.items.into_iter().filter_map(|item| {
+            snippets_by_path
+                .get(item.path.as_path())
+                .cloned()
+                .map(|snippet| ThreadSearchItem { item, snippet })
+        }));
         page_cursor = page.next_cursor;
         if matching_items.len() > params.page_size || page_cursor.is_none() {
             break;
@@ -116,7 +125,7 @@ pub(super) async fn search_threads(
             )
             .map(|thread| StoredThreadSearchResult {
                 thread,
-                search_preview: item.search_preview,
+                snippet: item.snippet,
             })
         })
         .collect::<Vec<_>>();

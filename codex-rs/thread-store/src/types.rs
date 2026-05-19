@@ -208,13 +208,10 @@ pub struct ThreadPage {
     pub next_cursor: Option<String>,
 }
 
-/// Search-only result metadata that should not become part of persisted thread state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredThreadSearchResult {
-    /// Matching stored thread.
     pub thread: StoredThread,
-    /// Search-specific preview context for result rendering.
-    pub search_preview: codex_rollout::ThreadSearchPreview,
+    pub snippet: String,
 }
 
 /// A page of thread-search results.

@@ -420,6 +420,7 @@ impl RolloutRecorder {
                 sort_key,
             ));
         }
+
         // For metadata-filtered listings the filesystem page is the page we return. Track those
         // IDs so the later DB page only triggers full reconciliation for DB-only hits.
         let fs_page_thread_ids = fs_page
