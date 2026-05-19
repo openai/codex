@@ -482,14 +482,23 @@ impl RequestUserInputOverlay {
 
         let question_count = self.question_count();
         let is_last_question = self.current_index().saturating_add(1) >= question_count;
-        let enter_tip = if question_count == 1 {
-            FooterTip::highlighted("enter to submit answer")
-        } else if is_last_question {
-            FooterTip::highlighted("enter to submit all")
+        let submit_key = if self.focus_is_notes() || !self.has_options() {
+            self.composer_submit_keys
+                .first()
+                .map(KeyBinding::display_label)
         } else {
-            FooterTip::new("enter to submit answer")
+            Some("enter".to_string())
         };
-        tips.push(enter_tip);
+        if let Some(submit_key) = submit_key {
+            let submit_tip = if question_count == 1 {
+                FooterTip::highlighted(format!("{submit_key} to submit answer"))
+            } else if is_last_question {
+                FooterTip::highlighted(format!("{submit_key} to submit all"))
+            } else {
+                FooterTip::new(format!("{submit_key} to submit answer"))
+            };
+            tips.push(submit_tip);
+        }
         if question_count > 1 {
             if self.has_options() && !self.focus_is_notes() {
                 tips.push(FooterTip::new("←/→ to navigate questions"));
@@ -1059,6 +1068,20 @@ impl BottomPaneView for RequestUserInputOverlay {
             return;
         }
 
+        if self.focus_is_notes() && self.composer_submit_keys.is_pressed(key_event) {
+            self.ensure_selected_for_notes();
+            self.pending_submission_draft = Some(self.capture_composer_draft());
+            let (result, _) = self.composer.handle_key_event(key_event);
+            if !self.handle_composer_input_result(result) {
+                self.pending_submission_draft = None;
+                if self.has_options() {
+                    self.select_current_option(/*committed*/ true);
+                }
+                self.go_next_or_submit();
+            }
+            return;
+        }
+
         // Question navigation is always available.
         match key_event {
             KeyEvent {
@@ -1204,19 +1227,6 @@ impl BottomPaneView for RequestUserInputOverlay {
                     }
                     self.focus = Focus::Options;
                     self.sync_composer_placeholder();
-                    return;
-                }
-                if self.composer_submit_keys.is_pressed(key_event) {
-                    self.ensure_selected_for_notes();
-                    self.pending_submission_draft = Some(self.capture_composer_draft());
-                    let (result, _) = self.composer.handle_key_event(key_event);
-                    if !self.handle_composer_input_result(result) {
-                        self.pending_submission_draft = None;
-                        if self.has_options() {
-                            self.select_current_option(/*committed*/ true);
-                        }
-                        self.go_next_or_submit();
-                    }
                     return;
                 }
                 if self.has_options() && matches!(key_event.code, KeyCode::Up | KeyCode::Down) {
@@ -2014,6 +2024,28 @@ mod tests {
     }
 
     #[test]
+    fn freeform_footer_shows_configured_submit_binding() {
+        let (tx, _rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![crate::key_hint::ctrl(KeyCode::Char('j'))];
+        let overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+
+        let tips = overlay.footer_tips();
+        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            tip_texts,
+            vec!["ctrl + j to submit answer", "esc to interrupt"]
+        );
+    }
+
+    #[test]
     fn tab_opens_notes_when_option_selected() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -2434,6 +2466,37 @@ mod tests {
         overlay.composer.move_cursor_to_end();
 
         overlay.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+
+        assert_eq!(overlay.current_index(), 1);
+        assert_eq!(overlay.answers[0].answer_committed, true);
+    }
+
+    #[test]
+    fn freeform_submit_binding_wins_over_question_navigation() {
+        let (tx, _rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![crate::key_hint::ctrl(KeyCode::Char('n'))];
+        let mut overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_without_options("q2", "More"),
+                ],
+            ),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+
+        overlay
+            .composer
+            .set_text_content("Draft".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
 
         assert_eq!(overlay.current_index(), 1);
         assert_eq!(overlay.answers[0].answer_committed, true);
@@ -3086,6 +3149,26 @@ mod tests {
         let area = Rect::new(0, 0, 120, 10);
         insta::assert_snapshot!(
             "request_user_input_freeform",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_freeform_remapped_submit_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![crate::key_hint::ctrl(KeyCode::Char('j'))];
+        let overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event("turn-1", vec![question_without_options("q1", "Goal")]),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+        let area = Rect::new(0, 0, 120, 10);
+        insta::assert_snapshot!(
+            "request_user_input_freeform_remapped_submit",
             render_snapshot(&overlay, area)
         );
     }
