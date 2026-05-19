@@ -88,24 +88,47 @@ function Write-Response {
     $stdout.WriteLine(($Response | ConvertTo-Json -Compress -Depth 3))
 }
 
+function Convert-LiteralCommandValue {
+    param($expression)
+
+    if ($expression -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        return $expression.Value
+    }
+
+    if ($expression -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+        if ($expression.NestedExpressions.Count -gt 0) {
+            return $null
+        }
+        return $expression.Value
+    }
+
+    if ($expression -is [System.Management.Automation.Language.ConstantExpressionAst]) {
+        return $expression.Value.ToString()
+    }
+
+    if ($expression.GetType().FullName -eq 'System.Management.Automation.Language.ArrayLiteralAst') {
+        $parts = [System.Collections.Generic.List[string]]::new()
+        foreach ($element in $expression.Elements) {
+            $part = Convert-LiteralCommandValue $element
+            if ($part -eq $null) {
+                return $null
+            }
+            $parts.Add($part)
+        }
+        return [string]::Join(',', $parts)
+    }
+
+    return $null
+}
+
 function Convert-CommandElement {
     param($element)
 
     # Accept only literal-ish command elements. Variable expansion, subexpressions, splats,
     # and other dynamic forms return $null so the whole request becomes unsupported.
-    if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-        return @($element.Value)
-    }
-
-    if ($element -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
-        if ($element.NestedExpressions.Count -gt 0) {
-            return $null
-        }
-        return @($element.Value)
-    }
-
-    if ($element -is [System.Management.Automation.Language.ConstantExpressionAst]) {
-        return @($element.Value.ToString())
+    $literalValue = Convert-LiteralCommandValue $element
+    if ($literalValue -ne $null) {
+        return @($literalValue)
     }
 
     if ($element -is [System.Management.Automation.Language.CommandParameterAst]) {
@@ -113,15 +136,23 @@ function Convert-CommandElement {
             return @('-' + $element.ParameterName)
         }
 
-        if ($element.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-            return @('-' + $element.ParameterName, $element.Argument.Value)
-        }
-
-        if ($element.Argument -is [System.Management.Automation.Language.ConstantExpressionAst]) {
-            return @('-' + $element.ParameterName, $element.Argument.Value.ToString())
+        $argumentValue = Convert-LiteralCommandValue $element.Argument
+        if ($argumentValue -ne $null) {
+            return @('-' + $element.ParameterName, $argumentValue)
         }
 
         return $null
+    }
+
+    if ($element -is [System.Management.Automation.Language.CommandExpressionAst]) {
+        if ($element.Redirections.Count -gt 0) {
+            return $null
+        }
+
+        $expressionValue = Convert-LiteralCommandValue $element.Expression
+        if ($expressionValue -ne $null) {
+            return @($expressionValue)
+        }
     }
 
     return $null

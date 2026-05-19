@@ -235,4 +235,30 @@ mod tests {
             ]
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_literal_comma_separated_argument_as_one_word() {
+        let commands = parse_powershell_command_into_plain_commands(&[
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "gh issue view 18861 --repo openai/codex --json number,title,state".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![vec![
+                "gh".to_string(),
+                "issue".to_string(),
+                "view".to_string(),
+                "18861".to_string(),
+                "-repo".to_string(),
+                "openai/codex".to_string(),
+                "-json".to_string(),
+                "number,title,state".to_string(),
+            ]]
+        );
+    }
 }

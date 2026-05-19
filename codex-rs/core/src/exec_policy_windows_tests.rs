@@ -71,6 +71,34 @@ fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
 }
 
 #[test]
+fn commands_for_exec_policy_normalizes_powershell_literal_comma_arrays() {
+    let command = vec![
+        "powershell.exe".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "gh issue view 18861 --repo openai/codex --json number,title,state".to_string(),
+    ];
+
+    assert_eq!(
+        commands_for_exec_policy(&command),
+        ExecPolicyCommands {
+            commands: vec![vec![
+                "gh".to_string(),
+                "issue".to_string(),
+                "view".to_string(),
+                "18861".to_string(),
+                "-repo".to_string(),
+                "openai/codex".to_string(),
+                "-json".to_string(),
+                "number,title,state".to_string(),
+            ]],
+            used_complex_parsing: false,
+            command_origin: ExecPolicyCommandOrigin::PowerShell,
+        }
+    );
+}
+
+#[test]
 fn unmatched_safe_powershell_words_are_allowed() {
     let command = vec!["Get-Content".to_string(), "Cargo.toml".to_string()];
 
