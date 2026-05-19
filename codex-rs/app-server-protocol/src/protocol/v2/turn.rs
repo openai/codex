@@ -103,6 +103,11 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Request-scoped config overrides for this turn and subsequent turns.
+    /// These mirror thread start/resume config overrides so clients can adjust
+    /// model-visible tool availability without rebuilding the thread.
+    #[ts(optional = nullable)]
+    pub config: Option<HashMap<String, JsonValue>>,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
     #[ts(optional = nullable)]

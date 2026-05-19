@@ -489,6 +489,10 @@ impl CodexThread {
         self.codex.session.refresh_runtime_config(next_config).await;
     }
 
+    pub async fn replace_runtime_config(&self, next_config: crate::config::Config) {
+        self.codex.session.replace_runtime_config(next_config).await;
+    }
+
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.codex.thread_environment_selections().await
     }

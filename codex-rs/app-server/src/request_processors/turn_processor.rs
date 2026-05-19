@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::McpServerRefreshConfig;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -347,6 +348,7 @@ impl TurnRequestProcessor {
             .collaboration_mode
             .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
         let environment_selections = self.parse_environment_selections(params.environments)?;
+        let runtime_config_overrides = params.config.clone();
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -366,7 +368,8 @@ impl TurnRequestProcessor {
             || params.effort.is_some()
             || params.summary.is_some()
             || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || params.personality.is_some()
+            || runtime_config_overrides.is_some();
 
         if params.sandbox_policy.is_some() && params.permissions.is_some() {
             return Err(invalid_request(
@@ -424,6 +427,26 @@ impl TurnRequestProcessor {
         let summary = params.summary;
         let service_tier = params.service_tier;
         let personality = params.personality;
+        let runtime_config = if let Some(request_overrides) = runtime_config_overrides {
+            let snapshot = thread.config_snapshot().await;
+            let config = self
+                .config_manager
+                .load_for_cwd(
+                    Some(request_overrides),
+                    ConfigOverrides {
+                        cwd: cwd.clone(),
+                        codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                        main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                        ..Default::default()
+                    },
+                    Some(snapshot.cwd.to_path_buf()),
+                )
+                .await
+                .map_err(|err| config_load_error(&err))?;
+            Some(config)
+        } else {
+            None
+        };
 
         // If any overrides are provided, validate them synchronously so the
         // request can fail before accepting user input. The actual update is
@@ -447,6 +470,34 @@ impl TurnRequestProcessor {
                 })
                 .await
                 .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+        }
+
+        if let Some(runtime_config) = runtime_config {
+            thread.replace_runtime_config(runtime_config.clone()).await;
+            let configured_mcp_servers = self
+                .thread_manager
+                .mcp_manager()
+                .configured_servers(&runtime_config)
+                .await;
+            thread
+                .submit(Op::RefreshMcpServers {
+                    config: McpServerRefreshConfig {
+                        mcp_servers: serde_json::to_value(configured_mcp_servers)
+                            .map_err(|err| internal_error(format!(
+                                "failed to serialize turn MCP refresh config: {err}"
+                            )))?,
+                        mcp_oauth_credentials_store_mode: serde_json::to_value(
+                            runtime_config.mcp_oauth_credentials_store_mode,
+                        )
+                        .map_err(|err| internal_error(format!(
+                            "failed to serialize turn MCP OAuth store mode: {err}"
+                        )))?,
+                    },
+                })
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to queue turn MCP refresh: {err}"))
+                })?;
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
