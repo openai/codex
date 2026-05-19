@@ -6,6 +6,7 @@ use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
 use crate::turn_metadata::McpTurnMetadataContext;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AppConfig;
@@ -2298,6 +2299,168 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         }
     );
     assert!(contents.contains("[mcp_servers.docs.tools.search]"));
+    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn maybe_persist_mcp_tool_approval_writes_project_override_for_override_server() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    let project_dir = tempdir().expect("tempdir");
+    std::fs::write(project_dir.path().join(".git"), "gitdir: nowhere").expect("seed git marker");
+    let project_codex_dir = project_dir.path().join(".codex");
+    std::fs::create_dir_all(&project_codex_dir).expect("create project .codex dir");
+    std::fs::write(
+        project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed project override config");
+    ConfigEditsBuilder::new(&codex_home)
+        .set_project_trust_level(
+            project_dir.path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .apply()
+        .await
+        .expect("trust project");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(project_dir.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load project override config");
+    turn_context.config = Arc::new(config);
+    let key = McpToolApprovalKey {
+        server: "docs".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+
+    let contents = std::fs::read_to_string(project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE))
+        .expect("read project override config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse project override config");
+    let tool = parsed
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("search"))
+        .expect("docs/search tool config exists");
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+    assert!(contents.contains("[mcp_servers.docs.tools.search]"));
+    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn maybe_persist_mcp_tool_approval_writes_user_override_for_override_server() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed user config");
+    let override_path = codex_home.join(CONFIG_OVERRIDE_TOML_FILE);
+    std::fs::write(
+        &override_path,
+        "[mcp_servers.docs.tools.search]\napproval_mode = \"prompt\"\n",
+    )
+    .expect("seed user override config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load user override config");
+    turn_context.config = Arc::new(config);
+    let key = McpToolApprovalKey {
+        server: "docs".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+
+    let contents = std::fs::read_to_string(&override_path).expect("read user override config");
+    let parsed: toml::Value = toml::from_str(&contents).expect("parse user override config");
+    let approval_mode = parsed
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .and_then(|servers| servers.get("docs"))
+        .and_then(toml::Value::as_table)
+        .and_then(|server| server.get("tools"))
+        .and_then(toml::Value::as_table)
+        .and_then(|tools| tools.get("search"))
+        .and_then(toml::Value::as_table)
+        .and_then(|tool| tool.get("approval_mode"))
+        .and_then(toml::Value::as_str);
+
+    assert_eq!(approval_mode, Some("approve"));
+    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn maybe_persist_mcp_tool_approval_writes_partial_project_override_for_override_server() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    let project_dir = tempdir().expect("tempdir");
+    std::fs::write(project_dir.path().join(".git"), "gitdir: nowhere").expect("seed git marker");
+    let project_codex_dir = project_dir.path().join(".codex");
+    std::fs::create_dir_all(&project_codex_dir).expect("create project .codex dir");
+    std::fs::write(
+        project_codex_dir.join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed project config");
+    let override_path = project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE);
+    std::fs::write(
+        &override_path,
+        "[mcp_servers.docs.tools.search]\napproval_mode = \"prompt\"\n",
+    )
+    .expect("seed project override config");
+    ConfigEditsBuilder::new(&codex_home)
+        .set_project_trust_level(
+            project_dir.path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .apply()
+        .await
+        .expect("trust project");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(project_dir.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load project override config");
+    turn_context.config = Arc::new(config);
+    let key = McpToolApprovalKey {
+        server: "docs".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+
+    let contents = std::fs::read_to_string(&override_path).expect("read project override config");
+    let parsed: toml::Value = toml::from_str(&contents).expect("parse project override config");
+    let approval_mode = parsed
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .and_then(|servers| servers.get("docs"))
+        .and_then(toml::Value::as_table)
+        .and_then(|server| server.get("tools"))
+        .and_then(toml::Value::as_table)
+        .and_then(|tools| tools.get("search"))
+        .and_then(toml::Value::as_table)
+        .and_then(|tool| tool.get("approval_mode"))
+        .and_then(toml::Value::as_str);
+
+    assert_eq!(approval_mode, Some("approve"));
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 
