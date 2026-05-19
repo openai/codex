@@ -776,27 +776,35 @@ model = "gpt-old"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_value_write_uses_user_config_version_when_override_is_effective() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let codex_home = temp_dir.path().canonicalize()?;
+async fn config_value_write_accepts_user_config_version_when_project_override_is_effective()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
     write_config(
-        &temp_dir,
+        &codex_home,
         r#"
 model = "gpt-base"
 "#,
     )?;
     std::fs::write(
-        temp_dir.path().join("config.override.toml"),
+        project_config_dir.join("config.toml"),
+        "model = \"gpt-project\"\n",
+    )?;
+    std::fs::write(
+        project_config_dir.join("config.override.toml"),
         "model = \"gpt-override\"\n",
     )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
-            cwd: None,
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -823,8 +831,8 @@ model = "gpt-base"
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
 
-    assert_eq!(write.status, WriteStatus::OkOverridden);
-    assert!(write.overridden_metadata.is_some());
+    assert_eq!(write.status, WriteStatus::Ok);
+    assert!(write.overridden_metadata.is_none());
 
     Ok(())
 }

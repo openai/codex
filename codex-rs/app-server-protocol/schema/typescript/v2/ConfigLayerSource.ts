@@ -8,7 +8,7 @@ export type ConfigLayerSource = { "type": "mdm", domain: string, key: string, } 
  * This is the path to the system config.toml file, though it is not
  * guaranteed to exist.
  */
-file: AbsolutePathBuf, } | { "type": "systemOverride", file: AbsolutePathBuf, } | { "type": "user",
+file: AbsolutePathBuf, } | { "type": "user",
 /**
  * This is the path to the user's config.toml file, though it is not
  * guaranteed to exist.
@@ -18,4 +18,4 @@ file: AbsolutePathBuf,
  * Name of the selected profile-v2 config layered on top of the base
  * user config, when this layer represents one.
  */
-profile: string | null, } | { "type": "userOverride", file: AbsolutePathBuf, } | { "type": "project", dotCodexFolder: AbsolutePathBuf, } | { "type": "projectOverride", dotCodexFolder: AbsolutePathBuf, } | { "type": "sessionFlags" } | { "type": "legacyManagedConfigTomlFromFile", file: AbsolutePathBuf, } | { "type": "legacyManagedConfigTomlFromMdm" };
+profile: string | null, } | { "type": "project", dotCodexFolder: AbsolutePathBuf, } | { "type": "projectOverride", dotCodexFolder: AbsolutePathBuf, } | { "type": "sessionFlags" } | { "type": "legacyManagedConfigTomlFromFile", file: AbsolutePathBuf, } | { "type": "legacyManagedConfigTomlFromMdm" };

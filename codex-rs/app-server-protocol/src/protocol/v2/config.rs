@@ -42,13 +42,6 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// System override layer from a sibling `config.override.toml`.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    SystemOverride {
-        file: AbsolutePathBuf,
-    },
-
     /// User config layer from $CODEX_HOME/config.toml. This layer is special
     /// in that it is expected to be:
     /// - writable by the user
@@ -63,13 +56,6 @@ pub enum ConfigLayerSource {
         /// Name of the selected profile-v2 config layered on top of the base
         /// user config, when this layer represents one.
         profile: Option<String>,
-    },
-
-    /// User override layer from `$CODEX_HOME/config.override.toml`.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    UserOverride {
-        file: AbsolutePathBuf,
     },
 
     /// Path to a .codex/ folder within a project. There could be multiple of
@@ -110,11 +96,10 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
-            ConfigLayerSource::SystemOverride { .. } => 11,
             ConfigLayerSource::User {
                 profile: Some(_), ..
             } => 21,
-            ConfigLayerSource::User { .. } | ConfigLayerSource::UserOverride { .. } => 20,
+            ConfigLayerSource::User { .. } => 20,
             ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,

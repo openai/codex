@@ -1126,10 +1126,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
 #[test]
 fn override_layers_do_not_duplicate_shared_hooks_json() {
     let temp = tempdir().expect("create temp dir");
-    let config_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
-    let override_path = AbsolutePathBuf::try_from(temp.path().join("config.override.toml"))
-        .expect("absolute override path");
+    let dot_codex_folder = AbsolutePathBuf::try_from(temp.path()).expect("absolute config folder");
     let hooks_json_path =
         AbsolutePathBuf::try_from(temp.path().join("hooks.json")).expect("absolute hooks path");
     fs::write(
@@ -1154,13 +1151,13 @@ fn override_layers_do_not_duplicate_shared_hooks_json() {
     let config_layer_stack = ConfigLayerStack::new(
         vec![
             ConfigLayerEntry::new(
-                ConfigLayerSource::System { file: config_path },
+                ConfigLayerSource::Project {
+                    dot_codex_folder: dot_codex_folder.clone(),
+                },
                 TomlValue::Table(Default::default()),
             ),
             ConfigLayerEntry::new(
-                ConfigLayerSource::SystemOverride {
-                    file: override_path,
-                },
+                ConfigLayerSource::ProjectOverride { dot_codex_folder },
                 TomlValue::Table(Default::default()),
             ),
         ],
@@ -1171,7 +1168,7 @@ fn override_layers_do_not_duplicate_shared_hooks_json() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
-        /*bypass_hook_trust*/ false,
+        /*bypass_hook_trust*/ true,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),

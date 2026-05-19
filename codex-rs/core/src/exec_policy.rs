@@ -586,7 +586,6 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
             && matches!(
                 layer.name,
                 ConfigLayerSource::User { .. }
-                    | ConfigLayerSource::UserOverride { .. }
                     | ConfigLayerSource::Project { .. }
                     | ConfigLayerSource::ProjectOverride { .. }
             )

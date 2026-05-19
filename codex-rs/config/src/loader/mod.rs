@@ -211,24 +211,6 @@ pub async fn load_config_layers_state(
     )
     .await?;
     layers.push(system_layer);
-    if let Some(system_override_layer) = load_optional_override_layer(
-        fs,
-        &system_config_toml_file,
-        strict_config,
-        |override_file, config_toml| {
-            ConfigLayerEntry::new(
-                ConfigLayerSource::SystemOverride {
-                    file: override_file,
-                },
-                config_toml,
-            )
-        },
-    )
-    .await?
-    {
-        layers.push(system_override_layer);
-    }
-
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
     // contain overrides.
@@ -260,25 +242,6 @@ pub async fn load_config_layers_state(
         ));
     }
     layers.push(base_user_layer);
-    if !ignore_user_config
-        && let Some(user_override_layer) = load_optional_override_layer(
-            fs,
-            &base_user_file,
-            strict_config,
-            |override_file, config_toml| {
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::UserOverride {
-                        file: override_file,
-                    },
-                    config_toml,
-                )
-            },
-        )
-        .await?
-    {
-        layers.push(user_override_layer);
-    }
-
     if active_user_file != base_user_file {
         layers.push(
             load_user_config_layer(
@@ -514,36 +477,6 @@ async fn load_config_toml_for_required_layer(
     }?;
 
     Ok(create_entry(toml_value))
-}
-
-async fn load_optional_override_layer(
-    fs: &dyn ExecutorFileSystem,
-    config_toml_file: &AbsolutePathBuf,
-    strict_config: bool,
-    create_entry: impl FnOnce(AbsolutePathBuf, TomlValue) -> ConfigLayerEntry,
-) -> io::Result<Option<ConfigLayerEntry>> {
-    let parent = config_toml_file.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "Config file {} has no parent directory",
-                config_toml_file.as_path().display()
-            ),
-        )
-    })?;
-    let override_file = parent.join(CONFIG_OVERRIDE_TOML_FILE);
-    let Some(config_toml) = layer_io::read_config_from_path(
-        fs,
-        &override_file,
-        /*log_missing_as_info*/ false,
-        strict_config,
-    )
-    .await?
-    else {
-        return Ok(None);
-    };
-    let config_toml = resolve_relative_paths_in_config_toml(config_toml, parent.as_path())?;
-    Ok(Some(create_entry(override_file, config_toml)))
 }
 
 fn validate_config_toml_strictly(

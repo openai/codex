@@ -74,27 +74,6 @@
           "type": "object"
         },
         {
-          "description": "System override layer from a sibling `config.override.toml`.",
-          "properties": {
-            "file": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "systemOverride"
-              ],
-              "title": "SystemOverrideConfigLayerSourceType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file",
-            "type"
-          ],
-          "title": "SystemOverrideConfigLayerSource",
-          "type": "object"
-        },
-        {
           "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
           "properties": {
             "file": {
@@ -125,27 +104,6 @@
             "type"
           ],
           "title": "UserConfigLayerSource",
-          "type": "object"
-        },
-        {
-          "description": "User override layer from `$CODEX_HOME/config.override.toml`.",
-          "properties": {
-            "file": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "userOverride"
-              ],
-              "title": "UserOverrideConfigLayerSourceType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file",
-            "type"
-          ],
-          "title": "UserOverrideConfigLayerSource",
           "type": "object"
         },
         {
