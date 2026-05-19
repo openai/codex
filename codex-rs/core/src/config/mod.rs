@@ -33,6 +33,7 @@ use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::project_trust_key;
+use codex_config::permissions_toml::PermissionsToml;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
@@ -120,6 +121,7 @@ use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::compile_permission_profile_workspace_roots;
 use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
+use crate::config::permissions::is_builtin_permission_profile_name;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
 use crate::config_lock::config_without_lock_controls;
@@ -2568,14 +2570,49 @@ impl Config {
             sandbox_mode,
             config_profile.sandbox_mode,
         );
-        let has_permission_profiles = cfg
-            .permissions
+        let requirements_toml = config_layer_stack.requirements_toml();
+        let effective_permissions =
+            merge_managed_permission_profiles(cfg.permissions.as_ref(), requirements_toml)?;
+        validate_user_permission_profile_names(effective_permissions.as_ref())?;
+        validate_required_permission_profile_catalog(
+            requirements_toml,
+            effective_permissions.as_ref(),
+        )?;
+
+        let has_permission_profiles = effective_permissions
             .as_ref()
             .is_some_and(|profiles| !profiles.is_empty());
-        let default_permissions = default_permissions_override
+        let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
+        let mut default_permissions = default_permissions_override
             .as_deref()
+            .or(requirements_toml.default_permissions.as_deref())
             .or(cfg.default_permissions.as_deref());
-        validate_user_permission_profile_names(cfg.permissions.as_ref())?;
+        if default_permissions.is_none() {
+            default_permissions = allowed_permissions
+                .and_then(|allowed_permissions| allowed_permissions.first())
+                .map(String::as_str);
+        }
+        if let (Some(selected_permissions), Some(allowed_permissions)) =
+            (default_permissions, allowed_permissions)
+            && !allowed_permissions
+                .iter()
+                .any(|allowed_permission| allowed_permission == selected_permissions)
+        {
+            let Some(fallback_permissions) = requirements_toml
+                .default_permissions
+                .as_deref()
+                .or_else(|| allowed_permissions.first().map(String::as_str))
+            else {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "requirements.toml allowed_permissions must include at least one profile",
+                ));
+            };
+            startup_warnings.push(format!(
+                "Configured permission profile `{selected_permissions}` is disallowed by requirements; falling back to required value `{fallback_permissions}`."
+            ));
+            default_permissions = Some(fallback_permissions);
+        }
         if has_permission_profiles
             && !matches!(
                 permission_config_syntax,
@@ -2663,7 +2700,7 @@ impl Config {
                         )
                     });
                     network_proxy_config_for_profile_selection(
-                        cfg.permissions.as_ref(),
+                        effective_permissions.as_ref(),
                         default_permissions,
                     )?
                 } else {
@@ -2710,19 +2747,19 @@ impl Config {
                 None
             };
             let configured_network_proxy_config = network_proxy_config_for_profile_selection(
-                cfg.permissions.as_ref(),
+                effective_permissions.as_ref(),
                 default_permissions,
             )?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 compile_permission_profile_selection(
-                    cfg.permissions.as_ref(),
+                    effective_permissions.as_ref(),
                     default_permissions,
                     builtin_workspace_write_settings,
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
-                cfg.permissions.as_ref(),
+                effective_permissions.as_ref(),
                 default_permissions,
                 resolved_cwd.as_path(),
             )?;
@@ -3667,6 +3704,96 @@ fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
     normalize_guardian_policy_config(requirements_toml.guardian_policy_config.as_deref())
+}
+
+fn merge_managed_permission_profiles(
+    configured_permissions: Option<&PermissionsToml>,
+    requirements_toml: &ConfigRequirementsToml,
+) -> std::io::Result<Option<PermissionsToml>> {
+    let managed_profiles = requirements_toml
+        .permissions
+        .as_ref()
+        .map(|permissions| &permissions.profiles)
+        .filter(|profiles| !profiles.is_empty());
+    let Some(managed_profiles) = managed_profiles else {
+        return Ok(configured_permissions.cloned());
+    };
+
+    let mut merged_permissions = configured_permissions.cloned().unwrap_or_default();
+    for (profile_id, managed_profile) in managed_profiles {
+        if merged_permissions.entries.contains_key(profile_id) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "requirements.toml permissions profile `{profile_id}` conflicts with a config-defined profile of the same name"
+                ),
+            ));
+        }
+        merged_permissions
+            .entries
+            .insert(profile_id.clone(), managed_profile.clone());
+    }
+
+    Ok(Some(merged_permissions))
+}
+
+fn validate_required_permission_profile_catalog(
+    requirements_toml: &ConfigRequirementsToml,
+    available_permissions: Option<&PermissionsToml>,
+) -> std::io::Result<()> {
+    let is_known_profile = |profile_id: &str| {
+        is_builtin_permission_profile_name(profile_id)
+            || available_permissions
+                .as_ref()
+                .is_some_and(|permissions| permissions.entries.contains_key(profile_id))
+    };
+
+    if let Some(default_permissions) = requirements_toml.default_permissions.as_deref()
+        && !is_known_profile(default_permissions)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "requirements.toml default_permissions refers to undefined profile `{default_permissions}`"
+            ),
+        ));
+    }
+
+    let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+        return Ok(());
+    };
+    if allowed_permissions.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml allowed_permissions must include at least one profile",
+        ));
+    }
+
+    for profile_id in allowed_permissions {
+        if !is_known_profile(profile_id) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "requirements.toml allowed_permissions refers to undefined profile `{profile_id}`"
+                ),
+            ));
+        }
+    }
+
+    if let Some(default_permissions) = requirements_toml.default_permissions.as_deref()
+        && !allowed_permissions
+            .iter()
+            .any(|profile_id| profile_id == default_permissions)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "requirements.toml default_permissions `{default_permissions}` must also be listed in allowed_permissions"
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {
