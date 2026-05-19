@@ -2,16 +2,13 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
-use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_output_truncation::TruncationPolicy;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,27 +68,6 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 
 fn default_tty() -> bool {
     false
-}
-
-fn effective_max_output_tokens(
-    max_output_tokens: Option<usize>,
-    truncation_policy: TruncationPolicy,
-) -> usize {
-    resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
-}
-
-fn effective_max_output_tokens_for_source(
-    source: &ToolCallSource,
-    max_output_tokens: Option<usize>,
-    truncation_policy: TruncationPolicy,
-) -> Option<usize> {
-    match source {
-        ToolCallSource::Direct => Some(effective_max_output_tokens(
-            max_output_tokens,
-            truncation_policy,
-        )),
-        ToolCallSource::CodeMode { .. } => max_output_tokens,
-    }
 }
 
 #[derive(Debug)]

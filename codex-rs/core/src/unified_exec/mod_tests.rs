@@ -10,6 +10,7 @@ use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
 use codex_sandboxing::SandboxType;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::get_remote_test_env;
 use core_test_support::skip_if_sandbox;
@@ -162,6 +163,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
+        truncation_policy: turn.truncation_policy,
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
@@ -195,6 +197,7 @@ async fn write_stdin(
             input,
             yield_time_ms,
             max_output_tokens: None,
+            truncation_policy: TruncationPolicy::Tokens(10_000),
         })
         .await
 }
