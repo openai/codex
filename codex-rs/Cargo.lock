@@ -2829,6 +2829,7 @@ dependencies = [
 name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-protocol",
  "codex-tools",
 ]
@@ -2947,9 +2948,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-goal-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-extension-api",
+ "codex-protocol",
+ "codex-tools",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-protocol",

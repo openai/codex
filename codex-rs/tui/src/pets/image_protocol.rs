@@ -21,6 +21,7 @@ const ESC: &str = "\x1b";
 const ST: &str = "\x1b\\";
 const KITTY_CHUNK_SIZE: usize = 4096;
 const SIXEL_CACHE_VERSION: &str = "v2";
+const ITERM2_KITTY_MIN_VERSION: (u64, u64, u64) = (3, 6, 0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageProtocol {
@@ -55,6 +56,7 @@ impl PetImageSupport {
 pub(crate) enum PetImageUnsupportedReason {
     Tmux,
     Zellij,
+    Iterm2TooOld,
     Terminal,
 }
 
@@ -66,6 +68,9 @@ impl PetImageUnsupportedReason {
             }
             Self::Zellij => {
                 "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
+            }
+            Self::Iterm2TooOld => {
+                "Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets."
             }
             Self::Terminal => {
                 "Pets aren’t available in this terminal. Terminal pets need image support, and this terminal environment doesn’t expose a supported image protocol. Try a terminal with Kitty graphics or Sixel support, or run Codex outside tmux."
@@ -142,6 +147,10 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
         return PetImageSupport::Supported(ImageProtocol::KittyLocalFile);
     }
 
+    if is_iterm2_terminal(info) {
+        return PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld);
+    }
+
     if supports_kitty_graphics(info) {
         return PetImageSupport::Supported(ImageProtocol::Kitty);
     }
@@ -154,6 +163,14 @@ fn pet_image_support_for_terminal(info: &TerminalInfo) -> PetImageSupport {
 }
 
 fn supports_iterm2_kitty_graphics(info: &TerminalInfo) -> bool {
+    is_iterm2_terminal(info)
+        && version_is_at_least(
+            info.version.as_deref(),
+            /*minimum*/ ITERM2_KITTY_MIN_VERSION,
+        )
+}
+
+fn is_iterm2_terminal(info: &TerminalInfo) -> bool {
     matches!(info.name, TerminalName::Iterm2)
         || terminal_field_contains(info.term_program.as_deref(), "iterm")
 }
@@ -179,6 +196,24 @@ fn supports_sixel(info: &TerminalInfo) -> bool {
 
 fn terminal_field_contains(value: Option<&str>, needle: &str) -> bool {
     value.is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+}
+
+fn version_is_at_least(version: Option<&str>, minimum: (u64, u64, u64)) -> bool {
+    parse_dotted_version(version).is_some_and(|version| version >= minimum)
+}
+
+fn parse_dotted_version(version: Option<&str>) -> Option<(u64, u64, u64)> {
+    let version = version?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some((major, minor, patch))
 }
 
 pub fn kitty_delete_image(image_id: u32) -> String {
@@ -400,16 +435,18 @@ mod tests {
     #[test]
     fn pet_image_support_detects_iterm2_kitty_file_graphics() {
         for info in [
-            terminal_info_for_test(
+            terminal_info_with_version_for_test(
                 TerminalName::Iterm2,
                 /*multiplexer*/ None,
                 Some("iTerm.app"),
+                Some("3.6.10"),
                 /*term*/ None,
             ),
-            terminal_info_for_test(
+            terminal_info_with_version_for_test(
                 TerminalName::Unknown,
                 /*multiplexer*/ None,
                 Some("iTerm.app"),
+                Some("3.6.10"),
                 Some("xterm-256color"),
             ),
         ] {
@@ -418,6 +455,49 @@ mod tests {
                 PetImageSupport::Supported(ImageProtocol::KittyLocalFile)
             );
         }
+    }
+
+    #[test]
+    fn pet_image_support_rejects_old_iterm2_versions() {
+        for info in [
+            terminal_info_with_version_for_test(
+                TerminalName::Iterm2,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                Some("3.5.14"),
+                /*term*/ None,
+            ),
+            terminal_info_with_version_for_test(
+                TerminalName::Unknown,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                /*version*/ None,
+                Some("xterm-256color"),
+            ),
+            terminal_info_with_version_for_test(
+                TerminalName::Iterm2,
+                /*multiplexer*/ None,
+                Some("iTerm.app"),
+                Some("3.5"),
+                /*term*/ None,
+            ),
+        ] {
+            assert_eq!(
+                pet_image_support_for_terminal(&info),
+                PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld)
+            );
+        }
+    }
+
+    #[test]
+    fn pet_image_support_old_iterm2_message_mentions_upgrade() {
+        let message = PetImageSupport::Unsupported(PetImageUnsupportedReason::Iterm2TooOld)
+            .unsupported_message();
+
+        assert_eq!(
+            message,
+            Some("Pets require iTerm2 3.6 or newer. Upgrade iTerm2 to use terminal pets.")
+        );
     }
 
     #[test]
@@ -539,13 +619,39 @@ mod tests {
         term_program: Option<&str>,
         term: Option<&str>,
     ) -> TerminalInfo {
+        terminal_info_with_version_for_test(
+            name,
+            multiplexer,
+            term_program,
+            /*version*/ None,
+            term,
+        )
+    }
+
+    fn terminal_info_with_version_for_test(
+        name: TerminalName,
+        multiplexer: Option<Multiplexer>,
+        term_program: Option<&str>,
+        version: Option<&str>,
+        term: Option<&str>,
+    ) -> TerminalInfo {
         TerminalInfo {
             name,
             term_program: term_program.map(str::to_string),
-            version: /*version*/ None,
+            version: version.map(str::to_string),
             term: term.map(str::to_string),
             multiplexer,
         }
+    }
+
+    #[test]
+    fn parse_dotted_version_requires_simple_numeric_components() {
+        assert_eq!(parse_dotted_version(Some("3.6.10")), Some((3, 6, 10)));
+        assert_eq!(parse_dotted_version(Some("3.6")), Some((3, 6, 0)));
+        assert_eq!(parse_dotted_version(Some("3")), Some((3, 0, 0)));
+        assert_eq!(parse_dotted_version(Some("3.6.10.1")), None);
+        assert_eq!(parse_dotted_version(Some("3.6beta")), None);
+        assert_eq!(parse_dotted_version(/*version*/ None), None);
     }
 
     #[test]

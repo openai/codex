@@ -58,8 +58,9 @@ impl ContextContributor for MemoriesExtension {
     }
 }
 
+#[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for MemoriesExtension {
-    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+    async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
         input
             .thread_store
             .insert(MemoriesExtensionConfig::from_config(input.config));

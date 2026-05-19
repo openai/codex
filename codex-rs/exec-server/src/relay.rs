@@ -19,6 +19,7 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
@@ -262,24 +263,42 @@ where
             return;
         }
 
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+            WEBSOCKET_KEEPALIVE_INTERVAL,
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut next_seq = 0u32;
-        while let Some(message) = outgoing_rx.recv().await {
-            let payload = match jsonrpc_payload(&message) {
-                Ok(payload) => payload,
-                Err(err) => {
-                    warn!("failed to serialize JSON-RPC payload for relay transport: {err}");
-                    break;
+        loop {
+            tokio::select! {
+                maybe_message = outgoing_rx.recv() => {
+                    let Some(message) = maybe_message else {
+                        break;
+                    };
+                    let payload = match jsonrpc_payload(&message) {
+                        Ok(payload) => payload,
+                        Err(err) => {
+                            warn!("failed to serialize JSON-RPC payload for relay transport: {err}");
+                            break;
+                        }
+                    };
+                    let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload);
+                    next_seq = next_seq.wrapping_add(1);
+                    if websocket_writer
+                        .send(Message::Binary(encode_relay_message_frame(&frame).into()))
+                        .await
+                        .is_err()
+                    {
+                        let _ = disconnected_tx.send(true);
+                        break;
+                    }
                 }
-            };
-            let frame = RelayMessageFrame::data(stream_id.clone(), next_seq, payload);
-            next_seq = next_seq.wrapping_add(1);
-            if websocket_writer
-                .send(Message::Binary(encode_relay_message_frame(&frame).into()))
-                .await
-                .is_err()
-            {
-                let _ = disconnected_tx.send(true);
-                break;
+                _ = keepalive.tick() => {
+                    if websocket_writer.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        let _ = disconnected_tx.send(true);
+                        break;
+                    }
+                }
             }
         }
     });
@@ -303,13 +322,30 @@ pub(crate) async fn run_multiplexed_executor<S>(
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let writer_task = tokio::spawn(async move {
-        while let Some(encoded) = physical_outgoing_rx.recv().await {
-            if websocket_writer
-                .send(Message::Binary(encoded.into()))
-                .await
-                .is_err()
-            {
-                break;
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
+            WEBSOCKET_KEEPALIVE_INTERVAL,
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                maybe_encoded = physical_outgoing_rx.recv() => {
+                    let Some(encoded) = maybe_encoded else {
+                        break;
+                    };
+                    if websocket_writer
+                        .send(Message::Binary(encoded.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                _ = keepalive.tick() => {
+                    if websocket_writer.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -451,5 +487,82 @@ fn spawn_virtual_stream(
     VirtualStream {
         incoming_tx,
         disconnected_tx,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::*;
+
+    fn test_runtime_paths() -> anyhow::Result<crate::ExecServerRuntimePaths> {
+        crate::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .map_err(anyhow::Error::from)
+    }
+
+    #[tokio::test]
+    async fn multiplexed_executor_sends_keepalive_ping() -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let executor_task = tokio::spawn(run_multiplexed_executor(
+            client_websocket,
+            ConnectionProcessor::new(test_runtime_paths()?),
+        ));
+
+        read_keepalive_ping(&mut server_websocket).await?;
+
+        executor_task.abort();
+        let _ = executor_task.await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn harness_connection_sends_keepalive_ping() -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let connection = harness_connection_from_websocket(client_websocket, "test".to_string());
+
+        read_keepalive_ping(&mut server_websocket).await?;
+
+        drop(connection);
+        Ok(())
+    }
+
+    async fn websocket_pair() -> anyhow::Result<(
+        WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        WebSocketStream<tokio::net::TcpStream>,
+    )> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let websocket_url = format!("ws://{}", listener.local_addr()?);
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            accept_async(stream).await.map_err(anyhow::Error::from)
+        });
+        let (client_websocket, _) = connect_async(websocket_url).await?;
+        let server_websocket = server_task.await??;
+        Ok((client_websocket, server_websocket))
+    }
+
+    async fn read_keepalive_ping(
+        websocket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ) -> anyhow::Result<()> {
+        loop {
+            let Some(message) = timeout(Duration::from_secs(1), websocket.next()).await? else {
+                anyhow::bail!("websocket closed before keepalive ping");
+            };
+            match message? {
+                Message::Ping(_) => return Ok(()),
+                Message::Binary(_) | Message::Text(_) | Message::Pong(_) | Message::Frame(_) => {}
+                Message::Close(_) => anyhow::bail!("websocket closed before keepalive ping"),
+            }
+        }
     }
 }

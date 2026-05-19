@@ -499,13 +499,12 @@ impl AgentControl {
                             agent_nickname: None,
                             agent_role: None,
                         });
-                    match self
-                        .resume_single_agent_from_rollout(
-                            config.clone(),
-                            child_thread_id,
-                            child_session_source,
-                        )
-                        .await
+                    match Box::pin(self.resume_single_agent_from_rollout(
+                        config.clone(),
+                        child_thread_id,
+                        child_session_source,
+                    ))
+                    .await
                     {
                         Ok(_) => true,
                         Err(err) => {

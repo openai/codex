@@ -2,7 +2,6 @@ use super::ActivePermissionProfile;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::PermissionProfile;
-use super::PermissionProfileSelectionParams;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
@@ -125,10 +124,8 @@ pub struct ThreadStartParams {
     pub sandbox: Option<SandboxMode>,
     /// Named profile id for this thread. Cannot be combined with `sandbox`.
     #[experimental("thread/start.permissions")]
-    #[schemars(with = "Option<String>")]
-    #[ts(type = "string | null")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -202,7 +199,7 @@ pub struct ThreadSettingsUpdateParams {
     #[schemars(with = "Option<String>")]
     #[ts(type = "string | null")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     /// Override the model for subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -373,10 +370,8 @@ pub struct ThreadResumeParams {
     /// Named profile id for the resumed thread. Cannot be combined with
     /// `sandbox`.
     #[experimental("thread/resume.permissions")]
-    #[schemars(with = "Option<String>")]
-    #[ts(type = "string | null")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -484,10 +479,8 @@ pub struct ThreadForkParams {
     /// Named profile id for the forked thread. Cannot be combined with
     /// `sandbox`.
     #[experimental("thread/fork.permissions")]
-    #[schemars(with = "Option<String>")]
-    #[ts(type = "string | null")]
     #[ts(optional = nullable)]
-    pub permissions: Option<PermissionProfileSelectionParams>,
+    pub permissions: Option<String>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -644,6 +637,8 @@ v2_enum_from_core! {
     pub enum ThreadGoalStatus from CoreThreadGoalStatus {
         Active,
         Paused,
+        Blocked,
+        UsageLimited,
         BudgetLimited,
         Complete,
     }
