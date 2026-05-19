@@ -1175,7 +1175,7 @@ async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_de
 
     let request = response_mock.single_request();
     let payload_text = request.body_json().to_string();
-    assert!(payload_text.contains("This tool is only available in Default or Plan mode."));
+    assert!(payload_text.contains("This tool is only available in Default or Plan mode. In Default mode, this tool is only available for artifact creation (documents, spreadsheets, presentations, pdfs) requests. Read the corresponding skills on how to invoke the tool before doing so."));
 
     Ok(())
 }

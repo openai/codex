@@ -140,6 +140,6 @@ fn request_user_input_tool_description_mentions_available_modes() {
     );
     assert_eq!(
         request_user_input_tool_description(&default_mode_enabled_available_modes()),
-        "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
+        "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode. In Default mode, this tool is only available for artifact creation (documents, spreadsheets, presentations, pdfs) requests. Read the corresponding skills on how to invoke the tool before doing so.".to_string()
     );
 }
