@@ -139,10 +139,28 @@ fn mark_as_git_repo(dir: &Path) {
 }
 
 fn tempdir_outside_ambient_repo() -> TempDir {
-    let home = home_dir().expect("home directory should be available");
-    tempfile::Builder::new()
-        .prefix("core-skills-tests-")
-        .tempdir_in(home)
+    let mut candidates = Vec::new();
+    if let Some(home) = home_dir() {
+        candidates.push(home);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.extend(cwd.ancestors().map(Path::to_path_buf));
+    }
+    candidates.push(std::env::temp_dir());
+
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            !candidate
+                .ancestors()
+                .any(|ancestor| ancestor.join(".git").exists())
+        })
+        .find_map(|candidate| {
+            tempfile::Builder::new()
+                .prefix("core-skills-tests-")
+                .tempdir_in(candidate)
+                .ok()
+        })
         .expect("tempdir outside ambient repo")
 }
 
