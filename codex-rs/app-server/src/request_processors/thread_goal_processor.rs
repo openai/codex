@@ -464,9 +464,9 @@ impl ThreadGoalRequestProcessor {
             subscribed_connection_ids,
             thread_id,
         );
-        crate::bespoke_event_handling::emit_terminal_plan_cleanup(
+        crate::bespoke_event_handling::flush_pending_terminal_plan_cleanup(
             thread_id,
-            crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(&thread_state).await,
+            &thread_state,
             &thread_outgoing,
         )
         .await;

@@ -1217,9 +1217,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
             if thread_goal_event.goal.status != codex_protocol::protocol::ThreadGoalStatus::Active {
-                emit_terminal_plan_cleanup(
+                flush_pending_terminal_plan_cleanup(
                     thread_goal_event.thread_id,
-                    take_pending_terminal_plan_cleanup(&thread_state).await,
+                    &thread_state,
                     &outgoing,
                 )
                 .await;
@@ -1324,11 +1324,12 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
-pub(crate) async fn emit_terminal_plan_cleanup(
+pub(crate) async fn flush_pending_terminal_plan_cleanup(
     conversation_id: ThreadId,
-    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
+    thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let pending_terminal_plan_cleanups = take_pending_terminal_plan_cleanup(thread_state).await;
     for (turn_id, latest_plan_update) in
         terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
     {
@@ -1368,20 +1369,8 @@ async fn emit_turn_plan_updated(
     plan_update_event: UpdatePlanArgs,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    let notification =
-        turn_plan_updated_notification(conversation_id, event_turn_id, plan_update_event);
-    outgoing
-        .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
-        .await;
-}
-
-fn turn_plan_updated_notification(
-    conversation_id: ThreadId,
-    event_turn_id: &str,
-    plan_update_event: UpdatePlanArgs,
-) -> TurnPlanUpdatedNotification {
     // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates.
-    TurnPlanUpdatedNotification {
+    let notification = TurnPlanUpdatedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: event_turn_id.to_string(),
         explanation: plan_update_event.explanation,
@@ -1390,7 +1379,10 @@ fn turn_plan_updated_notification(
             .into_iter()
             .map(TurnPlanStep::from)
             .collect(),
-    }
+    };
+    outgoing
+        .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+        .await;
 }
 
 async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadState>>) -> bool {
@@ -1401,7 +1393,7 @@ async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadStat
         .is_empty()
 }
 
-pub(crate) async fn take_pending_terminal_plan_cleanup(
+async fn take_pending_terminal_plan_cleanup(
     thread_state: &Arc<Mutex<ThreadState>>,
 ) -> Vec<PendingTerminalPlanCleanup> {
     std::mem::take(&mut thread_state.lock().await.pending_terminal_plan_cleanups)
@@ -1592,12 +1584,7 @@ async fn handle_turn_complete(
 ) {
     let turn_summary = find_and_remove_turn_summary(thread_state).await;
     if !preserve_terminal_plan_progress {
-        emit_terminal_plan_cleanup(
-            conversation_id,
-            take_pending_terminal_plan_cleanup(thread_state).await,
-            outgoing,
-        )
-        .await;
+        flush_pending_terminal_plan_cleanup(conversation_id, thread_state, outgoing).await;
     }
 
     let (status, error) = match turn_summary.last_error {
@@ -1630,12 +1617,7 @@ async fn handle_turn_interrupted(
 ) {
     let turn_summary = find_and_remove_turn_summary(thread_state).await;
     if !preserve_terminal_plan_progress {
-        emit_terminal_plan_cleanup(
-            conversation_id,
-            take_pending_terminal_plan_cleanup(thread_state).await,
-            outgoing,
-        )
-        .await;
+        flush_pending_terminal_plan_cleanup(conversation_id, thread_state, outgoing).await;
     }
 
     emit_turn_completed_with_status(
