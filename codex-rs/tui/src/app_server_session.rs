@@ -86,6 +86,8 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
@@ -524,6 +526,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/metadata/update failed while syncing git branch")
+    }
+
+    pub(crate) async fn thread_settings_update(
+        &mut self,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadSettingsUpdateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadSettingsUpdate { request_id, params })
+            .await
+            .wrap_err("thread/settings/update failed in TUI")?;
+        Ok(())
     }
 
     pub(crate) async fn thread_inject_items(

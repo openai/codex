@@ -173,7 +173,7 @@ impl ChatWidget {
             );
             return;
         }
-        self.set_collaboration_mask(collaboration_mode);
+        self.set_collaboration_mask_from_user_action(collaboration_mode);
         let should_queue = self.is_plan_streaming_in_tui();
         let user_message = UserMessage {
             text,
