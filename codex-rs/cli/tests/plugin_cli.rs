@@ -2,7 +2,6 @@ use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
-use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::path::Path;
 use tempfile::TempDir;
@@ -289,6 +288,32 @@ async fn plugin_remove_works_after_marketplace_is_removed() -> Result<()> {
 
     let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
     assert!(!config.contains("[plugins.\"sample@debug\"]"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_reload_command_help_uses_singular_plugin_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "reload", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Usage: codex plugin reload"))
+        .stdout(contains(
+            "Reload Codex's local installed-plugin state from marketplaces",
+        ))
+        .stdout(contains("Clears Codex's local plugin and skill caches"))
+        .stdout(contains(
+            "Updated plugin context is picked up in new CLI sessions and other fresh loads",
+        ))
+        .stdout(contains(
+            "Existing app-server-backed threads are not refreshed",
+        ))
+        .stdout(contains(
+            "Plugin instructions and skills already loaded into an existing thread are not reread",
+        ));
 
     Ok(())
 }

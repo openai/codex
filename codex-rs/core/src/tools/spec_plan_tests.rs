@@ -14,6 +14,7 @@ use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use crate::tools::handlers::plan_spec::create_update_plan_tool;
+use crate::tools::handlers::reload_plugins_spec::RELOAD_PLUGINS_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::tools::handlers::request_user_input_spec::create_request_user_input_tool;
 use crate::tools::handlers::request_user_input_spec::request_user_input_tool_description;
@@ -1390,6 +1391,36 @@ fn test_test_model_info_includes_sync_tool() {
     );
 
     assert!(tools.iter().any(|tool| tool.name() == "test_sync_tool"));
+}
+
+#[test]
+fn test_model_info_includes_reload_plugins_tool() {
+    let mut model_info = model_info();
+    model_info.experimental_supported_tools = vec![RELOAD_PLUGINS_TOOL_NAME.to_string()];
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name() == RELOAD_PLUGINS_TOOL_NAME)
+    );
 }
 
 #[test]

@@ -1,6 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
@@ -12,6 +11,7 @@ use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::MarketplaceListError;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_core_skills::SkillsManager;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
@@ -42,6 +42,9 @@ pub enum PluginSubcommand {
 
     /// Add, list, upgrade, or remove configured plugin marketplaces.
     Marketplace(MarketplaceCli),
+
+    /// Reload Codex's local installed-plugin state from disk/cache and refresh plugin-backed runtime state.
+    Reload(ReloadPluginsArgs),
 
     /// Remove an installed plugin from local config and cache.
     ///
@@ -90,6 +93,14 @@ pub struct RemovePluginArgs {
     #[arg(long = "marketplace", short = 'm', value_name = "MARKETPLACE")]
     marketplace_name: Option<String>,
 }
+
+#[derive(Debug, Parser)]
+#[command(
+    bin_name = "codex plugin reload",
+    about = "Reload Codex's local installed-plugin state from marketplaces",
+    after_help = "What this does:\n  Clears Codex's local plugin and skill caches so the next local load re-scans installed plugin state from disk/cache.\n\nWhat happens next:\n  Updated plugin context is picked up in new CLI sessions and other fresh loads.\n  Existing app-server-backed threads are not refreshed.\n  Plugin instructions and skills already loaded into an existing thread are not reread."
+)]
+pub struct ReloadPluginsArgs;
 
 pub async fn run_plugin_add(
     overrides: Vec<(String, toml::Value)>,
@@ -199,6 +210,28 @@ pub async fn run_plugin_remove(
         "Removed plugin `{}` from marketplace `{}`.",
         selection.plugin_name, selection.marketplace_name
     );
+
+    Ok(())
+}
+
+pub async fn run_plugin_reload(
+    overrides: Vec<(String, toml::Value)>,
+    _: ReloadPluginsArgs,
+) -> Result<()> {
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let plugins_manager = PluginsManager::new(codex_home.to_path_buf());
+    let skills_manager = SkillsManager::new(codex_home, config.bundled_skills_enabled());
+
+    plugins_manager.clear_cache();
+    skills_manager.clear_cache();
+
+    println!("Cleared Codex's local plugin and skill caches.");
+    println!("Updated plugin context will be picked up in new CLI sessions and other fresh loads.");
+    println!("Existing app-server-backed threads are not refreshed.");
+    println!("Plugin instructions and skills already loaded into an existing thread stay as-is.");
 
     Ok(())
 }

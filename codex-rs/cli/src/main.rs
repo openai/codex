@@ -957,6 +957,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
                     marketplace_cli.run().await?;
                 }
+                PluginSubcommand::Reload(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_reload(overrides, args).await?;
+                }
                 PluginSubcommand::Remove(args) => {
                     let overrides = config_overrides
                         .parse_overrides()
@@ -2538,6 +2544,21 @@ mod tests {
         .expect("parse");
 
         assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_reload_parses_under_plugin() {
+        let cli = MultitoolCli::try_parse_from(["codex", "plugin", "reload"]).expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugins_still_parses_as_prompt_text() {
+        let cli = MultitoolCli::try_parse_from(["codex", "plugins"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("plugins"));
     }
 
     #[test]

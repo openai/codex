@@ -16,6 +16,7 @@ use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
+use crate::tools::handlers::ReloadPluginsHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
@@ -45,6 +46,7 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::handlers::reload_plugins_spec::RELOAD_PLUGINS_TOOL_NAME;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -433,6 +435,14 @@ fn collect_tool_executors(
         .any(|tool| tool == "test_sync_tool")
     {
         executors.push(Arc::new(TestSyncHandler));
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == RELOAD_PLUGINS_TOOL_NAME)
+    {
+        executors.push(Arc::new(ReloadPluginsHandler));
     }
 
     if config.environment_mode.has_environment() {

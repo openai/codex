@@ -414,6 +414,10 @@ impl Session {
         self.services.agent_control.session_id()
     }
 
+    pub(crate) fn plugins_manager(&self) -> Arc<PluginsManager> {
+        Arc::clone(&self.services.plugins_manager)
+    }
+
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     #[expect(
