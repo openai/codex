@@ -38,7 +38,6 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
-use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
@@ -442,13 +441,6 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let legacy_after_agent_input_messages = sampling_request_input
-            .iter()
-            .filter_map(|item| match parse_turn_item(item) {
-                Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
-                _ => None,
-            })
-            .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
@@ -457,7 +449,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
-            sampling_request_input,
+            sampling_request_input.clone(),
             &explicitly_enabled_connectors,
             skills_outcome,
             cancellation_token.child_token(),
@@ -558,7 +550,7 @@ pub(crate) async fn run_turn(
                     if run_legacy_after_agent_hook(
                         &sess,
                         &turn_context,
-                        legacy_after_agent_input_messages,
+                        &sampling_request_input,
                         last_agent_message.clone(),
                     )
                     .await

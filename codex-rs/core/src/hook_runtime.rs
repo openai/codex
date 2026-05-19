@@ -391,10 +391,17 @@ pub(crate) async fn run_stop_hooks(
 pub(crate) async fn run_legacy_after_agent_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    input_messages: Vec<String>,
+    input: &[ResponseItem],
     last_assistant_message: Option<String>,
 ) -> bool {
     let mut abort_message = None;
+    let input_messages = input
+        .iter()
+        .filter_map(|item| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
+            _ => None,
+        })
+        .collect();
     let hooks = sess.hooks();
     for hook_outcome in hooks
         .dispatch(codex_hooks::HookPayload {
