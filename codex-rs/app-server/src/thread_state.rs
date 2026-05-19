@@ -81,6 +81,7 @@ pub(crate) struct ThreadState {
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     pending_thread_settings_waiters: HashMap<String, Vec<oneshot::Sender<ThreadSettingsAck>>>,
+    thread_settings_notification_lock: Arc<Mutex<()>>,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -138,13 +139,13 @@ impl ThreadState {
     pub(crate) fn track_pending_thread_settings(
         &mut self,
         submission_id: String,
-    ) -> oneshot::Receiver<ThreadSettingsAck> {
+    ) -> (oneshot::Receiver<ThreadSettingsAck>, Arc<Mutex<()>>) {
         let (tx, rx) = oneshot::channel();
         self.pending_thread_settings_waiters
             .entry(submission_id)
             .or_default()
             .push(tx);
-        rx
+        (rx, Arc::clone(&self.thread_settings_notification_lock))
     }
 
     pub(crate) fn track_current_pending_thread_settings(
