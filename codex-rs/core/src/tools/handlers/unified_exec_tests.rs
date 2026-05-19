@@ -226,7 +226,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
 }
 
 #[tokio::test]
-async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
+async fn write_stdin_pre_tool_use_payload_uses_generic_input() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
@@ -244,7 +244,10 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
-        None
+        Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: HookToolName::new("write_stdin"),
+            tool_input: serde_json::json!({ "chars": "echo hi" }),
+        })
     );
 }
 

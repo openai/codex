@@ -64,14 +64,49 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
     fn post_tool_use_payload(
         &self,
-        _invocation: &ToolInvocation,
-        _result: &dyn ToolOutput,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        None
+        let tool_response = if let Some(response) =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)
+        {
+            response
+        } else {
+            match result.to_response_item(&invocation.call_id, &invocation.payload) {
+                ResponseInputItem::FunctionCallOutput { output, .. }
+                | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+                    serde_json::to_value(output).ok()?
+                }
+                ResponseInputItem::McpToolCallOutput { output, .. } => {
+                    serde_json::to_value(output).ok()?
+                }
+                ResponseInputItem::ToolSearchOutput {
+                    status,
+                    execution,
+                    tools,
+                    ..
+                } => serde_json::json!({
+                    "status": status,
+                    "execution": execution,
+                    "tools": tools,
+                }),
+                ResponseInputItem::Message { .. } => return None,
+            }
+        };
+
+        Some(PostToolUsePayload {
+            tool_name: default_hook_tool_name(&self.tool_name()),
+            tool_use_id: result.post_tool_use_id(&invocation.call_id),
+            tool_input: hook_input_from_payload(&invocation.payload)?,
+            tool_response,
+        })
     }
 
-    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        None
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        Some(PreToolUsePayload {
+            tool_name: default_hook_tool_name(&self.tool_name()),
+            tool_input: hook_input_from_payload(&invocation.payload)?,
+        })
     }
 
     /// Rebuilds a tool invocation from hook-facing `tool_input`.
@@ -80,12 +115,37 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// hook contract they expose from `pre_tool_use_payload`.
     fn with_updated_hook_input(
         &self,
-        _invocation: ToolInvocation,
-        _updated_input: Value,
+        mut invocation: ToolInvocation,
+        updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
-        Err(FunctionCallError::RespondToModel(
-            "tool does not support hook input rewriting".to_string(),
-        ))
+        let tool_name = self.tool_name();
+        invocation.payload = match invocation.payload {
+            ToolPayload::Function { .. } => {
+                let arguments = serde_json::to_string(&updated_input).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to serialize rewritten {tool_name} arguments: {err}"
+                    ))
+                })?;
+                ToolPayload::Function { arguments }
+            }
+            ToolPayload::ToolSearch { .. } => {
+                let arguments = serde_json::from_value(updated_input).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse rewritten {tool_name} arguments: {err}"
+                    ))
+                })?;
+                ToolPayload::ToolSearch { arguments }
+            }
+            ToolPayload::Custom { .. } => match updated_input {
+                Value::String(input) => ToolPayload::Custom { input },
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "hook returned updatedInput for custom tool {tool_name} without a string value"
+                    )));
+                }
+            },
+        };
+        Ok(invocation)
     }
 
     /// Creates an optional consumer for streamed tool argument diffs.
@@ -160,6 +220,26 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_input: Value,
     /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
+}
+
+fn default_hook_tool_name(tool_name: &ToolName) -> HookToolName {
+    HookToolName::new(flat_tool_name(tool_name).into_owned())
+}
+
+fn hook_input_from_payload(payload: &ToolPayload) -> Option<Value> {
+    match payload {
+        ToolPayload::Function { arguments } => {
+            if arguments.trim().is_empty() {
+                return Some(Value::Object(serde_json::Map::new()));
+            }
+            Some(
+                serde_json::from_str(arguments)
+                    .unwrap_or_else(|_| Value::String(arguments.to_string())),
+            )
+        }
+        ToolPayload::ToolSearch { arguments } => serde_json::to_value(arguments).ok(),
+        ToolPayload::Custom { input } => Some(Value::String(input.clone())),
+    }
 }
 
 pub(crate) fn override_tool_exposure(
