@@ -13,10 +13,13 @@ use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
+use codex_hooks::StopOutcome;
+use codex_hooks::StopRequest;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -31,6 +34,7 @@ use serde_json::Value;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
+use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -316,6 +320,97 @@ pub(crate) async fn run_post_compact_hooks(
     } else {
         PostCompactHookOutcome::Continue
     }
+}
+
+pub(crate) async fn run_stop_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    stop_hook_active: bool,
+    last_assistant_message: Option<String>,
+) -> StopOutcome {
+    let request = StopRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        stop_hook_active,
+        last_assistant_message,
+    };
+    let hooks = sess.hooks();
+    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+    let mut outcome = hooks.run_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
+}
+
+pub(crate) async fn run_legacy_after_agent_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[ResponseItem],
+    last_assistant_message: Option<String>,
+) -> bool {
+    let mut abort_message = None;
+    let input_messages = input
+        .iter()
+        .filter_map(|item| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
+            _ => None,
+        })
+        .collect();
+    let hooks = sess.hooks();
+    for hook_outcome in hooks
+        .dispatch(codex_hooks::HookPayload {
+            session_id: sess.session_id().into(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: codex_hooks::HookEvent::AfterAgent {
+                event: codex_hooks::HookEventAfterAgent {
+                    thread_id: sess.conversation_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    input_messages,
+                    last_assistant_message,
+                },
+            },
+        })
+        .await
+    {
+        let hook_name = hook_outcome.hook_name;
+        let (error, should_abort) = match hook_outcome.result {
+            codex_hooks::HookResult::Success => continue,
+            codex_hooks::HookResult::FailedContinue(error) => (error, false),
+            codex_hooks::HookResult::FailedAbort(error) => (error, true),
+        };
+        let action = if should_abort {
+            "aborting operation"
+        } else {
+            "continuing"
+        };
+        tracing::warn!(
+            turn_id = %turn_context.sub_id,
+            hook_name = %hook_name,
+            error = %error,
+            "after_agent hook failed; {action}"
+        );
+        if should_abort && abort_message.is_none() {
+            abort_message = Some(format!(
+                "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
+            ));
+        }
+    }
+    let Some(message) = abort_message else {
+        return false;
+    };
+    let event = EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+        message,
+        codex_error_info: None,
+    });
+    sess.send_event(turn_context, event).await;
+    true
 }
 
 pub(crate) async fn inspect_pending_input(
