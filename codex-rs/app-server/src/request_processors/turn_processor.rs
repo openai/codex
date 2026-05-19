@@ -784,6 +784,14 @@ impl TurnRequestProcessor {
                 .inspect_err(|error| {
                     self.track_error_response(request_id, error, /*error_type*/ None);
                 })?;
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        super::thread_lifecycle::ensure_listener_task_running(
+            self.listener_task_context(),
+            thread_id,
+            thread.clone(),
+            thread_state.clone(),
+        )
+        .await?;
         self.wait_for_pending_thread_settings(thread_id).await?;
         let before_snapshot = thread.config_snapshot().await;
         let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
@@ -816,7 +824,6 @@ impl TurnRequestProcessor {
                 })?;
             let update_id = Uuid::now_v7().to_string();
             let (thread_settings_applied, notification_lock) = {
-                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let mut thread_state = thread_state.lock().await;
                 thread_state.track_pending_thread_settings(update_id.clone())
             };
@@ -831,7 +838,6 @@ impl TurnRequestProcessor {
                 })
                 .await
             {
-                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let mut thread_state = thread_state.lock().await;
                 thread_state.cancel_pending_thread_settings(&update_id);
                 return Err(internal_error(format!(
