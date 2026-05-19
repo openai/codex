@@ -3733,10 +3733,22 @@ impl Config {
                         ),
                     )
                 })?;
-            network_proxy_config_for_profile_selection(
+            let mut configured_network_proxy_config = network_proxy_config_for_profile_selection(
                 cfg.permissions.as_ref(),
                 active_permission_profile.id.as_str(),
-            )?
+            )?;
+            if self.features.enabled(Feature::NetworkProxy)
+                && permission_profile.network_sandbox_policy().is_enabled()
+            {
+                if let Some(network_proxy) = network_proxy_toml_config(cfg.features.as_ref()) {
+                    apply_network_proxy_feature_config(
+                        &mut configured_network_proxy_config,
+                        network_proxy,
+                    );
+                }
+                configured_network_proxy_config.network.enabled = true;
+            }
+            configured_network_proxy_config
         } else {
             NetworkProxyConfig::default()
         };
