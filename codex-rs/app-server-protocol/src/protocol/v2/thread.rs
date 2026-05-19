@@ -5,6 +5,7 @@ use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadItem;
+use super::ThreadSearchPreview;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
@@ -973,6 +974,47 @@ pub struct ThreadListParams {
     pub search_term: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchParams {
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional sort key; defaults to created_at.
+    #[ts(optional = nullable)]
+    pub sort_key: Option<ThreadSortKey>,
+    /// Optional sort direction; defaults to descending (newest first).
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+    /// Optional provider filter; when set, only sessions recorded under these
+    /// providers are returned. When present but empty, includes all providers.
+    #[ts(optional = nullable)]
+    pub model_providers: Option<Vec<String>>,
+    /// Optional source filter; when set, only sessions from these source kinds
+    /// are returned. When omitted or empty, defaults to interactive sources.
+    #[ts(optional = nullable)]
+    pub source_kinds: Option<Vec<ThreadSourceKind>>,
+    /// Optional archived filter; when set to true, only archived threads are returned.
+    /// If false or null, only non-archived threads are returned.
+    #[ts(optional = nullable)]
+    pub archived: Option<bool>,
+    /// Optional cwd filter or filters; when set, only threads whose session cwd
+    /// exactly matches one of these paths are returned.
+    #[ts(optional = nullable, type = "string | Array<string> | null")]
+    pub cwd: Option<ThreadListCwdFilter>,
+    /// If true, return from the state DB without scanning JSONL rollouts to
+    /// repair thread metadata. Omitted or false preserves scan-and-repair
+    /// behavior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_state_db_only: bool,
+    /// Required substring/full-text query for thread search.
+    pub search_term: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum ThreadListCwdFilter {
@@ -1019,6 +1061,29 @@ pub enum SortDirection {
 #[ts(export_to = "v2/")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// This is only populated when the page contains at least one thread.
+    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
+    /// at the start of the page timestamp so same-second updates are not skipped.
+    pub backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchResult {
+    pub thread: Thread,
+    pub search_preview: Option<ThreadSearchPreview>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchResponse {
+    pub data: Vec<ThreadSearchResult>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,

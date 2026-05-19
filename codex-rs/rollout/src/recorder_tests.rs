@@ -978,7 +978,6 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         cli_version: None,
         created_at: None,
         updated_at: None,
-        search_preview: None,
     };
     let state_item = ThreadItem {
         path: state_path,
@@ -996,7 +995,6 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         cli_version: Some("state-version".to_string()),
         created_at: Some("2025-01-03T16:00:00Z".to_string()),
         updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
-        search_preview: None,
     };
 
     fill_missing_thread_item_metadata(&mut item, state_item);

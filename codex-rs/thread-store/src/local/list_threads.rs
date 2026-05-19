@@ -13,6 +13,7 @@ use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ListThreadsParams;
 use crate::SortDirection;
+use crate::StoredThread;
 use crate::ThreadPage;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
@@ -75,6 +76,12 @@ pub(super) async fn list_threads(
         })
         .collect::<Vec<_>>();
 
+    set_thread_names(store, &mut items).await;
+
+    Ok(ThreadPage { items, next_cursor })
+}
+
+pub(super) async fn set_thread_names(store: &LocalThreadStore, items: &mut [StoredThread]) {
     let thread_ids = items
         .iter()
         .map(|thread| thread.thread_id)
@@ -98,16 +105,14 @@ pub(super) async fn list_threads(
             names.entry(thread_id).or_insert(title);
         }
     }
-    for thread in &mut items {
+    for thread in items {
         if let Some(title) = names.get(&thread.thread_id).cloned() {
             set_thread_name_from_title(thread, title);
         }
     }
-
-    Ok(ThreadPage { items, next_cursor })
 }
 
-async fn list_rollout_threads(
+pub(super) async fn list_rollout_threads(
     state_db: Option<codex_rollout::StateDbHandle>,
     config: &RolloutConfig,
     default_model_provider_id: &str,

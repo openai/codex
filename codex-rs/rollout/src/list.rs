@@ -2,8 +2,6 @@
 
 use async_trait::async_trait;
 use codex_utils_path as path_utils;
-use serde::Deserialize;
-use serde::Serialize;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::io;
@@ -77,20 +75,6 @@ pub struct ThreadItem {
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
     pub updated_at: Option<String>,
-    /// Search result context for app surfaces that render thread discovery results.
-    pub search_preview: Option<ThreadSearchPreview>,
-}
-
-/// Compact search-specific context attached only to thread discovery results.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThreadSearchPreview {
-    Conversation {
-        user_message: String,
-        assistant_message: Option<String>,
-    },
-    ContentMatch {
-        snippet: String,
-    },
 }
 
 #[allow(dead_code)]
@@ -821,7 +805,6 @@ async fn build_thread_item(
             cli_version,
             created_at,
             updated_at: summary_updated_at,
-            search_preview: None,
         });
     }
     None

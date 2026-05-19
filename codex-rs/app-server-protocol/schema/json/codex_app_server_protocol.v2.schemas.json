@@ -15310,6 +15310,27 @@
         }
       ]
     },
+    "ThreadSearchResult": {
+      "properties": {
+        "searchPreview": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSearchPreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "type": "object"
+    },
     "ThreadSetNameParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

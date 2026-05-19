@@ -4,6 +4,7 @@ mod helpers;
 mod list_threads;
 mod live_writer;
 mod read_thread;
+mod search_threads;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -31,6 +32,7 @@ use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
+use crate::ThreadSearchPage;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -120,6 +122,14 @@ impl LocalThreadStore {
     /// Return the live local rollout path for legacy local-only code paths.
     pub async fn live_rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<PathBuf> {
         live_writer::rollout_path(self, thread_id).await
+    }
+
+    /// Searches local rollout-backed threads and returns search-only preview metadata.
+    pub async fn search_threads(
+        &self,
+        params: ListThreadsParams,
+    ) -> ThreadStoreResult<ThreadSearchPage> {
+        search_threads::search_threads(self, params).await
     }
 
     pub(super) async fn live_recorder(

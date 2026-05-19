@@ -569,6 +569,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    #[experimental("thread/search")]
+    ThreadSearch => "thread/search" {
+        params: v2::ThreadSearchParams,
+        serialization: None,
+        response: v2::ThreadSearchResponse,
+    },
     ThreadLoadedList => "thread/loaded/list" {
         params: v2::ThreadLoadedListParams,
         serialization: None,
@@ -2321,7 +2327,6 @@ mod tests {
                     agent_role: None,
                     git_info: None,
                     name: None,
-                    search_preview: None,
                     turns: Vec::new(),
                 },
                 model: "gpt-5".to_string(),
@@ -2366,7 +2371,6 @@ mod tests {
                         "agentRole": null,
                         "gitInfo": null,
                         "name": null,
-                        "searchPreview": null,
                         "turns": []
                     },
                     "model": "gpt-5",
@@ -2973,6 +2977,27 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+
+    #[test]
+    fn thread_search_is_marked_experimental() {
+        let request = ClientRequest::ThreadSearch {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadSearchParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: false,
+                search_term: "needle".to_string(),
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("thread/search"));
     }
 
     #[test]

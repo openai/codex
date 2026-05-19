@@ -11,13 +11,13 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Deserialize;
+use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::list::ThreadItem;
-use super::list::ThreadSearchPreview;
 use super::session_index::find_thread_names_by_ids;
 
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
@@ -25,17 +25,30 @@ const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 const PREVIEW_MESSAGE_MAX_CHARS: usize = 96;
 const PREVIEW_SCAN_LINE_LIMIT: usize = 400;
 
-pub(crate) struct ThreadSearchMatches {
+/// Compact search-specific context attached only to thread discovery results.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThreadSearchPreview {
+    Conversation {
+        user_message: String,
+        assistant_message: Option<String>,
+    },
+    ContentMatch {
+        snippet: String,
+    },
+}
+
+pub struct ThreadSearchItem {
+    pub item: ThreadItem,
+    pub search_preview: Option<ThreadSearchPreview>,
+}
+
+pub struct ThreadSearchMatches {
     search_term: String,
     content_preview_by_path: HashMap<PathBuf, ThreadSearchPreview>,
 }
 
 impl ThreadSearchMatches {
-    pub(crate) async fn load(
-        codex_home: &Path,
-        archived: bool,
-        search_term: &str,
-    ) -> io::Result<Self> {
+    pub async fn load(codex_home: &Path, archived: bool, search_term: &str) -> io::Result<Self> {
         let root = codex_home.join(if archived {
             ARCHIVED_SESSIONS_SUBDIR
         } else {
@@ -48,11 +61,11 @@ impl ThreadSearchMatches {
         })
     }
 
-    pub(crate) async fn retain_matching_items(
+    pub async fn matching_items(
         &self,
         codex_home: &Path,
-        items: &mut Vec<ThreadItem>,
-    ) -> io::Result<()> {
+        items: Vec<ThreadItem>,
+    ) -> io::Result<Vec<ThreadSearchItem>> {
         let thread_ids = items
             .iter()
             .filter_map(|item| item.thread_id)
@@ -60,10 +73,12 @@ impl ThreadSearchMatches {
         let thread_names = find_thread_names_by_ids(codex_home, &thread_ids).await?;
         let mut matching_items = Vec::with_capacity(items.len());
 
-        for mut item in items.drain(..) {
+        for item in items {
             if let Some(preview) = self.content_preview_by_path.get(item.path.as_path()) {
-                item.search_preview = Some(preview.clone());
-                matching_items.push(item);
+                matching_items.push(ThreadSearchItem {
+                    item,
+                    search_preview: Some(preview.clone()),
+                });
                 continue;
             }
 
@@ -75,12 +90,13 @@ impl ThreadSearchMatches {
                 continue;
             }
 
-            item.search_preview = conversation_preview_from_rollout(item.path.as_path()).await?;
-            matching_items.push(item);
+            matching_items.push(ThreadSearchItem {
+                search_preview: conversation_preview_from_rollout(item.path.as_path()).await?,
+                item,
+            });
         }
 
-        *items = matching_items;
-        Ok(())
+        Ok(matching_items)
     }
 }
 

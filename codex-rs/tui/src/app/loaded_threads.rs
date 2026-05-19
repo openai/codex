@@ -136,7 +136,6 @@ mod tests {
             git_info: None,
             name: None,
             turns: Vec::new(),
-            search_preview: None,
         }
     }
 

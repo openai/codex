@@ -214,6 +214,9 @@ use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadSearchParams;
+use codex_app_server_protocol::ThreadSearchResponse;
+use codex_app_server_protocol::ThreadSearchResult;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSettings;
@@ -411,6 +414,7 @@ use codex_thread_store::ReadThreadByRolloutPathParams as StoreReadThreadByRollou
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
+use codex_thread_store::StoredThreadSearchResult;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;

@@ -137,7 +137,6 @@ fn sample_thread(thread_id: &str) -> Thread {
         git_info: None,
         name: None,
         turns: Vec::new(),
-        search_preview: None,
     }
 }
 

@@ -143,7 +143,6 @@ pub(super) fn stored_thread_from_rollout_item(
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,
         first_user_message: item.first_user_message,
-        search_preview: item.search_preview,
         history: None,
     })
 }

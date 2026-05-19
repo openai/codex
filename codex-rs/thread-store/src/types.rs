@@ -208,6 +208,24 @@ pub struct ThreadPage {
     pub next_cursor: Option<String>,
 }
 
+/// Search-only result metadata that should not become part of persisted thread state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredThreadSearchResult {
+    /// Matching stored thread.
+    pub thread: StoredThread,
+    /// Search-specific preview context for result rendering.
+    pub search_preview: Option<codex_rollout::ThreadSearchPreview>,
+}
+
+/// A page of thread-search results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreadSearchPage {
+    /// Search results returned for this page.
+    pub items: Vec<StoredThreadSearchResult>,
+    /// Opaque cursor to continue searching.
+    pub next_cursor: Option<String>,
+}
+
 /// Requested amount of item detail for stored turns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoredTurnItemsView {
@@ -368,8 +386,6 @@ pub struct StoredThread {
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
-    /// Search-only preview context populated for thread discovery responses.
-    pub search_preview: Option<codex_rollout::ThreadSearchPreview>,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
 }

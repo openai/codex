@@ -18,6 +18,7 @@ use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSearchPreview;
+use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -575,7 +576,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_list_respects_search_term_filter() -> Result<()> {
+async fn thread_search_returns_content_and_title_matches() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -655,7 +656,7 @@ sqlite = true
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
-        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -665,7 +666,7 @@ sqlite = true
             archived: None,
             cwd: None,
             use_state_db_only: false,
-            search_term: Some("needle".to_string()),
+            search_term: "needle".to_string(),
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -673,12 +674,15 @@ sqlite = true
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadListResponse {
+    let ThreadSearchResponse {
         data, next_cursor, ..
-    } = to_response::<ThreadListResponse>(resp)?;
+    } = to_response::<ThreadSearchResponse>(resp)?;
 
     assert_eq!(next_cursor, None);
-    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
     assert_eq!(ids, vec![newer_match, title_match, older_match]);
     assert_eq!(
         data[0].search_preview,
