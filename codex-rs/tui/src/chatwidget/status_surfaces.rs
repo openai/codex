@@ -940,9 +940,7 @@ fn secondary_window_with_label_when_weekly_is_available<'a>(
     snapshot: &'a RateLimitSnapshotDisplay,
     label: &str,
 ) -> Option<(&'a RateLimitWindowDisplay, bool)> {
-    if find_codex_window(snapshot, "weekly").is_none() {
-        return None;
-    }
+    find_codex_window(snapshot, "weekly")?;
 
     let secondary = snapshot.secondary.as_ref()?;
     if matches_window_label(secondary, label) {
