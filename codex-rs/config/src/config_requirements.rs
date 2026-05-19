@@ -1009,12 +1009,15 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     type Error = ConstraintError;
 
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
+        // Profile catalog selection remains on ConfigRequirementsToml for
+        // config loading and requirements API projection. The normalized
+        // constraints below only need the compiled PermissionProfile envelope.
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            default_permissions: _default_permissions,
-            allowed_permissions: _allowed_permissions,
+            default_permissions: _,
+            allowed_permissions: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
             computer_use,

@@ -2600,37 +2600,12 @@ impl Config {
         let has_permission_profiles = effective_permissions
             .as_ref()
             .is_some_and(|profiles| !profiles.is_empty());
-        let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
-        let mut default_permissions = default_permissions_override
-            .as_deref()
-            .or(requirements_toml.default_permissions.as_deref())
-            .or(cfg.default_permissions.as_deref());
-        if default_permissions.is_none() {
-            default_permissions = allowed_permissions
-                .and_then(|allowed_permissions| allowed_permissions.first())
-                .map(String::as_str);
-        }
-        if let (Some(selected_permissions), Some(allowed_permissions)) =
-            (default_permissions, allowed_permissions)
-            && !allowed_permissions
-                .iter()
-                .any(|allowed_permission| allowed_permission == selected_permissions)
-        {
-            let Some(fallback_permissions) = requirements_toml
-                .default_permissions
-                .as_deref()
-                .or_else(|| allowed_permissions.first().map(String::as_str))
-            else {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "requirements.toml allowed_permissions must include at least one profile",
-                ));
-            };
-            startup_warnings.push(format!(
-                "Configured permission profile `{selected_permissions}` is disallowed by requirements; falling back to required value `{fallback_permissions}`."
-            ));
-            default_permissions = Some(fallback_permissions);
-        }
+        let default_permissions = resolve_default_permissions(
+            default_permissions_override.as_deref(),
+            cfg.default_permissions.as_deref(),
+            requirements_toml,
+            &mut startup_warnings,
+        )?;
         if has_permission_profiles
             && !matches!(
                 permission_config_syntax,
@@ -2653,7 +2628,10 @@ impl Config {
         std::fs::create_dir_all(&memories_root)?;
         let internal_writable_roots = vec![memories_root];
 
-        let profiles_are_active = default_permissions_override.is_some()
+        let requirements_select_permissions = requirements_toml.default_permissions.is_some()
+            || requirements_toml.allowed_permissions.is_some();
+        let profiles_are_active = requirements_select_permissions
+            || default_permissions_override.is_some()
             || matches!(
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Profiles)
@@ -3777,6 +3755,46 @@ fn merge_managed_permission_profiles(
     }
 
     Ok(Some(merged_permissions))
+}
+
+fn resolve_default_permissions<'a>(
+    default_permissions_override: Option<&'a str>,
+    configured_default_permissions: Option<&'a str>,
+    requirements_toml: &'a ConfigRequirementsToml,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<Option<&'a str>> {
+    let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
+    let mut default_permissions = default_permissions_override
+        .or(configured_default_permissions)
+        .or(requirements_toml.default_permissions.as_deref());
+    if default_permissions.is_none() {
+        default_permissions = allowed_permissions
+            .and_then(|allowed_permissions| allowed_permissions.first())
+            .map(String::as_str);
+    }
+    if let (Some(selected_permissions), Some(allowed_permissions)) =
+        (default_permissions, allowed_permissions)
+        && !allowed_permissions
+            .iter()
+            .any(|allowed_permission| allowed_permission == selected_permissions)
+    {
+        let Some(fallback_permissions) = requirements_toml
+            .default_permissions
+            .as_deref()
+            .or_else(|| allowed_permissions.first().map(String::as_str))
+        else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "requirements.toml allowed_permissions must include at least one profile",
+            ));
+        };
+        startup_warnings.push(format!(
+            "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+        ));
+        default_permissions = Some(fallback_permissions);
+    }
+
+    Ok(default_permissions)
 }
 
 fn validate_required_permission_profile_catalog(

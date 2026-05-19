@@ -1475,6 +1475,149 @@ allowed_permissions = ["managed-standard"]
 }
 
 #[tokio::test]
+async fn system_requirements_profiles_apply_with_legacy_sandbox_config() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+sandbox_mode = "danger-full-access"
+"#,
+    )
+    .await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+default_permissions = "managed-standard"
+allowed_permissions = ["managed-standard"]
+
+[permissions.managed-standard.filesystem]
+":workspace_roots" = "read"
+"#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
+        Some("managed-standard".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_requirements_preserve_allowed_configured_permission_default() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+default_permissions = "managed-build"
+"#,
+    )
+    .await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+default_permissions = "managed-standard"
+allowed_permissions = ["managed-standard", "managed-build"]
+
+[permissions.managed-standard.filesystem]
+":workspace_roots" = "read"
+
+[permissions.managed-build.filesystem]
+":workspace_roots" = "write"
+"#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
+        Some("managed-build".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_requirements_warn_for_disallowed_explicit_permission_override() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+default_permissions = "managed-standard"
+allowed_permissions = ["managed-standard"]
+
+[permissions.managed-standard.filesystem]
+":workspace_roots" = "read"
+"#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            default_permissions: Some("managed-build".to_string()),
+            ..ConfigOverrides::default()
+        })
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
+        Some("managed-standard".to_string())
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning
+            .contains("Configured value for `permission_profile` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
