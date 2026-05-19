@@ -199,6 +199,8 @@ impl App {
             return;
         }
 
+        self.file_search
+            .update_search_dir(notification.thread_settings.cwd.to_path_buf());
         self.chat_widget
             .handle_server_notification(server_notification, /*replay_kind*/ None);
     }

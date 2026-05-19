@@ -5060,7 +5060,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 }
 
 #[tokio::test]
-async fn refreshed_snapshot_session_persists_resumed_turns() {
+async fn refreshed_snapshot_session_persists_resumed_turns_and_drops_stale_settings_update() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
     let initial_session = test_thread_session(thread_id, test_path_buf("/tmp/original"));
@@ -5072,6 +5072,22 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
             Vec::new(),
         ),
     );
+    let stale_settings_update =
+        ServerNotification::ThreadSettingsUpdated(ThreadSettingsUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            thread_settings: test_thread_settings("gpt-stale", test_path_buf("/tmp/stale").abs()),
+        });
+    {
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel");
+        channel
+            .store
+            .lock()
+            .await
+            .push_notification(stale_settings_update.clone());
+    }
 
     let resumed_turns = vec![test_turn(
         "turn-1",
@@ -5093,7 +5109,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
     let mut snapshot = ThreadEventSnapshot {
         session: Some(initial_session),
         turns: Vec::new(),
-        events: Vec::new(),
+        events: vec![ThreadBufferedEvent::Notification(stale_settings_update)],
         input_state: None,
     };
 
@@ -5120,6 +5136,8 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
     let store_snapshot = store.snapshot();
     assert_eq!(store_snapshot.session, Some(resumed_session));
     assert_eq!(store_snapshot.turns, snapshot.turns);
+    assert!(store_snapshot.events.is_empty());
+    assert!(snapshot.events.is_empty());
 }
 
 #[tokio::test]
