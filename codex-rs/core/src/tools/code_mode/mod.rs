@@ -18,6 +18,7 @@ use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
+use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
 use crate::session::session::Session;
@@ -256,6 +257,49 @@ fn truncate_code_mode_result(
     }
 
     truncate_function_output_items_with_policy(&items, policy)
+}
+
+pub(super) async fn build_enabled_tools(
+    exec: &ExecContext,
+) -> Vec<codex_code_mode::ToolDefinition> {
+    let router = build_nested_router(exec).await;
+    let specs = router.specs();
+    collect_code_mode_tool_definitions(&specs)
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "nested tool router construction reads through the session-owned manager guard"
+)]
+async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
+    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    let mcp_connection_manager = exec.session.services.mcp_connection_manager.read().await;
+    let listed_mcp_tools = mcp_connection_manager.list_all_tools().await;
+    let connectors = exec.turn.apps_enabled().then(|| {
+        crate::connectors::with_app_enabled_state(
+            crate::connectors::accessible_connectors_from_mcp_tools(&listed_mcp_tools),
+            &exec.turn.config,
+        )
+    });
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &listed_mcp_tools,
+        connectors.as_deref(),
+        connectors.as_deref().unwrap_or_default(),
+        &exec.turn.config,
+        &nested_tools_config,
+    );
+
+    ToolRouter::from_config(
+        &nested_tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tools: Some(mcp_tool_exposure.direct_tools),
+            unavailable_called_tools: Vec::new(),
+            discoverable_tools: None,
+            extension_tool_bundles: extension_tool_bundles(exec.session.as_ref()),
+            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+        },
+    )
 }
 
 async fn call_nested_tool(
