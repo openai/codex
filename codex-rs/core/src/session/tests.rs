@@ -55,6 +55,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::RuntimeCapabilities;
 use crate::goals::ExternalGoalPreviousStatus;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
@@ -4152,6 +4153,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -4168,7 +4171,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -4383,9 +4387,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*goal_tools_supported*/ true,
     );
 
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(
+        services.environment_manager.as_ref(),
+    ));
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        runtime_capabilities,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -4492,6 +4500,8 @@ async fn make_session_with_config_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
 
     let session = Session::new(
         session_configuration,
@@ -4509,7 +4519,8 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -4595,6 +4606,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
 
     let session = Session::new(
         session_configuration,
@@ -4612,7 +4625,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         agent_control,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
         /*analytics_events_client*/ None,
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
@@ -6210,9 +6224,13 @@ where
         /*goal_tools_supported*/ true,
     ));
 
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(
+        services.environment_manager.as_ref(),
+    ));
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        runtime_capabilities,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,

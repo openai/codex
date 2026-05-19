@@ -33,6 +33,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::runtime_capabilities::RuntimeCapabilities;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -391,6 +392,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    pub(crate) runtime_capabilities: Arc<RuntimeCapabilities>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -455,6 +457,7 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
+            runtime_capabilities,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -657,6 +660,7 @@ impl Codex {
             extensions,
             agent_control,
             environment_manager,
+            runtime_capabilities,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,

@@ -203,7 +203,6 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
-    #[allow(dead_code)] // Forwarded into CodexSpawnArgs by the next stacked slice.
     runtime_capabilities: Arc<RuntimeCapabilities>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
@@ -1210,6 +1209,7 @@ impl ThreadManagerState {
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
+            runtime_capabilities: Arc::clone(&self.runtime_capabilities),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),

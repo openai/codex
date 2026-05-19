@@ -678,12 +678,15 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         /*state_db*/ None,
     ));
 
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
         skills_manager,
         plugins_manager,
         mcp_manager,
