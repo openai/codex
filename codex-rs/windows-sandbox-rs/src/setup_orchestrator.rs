@@ -787,6 +787,7 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
+    read_roots = ensure_user_profile_root_anchor(read_roots, &write_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -886,6 +887,47 @@ fn filter_ssh_config_dependency_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let dependency_paths = ssh_config_dependency_paths(user_profile);
     roots.retain(|root| !is_ssh_config_dependency_root(root, user_profile, &dependency_paths));
     roots
+}
+
+fn ensure_user_profile_root_anchor(
+    read_roots: Vec<PathBuf>,
+    write_roots: &[PathBuf],
+) -> Vec<PathBuf> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return read_roots;
+    };
+    ensure_user_profile_root_anchor_for(read_roots, write_roots, Path::new(&user_profile))
+}
+
+fn ensure_user_profile_root_anchor_for(
+    mut read_roots: Vec<PathBuf>,
+    write_roots: &[PathBuf],
+    user_profile: &Path,
+) -> Vec<PathBuf> {
+    if !user_profile.exists() {
+        return read_roots;
+    }
+
+    let user_profile_key = canonical_path_key(user_profile);
+    let user_profile_prefix = format!("{}/", user_profile_key.trim_end_matches('/'));
+    let needs_anchor = read_roots.iter().chain(write_roots.iter()).any(|root| {
+        let root_key = canonical_path_key(root);
+        root_key.starts_with(&user_profile_prefix)
+    });
+    if !needs_anchor {
+        return read_roots;
+    }
+
+    if !read_roots
+        .iter()
+        .any(|root| canonical_path_key(root) == user_profile_key)
+    {
+        read_roots.push(user_profile.to_path_buf());
+    }
+
+    read_roots.sort_by_key(|root| canonical_path_key(root));
+    read_roots.dedup_by(|a, b| canonical_path_key(a.as_path()) == canonical_path_key(b.as_path()));
+    read_roots
 }
 
 fn is_ssh_config_dependency_root(
@@ -1391,6 +1433,33 @@ mod tests {
             canonical_windows_platform_default_roots()
                 .into_iter()
                 .all(|path| !read_roots.contains(&path))
+        );
+    }
+
+    #[test]
+    fn ensure_user_profile_root_anchor_readds_profile_for_profile_children() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path().join("user-profile");
+        let pnpm_cache = user_profile.join("AppData").join("Local").join("pnpm");
+        let pnpm_store = user_profile.join(".local").join("share").join("pnpm");
+        fs::create_dir_all(&pnpm_cache).expect("create pnpm cache");
+        fs::create_dir_all(&pnpm_store).expect("create pnpm store");
+
+        let anchored = super::ensure_user_profile_root_anchor_for(
+            vec![pnpm_cache.clone()],
+            std::slice::from_ref(&pnpm_store),
+            &user_profile,
+        );
+
+        assert!(anchored.contains(&user_profile));
+        assert!(anchored.contains(&pnpm_cache));
+        assert_eq!(
+            anchored
+                .iter()
+                .filter(|path| super::canonical_path_key(path)
+                    == super::canonical_path_key(&user_profile))
+                .count(),
+            1
         );
     }
 
