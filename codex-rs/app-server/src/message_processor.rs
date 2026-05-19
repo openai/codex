@@ -74,6 +74,7 @@ use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_login::auth::ExternalAuthTokens;
+use codex_login::default_client::Originator;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -193,8 +194,7 @@ pub(crate) struct ConnectionSessionState {
 pub(crate) struct InitializedConnectionSessionState {
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
-    pub(crate) app_server_client_name: String,
-    pub(crate) client_version: String,
+    pub(crate) originator: Originator,
     pub(crate) request_attestation: bool,
 }
 
@@ -232,13 +232,21 @@ impl ConnectionSessionState {
     pub(crate) fn app_server_client_name(&self) -> Option<&str> {
         self.initialized
             .get()
-            .map(|session| session.app_server_client_name.as_str())
+            .and_then(|session| session.originator.app_server_client())
+            .map(codex_login::default_client::AppServerClient::name)
     }
 
     pub(crate) fn client_version(&self) -> Option<&str> {
         self.initialized
             .get()
-            .map(|session| session.client_version.as_str())
+            .and_then(|session| session.originator.app_server_client())
+            .map(codex_login::default_client::AppServerClient::version)
+    }
+
+    pub(crate) fn originator(&self) -> Option<Originator> {
+        self.initialized
+            .get()
+            .map(|session| session.originator.clone())
     }
 
     pub(crate) fn request_attestation(&self) -> bool {
@@ -802,8 +810,12 @@ impl MessageProcessor {
         );
 
         let serialization_scope = codex_request.serialization_scope();
-        let app_server_client_name = session.app_server_client_name().map(str::to_string);
-        let client_version = session.client_version().map(str::to_string);
+        let Some(originator) = session.originator() else {
+            return Err(crate::error_code::internal_error(
+                "initialized session is missing originator",
+            ));
+        };
+        let request_context = request_context.with_originator(originator);
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -817,8 +829,6 @@ impl MessageProcessor {
                         connection_request_id,
                         codex_request,
                         request_context,
-                        app_server_client_name,
-                        client_version,
                     )
                     .await;
                 if let Err(error) = result {
@@ -846,8 +856,6 @@ impl MessageProcessor {
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         request_context: RequestContext,
-        app_server_client_name: Option<String>,
-        client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
@@ -876,7 +884,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigImport { params, .. } => self
                 .external_agent_config_processor
-                .import(request_id.clone(), params)
+                .import(request_id.clone(), params, &request_context)
                 .await
                 .map(|()| None),
             ClientRequest::ConfigValueWrite { params, .. } => {
@@ -962,13 +970,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor
-                    .thread_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        request_context,
-                    )
+                    .thread_start(request_id.clone(), params, request_context)
                     .await
             }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
@@ -978,22 +980,12 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadResume { params, .. } => {
                 self.thread_processor
-                    .thread_resume(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
+                    .thread_resume(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
-                    .thread_fork(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
+                    .thread_fork(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
@@ -1158,12 +1150,7 @@ impl MessageProcessor {
             }
             ClientRequest::TurnStart { params, .. } => {
                 self.turn_processor
-                    .turn_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
+                    .turn_start(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadInjectItems { params, .. } => {
@@ -1201,7 +1188,9 @@ impl MessageProcessor {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor.review_start(&request_id, params).await
+                self.turn_processor
+                    .review_start(&request_id, params, &request_context)
+                    .await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await

@@ -9,7 +9,6 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
-
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -89,8 +88,7 @@ impl InitializeRequestProcessor {
             .initialize(InitializedConnectionSessionState {
                 experimental_api_enabled,
                 opted_out_notification_methods: opt_out_notification_methods.into_iter().collect(),
-                app_server_client_name: name.clone(),
-                client_version: version.clone(),
+                originator: originator.clone(),
                 request_attestation,
             })
             .is_err()
@@ -101,7 +99,7 @@ impl InitializeRequestProcessor {
         self.analytics_events_client.track_initialize(
             connection_id.0,
             analytics_initialize_params,
-            name,
+            name.clone(),
             self.rpc_transport,
         );
         set_default_client_residency_requirement(self.config.enforce_residency.value());

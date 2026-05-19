@@ -2,6 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use codex_login::default_client::Originator;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -69,6 +70,7 @@ pub struct TurnContext {
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
+    pub(crate) originator: Originator,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
@@ -226,6 +228,7 @@ impl TurnContext {
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
+            originator: self.originator.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
@@ -454,10 +457,17 @@ impl Session {
         let reasoning_summary = session_configuration
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
-        let session_telemetry = session_telemetry.clone().with_model(
-            session_configuration.collaboration_mode.model(),
-            model_info.slug.as_str(),
-        );
+        let originator = session_configuration
+            .app_server_originator
+            .clone()
+            .unwrap_or_else(Originator::process_default);
+        let session_telemetry = session_telemetry
+            .clone()
+            .with_model(
+                session_configuration.collaboration_mode.model(),
+                model_info.slug.as_str(),
+            )
+            .with_originator(originator.value());
         let session_source = session_configuration.session_source.clone();
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
@@ -507,6 +517,7 @@ impl Session {
             cwd,
             current_date: Some(current_date),
             timezone: Some(timezone),
+            originator,
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),

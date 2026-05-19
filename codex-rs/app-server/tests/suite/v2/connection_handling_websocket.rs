@@ -2,12 +2,14 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -18,6 +20,9 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
@@ -96,6 +101,58 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     assert_eq!(ws2_config.id, RequestId::Integer(77));
     assert!(ws1_config.result.get("config").is_some());
     assert!(ws2_config.result.get("config").is_some());
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_originator_is_connection_scoped_across_clients() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let mut backend_ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut backend_ws, /*id*/ 1, "codex-backend").await?;
+    let backend_init = read_response_for_id(&mut backend_ws, /*id*/ 1).await?;
+    let backend_init = to_response::<InitializeResponse>(backend_init)?;
+    assert!(backend_init.user_agent.starts_with("codex-backend/"));
+
+    let mut client_ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut client_ws, /*id*/ 2, "codex_ios").await?;
+    let client_init = read_response_for_id(&mut client_ws, /*id*/ 2).await?;
+    let client_init = to_response::<InitializeResponse>(client_init)?;
+    assert!(client_init.user_agent.starts_with("codex_ios/"));
+
+    let thread_id = start_thread(&mut client_ws, /*id*/ 3).await?;
+    send_turn_start_request(&mut client_ws, /*id*/ 4, thread_id).await?;
+    let turn_response = read_response_for_id(&mut client_ws, /*id*/ 4).await?;
+    let _: TurnStartResponse = to_response(turn_response)?;
+    read_notification_for_method(&mut client_ws, "turn/completed").await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    assert!(!requests.is_empty());
+    for request in requests {
+        let originator = request
+            .headers
+            .get("originator")
+            .context("originator header missing")?;
+        assert_eq!(originator.to_str()?, "codex_ios");
+        let user_agent = request
+            .headers
+            .get("user-agent")
+            .context("user-agent header missing")?;
+        assert!(user_agent.to_str()?.starts_with("codex_ios/"));
+    }
 
     process
         .kill()
@@ -623,6 +680,23 @@ async fn start_thread(stream: &mut WsClient, id: i64) -> Result<String> {
     let response = read_response_for_id(stream, id).await?;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
     Ok(thread.id)
+}
+
+async fn send_turn_start_request(stream: &mut WsClient, id: i64, thread_id: String) -> Result<()> {
+    send_request(
+        stream,
+        "turn/start",
+        id,
+        Some(serde_json::to_value(TurnStartParams {
+            thread_id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })?),
+    )
+    .await
 }
 
 async fn assert_loaded_threads(stream: &mut WsClient, id: i64, expected: &[&str]) -> Result<()> {

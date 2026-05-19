@@ -34,6 +34,7 @@ use codex_core_api::Notice;
 use codex_core_api::OAuthCredentialsStoreMode;
 use codex_core_api::OPENAI_PROVIDER_ID;
 use codex_core_api::Op;
+use codex_core_api::Originator;
 use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
 use codex_core_api::Permissions;
@@ -42,6 +43,7 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::StartThreadOptions;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -127,10 +129,24 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         /*attestation_provider*/ None,
     );
 
+    let originator = Originator::for_process("codex_thread_manager_sample".to_string())
+        .expect("codex_thread_manager_sample should be a valid originator header value");
+    let environments = thread_manager.default_environment_selections(&config.cwd);
     let NewThread {
         thread_id, thread, ..
     } = thread_manager
-        .start_thread(config)
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: codex_core_api::InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments,
+            originator,
+        })
         .await
         .context("start Codex thread")?;
 

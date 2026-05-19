@@ -69,6 +69,7 @@ pub(crate) struct MemoryStartupContext {
     thread_manager: Arc<ThreadManager>,
     auth_manager: Arc<AuthManager>,
     session_telemetry: SessionTelemetry,
+    originator: Originator,
 }
 
 impl MemoryStartupContext {
@@ -111,6 +112,7 @@ impl MemoryStartupContext {
             thread_manager,
             auth_manager,
             session_telemetry,
+            originator,
         }
     }
 
@@ -190,6 +192,7 @@ impl MemoryStartupContext {
         let mut client_session = model_client.new_session();
         let mut stream = client_session
             .stream(
+                &self.originator,
                 prompt,
                 &context.model_info,
                 &context.session_telemetry,
@@ -251,6 +254,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                originator: self.originator.clone(),
             })
             .await?;
 

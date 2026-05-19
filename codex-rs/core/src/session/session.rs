@@ -91,6 +91,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
+    pub(super) app_server_originator: Option<Originator>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -337,6 +338,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(app_server_originator) = updates.app_server_originator.clone() {
+            next_configuration.app_server_originator = Some(app_server_originator);
+        }
         Ok(next_configuration)
     }
 
@@ -399,11 +403,14 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) app_server_originator: Option<Originator>,
 }
 
+#[derive(Clone)]
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
+    pub(crate) originator: Originator,
 }
 
 impl Session {
@@ -671,7 +678,11 @@ impl Session {
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
             let account_email = auth.and_then(CodexAuth::get_account_email);
-            let originator = Originator::process_default().value().to_string();
+            let originator = session_configuration
+                .app_server_originator
+                .clone()
+                .unwrap_or_else(Originator::process_default);
+            let originator_value = originator.value().to_string();
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
             let auth_env_telemetry = collect_auth_env_telemetry(
@@ -685,7 +696,7 @@ impl Session {
                 account_id.clone(),
                 account_email.clone(),
                 auth_mode,
-                originator.clone(),
+                originator_value.clone(),
                 config.otel.log_user_prompt,
                 terminal_type.clone(),
                 session_configuration.session_source.clone(),
@@ -699,7 +710,7 @@ impl Session {
                 app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 user_account_id: account_id,
                 auth_mode: auth_mode.map(|mode| mode.to_string()),
-                originator: Some(originator),
+                originator: Some(originator_value),
                 user_email: account_email,
                 terminal_type: Some(terminal_type),
                 model: Some(session_model.clone()),
@@ -882,7 +893,19 @@ impl Session {
                     thread_store: &thread_extension_data,
                 }).await;
             }
-
+            let model_client = ModelClient::new(
+                Some(Arc::clone(&auth_manager)),
+                session_id,
+                thread_id,
+                installation_id.clone(),
+                session_configuration.provider.clone(),
+                session_configuration.session_source.clone(),
+                config.model_verbosity,
+                config.features.enabled(Feature::EnableRequestCompression),
+                config.features.enabled(Feature::RuntimeMetrics),
+                Self::build_model_client_beta_features_header(config.as_ref()),
+                attestation_provider.clone(),
+            );
             let services = SessionServices {
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
@@ -931,19 +954,7 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
-                model_client: ModelClient::new(
-                    Some(Arc::clone(&auth_manager)),
-                    session_id,
-                    thread_id,
-                    installation_id.clone(),
-                    session_configuration.provider.clone(),
-                    session_configuration.session_source.clone(),
-                    config.model_verbosity,
-                    config.features.enabled(Feature::EnableRequestCompression),
-                    config.features.enabled(Feature::RuntimeMetrics),
-                    Self::build_model_client_beta_features_header(config.as_ref()),
-                    attestation_provider,
-                ),
+                model_client,
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };

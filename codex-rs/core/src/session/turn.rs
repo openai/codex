@@ -1735,6 +1735,7 @@ async fn try_run_sampling_request(
     );
     let mut stream = client_session
         .stream(
+            &turn_context.originator,
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,

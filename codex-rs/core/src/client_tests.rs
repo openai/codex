@@ -15,6 +15,7 @@ use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
@@ -316,9 +317,11 @@ async fn summarize_memories_returns_empty_for_empty_input() {
     let client = test_model_client(SessionSource::Cli);
     let model_info = test_model_info();
     let session_telemetry = test_session_telemetry();
+    let originator = Originator::process_default();
 
     let output = client
         .summarize_memories(
+            &originator,
             Vec::new(),
             &model_info,
             /*effort*/ None,

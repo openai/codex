@@ -382,19 +382,11 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_start_inner(
-            request_id,
-            params,
-            app_server_client_name,
-            app_server_client_version,
-            request_context,
-        )
-        .await
-        .map(|()| None)
+        self.thread_start_inner(request_id, params, request_context)
+            .await
+            .map(|()| None)
     }
 
     pub(crate) async fn thread_unsubscribe(
@@ -411,34 +403,22 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_resume_inner(
-            request_id,
-            params,
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await
-        .map(|()| None)
+        self.thread_resume_inner(request_id, params, request_context.originator().clone())
+            .await
+            .map(|()| None)
     }
 
     pub(crate) async fn thread_fork(
         &self,
         request_id: ConnectionRequestId,
         params: ThreadForkParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_fork_inner(
-            request_id,
-            params,
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await
-        .map(|()| None)
+        self.thread_fork_inner(request_id, params, request_context.originator().clone())
+            .await
+            .map(|()| None)
     }
 
     pub(crate) async fn thread_archive(
@@ -689,19 +669,15 @@ impl ThreadRequestProcessor {
 
     async fn set_app_server_client_info(
         thread: &CodexThread,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
     ) -> Result<(), JSONRPCErrorError> {
+        let app_server_client = originator.app_server_client();
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
-            app_server_client_name.as_deref(),
-            app_server_client_version.as_deref(),
+            app_server_client.map(AppServerClient::name),
+            app_server_client.map(AppServerClient::version),
         );
         thread
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(originator, mcp_elicitations_auto_deny)
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
@@ -814,8 +790,6 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -879,16 +853,16 @@ impl ThreadRequestProcessor {
             skills_watcher: Arc::clone(&self.skills_watcher),
         };
         let request_trace = request_context.request_trace();
+        let originator = request_context.originator().clone();
         let config_manager = self.config_manager.clone();
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
-        let thread_start_task = async move {
+        let thread_start_task = Box::pin(async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
                 config_manager,
                 request_id,
-                app_server_client_name,
-                app_server_client_version,
+                originator,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -903,7 +877,7 @@ impl ThreadRequestProcessor {
             {
                 outgoing.send_error(error_request_id, error).await;
             }
-        };
+        });
         self.background_tasks
             .spawn(thread_start_task.instrument(request_context.span()));
         Ok(())
@@ -971,8 +945,7 @@ impl ThreadRequestProcessor {
         listener_task_context: ListenerTaskContext,
         config_manager: ConfigManager,
         request_id: ConnectionRequestId,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -1101,6 +1074,7 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
+                originator: originator.clone(),
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -1120,12 +1094,7 @@ impl ThreadRequestProcessor {
             Some("ready"),
         );
 
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await?;
+        Self::set_app_server_client_info(thread.as_ref(), originator).await?;
 
         let config_snapshot = thread
             .config_snapshot()
@@ -2304,8 +2273,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2338,6 +2306,9 @@ impl ThreadRequestProcessor {
             self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
                 .await;
         }
+        let app_server_client_name = originator
+            .app_server_client()
+            .map(|client| client.name().to_string());
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -2349,12 +2320,7 @@ impl ThreadRequestProcessor {
             }
         };
         match self
-            .resume_running_thread(
-                &request_id,
-                &params,
-                app_server_client_name.clone(),
-                app_server_client_version.clone(),
-            )
+            .resume_running_thread(&request_id, &params, originator.clone())
             .await
         {
             Ok(true) => return Ok(()),
@@ -2450,6 +2416,7 @@ impl ThreadRequestProcessor {
                 self.auth_manager.clone(),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
+                originator.clone(),
             )
             .await
         {
@@ -2459,12 +2426,8 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
-                if let Err(err) = Self::set_app_server_client_info(
-                    codex_thread.as_ref(),
-                    app_server_client_name,
-                    app_server_client_version,
-                )
-                .await
+                if let Err(err) =
+                    Self::set_app_server_client_info(codex_thread.as_ref(), originator).await
                 {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
@@ -2613,8 +2576,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
     ) -> Result<bool, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -2676,6 +2638,9 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+            let app_server_client_name = originator
+                .app_server_client()
+                .map(|client| client.name().to_string());
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
@@ -2698,12 +2663,7 @@ impl ThreadRequestProcessor {
                 thread_state.clone(),
             )
             .await?;
-            Self::set_app_server_client_info(
-                existing_thread.as_ref(),
-                app_server_client_name,
-                app_server_client_version,
-            )
-            .await?;
+            Self::set_app_server_client_info(existing_thread.as_ref(), originator).await?;
 
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
@@ -3001,8 +2961,7 @@ impl ThreadRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadForkParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3115,6 +3074,7 @@ impl ThreadRequestProcessor {
                 thread_source.map(Into::into),
                 /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
+                originator.clone(),
             )
             .await
             .map_err(|err| match err {
@@ -3125,12 +3085,7 @@ impl ThreadRequestProcessor {
                 err => internal_error(format!("error forking thread: {err}")),
             })?;
 
-        Self::set_app_server_client_info(
-            forked_thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await?;
+        Self::set_app_server_client_info(forked_thread.as_ref(), originator).await?;
 
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(

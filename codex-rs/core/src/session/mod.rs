@@ -59,6 +59,7 @@ use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_login::default_client::Originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -403,6 +404,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
+    pub(crate) originator: Originator,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
@@ -467,6 +469,7 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            originator,
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
@@ -606,6 +609,10 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
+        let app_server_client = originator.app_server_client();
+        let app_server_client_name = app_server_client.map(|client| client.name().to_string());
+        let app_server_client_version =
+            app_server_client.map(|client| client.version().to_string());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -627,8 +634,9 @@ impl Codex {
             environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
-            app_server_client_name: None,
-            app_server_client_version: None,
+            app_server_client_name,
+            app_server_client_version,
+            app_server_originator: Some(originator),
             session_source,
             thread_source,
             dynamic_tools,
@@ -765,14 +773,18 @@ impl Codex {
 
     pub(crate) async fn set_app_server_client_info(
         &self,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
+        originator: Originator,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
+        let app_server_client = originator.app_server_client();
+        let app_server_client_name = app_server_client.map(|client| client.name().to_string());
+        let app_server_client_version =
+            app_server_client.map(|client| client.version().to_string());
         self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
                 app_server_client_version,
+                app_server_originator: Some(originator),
                 ..Default::default()
             })
             .await?;
@@ -884,7 +896,21 @@ impl Session {
                 .session_configuration
                 .app_server_client_version
                 .clone(),
+            originator: state
+                .session_configuration
+                .app_server_originator
+                .clone()
+                .unwrap_or_else(Originator::process_default),
         }
+    }
+
+    pub(crate) async fn originator(&self) -> Originator {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .app_server_originator
+            .clone()
+            .unwrap_or_else(Originator::process_default)
     }
 
     fn managed_network_proxy_active_for_permission_profile(
@@ -3277,6 +3303,7 @@ pub(crate) fn emit_subagent_session_started(
     let AppServerClientMetadata {
         client_name,
         client_version,
+        ..
     } = client_metadata;
     let (Some(client_name), Some(client_version)) = (client_name, client_version) else {
         tracing::warn!("skipping subagent thread analytics: missing inherited client metadata");

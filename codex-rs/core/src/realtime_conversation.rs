@@ -25,7 +25,6 @@ use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::default_client::Originator;
-use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -74,11 +73,6 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
-
-fn process_default_headers() -> HeaderMap {
-    let originator = Originator::process_default();
-    default_headers(&originator)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -235,6 +229,7 @@ struct RealtimeStart {
     extra_headers: Option<HeaderMap>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
+    originator: Originator,
     sdp: Option<String>,
 }
 
@@ -287,6 +282,7 @@ impl RealtimeConversationManager {
             extra_headers,
             session_config,
             model_client,
+            originator,
             sdp,
         } = start;
         let event_parser = session_config.event_parser;
@@ -316,6 +312,7 @@ impl RealtimeConversationManager {
         let (task, sdp) = if let Some(sdp) = sdp {
             let call = model_client
                 .create_realtime_call_with_headers(
+                    &originator,
                     sdp,
                     session_config.clone(),
                     extra_headers.unwrap_or_default(),
@@ -326,6 +323,7 @@ impl RealtimeConversationManager {
                 session_config,
                 call_id: call.call_id,
                 sideband_headers: call.sideband_headers,
+                default_headers: model_client.default_headers(&originator),
                 input_channels,
                 events_tx,
                 handoff_state: handoff.clone(),
@@ -339,7 +337,7 @@ impl RealtimeConversationManager {
                 .connect(
                     session_config,
                     extra_headers.unwrap_or_default(),
-                    process_default_headers(),
+                    model_client.default_headers(&originator),
                 )
                 .await
                 .map_err(map_api_error)?;
@@ -795,6 +793,7 @@ async fn handle_start_inner(
         extra_headers,
         session_config,
         model_client: sess.services.model_client.clone(),
+        originator: sess.originator().await,
         sdp,
     };
     let start_output = sess.conversation.start(start).await?;
@@ -1028,6 +1027,7 @@ struct RealtimeWebrtcSidebandInputTask {
     session_config: RealtimeSessionConfig,
     call_id: String,
     sideband_headers: HeaderMap,
+    default_headers: HeaderMap,
     input_channels: RealtimeInputChannels,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
@@ -1042,6 +1042,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         session_config,
         call_id,
         sideband_headers,
+        default_headers,
         input_channels,
         events_tx,
         handoff_state,
@@ -1056,12 +1057,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         }
 
         let connection = match client
-            .connect_webrtc_sideband(
-                session_config,
-                &call_id,
-                sideband_headers,
-                process_default_headers(),
-            )
+            .connect_webrtc_sideband(session_config, &call_id, sideband_headers, default_headers)
             .await
         {
             Ok(connection) => connection,

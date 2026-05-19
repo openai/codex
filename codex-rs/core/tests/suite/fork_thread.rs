@@ -1,6 +1,7 @@
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
+use codex_login::default_client::Originator;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -204,6 +205,7 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            Originator::process_default(),
         )
         .await
         .expect("fork from stored history");

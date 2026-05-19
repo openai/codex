@@ -4,6 +4,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_core::NewThread;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::WarningEvent;
@@ -48,6 +49,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            Originator::process_default(),
         )
         .await
         .expect("spawn conversation");
@@ -95,6 +97,7 @@ async fn suppresses_warning_when_configured() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            Originator::process_default(),
         )
         .await
         .expect("spawn conversation");

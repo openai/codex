@@ -917,8 +917,10 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         phase: None,
     });
 
+    let originator = Originator::process_default();
     let mut stream = client_session
         .stream(
+            &originator,
             &prompt,
             &model_info,
             &session_telemetry,
@@ -2405,8 +2407,10 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         output: FunctionCallOutputPayload::from_text("ok".into()),
     });
 
+    let originator = Originator::process_default();
     let mut stream = client_session
         .stream(
+            &originator,
             &prompt,
             &model_info,
             &session_telemetry,
