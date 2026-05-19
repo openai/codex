@@ -8,6 +8,7 @@
 //! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
@@ -39,6 +40,7 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::McpServerConfig;
 use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -106,6 +108,12 @@ pub(crate) enum WindowsSandboxEnableMode {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
+}
+
+#[derive(Debug)]
+pub(crate) struct McpInventory {
+    pub(crate) statuses: Vec<McpServerStatus>,
+    pub(crate) configured_servers: HashMap<String, McpServerConfig>,
 }
 
 /// Distinguishes why a rate-limit refresh was requested so the completion
@@ -538,7 +546,7 @@ pub(crate) enum AppEvent {
 
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
-        result: Result<Vec<McpServerStatus>, String>,
+        result: Result<McpInventory, String>,
         detail: McpServerStatusDetail,
     },
 

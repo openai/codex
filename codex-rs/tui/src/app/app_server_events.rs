@@ -95,12 +95,11 @@ impl App {
             }
             ServerNotification::ExternalAgentConfigImportCompleted(_) => {
                 let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-                if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                    tracing::warn!(
-                        error = %err,
-                        "failed to refresh config after external agent config import"
-                    );
-                }
+                self.refresh_config_layer_stack_from_app_server_best_effort(
+                    app_server_client,
+                    "external agent config import",
+                )
+                .await;
                 self.chat_widget.refresh_plugin_mentions();
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);

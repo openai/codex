@@ -1,0 +1,17 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • No MCP tools available.
+
+  • server_only
+    • Status: enabled
+    • Auth: Unsupported
+    • Command: server-only --stdio
+    • Tools: (none)
+    • Resources: (none)
+    • Resource templates: (none)

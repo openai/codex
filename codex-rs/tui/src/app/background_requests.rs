@@ -6,6 +6,8 @@
 
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -14,7 +16,9 @@ use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
 
 use codex_app_server_protocol::RequestId;
+use codex_config::types::McpServerConfig;
 
+use crate::app_event::McpInventory;
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
@@ -26,10 +30,11 @@ impl App {
         app_server: &AppServerSession,
         detail: McpServerStatusDetail,
     ) {
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_all_mcp_server_statuses(request_handle, detail)
+            let result = fetch_mcp_inventory_from_app_server(request_handle, detail, cwd)
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result, detail });
@@ -360,16 +365,12 @@ impl App {
     }
 
     pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
-        let config = self.config.clone();
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        if !config.features.enabled(Feature::Plugins) {
-            app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
-            return;
-        }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config).await {
+            match fetch_plugin_mentions(request_handle, cwd).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),
@@ -505,19 +506,18 @@ impl App {
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
-    /// When both the local config and the app-server report zero servers, a special
-    /// "empty" cell is shown instead of the full table.
+    /// When app-server status and config both report zero servers, a special "empty" cell is shown
+    /// instead of the full table.
     pub(super) fn handle_mcp_inventory_result(
         &mut self,
-        result: Result<Vec<McpServerStatus>, String>,
+        result: Result<McpInventory, String>,
         detail: McpServerStatusDetail,
     ) {
-        let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
 
-        let statuses = match result {
-            Ok(statuses) => statuses,
+        let inventory = match result {
+            Ok(inventory) => inventory,
             Err(err) => {
                 self.chat_widget
                     .add_error_message(format!("Failed to load MCP inventory: {err}"));
@@ -525,7 +525,7 @@ impl App {
             }
         };
 
-        if config.mcp_servers.get().is_empty() && statuses.is_empty() {
+        if inventory.statuses.is_empty() && inventory.configured_servers.is_empty() {
             self.chat_widget
                 .add_to_history(history_cell::empty_mcp_output());
             return;
@@ -533,7 +533,9 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses, detail,
+                &inventory.configured_servers,
+                &inventory.statuses,
+                detail,
             ));
     }
 
@@ -551,6 +553,64 @@ impl App {
             overlay.replace_cells(self.transcript_cells.clone());
         }
     }
+}
+
+pub(super) async fn fetch_mcp_inventory_from_app_server(
+    request_handle: AppServerRequestHandle,
+    detail: McpServerStatusDetail,
+    cwd: PathBuf,
+) -> Result<McpInventory> {
+    let configured_servers = match fetch_app_server_mcp_config(request_handle.clone(), cwd).await {
+        Ok(configured_servers) => configured_servers,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "config/read failed while loading MCP inventory config; rendering status data only"
+            );
+            HashMap::new()
+        }
+    };
+    let statuses = fetch_all_mcp_server_statuses(request_handle, detail).await?;
+    Ok(McpInventory {
+        statuses,
+        configured_servers,
+    })
+}
+
+pub(super) async fn fetch_app_server_config(
+    request_handle: AppServerRequestHandle,
+    cwd: Option<PathBuf>,
+    include_layers: bool,
+) -> Result<ConfigReadResponse> {
+    let request_id = RequestId::String(format!("config-read-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigRead {
+            request_id,
+            params: ConfigReadParams {
+                include_layers,
+                cwd: cwd.map(|cwd| cwd.display().to_string()),
+            },
+        })
+        .await
+        .wrap_err("config/read failed in TUI")
+}
+
+async fn fetch_app_server_mcp_config(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<HashMap<String, McpServerConfig>> {
+    let response =
+        fetch_app_server_config(request_handle, Some(cwd), /*include_layers*/ false).await?;
+    mcp_servers_from_app_server_config(response.config)
+}
+
+fn mcp_servers_from_app_server_config(
+    config: codex_app_server_protocol::Config,
+) -> Result<HashMap<String, McpServerConfig>> {
+    let Some(mcp_servers) = config.additional.get("mcp_servers") else {
+        return Ok(HashMap::new());
+    };
+    serde_json::from_value(mcp_servers.clone()).wrap_err("failed to decode app-server MCP config")
 }
 
 pub(super) async fn fetch_all_mcp_server_statuses(

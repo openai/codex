@@ -4,7 +4,11 @@
 //! and the ChatWidget copy of session settings, keeping persistence-heavy code out of the main app
 //! loop.
 
+use super::background_requests::fetch_app_server_config;
 use super::*;
+use codex_app_server_protocol::ConfigLayer as AppServerConfigLayer;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
 
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
@@ -38,6 +42,40 @@ impl App {
                 action,
                 "failed to refresh config before thread transition; continuing with current in-memory config"
             );
+        }
+    }
+
+    pub(super) async fn refresh_config_layer_stack_from_app_server_best_effort(
+        &mut self,
+        app_server: &AppServerSession,
+        action: &str,
+    ) {
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        match fetch_app_server_config(
+            app_server.request_handle(),
+            Some(cwd),
+            /*include_layers*/ true,
+        )
+        .await
+        .and_then(|response| {
+            let Some(layers) = response.layers else {
+                return Err(color_eyre::eyre::eyre!(
+                    "config/read response did not include layers"
+                ));
+            };
+            config_layer_stack_from_app_server_layers(layers, &self.config.config_layer_stack)
+        }) {
+            Ok(config_layer_stack) => {
+                self.config.config_layer_stack = config_layer_stack;
+                self.chat_widget.sync_plugin_mentions_config(&self.config);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    action,
+                    "failed to refresh config layers from app server"
+                );
+            }
         }
     }
 
@@ -584,12 +622,46 @@ impl App {
     }
 }
 
+fn config_layer_stack_from_app_server_layers(
+    layers: Vec<AppServerConfigLayer>,
+    current_stack: &ConfigLayerStack,
+) -> Result<ConfigLayerStack> {
+    let mut layers = layers
+        .into_iter()
+        .map(config_layer_entry_from_app_server_layer)
+        .collect::<Result<Vec<_>>>()?;
+    // config/read returns layers highest-precedence first; ConfigLayerStack stores them lowest
+    // precedence first.
+    layers.reverse();
+    ConfigLayerStack::new(
+        layers,
+        current_stack.requirements().clone(),
+        current_stack.requirements_toml().clone(),
+    )
+    .wrap_err("invalid app-server config layer stack")
+}
+
+fn config_layer_entry_from_app_server_layer(
+    layer: AppServerConfigLayer,
+) -> Result<ConfigLayerEntry> {
+    let config = serde_json::from_value(layer.config)
+        .wrap_err("failed to decode app-server config layer")?;
+    let mut entry = if let Some(disabled_reason) = layer.disabled_reason {
+        ConfigLayerEntry::new_disabled(layer.name, config, disabled_reason)
+    } else {
+        ConfigLayerEntry::new(layer.name, config)
+    };
+    entry.version = layer.version;
+    Ok(entry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
     use crate::test_support::PathBufExt;
+    use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -647,6 +719,50 @@ mod tests {
         assert_eq!(
             app_enabled_in_effective_config(&app.config, &app_id),
             Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn config_layer_stack_from_app_server_layers_uses_server_user_config() -> Result<()> {
+        let user_file = AbsolutePathBuf::try_from(PathBuf::from("/tmp/codex/config.toml"))?;
+        let stack = config_layer_stack_from_app_server_layers(
+            vec![AppServerConfigLayer {
+                name: ConfigLayerSource::User {
+                    file: user_file,
+                    profile: None,
+                },
+                version: "server-version".to_string(),
+                config: serde_json::json!({
+                    "marketplaces": {
+                        "server-marketplace": {
+                            "source_type": "git",
+                        },
+                    },
+                }),
+                disabled_reason: None,
+            }],
+            &ConfigLayerStack::default(),
+        )?;
+
+        let user_config = stack
+            .effective_user_config()
+            .expect("server user config layer");
+        let source_type = user_config
+            .get("marketplaces")
+            .and_then(toml::Value::as_table)
+            .and_then(|marketplaces| marketplaces.get("server-marketplace"))
+            .and_then(toml::Value::as_table)
+            .and_then(|marketplace| marketplace.get("source_type"))
+            .and_then(toml::Value::as_str);
+
+        assert_eq!(source_type, Some("git"));
+        assert_eq!(
+            stack
+                .get_active_user_layer()
+                .expect("active user layer")
+                .version,
+            "server-version"
         );
         Ok(())
     }

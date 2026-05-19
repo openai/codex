@@ -835,7 +835,7 @@ async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
     }];
 
     let cell = new_mcp_tools_output_from_statuses(
-        &config,
+        config.mcp_servers.get(),
         &statuses,
         McpServerStatusDetail::ToolsAndAuthOnly,
     );
@@ -892,7 +892,24 @@ async fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
         auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
     }];
 
-    let cell = new_mcp_tools_output_from_statuses(&config, &statuses, McpServerStatusDetail::Full);
+    let cell = new_mcp_tools_output_from_statuses(
+        config.mcp_servers.get(),
+        &statuses,
+        McpServerStatusDetail::Full,
+    );
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn mcp_tools_output_from_statuses_renders_configured_server_without_status() {
+    let servers = HashMap::from([(
+        "server_only".to_string(),
+        stdio_server_config("server-only", vec!["--stdio"], /*env*/ None, vec![]),
+    )]);
+
+    let cell = new_mcp_tools_output_from_statuses(&servers, &[], McpServerStatusDetail::Full);
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);

@@ -117,17 +117,72 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
         )));
 
     app.handle_mcp_inventory_result(
-        Ok(vec![McpServerStatus {
-            name: "docs".to_string(),
-            tools: HashMap::new(),
-            resources: Vec::new(),
-            resource_templates: Vec::new(),
-            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        }]),
+        Ok(crate::app_event::McpInventory {
+            statuses: vec![McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            }],
+            configured_servers: HashMap::new(),
+        }),
         McpServerStatusDetail::ToolsAndAuthOnly,
     );
 
     assert_eq!(app.transcript_cells.len(), 0);
+}
+
+#[tokio::test]
+async fn handle_mcp_inventory_result_uses_server_empty_inventory_not_client_config() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let local_server: codex_config::types::McpServerConfig =
+        toml::from_str("command = \"local-only\"").expect("valid test MCP config");
+    let local_servers = HashMap::from([("local_only".to_string(), local_server)]);
+    app.config
+        .mcp_servers
+        .set(local_servers)
+        .expect("test config accepts MCP servers");
+
+    app.handle_mcp_inventory_result(
+        Ok(crate::app_event::McpInventory {
+            statuses: Vec::new(),
+            configured_servers: HashMap::new(),
+        }),
+        McpServerStatusDetail::ToolsAndAuthOnly,
+    );
+
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected MCP inventory history cell, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("No MCP servers configured."));
+    assert!(!rendered.contains("local-only"));
+}
+
+#[tokio::test]
+async fn handle_mcp_inventory_result_uses_server_config_when_status_inventory_is_empty() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let server_config: codex_config::types::McpServerConfig =
+        toml::from_str("command = \"server-only\"").expect("valid test MCP config");
+
+    app.handle_mcp_inventory_result(
+        Ok(crate::app_event::McpInventory {
+            statuses: Vec::new(),
+            configured_servers: HashMap::from([("remote_only".to_string(), server_config)]),
+        }),
+        McpServerStatusDetail::Full,
+    );
+
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected MCP inventory history cell, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(!rendered.contains("No MCP servers configured."));
+    assert!(rendered.contains("remote_only"));
+    assert!(rendered.contains("Command: server-only"));
 }
 
 #[test]

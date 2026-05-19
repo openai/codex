@@ -1,6 +1,7 @@
 //! MCP tool-call, inventory, and output history cells.
 
 use super::*;
+use codex_config::McpServerConfig;
 
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
@@ -511,15 +512,15 @@ pub(crate) fn new_mcp_tools_output(
 
 /// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
 ///
-/// The server list comes directly from the app-server status response, sorted
-/// alphabetically. Local config is only used to enrich returned servers with
-/// transport details such as command, URL, cwd, and environment display.
+/// The server list comes from app-server status plus app-server config, sorted alphabetically.
+/// Config enriches returned servers with transport details such as command, URL, cwd, and
+/// environment display, and keeps configured-only servers visible when status inventory is empty.
 ///
 /// This mirrors the layout of [`new_mcp_tools_output`] but sources data from
 /// the paginated RPC response rather than the in-process `McpManager`. The
 /// `detail` flag controls whether resources and resource templates are rendered.
 pub(crate) fn new_mcp_tools_output_from_statuses(
-    config: &Config,
+    configured_servers: &HashMap<String, McpServerConfig>,
     statuses: &[McpServerStatus],
     detail: McpServerStatusDetail,
 ) -> PlainHistoryCell {
@@ -536,6 +537,12 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     }
 
     let mut server_names: Vec<String> = statuses.iter().map(|status| status.name.clone()).collect();
+    server_names.extend(
+        configured_servers
+            .keys()
+            .filter(|server| !statuses_by_name.contains_key(server.as_str()))
+            .cloned(),
+    );
     server_names.sort();
 
     let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());
@@ -545,7 +552,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     }
 
     for server in server_names {
-        let cfg = config.mcp_servers.get().get(server.as_str());
+        let cfg = configured_servers.get(server.as_str());
         let status = statuses_by_name.get(server.as_str()).copied();
         let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
 

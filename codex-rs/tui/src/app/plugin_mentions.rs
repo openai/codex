@@ -1,109 +1,108 @@
 //! Plugin mention capability enrichment for the TUI.
 //!
-//! Mention inventory comes from app-server `plugin/list`, while mention eligibility still reuses
-//! the older local bulk capability summaries. That keeps the feature app-server-shaped without
-//! paying for a `plugin/read` per plugin.
+//! Mention inventory comes from app-server `plugin/list`, then eligible plugins are hydrated with
+//! `plugin/read` so the TUI does not derive mention capabilities from the client machine's local
+//! config or plugin cache.
 
+use super::background_requests::fetch_plugin_detail;
 use super::background_requests::request_plugin_list;
 use super::*;
+use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginListResponse;
-use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginSummary;
-use codex_core_plugins::PluginsManager;
+use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
-use std::collections::HashMap;
-
-#[derive(Debug, Clone)]
-struct PluginMentionEntry {
-    config_name: String,
-    display_name: String,
-    description: Option<String>,
-}
-
-impl PluginMentionEntry {
-    fn capability_summary(
-        self,
-        capabilities_by_config_name: &HashMap<String, PluginCapabilitySummary>,
-    ) -> Option<PluginCapabilitySummary> {
-        let capabilities = capabilities_by_config_name.get(&self.config_name)?;
-        Some(PluginCapabilitySummary {
-            config_name: self.config_name,
-            display_name: self.display_name,
-            description: self.description,
-            has_skills: capabilities.has_skills,
-            mcp_server_names: capabilities.mcp_server_names.clone(),
-            app_connector_ids: capabilities.app_connector_ids.clone(),
-        })
-    }
-}
 
 pub(super) async fn fetch_plugin_mentions(
     request_handle: AppServerRequestHandle,
-    config: crate::legacy_core::config::Config,
+    cwd: PathBuf,
 ) -> Result<Vec<PluginCapabilitySummary>> {
-    let response = request_plugin_list(request_handle, config.cwd.to_path_buf()).await?;
-    let mention_entries = plugin_mention_entries_from_list_response(response);
-    let capabilities_by_config_name = load_plugin_mention_capabilities(&config).await;
+    let response = request_plugin_list(request_handle.clone(), cwd).await?;
+    let mention_reads = plugin_mention_reads_from_list_response(response);
 
-    Ok(mention_entries
-        .into_iter()
-        .filter_map(|entry| entry.capability_summary(&capabilities_by_config_name))
-        .collect())
-}
-
-async fn load_plugin_mention_capabilities(
-    config: &crate::legacy_core::config::Config,
-) -> HashMap<String, PluginCapabilitySummary> {
-    let plugins_input = config.plugins_config_input();
-    PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(&plugins_input)
-        .await
-        .capability_summaries()
-        .iter()
-        .cloned()
-        .map(|summary| (summary.config_name.clone(), summary))
-        .collect()
-}
-
-fn plugin_mention_entries_from_list_response(
-    response: PluginListResponse,
-) -> Vec<PluginMentionEntry> {
-    response
-        .marketplaces
-        .into_iter()
-        .flat_map(plugin_mention_entries_from_marketplace)
-        .collect()
-}
-
-fn plugin_mention_entries_from_marketplace(
-    marketplace: PluginMarketplaceEntry,
-) -> Vec<PluginMentionEntry> {
-    let marketplace_name = marketplace.name;
-    marketplace
-        .plugins
-        .into_iter()
-        .filter_map(|plugin| plugin_mention_entry(&marketplace_name, plugin))
-        .collect()
-}
-
-fn plugin_mention_entry(
-    marketplace_name: &str,
-    plugin: PluginSummary,
-) -> Option<PluginMentionEntry> {
-    if !plugin_is_eligible_for_mentions(&plugin) {
-        return None;
+    let mut capabilities = Vec::new();
+    for read_params in mention_reads {
+        let plugin_name = read_params.plugin_name.clone();
+        match fetch_plugin_detail(request_handle.clone(), read_params).await {
+            Ok(response) => {
+                if let Some(summary) = plugin_detail_capability_summary(response.plugin) {
+                    capabilities.push(summary);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    plugin_name,
+                    "plugin/read failed while refreshing plugin mention candidates"
+                );
+            }
+        }
     }
+    Ok(capabilities)
+}
 
-    let config_name = plugin_mention_config_name(marketplace_name, &plugin)?;
-    Some(PluginMentionEntry {
+fn plugin_detail_capability_summary(detail: PluginDetail) -> Option<PluginCapabilitySummary> {
+    let config_name = plugin_mention_config_name(&detail.marketplace_name, &detail.summary)?;
+    Some(PluginCapabilitySummary {
         config_name,
-        display_name: plugin_mention_display_name(&plugin),
-        description: plugin_mention_description(&plugin),
+        display_name: plugin_mention_display_name(&detail.summary),
+        description: plugin_mention_description(&detail.summary),
+        has_skills: detail.skills.iter().any(|skill| skill.enabled),
+        mcp_server_names: detail.mcp_servers,
+        app_connector_ids: detail
+            .apps
+            .into_iter()
+            .map(|app| AppConnectorId(app.id))
+            .collect(),
     })
 }
 
-fn plugin_is_eligible_for_mentions(plugin: &PluginSummary) -> bool {
-    plugin.installed && plugin.enabled
+fn plugin_mention_reads_from_list_response(response: PluginListResponse) -> Vec<PluginReadParams> {
+    response
+        .marketplaces
+        .into_iter()
+        .flat_map(|marketplace| {
+            let marketplace_name = marketplace.name;
+            let marketplace_path = marketplace.path;
+            marketplace.plugins.into_iter().filter_map(move |plugin| {
+                plugin_mention_read(&marketplace_name, marketplace_path.clone(), plugin)
+            })
+        })
+        .collect()
+}
+
+fn plugin_mention_read(
+    marketplace_name: &str,
+    marketplace_path: Option<AbsolutePathBuf>,
+    plugin: PluginSummary,
+) -> Option<PluginReadParams> {
+    if !plugin.installed || !plugin.enabled {
+        return None;
+    }
+
+    plugin_mention_config_name(marketplace_name, &plugin)?;
+    if let Some(marketplace_path) = marketplace_path {
+        Some(PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: plugin.name,
+        })
+    } else {
+        let Some(remote_plugin_id) = plugin.remote_plugin_id else {
+            tracing::warn!(
+                plugin_name = plugin.name,
+                marketplace_name,
+                "skipping remote plugin mention without remote plugin id"
+            );
+            return None;
+        };
+        Some(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some(marketplace_name.to_string()),
+            plugin_name: remote_plugin_id,
+        })
+    }
 }
 
 fn plugin_mention_config_name(marketplace_name: &str, plugin: &PluginSummary) -> Option<String> {
@@ -144,4 +143,128 @@ fn plugin_mention_description(plugin: &PluginSummary) -> Option<String> {
         .map(str::trim)
         .filter(|description| !description.is_empty())
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::AppSummary;
+    use codex_app_server_protocol::PluginAuthPolicy;
+    use codex_app_server_protocol::PluginAvailability;
+    use codex_app_server_protocol::PluginInstallPolicy;
+    use codex_app_server_protocol::PluginMarketplaceEntry;
+    use codex_app_server_protocol::PluginSource;
+    use codex_app_server_protocol::SkillSummary;
+    use pretty_assertions::assert_eq;
+
+    fn test_absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    fn plugin_summary(name: &str, installed: bool, enabled: bool) -> PluginSummary {
+        PluginSummary {
+            id: format!("{name}@test-marketplace"),
+            remote_plugin_id: None,
+            local_version: None,
+            name: name.to_string(),
+            share_context: None,
+            source: PluginSource::Remote,
+            installed,
+            enabled,
+            install_policy: PluginInstallPolicy::Available,
+            auth_policy: PluginAuthPolicy::OnUse,
+            availability: PluginAvailability::Available,
+            interface: None,
+            keywords: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn plugin_mentions_use_app_server_detail_capabilities() {
+        let summary = plugin_detail_capability_summary(PluginDetail {
+            marketplace_name: "test-marketplace".to_string(),
+            marketplace_path: Some(test_absolute_path("/marketplace")),
+            summary: plugin_summary("calendar", /*installed*/ true, /*enabled*/ true),
+            description: None,
+            skills: vec![SkillSummary {
+                name: "schedule".to_string(),
+                description: "Schedule things".to_string(),
+                short_description: None,
+                interface: None,
+                path: None,
+                enabled: true,
+            }],
+            hooks: Vec::new(),
+            apps: vec![AppSummary {
+                id: "calendar-app".to_string(),
+                name: "Calendar".to_string(),
+                description: None,
+                install_url: None,
+                needs_auth: false,
+            }],
+            mcp_servers: vec!["calendar-mcp".to_string()],
+        })
+        .expect("valid plugin detail");
+
+        assert_eq!(
+            summary,
+            PluginCapabilitySummary {
+                config_name: "calendar@test-marketplace".to_string(),
+                display_name: "calendar".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: vec!["calendar-mcp".to_string()],
+                app_connector_ids: vec![AppConnectorId("calendar-app".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_mention_reads_skip_disabled_and_handle_local_and_remote_sources() {
+        let marketplace_path = test_absolute_path("/marketplace");
+        let mut remote_plugin = plugin_summary(
+            "remote_name",
+            /*installed*/ true,
+            /*enabled*/ true,
+        );
+        remote_plugin.remote_plugin_id = Some("plugins~remote_id".to_string());
+
+        let reads = plugin_mention_reads_from_list_response(PluginListResponse {
+            marketplaces: vec![
+                PluginMarketplaceEntry {
+                    name: "test-marketplace".to_string(),
+                    path: Some(marketplace_path.clone()),
+                    interface: None,
+                    plugins: vec![
+                        plugin_summary("enabled", /*installed*/ true, /*enabled*/ true),
+                        plugin_summary("disabled", /*installed*/ true, /*enabled*/ false),
+                    ],
+                },
+                PluginMarketplaceEntry {
+                    name: "chatgpt-global".to_string(),
+                    path: None,
+                    interface: None,
+                    plugins: vec![remote_plugin],
+                },
+            ],
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+        });
+
+        assert_eq!(
+            reads,
+            vec![
+                PluginReadParams {
+                    marketplace_path: Some(marketplace_path),
+                    remote_marketplace_name: None,
+                    plugin_name: "enabled".to_string(),
+                },
+                PluginReadParams {
+                    marketplace_path: None,
+                    remote_marketplace_name: Some("chatgpt-global".to_string()),
+                    plugin_name: "plugins~remote_id".to_string(),
+                },
+            ]
+        );
+    }
 }

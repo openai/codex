@@ -34,7 +34,6 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -169,14 +168,6 @@ pub(super) enum PluginsCacheState {
 
 impl ChatWidget {
     pub(crate) fn add_plugins_output(&mut self) {
-        if !self.config.features.enabled(Feature::Plugins) {
-            self.add_info_message(
-                "Plugins are disabled.".to_string(),
-                Some("Enable the plugins feature to use /plugins.".to_string()),
-            );
-            return;
-        }
-
         self.plugins_active_tab_id = Some(ALL_PLUGINS_TAB_ID.to_string());
         self.prefetch_plugins();
 

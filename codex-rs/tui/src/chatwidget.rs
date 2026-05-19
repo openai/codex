@@ -1356,10 +1356,6 @@ impl ChatWidget {
     }
 
     fn plugins_for_mentions(&self) -> Option<&[PluginCapabilitySummary]> {
-        if !self.config.features.enabled(Feature::Plugins) {
-            return None;
-        }
-
         self.bottom_pane.plugins().map(Vec::as_slice)
     }
 
@@ -1730,11 +1726,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn refresh_plugin_mentions(&mut self) {
-        if !self.config.features.enabled(Feature::Plugins) {
-            self.bottom_pane.set_plugin_mentions(/*plugins*/ None);
-            return;
-        }
-
         self.app_event_tx.send(AppEvent::RefreshPluginMentions);
     }
 

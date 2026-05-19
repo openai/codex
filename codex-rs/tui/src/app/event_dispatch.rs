@@ -502,9 +502,11 @@ impl App {
                 self.chat_widget
                     .on_marketplace_add_loaded(cwd.clone(), source, result);
                 if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after marketplace add");
-                    }
+                    self.refresh_config_layer_stack_from_app_server_best_effort(
+                        app_server,
+                        "marketplace add",
+                    )
+                    .await;
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -512,12 +514,11 @@ impl App {
                 let marketplace_contents_changed =
                     matches!(&result, Ok(response) if !response.upgraded_roots.is_empty());
                 if marketplace_contents_changed {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to refresh config after marketplace upgrade"
-                        );
-                    }
+                    self.refresh_config_layer_stack_from_app_server_best_effort(
+                        app_server,
+                        "marketplace upgrade",
+                    )
+                    .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
@@ -554,9 +555,11 @@ impl App {
                 );
                 if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
                 {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after marketplace remove");
-                    }
+                    self.refresh_config_layer_stack_from_app_server_best_effort(
+                        app_server,
+                        "marketplace remove",
+                    )
+                    .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                     self.fetch_plugins_list(app_server, cwd);
@@ -605,9 +608,11 @@ impl App {
             } => {
                 let install_succeeded = result.is_ok();
                 if install_succeeded {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after plugin install");
-                    }
+                    self.refresh_config_layer_stack_from_app_server_best_effort(
+                        app_server,
+                        "plugin install",
+                    )
+                    .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
@@ -661,12 +666,11 @@ impl App {
                     self.pending_plugin_enabled_writes.remove(&plugin_id);
                     let update_succeeded = result.is_ok();
                     if update_succeeded {
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                            tracing::warn!(
-                                error = %err,
-                                "failed to refresh config after plugin toggle"
-                            );
-                        }
+                        self.refresh_config_layer_stack_from_app_server_best_effort(
+                            app_server,
+                            "plugin toggle",
+                        )
+                        .await;
                         self.chat_widget.refresh_plugin_mentions();
                         self.chat_widget.submit_op(AppCommand::reload_user_config());
                     }
@@ -1238,12 +1242,11 @@ impl App {
             } => {
                 let uninstall_succeeded = result.is_ok();
                 if uninstall_succeeded {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to refresh config after plugin uninstall"
-                        );
-                    }
+                    self.refresh_config_layer_stack_from_app_server_best_effort(
+                        app_server,
+                        "plugin uninstall",
+                    )
+                    .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
@@ -1261,10 +1264,7 @@ impl App {
             AppEvent::RefreshPluginMentions => {
                 self.refresh_plugin_mentions(app_server);
             }
-            AppEvent::PluginMentionsLoaded { mut plugins } => {
-                if !self.config.features.enabled(Feature::Plugins) {
-                    plugins = None;
-                }
+            AppEvent::PluginMentionsLoaded { plugins } => {
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
             AppEvent::PersistPersonalitySelection { personality } => {
