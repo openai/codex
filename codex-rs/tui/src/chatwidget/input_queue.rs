@@ -38,6 +38,9 @@ pub(super) struct InputQueueState {
     pub(super) rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     /// Steers already submitted to core but not yet committed into history.
     pub(super) pending_steers: VecDeque<PendingSteer>,
+    /// After a limit error, queued follow-up inputs must not resume without an
+    /// explicit user confirmation.
+    pub(super) queued_sends_paused_after_usage_limit: bool,
     /// When set, the next interrupt should resubmit all pending steers as one
     /// fresh user turn instead of restoring them into the composer.
     pub(super) submit_pending_steers_after_interrupt: bool,
@@ -56,6 +59,7 @@ impl InputQueueState {
         self.rejected_steers_queue.clear();
         self.rejected_steer_history_records.clear();
         self.pending_steers.clear();
+        self.queued_sends_paused_after_usage_limit = false;
         self.submit_pending_steers_after_interrupt = false;
     }
 
@@ -139,6 +143,7 @@ mod tests {
             .rejected_steers_queue
             .push_back(UserMessage::from("rejected"));
         state.user_turn_pending_start = true;
+        state.queued_sends_paused_after_usage_limit = true;
         state.submit_pending_steers_after_interrupt = true;
 
         state.clear();
@@ -149,6 +154,7 @@ mod tests {
         assert!(state.rejected_steers_queue.is_empty());
         assert!(state.rejected_steer_history_records.is_empty());
         assert!(state.pending_steers.is_empty());
+        assert!(!state.queued_sends_paused_after_usage_limit);
         assert!(!state.submit_pending_steers_after_interrupt);
     }
 }

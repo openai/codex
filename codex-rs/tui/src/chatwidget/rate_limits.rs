@@ -257,6 +257,9 @@ impl ChatWidget {
     }
 
     pub(super) fn maybe_show_pending_rate_limit_prompt(&mut self) {
+        if self.input_queue.queued_sends_paused_after_usage_limit {
+            return;
+        }
         if self.rate_limit_switch_prompt_hidden() {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
             return;

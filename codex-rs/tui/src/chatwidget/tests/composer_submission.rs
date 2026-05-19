@@ -948,6 +948,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
         queued_user_message_history_records: VecDeque::new(),
+        queued_sends_paused_after_usage_limit: false,
         user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),

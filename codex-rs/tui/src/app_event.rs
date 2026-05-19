@@ -772,6 +772,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Resume queued follow-up sends after the user explicitly confirms intent.
+    ResumeQueuedSends,
+
     /// Update the Plan-mode-specific reasoning effort in memory.
     UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
 

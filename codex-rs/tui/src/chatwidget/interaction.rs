@@ -100,6 +100,14 @@ impl ChatWidget {
         }
 
         if key_event.kind == KeyEventKind::Press
+            && matches!(key_event.code, KeyCode::Enter)
+            && self.should_prompt_to_resume_queued_sends()
+        {
+            self.show_resume_queued_sends_prompt();
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
             && self.chat_keymap.edit_queued_message.is_pressed(key_event)
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()

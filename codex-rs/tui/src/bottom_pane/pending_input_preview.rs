@@ -24,6 +24,7 @@ pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
+    pub queued_sends_paused_after_usage_limit: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -37,6 +38,7 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
+            queued_sends_paused_after_usage_limit: false,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
         }
     }
@@ -80,7 +82,26 @@ impl PendingInputPreview {
 
         let mut lines = vec![];
 
+        if self.queued_sends_paused_after_usage_limit {
+            Self::push_section_header(
+                &mut lines,
+                width,
+                Line::from("Queued sends paused after usage limit".cyan().bold()),
+            );
+            lines.push(Line::from(vec![
+                "  Press ".into(),
+                key_hint::plain(KeyCode::Enter)
+                    .display_label()
+                    .cyan()
+                    .bold(),
+                " to resume queued sends".into(),
+            ]));
+        }
+
         if !self.pending_steers.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
             Self::push_section_header(
                 &mut lines,
                 width,
@@ -346,6 +367,35 @@ mod tests {
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!(
             "render_pending_steers_above_queued_messages",
+            format!("{buf:?}")
+        );
+    }
+
+    #[test]
+    fn render_paused_after_usage_limit() {
+        let mut queue = PendingInputPreview::new();
+        queue.queued_messages.push("Try again later".to_string());
+        queue.queued_sends_paused_after_usage_limit = true;
+        let width = 48;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!("render_paused_after_usage_limit", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn render_paused_steering_after_usage_limit() {
+        let mut queue = PendingInputPreview::new();
+        queue
+            .rejected_steers
+            .push("Check the final command output.".to_string());
+        queue.queued_sends_paused_after_usage_limit = true;
+        let width = 48;
+        let height = queue.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!(
+            "render_paused_steering_after_usage_limit",
             format!("{buf:?}")
         );
     }

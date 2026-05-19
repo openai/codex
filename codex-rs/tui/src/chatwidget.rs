@@ -370,6 +370,7 @@ mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
 mod protocol;
+mod queued_sends;
 mod protocol_requests;
 mod rate_limits;
 use self::rate_limits::RateLimitErrorKind;

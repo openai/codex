@@ -289,6 +289,17 @@ impl ChatWidget {
         ) && self.enqueue_rejected_steer()
     }
 
+    fn defer_pending_steers_after_usage_limit(&mut self) {
+        while let Some(pending_steer) = self.input_queue.pending_steers.pop_front() {
+            self.input_queue
+                .rejected_steers_queue
+                .push_back(pending_steer.user_message);
+            self.input_queue
+                .rejected_steer_history_records
+                .push_back(pending_steer.history_record);
+        }
+    }
+
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -363,6 +374,11 @@ impl ChatWidget {
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+            self.defer_pending_steers_after_usage_limit();
+            self.pause_queued_sends_after_limit_error();
+        }
+
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
             if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
                 match kind {

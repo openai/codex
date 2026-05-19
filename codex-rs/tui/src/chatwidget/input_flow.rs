@@ -77,7 +77,10 @@ impl ChatWidget {
         user_message: UserMessage,
         action: QueuedInputAction,
     ) {
-        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+        if self.input_queue.queued_sends_paused_after_usage_limit
+            || !self.is_session_configured()
+            || self.is_user_turn_pending_or_running()
+        {
             self.input_queue
                 .queued_user_messages
                 .push_back(QueuedUserMessage::new(user_message, action));
@@ -92,7 +95,9 @@ impl ChatWidget {
 
     /// If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) -> bool {
-        if self.input_queue.suppress_queue_autosend {
+        if self.input_queue.suppress_queue_autosend
+            || self.input_queue.queued_sends_paused_after_usage_limit
+        {
             return false;
         }
         if self.is_user_turn_pending_or_running() {
@@ -147,12 +152,20 @@ impl ChatWidget {
 
     /// Rebuild and update the bottom-pane pending-input preview.
     pub(super) fn refresh_pending_input_preview(&mut self) {
+        let queued_sends_were_paused = self.input_queue.queued_sends_paused_after_usage_limit;
+        if !self.has_queued_follow_up_messages() {
+            self.input_queue.queued_sends_paused_after_usage_limit = false;
+        }
         let preview = self.input_queue.preview();
         self.bottom_pane.set_pending_input_preview(
             preview.queued_messages,
             preview.pending_steers,
             preview.rejected_steers,
+            self.input_queue.queued_sends_paused_after_usage_limit,
         );
+        if queued_sends_were_paused && !self.input_queue.queued_sends_paused_after_usage_limit {
+            self.maybe_show_pending_rate_limit_prompt();
+        }
     }
 
     pub(crate) fn submit_user_message_with_mode(

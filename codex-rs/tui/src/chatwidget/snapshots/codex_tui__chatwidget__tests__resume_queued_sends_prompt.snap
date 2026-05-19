@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: popup
+---
+  Resume queued sends?
+  Queued inputs were paused after a usage limit was reached.
+
+› 1. Keep paused          Leave queued sends paused until you review them later.
+  2. Resume queued sends  Continue sending queued inputs.
+
+  Press enter to confirm or esc to go back

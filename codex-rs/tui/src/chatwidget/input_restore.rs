@@ -273,6 +273,9 @@ impl ChatWidget {
                 .input_queue
                 .queued_user_message_history_records
                 .clone(),
+            queued_sends_paused_after_usage_limit: self
+                .input_queue
+                .queued_sends_paused_after_usage_limit,
             user_turn_pending_start: self.input_queue.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
@@ -348,6 +351,8 @@ impl ChatWidget {
             self.input_queue.queued_user_messages = input_state.queued_user_messages;
             self.input_queue.queued_user_message_history_records =
                 input_state.queued_user_message_history_records;
+            self.input_queue.queued_sends_paused_after_usage_limit =
+                input_state.queued_sends_paused_after_usage_limit;
             self.input_queue.queued_user_message_history_records.resize(
                 self.input_queue.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,

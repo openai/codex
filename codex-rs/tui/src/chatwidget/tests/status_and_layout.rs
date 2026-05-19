@@ -787,6 +787,52 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
 }
 
 #[tokio::test]
+async fn rate_limit_switch_prompt_stays_hidden_while_queued_sends_are_paused_after_usage_limit() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+    chat.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued follow-up").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    chat.input_queue.queued_sends_paused_after_usage_limit = true;
+
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_shows_when_paused_queue_is_cleared() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+    chat.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued follow-up").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    chat.input_queue.queued_sends_paused_after_usage_limit = true;
+
+    chat.input_queue.queued_user_messages.clear();
+    chat.input_queue.queued_user_message_history_records.clear();
+    chat.refresh_pending_input_preview();
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;
@@ -888,6 +934,67 @@ async fn usage_limit_error_remaps_stale_member_credits_state_to_usage_limit_prom
 }
 
 #[tokio::test]
+async fn usage_limit_error_pauses_queued_follow_ups_until_confirmed() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.queue_user_message("first queued follow-up".into());
+    chat.queue_user_message("second queued follow-up".into());
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
+
+    assert!(chat.input_queue.queued_sends_paused_after_usage_limit);
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec![
+            "first queued follow-up".to_string(),
+            "second queued follow-up".to_string(),
+        ]
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.resume_queued_sends();
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "first queued follow-up".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["second queued follow-up".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn paused_queued_sends_require_confirmation_before_resuming() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued follow-up").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    chat.input_queue.queued_sends_paused_after_usage_limit = true;
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("resume_queued_sends_prompt", popup);
+}
+
+#[tokio::test]
 async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
     for (limit_type, error_kind) in [
         (
@@ -964,6 +1071,69 @@ async fn missing_rate_limit_reached_type_does_not_prompt_or_refresh() {
     let popup = render_bottom_popup(&chat, /*width*/ 90);
     assert!(!popup.contains("workspace owner"));
     assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
+}
+
+#[tokio::test]
+async fn usage_limit_error_pauses_pending_steers_until_confirmed() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("keep this from auto-sending"));
+    chat.refresh_pending_input_preview();
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
+
+    assert!(chat.input_queue.pending_steers.is_empty());
+    assert_eq!(chat.input_queue.rejected_steers_queue.len(), 1);
+    assert_eq!(
+        chat.input_queue.rejected_steers_queue.front().unwrap().text,
+        "keep this from auto-sending"
+    );
+    assert!(chat.input_queue.queued_sends_paused_after_usage_limit);
+
+    chat.finalize_turn();
+    assert!(!chat.maybe_send_next_queued_input());
+    assert_no_submit_op(&mut op_rx);
+
+    chat.resume_queued_sends();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "keep this from auto-sending".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected resumed steer as Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn generic_rate_limit_error_does_not_pause_pending_steers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("keep this in flight"));
+    chat.refresh_pending_input_preview();
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::Generic,
+        "Rate limit reached.".to_string(),
+    );
+
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert!(chat.input_queue.rejected_steers_queue.is_empty());
+    assert!(!chat.input_queue.queued_sends_paused_after_usage_limit);
 }
 
 #[tokio::test]
