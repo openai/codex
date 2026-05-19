@@ -27,9 +27,41 @@ pub enum RequirementSource {
     Unknown,
     MdmManagedPreferences { domain: String, key: String },
     CloudRequirements,
+    Composite { sources: Vec<RequirementSource> },
+    EnterpriseManaged { id: String, name: String },
     SystemRequirementsToml { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromMdm,
+}
+
+impl RequirementSource {
+    pub fn composite(sources: impl IntoIterator<Item = RequirementSource>) -> Self {
+        let mut flattened = Vec::new();
+        for source in sources {
+            source.append_to_composite(&mut flattened);
+        }
+
+        match flattened.len() {
+            0 => RequirementSource::Unknown,
+            1 => flattened.remove(0),
+            _ => RequirementSource::Composite { sources: flattened },
+        }
+    }
+
+    fn append_to_composite(self, flattened: &mut Vec<RequirementSource>) {
+        match self {
+            RequirementSource::Composite { sources } => {
+                for source in sources {
+                    source.append_to_composite(flattened);
+                }
+            }
+            source => {
+                if !flattened.contains(&source) {
+                    flattened.push(source);
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for RequirementSource {
@@ -41,6 +73,19 @@ impl fmt::Display for RequirementSource {
             }
             RequirementSource::CloudRequirements => {
                 write!(f, "cloud requirements")
+            }
+            RequirementSource::Composite { sources } => {
+                write!(f, "requirements composition: ")?;
+                for (index, source) in sources.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{source}")?;
+                }
+                Ok(())
+            }
+            RequirementSource::EnterpriseManaged { id, name } => {
+                write!(f, "enterprise-managed requirements {name} ({id})")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -983,7 +1028,7 @@ fn hostname_matches_any_pattern(hostname: &str, patterns: &[String]) -> bool {
 
 /// Currently, `external-sandbox` is not supported in config.toml, but it is
 /// supported through programmatic use.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SandboxModeRequirement {
     #[serde(rename = "read-only")]
     ReadOnly,
@@ -1430,6 +1475,35 @@ mod tests {
         )?)
     }
 
+    fn composite_requirement_source() -> RequirementSource {
+        RequirementSource::composite([
+            RequirementSource::MdmManagedPreferences {
+                domain: "com.openai.codex".to_string(),
+                key: "requirements_toml_base64".to_string(),
+            },
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+        ])
+    }
+
+    #[test]
+    fn composite_requirement_source_flattens_and_deduplicates_sources() {
+        let mdm_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
+        let legacy_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+
+        assert_eq!(
+            RequirementSource::composite([
+                mdm_source.clone(),
+                RequirementSource::composite([legacy_source.clone(), mdm_source.clone()]),
+            ]),
+            RequirementSource::Composite {
+                sources: vec![mdm_source, legacy_source],
+            }
+        );
+    }
+
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
@@ -1810,7 +1884,7 @@ mod tests {
     fn merge_unset_fields_ignores_blank_guardian_override() {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            composite_requirement_source(),
             ConfigRequirementsToml {
                 guardian_policy_config: Some("   \n\t".to_string()),
                 ..Default::default()
@@ -2156,7 +2230,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
-        let higher_source = RequirementSource::CloudRequirements;
+        let higher_source = composite_requirement_source();
         let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut target = ConfigRequirementsWithSources::default();
 
@@ -2198,7 +2272,7 @@ allowed_approvals_reviewers = ["user"]
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            composite_requirement_source(),
             ConfigRequirementsToml {
                 apps: Some(apps_requirements(&[])),
                 ..Default::default()
@@ -2273,14 +2347,14 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn constraint_error_includes_cloud_requirements_source() -> Result<()> {
+    fn constraint_error_includes_composite_requirement_source() -> Result<()> {
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = composite_requirement_source();
 
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
@@ -2313,7 +2387,7 @@ allowed_approvals_reviewers = ["user"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = composite_requirement_source();
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2623,7 +2697,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
-        let source = RequirementSource::CloudRequirements;
+        let source = composite_requirement_source();
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2714,7 +2788,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
-        let high_source = RequirementSource::CloudRequirements;
+        let high_source = composite_requirement_source();
         let mut high_precedence: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2901,7 +2975,7 @@ statusMessage = "checking"
     fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            composite_requirement_source(),
             from_str::<ConfigRequirementsToml>(
                 r#"
 [hooks]
@@ -2945,7 +3019,7 @@ command = "python3 /system/hooks/pre.py"
         );
         assert_eq!(
             target.hooks.as_ref().map(|hooks| hooks.source.clone()),
-            Some(RequirementSource::CloudRequirements)
+            Some(composite_requirement_source())
         );
         Ok(())
     }
@@ -3009,7 +3083,7 @@ command = "python3 /enterprise/hooks/pre.py"
             "/tmp/blocked.sock" = "deny"
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = composite_requirement_source();
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -3082,7 +3156,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_local_binding = false
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = composite_requirement_source();
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
