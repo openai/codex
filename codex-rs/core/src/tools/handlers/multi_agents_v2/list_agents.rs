@@ -7,8 +7,6 @@ pub(crate) struct Handler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
-    type Output = ListAgentsResult;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_agents")
     }
@@ -17,7 +15,10 @@ impl ToolExecutor<ToolInvocation> for Handler {
         Some(create_list_agents_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -37,11 +38,11 @@ impl ToolExecutor<ToolInvocation> for Handler {
             .await
             .map_err(collab_spawn_error)?;
 
-        Ok(ListAgentsResult { agents })
+        Ok(boxed_tool_output(ListAgentsResult { agents }))
     }
 }
 
-impl ToolHandler for Handler {
+impl CoreToolRuntime for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

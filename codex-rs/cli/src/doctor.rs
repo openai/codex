@@ -105,6 +105,10 @@ const COLOR_ENV_VARS: &[&str] = &[
 const TERMINAL_DIMENSION_ENV_VARS: &[&str] = &["COLUMNS", "LINES"];
 const TERMINFO_ENV_VARS: &[&str] = &["TERMINFO", "TERMINFO_DIRS"];
 const LOCALE_ENV_VARS: &[&str] = &["LC_ALL", "LC_CTYPE", "LANG"];
+#[cfg(windows)]
+const NPM_COMMAND: &str = "npm.cmd";
+#[cfg(not(windows))]
+const NPM_COMMAND: &str = "npm";
 const REMOTE_TERMINAL_ENV_VARS: &[&str] = &[
     "SSH_TTY",
     "SSH_CONNECTION",
@@ -884,7 +888,7 @@ fn npm_global_root_check() -> NpmRootCheck {
         return NpmRootCheck::MissingPackageRoot;
     };
 
-    let output = match run_command("npm", ["root", "-g"]) {
+    let output = match run_command(NPM_COMMAND, ["root", "-g"]) {
         Ok(output) => output,
         Err(err) => return NpmRootCheck::NpmUnavailable(err),
     };
@@ -1939,13 +1943,11 @@ async fn state_check(config: &Config) -> DoctorCheck {
     path_readiness(&mut details, "CODEX_HOME", &config.codex_home);
     path_readiness(&mut details, "log dir", &config.log_dir);
     path_readiness(&mut details, "sqlite home", &config.sqlite_home);
-    let state_db = codex_state::state_db_path(&config.sqlite_home);
-    let log_db = codex_state::logs_db_path(&config.sqlite_home);
-    path_readiness(&mut details, "state DB", &state_db);
-    path_readiness(&mut details, "log DB", &log_db);
     let mut integrity_failures = Vec::new();
-    sqlite_integrity_detail(&mut details, &mut integrity_failures, "state DB", &state_db).await;
-    sqlite_integrity_detail(&mut details, &mut integrity_failures, "log DB", &log_db).await;
+    for db in codex_state::runtime_db_paths(&config.sqlite_home) {
+        path_readiness(&mut details, db.label, &db.path);
+        sqlite_integrity_detail(&mut details, &mut integrity_failures, db.label, &db.path).await;
+    }
     rollout_stats_details(&mut details, &config.codex_home);
     standalone_release_cache_details(&mut details);
 

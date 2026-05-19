@@ -109,6 +109,8 @@ pub struct McpConfig {
     pub chatgpt_base_url: String,
     /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
+    /// Optional product SKU forwarded to the host-owned apps MCP server.
+    pub apps_mcp_product_sku: Option<String>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -136,6 +138,8 @@ pub struct McpConfig {
     ///
     /// Runtime-only additions are merged later by [`effective_mcp_servers`].
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
+    /// Winning plugin owner for plugin-provided MCP servers, keyed by server name.
+    pub plugin_ids_by_mcp_server_name: HashMap<String, String>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
@@ -144,6 +148,7 @@ pub struct McpConfig {
 pub struct ToolPluginProvenance {
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
     plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
+    plugin_ids_by_mcp_server_name: HashMap<String, String>,
 }
 
 impl ToolPluginProvenance {
@@ -161,9 +166,15 @@ impl ToolPluginProvenance {
             .unwrap_or(&[])
     }
 
-    fn from_capability_summaries(capability_summaries: &[PluginCapabilitySummary]) -> Self {
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+        self.plugin_ids_by_mcp_server_name
+            .get(server_name)
+            .map(String::as_str)
+    }
+
+    fn from_config(config: &McpConfig) -> Self {
         let mut tool_plugin_provenance = Self::default();
-        for plugin in capability_summaries {
+        for plugin in &config.plugin_capability_summaries {
             for connector_id in &plugin.app_connector_ids {
                 tool_plugin_provenance
                     .plugin_display_names_by_connector_id
@@ -193,6 +204,8 @@ impl ToolPluginProvenance {
             plugin_names.sort_unstable();
             plugin_names.dedup();
         }
+        tool_plugin_provenance.plugin_ids_by_mcp_server_name =
+            config.plugin_ids_by_mcp_server_name.clone();
 
         tool_plugin_provenance
     }
@@ -242,7 +255,7 @@ pub fn effective_mcp_servers_from_configured(
 }
 
 pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
-    ToolPluginProvenance::from_capability_summaries(&config.plugin_capability_summaries)
+    ToolPluginProvenance::from_config(config)
 }
 
 pub async fn read_mcp_resource(
@@ -427,12 +440,15 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str, apps_mcp_path_override: Optio
 
 fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
     let url = codex_apps_mcp_url(config);
+    let http_headers = config.apps_mcp_product_sku.as_ref().map(|product_sku| {
+        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.clone())])
+    });
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers: None,
+            http_headers,
             env_http_headers: None,
         },
         experimental_environment: None,

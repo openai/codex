@@ -347,8 +347,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
     ];
 
     let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
+    let permission_profile = PermissionProfile::Disabled;
     let output = process_exec_tool_call(
         ExecParams {
             command,
@@ -699,7 +698,7 @@ fn windows_restricted_token_rejects_unreadable_split_carveouts() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::Path { path: blocked },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -847,7 +846,7 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
                 path: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&blocked)
                     .expect("absolute blocked"),
             },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -909,7 +908,7 @@ fn windows_elevated_supports_unreadable_globs() {
             path: codex_protocol::permissions::FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: codex_protocol::permissions::FileSystemAccessMode::None,
+            access: codex_protocol::permissions::FileSystemAccessMode::Deny,
         },
     ]);
 

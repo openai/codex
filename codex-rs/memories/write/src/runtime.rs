@@ -261,6 +261,7 @@ impl MemoryStartupContext {
                 environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
         {

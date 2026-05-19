@@ -91,13 +91,13 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
             path: FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: future_secret,
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(
@@ -173,11 +173,11 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
             path: FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: exact_secret },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(

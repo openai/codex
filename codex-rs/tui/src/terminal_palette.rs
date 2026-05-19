@@ -68,6 +68,13 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
 }
 
+#[cfg(unix)]
+pub(crate) fn set_default_colors_from_startup_probe(
+    colors: Option<crate::terminal_probe::DefaultColors>,
+) {
+    imp::set_default_colors_from_startup_probe(colors);
+}
+
 #[cfg(all(unix, not(test)))]
 mod imp {
     use super::DefaultColors;
@@ -110,6 +117,18 @@ mod imp {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
         cache.get_or_init_with(query_default_colors)
+    }
+
+    pub(super) fn set_default_colors_from_startup_probe(
+        colors: Option<crate::terminal_probe::DefaultColors>,
+    ) {
+        if let Ok(mut cache) = default_colors_cache().lock() {
+            cache.value = colors.map(|colors| DefaultColors {
+                fg: colors.fg,
+                bg: colors.bg,
+            });
+            cache.attempted = true;
+        }
     }
 
     pub(super) fn requery_default_colors() {
@@ -164,6 +183,12 @@ mod imp {
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
         None
+    }
+
+    #[cfg(unix)]
+    pub(super) fn set_default_colors_from_startup_probe(
+        _colors: Option<crate::terminal_probe::DefaultColors>,
+    ) {
     }
 
     pub(super) fn requery_default_colors() {}

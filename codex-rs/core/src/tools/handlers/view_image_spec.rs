@@ -20,9 +20,12 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
     if options.can_request_original_image_detail {
         properties.insert(
             "detail".to_string(),
-            JsonSchema::string(Some(
-                "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
-            )),
+            JsonSchema::string_enum(
+                vec![json!("high"), json!("original")],
+                Some(
+                    "Optional detail override. Supported values are `high` and `original`; omit this field for default high resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                ),
+            ),
         );
     }
     if options.include_environment_id {
@@ -55,8 +58,9 @@ fn view_image_output_schema() -> Value {
                 "description": "Data URL for the loaded image."
             },
             "detail": {
-                "type": ["string", "null"],
-                "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
+                "type": "string",
+                "enum": ["high", "original"],
+                "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."
             }
         },
         "required": ["image_url", "detail"],

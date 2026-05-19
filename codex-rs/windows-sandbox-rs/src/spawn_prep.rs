@@ -8,7 +8,6 @@ use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
 use crate::cap::workspace_write_root_specificity;
-use crate::deny_read_acl::apply_deny_read_acls;
 use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
@@ -283,11 +282,9 @@ pub(crate) fn apply_legacy_session_acl_rules(
     additional_deny_read_paths: &[PathBuf],
     additional_deny_write_paths: &[PathBuf],
     acl_sids: LegacyAclSids<'_>,
-    persist_aces: bool,
-) -> Result<Vec<(PathBuf, String)>> {
+) -> Result<()> {
     let AllowDenyPaths { allow, mut deny } =
         compute_allow_paths(policy, sandbox_policy_cwd, current_dir, env_map);
-    let mut guards: Vec<(PathBuf, String)> = Vec::new();
     unsafe {
         for path in additional_deny_write_paths {
             // Explicit carveouts must exist before the command starts so the
@@ -300,31 +297,19 @@ pub(crate) fn apply_legacy_session_acl_rules(
         }
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             for p in &allow {
-                if matches!(add_allow_ace(p, readonly_sid.as_ptr()), Ok(true))
-                    && !persist_aces
-                    && let Some(readonly_sid_str) = acl_sids.readonly_sid_str
-                {
-                    guards.push((p.clone(), readonly_sid_str.to_string()));
-                }
+                let _ = add_allow_ace(p, readonly_sid.as_ptr());
             }
         } else {
             for p in &allow {
                 let Some(root_sid) = matching_root_capability(p, acl_sids.write_root_sids) else {
                     continue;
                 };
-                if matches!(add_allow_ace(p, root_sid.sid.as_ptr()), Ok(true)) && !persist_aces {
-                    guards.push((p.clone(), root_sid.sid_str.clone()));
-                }
+                let _ = add_allow_ace(p, root_sid.sid.as_ptr());
             }
         }
         for p in &deny {
             for root_sid in deny_root_capabilities_for_path(p, acl_sids.write_root_sids) {
-                if let Ok(added) = add_deny_write_ace(p, root_sid.sid.as_ptr())
-                    && added
-                    && !persist_aces
-                {
-                    guards.push((p.clone(), root_sid.sid_str.clone()));
-                }
+                let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
             }
         }
         if !additional_deny_read_paths.is_empty() {
@@ -332,42 +317,20 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 let Some(readonly_sid_str) = acl_sids.readonly_sid_str else {
                     anyhow::bail!("readonly capability SID string missing");
                 };
-                let applied_deny_read_paths = if persist_aces {
-                    sync_persistent_deny_read_acls(
-                        codex_home,
-                        readonly_sid_str,
-                        additional_deny_read_paths,
-                        readonly_sid.as_ptr(),
-                    )?
-                } else {
-                    apply_deny_read_acls(additional_deny_read_paths, readonly_sid.as_ptr())?
-                };
-                if !persist_aces {
-                    guards.extend(
-                        applied_deny_read_paths
-                            .into_iter()
-                            .map(|path| (path, readonly_sid_str.to_string())),
-                    );
-                }
+                sync_persistent_deny_read_acls(
+                    codex_home,
+                    readonly_sid_str,
+                    additional_deny_read_paths,
+                    readonly_sid.as_ptr(),
+                )?;
             } else {
                 for root_sid in acl_sids.write_root_sids {
-                    let applied_deny_read_paths = if persist_aces {
-                        sync_persistent_deny_read_acls(
-                            codex_home,
-                            &root_sid.sid_str,
-                            additional_deny_read_paths,
-                            root_sid.sid.as_ptr(),
-                        )?
-                    } else {
-                        apply_deny_read_acls(additional_deny_read_paths, root_sid.sid.as_ptr())?
-                    };
-                    if !persist_aces {
-                        guards.extend(
-                            applied_deny_read_paths
-                                .into_iter()
-                                .map(|path| (path, root_sid.sid_str.clone())),
-                        );
-                    }
+                    sync_persistent_deny_read_acls(
+                        codex_home,
+                        &root_sid.sid_str,
+                        additional_deny_read_paths,
+                        root_sid.sid.as_ptr(),
+                    )?;
                 }
             }
         }
@@ -377,8 +340,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             allow_null_device(readonly_sid.as_ptr());
         }
-        if persist_aces
-            && matches!(policy, SandboxPolicy::WorkspaceWrite { .. })
+        if matches!(policy, SandboxPolicy::WorkspaceWrite { .. })
             && let Some(workspace_sid) =
                 matching_root_capability(current_dir, acl_sids.write_root_sids)
         {
@@ -389,7 +351,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
             }
         }
     }
-    Ok(guards)
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

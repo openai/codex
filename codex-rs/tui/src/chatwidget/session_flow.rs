@@ -32,26 +32,12 @@ impl ChatWidget {
         self.forked_from = session.forked_from_id;
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
-        let previous_cwd = self.config.cwd.clone();
-        let previous_workspace_roots = self.config.workspace_roots.clone();
         self.config.cwd = session.cwd.clone();
-        if !self.config.workspace_roots_explicit {
-            let mut workspace_roots = vec![session.cwd.clone()];
-            if previous_workspace_roots
-                .iter()
-                .any(|root| root == &previous_cwd)
-            {
-                for root in previous_workspace_roots {
-                    if root != previous_cwd
-                        && !workspace_roots.iter().any(|existing| existing == &root)
-                    {
-                        workspace_roots.push(root);
-                    }
-                }
-            }
-            self.config.workspace_roots = workspace_roots.clone();
-            self.config.permissions.set_workspace_roots(workspace_roots);
-        }
+        let runtime_workspace_roots = session.runtime_workspace_roots.clone();
+        self.config.workspace_roots = runtime_workspace_roots.clone();
+        self.config
+            .permissions
+            .set_workspace_roots(runtime_workspace_roots);
         self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
             .config
@@ -63,22 +49,20 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(session.approval_policy.to_core());
         }
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            session.permission_profile.clone(),
+            session.active_permission_profile.clone(),
+        );
         let permission_sync = self
             .config
             .permissions
-            .set_permission_profile_from_session_snapshot(
-                session.permission_profile.clone(),
-                session.active_permission_profile.clone(),
-            );
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone());
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
             if let Err(replace_err) = self
                 .config
                 .permissions
-                .replace_permission_profile_from_session_snapshot(
-                    Constrained::allow_only(session.permission_profile.clone()),
-                    session.active_permission_profile.clone(),
-                )
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
             {
                 tracing::error!(
                     %replace_err,
