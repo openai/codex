@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -45,6 +46,9 @@ use wiremock::MockServer;
 
 const CODE_MODE_EXEC_LONG_OUTPUT_COMMAND: &str =
     "printf '0123456789012345678901234567890123456789'";
+const CODE_MODE_EXEC_RAW_OUTPUT_LEN: usize = 50_000;
+const CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS: usize = 20_000;
+const CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT: usize = 50;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
@@ -148,10 +152,20 @@ async fn run_code_mode_turn(
     prompt: &str,
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
+    run_code_mode_turn_with_config(server, prompt, code, |_| {}).await
+}
+
+async fn run_code_mode_turn_with_config(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<(TestCodex, ResponseMock)> {
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            configure(config);
         });
     let test = builder.build(server).await?;
 
@@ -178,18 +192,34 @@ async fn run_code_mode_turn(
     Ok((test, second_mock))
 }
 
-async fn assert_code_mode_exec_output_snapshot(snapshot_name: &str, code: &str) -> Result<()> {
+async fn code_mode_exec_output_text(code: &str) -> Result<String> {
+    code_mode_exec_output_text_with_config(code, |_| {}).await
+}
+
+async fn code_mode_exec_output_text_with_config(
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<String> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) =
-        run_code_mode_turn(&server, "use exec_command from code mode", code).await?;
+        run_code_mode_turn_with_config(&server, "use exec_command from code mode", code, configure)
+            .await?;
 
     let req = second_mock.single_request();
     let items = custom_tool_output_items(&req, "call-1");
     assert_eq!(items.len(), 2);
-    let output = text_item(&items, /*index*/ 1);
+    Ok(text_item(&items, /*index*/ 1).to_string())
+}
+
+async fn assert_code_mode_exec_output_snapshot(snapshot_name: &str, code: &str) -> Result<()> {
+    let output = code_mode_exec_output_text(code).await?;
     insta::assert_snapshot!(snapshot_name, output);
 
     Ok(())
+}
+
+fn code_mode_exec_repeated_output_command(len: usize) -> String {
+    format!("python3 -c \"import sys; sys.stdout.write('x' * {len})\"")
 }
 
 async fn run_code_mode_turn_with_rmcp(
@@ -686,23 +716,45 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_command_without_max_output_tokens_uses_raw_output_snapshot() -> Result<()> {
+async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
     let code = format!(
-        r#"
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS}}}
 const result = await tools.exec_command({{
-  cmd: {CODE_MODE_EXEC_LONG_OUTPUT_COMMAND:?}
+  cmd: {command:?}
 }});
 text(result.output);
 "#
     );
 
-    assert_code_mode_exec_output_snapshot(
-        "code_mode_exec_command_without_max_output_tokens_uses_raw_output",
-        &code,
-    )
+    let output = code_mode_exec_output_text(&code).await?;
+    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    let code = format!(
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS}}}
+const result = await tools.exec_command({{
+  cmd: {command:?}
+}});
+text(result.output);
+"#
+    );
+
+    let output = code_mode_exec_output_text_with_config(&code, |config| {
+        config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
+    })
     .await?;
+    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
 
     Ok(())
 }
