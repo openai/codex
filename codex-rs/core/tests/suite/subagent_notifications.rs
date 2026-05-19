@@ -7,7 +7,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
@@ -31,6 +31,7 @@ use tokio::time::sleep;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
+const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -164,7 +165,12 @@ async fn setup_turn_one_with_custom_spawned_child(
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
         sse(vec![
             ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed("resp-turn1-1"),
         ]),
     )
@@ -320,7 +326,12 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
         sse(vec![
             ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed("resp-turn1-1"),
         ]),
     )
@@ -426,7 +437,12 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
         sse(vec![
             ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed("resp-turn1-1"),
         ]),
     )
@@ -511,7 +527,12 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
         sse(vec![
             ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed("resp-turn1-1"),
         ]),
     )
