@@ -75,14 +75,14 @@ setup_remote_env() {
     remote_exec_server_port="31987"
     remote_exec_server_stdout_path="/tmp/codex-remote-env/exec-server.stdout"
     remote_exec_server_dir="$(dirname "${remote_exec_server_stdout_path}")"
-    docker exec "${container_name}" sh -lc \
-      "mkdir -p ${remote_codex_dir} ${remote_exec_server_dir}"
+    docker exec "${container_name}" mkdir -p "${remote_codex_dir}" "${remote_exec_server_dir}"
     docker cp "${codex_binary_path}" "${container_name}:${remote_codex_path}"
-    docker exec "${container_name}" sh -lc \
-      "chmod +x ${remote_codex_path} && ln -sf ${remote_codex_path} ${remote_codex_linux_sandbox_path}"
+    docker exec "${container_name}" chmod +x "${remote_codex_path}"
+    docker exec "${container_name}" ln -sf "${remote_codex_path}" "${remote_codex_linux_sandbox_path}"
     remote_exec_server_pid="$(
       docker exec "${container_name}" sh -lc \
-        "rm -f ${remote_exec_server_stdout_path}; nohup ${remote_codex_path} exec-server --listen ws://0.0.0.0:${remote_exec_server_port} > ${remote_exec_server_stdout_path} 2>&1 & echo \$!"
+        'rm -f "$1"; nohup "$2" exec-server --listen "ws://0.0.0.0:$3" > "$1" 2>&1 & echo $!' \
+        sh "${remote_exec_server_stdout_path}" "${remote_codex_path}" "${remote_exec_server_port}"
     )"
     wait_for_remote_exec_server_port "${container_name}" "${remote_exec_server_port}" "${remote_exec_server_stdout_path}"
     container_ip="$(
@@ -119,7 +119,7 @@ wait_for_remote_exec_server_port() {
   done
 
   echo "timed out waiting for remote exec-server on ${container_name}:${port}" >&2
-  docker exec "${container_name}" sh -lc "cat ${stdout_path} 2>/dev/null || true" >&2 || true
+  docker exec "${container_name}" sh -lc 'cat "$1" 2>/dev/null || true' sh "${stdout_path}" >&2 || true
   return 1
 }
 
