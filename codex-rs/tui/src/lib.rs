@@ -804,15 +804,46 @@ fn latest_session_cwd_filter<'a>(
 fn app_server_target_for_launch(
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
     default_daemon_socket: Option<AbsolutePathBuf>,
+    can_reuse_implicit_local_daemon: bool,
 ) -> AppServerTarget {
     match explicit_remote_endpoint {
         Some(endpoint) => AppServerTarget::Remote { endpoint },
-        None => default_daemon_socket.map_or(AppServerTarget::Embedded, |socket_path| {
-            AppServerTarget::LocalDaemon {
-                endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
-            }
-        }),
+        None if can_reuse_implicit_local_daemon => {
+            default_daemon_socket.map_or(AppServerTarget::Embedded, |socket_path| {
+                AppServerTarget::LocalDaemon {
+                    endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+                }
+            })
+        }
+        None => AppServerTarget::Embedded,
     }
+}
+
+fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
+    let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
+        && loader_overrides.user_config_profile.is_none()
+        && loader_overrides.managed_config_path.is_none()
+        && loader_overrides.system_config_path.is_none()
+        && loader_overrides.system_requirements_path.is_none()
+        && !loader_overrides.ignore_managed_requirements
+        && !loader_overrides.ignore_user_config
+        && !loader_overrides.ignore_user_and_project_exec_policy_rules
+        && loader_overrides
+            .macos_managed_config_requirements_base64
+            .is_none();
+    #[cfg(target_os = "macos")]
+    let loader_overrides_are_default =
+        loader_overrides_are_default && loader_overrides.managed_preferences_base64.is_none();
+    loader_overrides_are_default
+}
+
+fn can_reuse_implicit_local_daemon(
+    cli_kv_overrides: &[(String, toml::Value)],
+    loader_overrides: &LoaderOverrides,
+    strict_config: bool,
+) -> bool {
+    // A reused daemon cannot adopt this invocation's full launch config state.
+    cli_kv_overrides.is_empty() && loader_overrides_are_default(loader_overrides) && !strict_config
 }
 
 pub async fn run_main(
@@ -866,12 +897,24 @@ pub async fn run_main(
         }
     };
 
-    let default_daemon = if explicit_remote_endpoint.is_none() {
+    let mut launch_loader_overrides = loader_overrides.clone();
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
+        launch_loader_overrides.user_config_path = Some(user_config_path);
+        launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
+    let reuse_implicit_local_daemon =
+        can_reuse_implicit_local_daemon(&cli_kv_overrides, &launch_loader_overrides, strict_config);
+    let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         maybe_probe_default_daemon_socket(&codex_home).await
     } else {
         None
     };
-    let app_server_target = app_server_target_for_launch(explicit_remote_endpoint, default_daemon);
+    let app_server_target = app_server_target_for_launch(
+        explicit_remote_endpoint,
+        default_daemon,
+        reuse_implicit_local_daemon,
+    );
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -2028,6 +2071,7 @@ mod tests {
         let target = app_server_target_for_launch(
             /*explicit_remote_endpoint*/ None,
             Some(socket_path.clone()),
+            /*can_reuse_implicit_local_daemon*/ true,
         );
 
         assert_eq!(
@@ -2049,6 +2093,7 @@ mod tests {
         let target = app_server_target_for_launch(
             Some(explicit_endpoint.clone()),
             Some(AbsolutePathBuf::relative_to_current_dir("default.sock")?),
+            /*can_reuse_implicit_local_daemon*/ false,
         );
 
         assert_eq!(
@@ -2059,6 +2104,49 @@ mod tests {
         );
         assert!(target.uses_remote_workspace());
         assert_eq!(target.thread_params_mode(), ThreadParamsMode::Remote);
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_target_for_launch_skips_local_daemon_when_launch_config_is_not_replayable()
+    -> color_eyre::Result<()> {
+        let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
+        let target = app_server_target_for_launch(
+            /*explicit_remote_endpoint*/ None,
+            Some(socket_path),
+            /*can_reuse_implicit_local_daemon*/ false,
+        );
+
+        assert_eq!(target, AppServerTarget::Embedded);
+        Ok(())
+    }
+
+    #[test]
+    fn can_reuse_implicit_local_daemon_requires_default_launch_config() -> color_eyre::Result<()> {
+        let mut loader_overrides = LoaderOverrides::default();
+        let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
+
+        assert!(can_reuse_implicit_local_daemon(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+        ));
+        assert!(!can_reuse_implicit_local_daemon(
+            &cli_kv_overrides,
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+        ));
+        loader_overrides.ignore_user_config = true;
+        assert!(!can_reuse_implicit_local_daemon(
+            &[],
+            &loader_overrides,
+            /*strict_config*/ false,
+        ));
+        assert!(!can_reuse_implicit_local_daemon(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ true,
+        ));
         Ok(())
     }
 
