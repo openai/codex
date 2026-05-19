@@ -465,6 +465,7 @@ pub(super) async fn handle_thread_listener_command(
             .await;
         }
         ThreadListenerCommand::EmitThreadGoalUpdated { goal } => {
+            let goal_is_active = goal.status == ThreadGoalStatus::Active;
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(
                     ThreadGoalUpdatedNotification {
@@ -474,6 +475,15 @@ pub(super) async fn handle_thread_listener_command(
                     },
                 ))
                 .await;
+            if !goal_is_active {
+                crate::bespoke_event_handling::emit_terminal_plan_cleanup_globally(
+                    conversation_id,
+                    crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(thread_state)
+                        .await,
+                    outgoing,
+                )
+                .await;
+            }
         }
         ThreadListenerCommand::EmitThreadGoalCleared => {
             outgoing
@@ -483,6 +493,13 @@ pub(super) async fn handle_thread_listener_command(
                     },
                 ))
                 .await;
+            crate::bespoke_event_handling::emit_terminal_plan_cleanup_globally(
+                conversation_id,
+                crate::bespoke_event_handling::take_pending_terminal_plan_cleanup(thread_state)
+                    .await,
+                outgoing,
+            )
+            .await;
         }
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;

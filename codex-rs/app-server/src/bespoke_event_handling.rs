@@ -1,6 +1,7 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ClientRequestResult;
+use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
@@ -1271,15 +1272,24 @@ async fn handle_turn_plan_update(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let pending_terminal_plan_cleanup = plan_update_event
-        .plan
-        .iter()
-        .any(|item| matches!(item.status, StepStatus::InProgress))
-        .then(|| PendingTerminalPlanCleanup {
-            turn_id: event_turn_id.to_string(),
-            plan_update: plan_update_event.clone(),
-        });
-    thread_state.lock().await.pending_terminal_plan_cleanup = pending_terminal_plan_cleanup;
+    {
+        let mut state = thread_state.lock().await;
+        state
+            .pending_terminal_plan_cleanups
+            .retain(|cleanup| cleanup.turn_id != event_turn_id);
+        if plan_update_event
+            .plan
+            .iter()
+            .any(|item| matches!(item.status, StepStatus::InProgress))
+        {
+            state
+                .pending_terminal_plan_cleanups
+                .push(PendingTerminalPlanCleanup {
+                    turn_id: event_turn_id.to_string(),
+                    plan_update: plan_update_event.clone(),
+                });
+        }
+    }
     emit_turn_plan_updated(conversation_id, event_turn_id, plan_update_event, outgoing).await;
 }
 
@@ -1317,29 +1327,56 @@ async fn emit_turn_completed_with_status(
 
 async fn emit_terminal_plan_cleanup(
     conversation_id: ThreadId,
-    pending_terminal_plan_cleanup: Option<PendingTerminalPlanCleanup>,
+    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    let Some(PendingTerminalPlanCleanup {
-        turn_id,
-        plan_update: mut latest_plan_update,
-    }) = pending_terminal_plan_cleanup
-    else {
-        return;
-    };
-    let mut downgraded = false;
-    for item in &mut latest_plan_update.plan {
-        if matches!(item.status, StepStatus::InProgress) {
-            item.status = StepStatus::Pending;
-            downgraded = true;
-        }
+    for (turn_id, latest_plan_update) in
+        terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
+    {
+        emit_turn_plan_updated(conversation_id, &turn_id, latest_plan_update, outgoing).await;
     }
-    if !downgraded {
-        return;
-    }
+}
 
-    latest_plan_update.explanation = None;
-    emit_turn_plan_updated(conversation_id, &turn_id, latest_plan_update, outgoing).await;
+pub(crate) async fn emit_terminal_plan_cleanup_globally(
+    conversation_id: ThreadId,
+    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
+    outgoing: &Arc<OutgoingMessageSender>,
+) {
+    for (turn_id, latest_plan_update) in
+        terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
+    {
+        let notification =
+            turn_plan_updated_notification(conversation_id, &turn_id, latest_plan_update);
+        outgoing
+            .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+            .await;
+    }
+}
+
+fn terminal_plan_cleanup_updates(
+    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
+) -> Vec<(String, UpdatePlanArgs)> {
+    pending_terminal_plan_cleanups
+        .into_iter()
+        .filter_map(
+            |PendingTerminalPlanCleanup {
+                 turn_id,
+                 plan_update: mut latest_plan_update,
+             }| {
+                let mut downgraded = false;
+                for item in &mut latest_plan_update.plan {
+                    if matches!(item.status, StepStatus::InProgress) {
+                        item.status = StepStatus::Pending;
+                        downgraded = true;
+                    }
+                }
+                downgraded.then(|| {
+                    latest_plan_update.explanation = None;
+                    (turn_id, latest_plan_update)
+                })
+            },
+        )
+        .collect()
 }
 
 async fn emit_turn_plan_updated(
@@ -1348,8 +1385,20 @@ async fn emit_turn_plan_updated(
     plan_update_event: UpdatePlanArgs,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let notification =
+        turn_plan_updated_notification(conversation_id, event_turn_id, plan_update_event);
+    outgoing
+        .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+        .await;
+}
+
+fn turn_plan_updated_notification(
+    conversation_id: ThreadId,
+    event_turn_id: &str,
+    plan_update_event: UpdatePlanArgs,
+) -> TurnPlanUpdatedNotification {
     // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates.
-    let notification = TurnPlanUpdatedNotification {
+    TurnPlanUpdatedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: event_turn_id.to_string(),
         explanation: plan_update_event.explanation,
@@ -1358,28 +1407,21 @@ async fn emit_turn_plan_updated(
             .into_iter()
             .map(TurnPlanStep::from)
             .collect(),
-    };
-    outgoing
-        .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
-        .await;
+    }
 }
 
 async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadState>>) -> bool {
-    thread_state
+    !thread_state
         .lock()
         .await
-        .pending_terminal_plan_cleanup
-        .is_some()
+        .pending_terminal_plan_cleanups
+        .is_empty()
 }
 
-async fn take_pending_terminal_plan_cleanup(
+pub(crate) async fn take_pending_terminal_plan_cleanup(
     thread_state: &Arc<Mutex<ThreadState>>,
-) -> Option<PendingTerminalPlanCleanup> {
-    thread_state
-        .lock()
-        .await
-        .pending_terminal_plan_cleanup
-        .take()
+) -> Vec<PendingTerminalPlanCleanup> {
+    std::mem::take(&mut thread_state.lock().await.pending_terminal_plan_cleanups)
 }
 
 async fn should_preserve_terminal_plan_progress(
@@ -1569,7 +1611,7 @@ async fn handle_turn_complete(
     emit_terminal_plan_cleanup(
         conversation_id,
         if preserve_terminal_plan_progress {
-            None
+            Vec::new()
         } else {
             take_pending_terminal_plan_cleanup(thread_state).await
         },
@@ -1609,7 +1651,7 @@ async fn handle_turn_interrupted(
     emit_terminal_plan_cleanup(
         conversation_id,
         if preserve_terminal_plan_progress {
-            None
+            Vec::new()
         } else {
             take_pending_terminal_plan_cleanup(thread_state).await
         },
@@ -3628,8 +3670,8 @@ mod tests {
             thread_state
                 .lock()
                 .await
-                .pending_terminal_plan_cleanup
-                .is_none(),
+                .pending_terminal_plan_cleanups
+                .is_empty(),
             "plans without in-progress steps do not need terminal cleanup"
         );
         assert!(rx.try_recv().is_err(), "no extra messages expected");
@@ -3642,8 +3684,8 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete_with_plan".to_string();
         let thread_state = new_thread_state();
-        thread_state.lock().await.pending_terminal_plan_cleanup =
-            Some(PendingTerminalPlanCleanup {
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
                 turn_id: event_turn_id.clone(),
                 plan_update: UpdatePlanArgs {
                     explanation: Some("still working".to_string()),
@@ -3662,7 +3704,7 @@ mod tests {
                         },
                     ],
                 },
-            });
+            }];
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             tx,
@@ -3731,8 +3773,8 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event_turn_id = "interrupt_with_plan".to_string();
         let thread_state = new_thread_state();
-        thread_state.lock().await.pending_terminal_plan_cleanup =
-            Some(PendingTerminalPlanCleanup {
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
                 turn_id: event_turn_id.clone(),
                 plan_update: UpdatePlanArgs {
                     explanation: Some("still working".to_string()),
@@ -3741,7 +3783,7 @@ mod tests {
                         status: StepStatus::InProgress,
                     }],
                 },
-            });
+            }];
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             tx,
@@ -3799,8 +3841,8 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete_active_goal".to_string();
         let thread_state = new_thread_state();
-        thread_state.lock().await.pending_terminal_plan_cleanup =
-            Some(PendingTerminalPlanCleanup {
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
                 turn_id: event_turn_id.clone(),
                 plan_update: UpdatePlanArgs {
                     explanation: Some("still working".to_string()),
@@ -3809,7 +3851,7 @@ mod tests {
                         status: StepStatus::InProgress,
                     }],
                 },
-            });
+            }];
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             tx,
@@ -3843,8 +3885,9 @@ mod tests {
             thread_state
                 .lock()
                 .await
-                .pending_terminal_plan_cleanup
-                .is_some(),
+                .pending_terminal_plan_cleanups
+                .len()
+                == 1,
             "active goals retain pending cleanup until the goal settles"
         );
         assert!(rx.try_recv().is_err(), "no extra messages expected");
@@ -3870,8 +3913,8 @@ mod tests {
         } = thread_manager.start_thread(config).await?;
         let turn_id = "preserved-plan-turn".to_string();
         let thread_state = new_thread_state();
-        thread_state.lock().await.pending_terminal_plan_cleanup =
-            Some(PendingTerminalPlanCleanup {
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
                 turn_id: turn_id.clone(),
                 plan_update: UpdatePlanArgs {
                     explanation: Some("still working".to_string()),
@@ -3880,7 +3923,7 @@ mod tests {
                         status: StepStatus::InProgress,
                     }],
                 },
-            });
+            }];
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             tx,
@@ -3951,8 +3994,8 @@ mod tests {
             thread_state
                 .lock()
                 .await
-                .pending_terminal_plan_cleanup
-                .is_none(),
+                .pending_terminal_plan_cleanups
+                .is_empty(),
             "terminal goal updates consume preserved cleanup state"
         );
         assert!(rx.try_recv().is_err(), "no extra messages expected");

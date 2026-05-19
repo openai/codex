@@ -78,7 +78,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
-    pub(crate) pending_terminal_plan_cleanup: Option<PendingTerminalPlanCleanup>,
+    pub(crate) pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
     pub(crate) last_terminal_turn_id: Option<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
