@@ -13,6 +13,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -199,6 +200,7 @@ pub struct ExecServerClient {
 pub(crate) struct RemoteExecServerClient {
     transport_params: ExecServerTransportParams,
     state: Arc<Mutex<RemoteExecServerClientState>>,
+    connect_lock: Arc<Semaphore>,
 }
 
 enum RemoteExecServerClientState {
@@ -212,62 +214,94 @@ impl RemoteExecServerClient {
         Self {
             transport_params,
             state: Arc::new(Mutex::new(RemoteExecServerClientState::Uninitialized)),
+            connect_lock: Arc::new(Semaphore::new(1)),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
-        let mut state = self.state.lock().await;
+        if let Some(client) = self.cached_connected_client().await? {
+            return Ok(client);
+        }
+
+        let _connect_guard = self.connect_lock.acquire().await.map_err(|_| {
+            ExecServerError::Protocol("exec-server connect lock closed".to_string())
+        })?;
+        if let Some(client) = self.cached_connected_client().await? {
+            return Ok(client);
+        }
+
+        let reconnect_session_id = {
+            let state = self.state.lock().await;
+            match &*state {
+                RemoteExecServerClientState::Connected(client) => {
+                    Some(client.session_id().ok_or_else(|| {
+                        ExecServerError::Protocol(
+                            "disconnected exec-server websocket client has no session id"
+                                .to_string(),
+                        )
+                    })?)
+                }
+                RemoteExecServerClientState::Uninitialized => None,
+                RemoteExecServerClientState::TerminalResumeError { .. } => {
+                    unreachable!("cached terminal errors return above")
+                }
+            }
+        };
+        let client = match reconnect_session_id {
+            Some(session_id) => self.reconnect_websocket(session_id).await,
+            None => {
+                ExecServerClient::connect_for_transport(
+                    self.transport_params.clone(),
+                    /*resume_session_id*/ None,
+                )
+                .await
+            }
+        };
+
+        match client {
+            Ok(client) => {
+                let mut state = self.state.lock().await;
+                *state = RemoteExecServerClientState::Connected(client.clone());
+                Ok(client)
+            }
+            Err(err) => {
+                if let Some((code, message)) = terminal_resume_error(&err) {
+                    debug!("caching terminal exec-server websocket resume failure");
+                    let mut state = self.state.lock().await;
+                    *state = RemoteExecServerClientState::TerminalResumeError {
+                        code,
+                        message: message.clone(),
+                    };
+                    return Err(ExecServerError::Server { code, message });
+                }
+                Err(err)
+            }
+        }
+    }
+
+    async fn cached_connected_client(&self) -> Result<Option<ExecServerClient>, ExecServerError> {
+        let state = self.state.lock().await;
         match &*state {
             RemoteExecServerClientState::TerminalResumeError { code, message } => {
-                return Err(ExecServerError::Server {
+                Err(ExecServerError::Server {
                     code: *code,
                     message: message.clone(),
-                });
+                })
             }
             RemoteExecServerClientState::Connected(client) if !client.is_disconnected() => {
-                return Ok(client.clone());
+                Ok(Some(client.clone()))
             }
-            RemoteExecServerClientState::Connected(client) => {
+            RemoteExecServerClientState::Connected(client)
                 if !matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
-                ) {
-                    return Ok(client.clone());
-                }
-
-                let session_id = client.session_id().ok_or_else(|| {
-                    ExecServerError::Protocol(
-                        "disconnected exec-server websocket client has no session id".to_string(),
-                    )
-                })?;
-                match self.reconnect_websocket(session_id).await {
-                    Ok(client) => {
-                        *state = RemoteExecServerClientState::Connected(client.clone());
-                        return Ok(client);
-                    }
-                    Err(err) => {
-                        if let Some((code, message)) = terminal_resume_error(&err) {
-                            debug!("caching terminal exec-server websocket resume failure");
-                            *state = RemoteExecServerClientState::TerminalResumeError {
-                                code,
-                                message: message.clone(),
-                            };
-                            return Err(ExecServerError::Server { code, message });
-                        }
-                        return Err(err);
-                    }
-                }
+                ) =>
+            {
+                Ok(Some(client.clone()))
             }
-            RemoteExecServerClientState::Uninitialized => {}
+            RemoteExecServerClientState::Connected(_)
+            | RemoteExecServerClientState::Uninitialized => Ok(None),
         }
-
-        let client = ExecServerClient::connect_for_transport(
-            self.transport_params.clone(),
-            /*resume_session_id*/ None,
-        )
-        .await?;
-        *state = RemoteExecServerClientState::Connected(client.clone());
-        Ok(client)
     }
 
     pub(crate) async fn request<T, F, Fut>(&self, mut request: F) -> Result<T, ExecServerError>
@@ -315,7 +349,11 @@ impl RemoteExecServerClient {
             }
         }
 
-        Err(last_error.expect("reconnect attempts should record a retryable error"))
+        Err(last_error.ok_or_else(|| {
+            ExecServerError::Protocol(
+                "exec-server websocket reconnect exhausted without retryable error".to_string(),
+            )
+        })?)
     }
 }
 
