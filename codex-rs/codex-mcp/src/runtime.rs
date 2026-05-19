@@ -68,10 +68,7 @@ impl McpRuntimeEnvironment {
         // the ambient HTTP client with no local environment configured.
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
-                if !self
-                    .environment
-                    .as_ref()
-                    .is_some_and(|environment| !environment.is_remote())
+                if self.environment.as_ref().is_none_or(Environment::is_remote)
                     && matches!(
                         config.transport,
                         codex_config::McpServerTransportConfig::Stdio { .. }
@@ -158,7 +155,10 @@ mod tests {
             McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
 
         assert_eq!(
-            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(None)),
+            runtime_environment.startup_unavailable_reason(
+                "stdio",
+                &stdio_server(/*experimental_environment*/ None)
+            ),
             Some("local stdio MCP server `stdio` requires a local environment".to_string())
         );
     }
@@ -169,7 +169,10 @@ mod tests {
             McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
 
         assert_eq!(
-            runtime_environment.startup_unavailable_reason("http", &http_server(None)),
+            runtime_environment.startup_unavailable_reason(
+                "http",
+                &http_server(/*experimental_environment*/ None)
+            ),
             None
         );
     }
@@ -180,7 +183,10 @@ mod tests {
             McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp"));
 
         assert_eq!(
-            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(Some("remote"))),
+            runtime_environment.startup_unavailable_reason(
+                "stdio",
+                &stdio_server(/*experimental_environment*/ Some("remote")),
+            ),
             Some("remote MCP server `stdio` requires a remote environment".to_string())
         );
     }
@@ -195,11 +201,17 @@ mod tests {
             McpRuntimeEnvironment::new(Some(environment), PathBuf::from("/tmp"));
 
         assert_eq!(
-            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(Some("remote"))),
+            runtime_environment.startup_unavailable_reason(
+                "stdio",
+                &stdio_server(/*experimental_environment*/ Some("remote")),
+            ),
             None
         );
         assert_eq!(
-            runtime_environment.startup_unavailable_reason("http", &http_server(Some("remote"))),
+            runtime_environment.startup_unavailable_reason(
+                "http",
+                &http_server(/*experimental_environment*/ Some("remote")),
+            ),
             None
         );
     }
