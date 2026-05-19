@@ -112,7 +112,7 @@ async fn submission_includes_configured_active_permission_profile() {
                     path: FileSystemPath::GlobPattern {
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ],
             glob_scan_max_depth: None,

@@ -120,11 +120,17 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         max_concurrent_threads_per_session: None,
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("spawn_agent should be a function tool");
+    let ToolSpec::Namespace(namespace) = tool else {
+        panic!("spawn_agent v1 should be a namespace tool");
+    };
+    assert_eq!(namespace.name, MULTI_AGENT_V1_NAMESPACE);
+    let Some(ResponsesApiNamespaceTool::Function(ResponsesApiTool { parameters, .. })) =
+        namespace.tools.first()
+    else {
+        panic!("spawn_agent should be a namespace function tool");
     };
     assert_eq!(
-        parameters.schema_type,
+        parameters.schema_type.clone(),
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
     );
     let properties = parameters

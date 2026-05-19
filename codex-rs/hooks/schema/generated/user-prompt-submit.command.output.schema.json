@@ -17,6 +17,7 @@
         "PostCompact",
         "SessionStart",
         "UserPromptSubmit",
+        "SubagentStart",
         "Stop"
       ],
       "type": "string"

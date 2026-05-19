@@ -441,7 +441,7 @@ mod tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ],
                 glob_scan_max_depth: None,

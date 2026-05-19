@@ -20,6 +20,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
@@ -28,22 +29,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::sleep;
 
+const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
 fn spawn_agent_description(body: &Value) -> Option<String> {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some(SPAWN_AGENT_TOOL_NAME) {
-                    tool.get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-        })
+    namespace_child_tool(body, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn test_model_info(

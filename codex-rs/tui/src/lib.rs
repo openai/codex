@@ -852,9 +852,9 @@ pub async fn run_main(
     )?;
     let environment_manager =
         if should_load_configured_environments(&loader_overrides, &app_server_target) {
-            EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+            EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
         } else {
-            EnvironmentManager::from_env(local_runtime_paths).await
+            EnvironmentManager::from_env(Some(local_runtime_paths)).await
         }
         .map(Arc::new)
         .map_err(std::io::Error::other)?;
@@ -2291,10 +2291,10 @@ mod tests {
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
-            ExecServerRuntimePaths::new(
+            Some(ExecServerRuntimePaths::new(
                 std::env::current_exe().expect("current exe"),
                 /*codex_linux_sandbox_exe*/ None,
-            )?,
+            )?),
         )
         .await;
 

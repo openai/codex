@@ -143,7 +143,7 @@ fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
         },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     }]);
 
     assert_eq!(

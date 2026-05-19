@@ -445,9 +445,9 @@ pub async fn run_main_with_transport_options(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager = if loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(local_runtime_paths).await
+        EnvironmentManager::from_env(Some(local_runtime_paths)).await
     } else {
-        EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
     }
     .map(Arc::new)
     .map_err(std::io::Error::other)?;

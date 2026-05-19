@@ -178,7 +178,7 @@ v2_enum_from_core!(
     pub enum FileSystemAccessMode from CoreFileSystemAccessMode {
         Read,
         Write,
-        None
+        Deny
     }
 );
 

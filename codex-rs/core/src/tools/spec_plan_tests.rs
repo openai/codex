@@ -27,6 +27,7 @@ use serde_json::json;
 
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 
@@ -602,14 +603,27 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
     })
     .await;
-    v1.assert_visible_contains(&[
+    v1.assert_visible_contains(&[MULTI_AGENT_V1_NAMESPACE]);
+    v1.assert_visible_lacks(&[
         "spawn_agent",
         "send_input",
         "resume_agent",
         "wait_agent",
         "close_agent",
+        "send_message",
+        "followup_task",
+        "list_agents",
     ]);
-    v1.assert_visible_lacks(&["send_message", "followup_task", "list_agents"]);
+    assert_eq!(
+        v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
+        &[
+            "close_agent".to_string(),
+            "resume_agent".to_string(),
+            "send_input".to_string(),
+            "spawn_agent".to_string(),
+            "wait_agent".to_string(),
+        ]
+    );
 
     let v2 = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -678,8 +692,19 @@ async fn v1_multi_agent_tools_defer_when_tool_search_available() {
         "wait_agent",
         "close_agent",
     ] {
-        plan.assert_registered_contains(&[tool_name]);
-        assert_eq!(plan.exposure(tool_name), ToolExposure::Deferred);
+        let namespaced_tool_name = ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, tool_name);
+        let namespaced_tool_name = namespaced_tool_name.to_string();
+        assert!(
+            plan.registered_names.contains(&namespaced_tool_name),
+            "expected namespaced runtime for {tool_name}"
+        );
+        assert!(
+            !plan
+                .registered_names
+                .contains(&ToolName::plain(tool_name).to_string()),
+            "expected no plain runtime for deferred {tool_name}"
+        );
+        assert_eq!(plan.exposure(&namespaced_tool_name), ToolExposure::Deferred);
     }
     let ToolSpec::ToolSearch { description, .. } = plan.visible_spec("tool_search") else {
         panic!("expected visible tool_search spec");

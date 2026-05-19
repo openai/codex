@@ -18,13 +18,12 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
-use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
-use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::hook_runtime::run_stop_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -35,9 +34,9 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
-use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -71,10 +70,6 @@ use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
-use codex_hooks::HookEvent;
-use codex_hooks::HookEventAfterAgent;
-use codex_hooks::HookPayload;
-use codex_hooks::HookResult;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -82,7 +77,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -91,7 +85,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -143,10 +136,6 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() && !sess.input_queue.has_pending_input(&sess.active_turn).await {
-        return None;
-    }
-
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -183,17 +172,10 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
-    } else {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
-            &sess,
-            &turn_context,
-            UserMessageItem::new(&input).message(),
-        )
-        .await;
+    if !input.is_empty() {
+        let initial_turn_input = TurnInput::UserInput(input.clone());
+        let user_prompt_submit_outcome =
+            inspect_pending_input(&sess, &turn_context, &initial_turn_input).await;
         if user_prompt_submit_outcome.should_stop {
             record_additional_contexts(
                 &sess,
@@ -203,23 +185,22 @@ pub(crate) async fn run_turn(
             .await;
             return None;
         }
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
-        user_prompt_submit_outcome.additional_contexts
-    };
-    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
-        .await;
-    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    if !input.is_empty() {
-        // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review) cannot suppress future
-        // model/realtime injections.
-        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
-            realtime_active: Some(turn_context.realtime_active),
-        }))
+        record_pending_input(
+            &sess,
+            &turn_context,
+            initial_turn_input,
+            user_prompt_submit_outcome.additional_contexts,
+        )
         .await;
     }
+
+    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
+        .await;
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: turn_context.model_info.slug.clone(),
+        realtime_active: Some(turn_context.realtime_active),
+    }))
+    .await;
     for response_item in injection_items {
         sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -256,10 +237,6 @@ pub(crate) async fn run_turn(
     let mut can_drain_pending_input = input.is_empty();
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
-        }
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -270,45 +247,26 @@ pub(crate) async fn run_turn(
         };
 
         let mut blocked_pending_input = false;
-        let mut blocked_pending_input_contexts = Vec::new();
-        let mut requeued_pending_input = false;
-        let mut accepted_pending_input = Vec::new();
-        if !pending_input.is_empty() {
-            let mut pending_input_iter = pending_input.into_iter();
-            while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push(*pending_input);
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
-                        if !remaining_pending_input.is_empty() {
-                            let _ = sess
-                                .input_queue
-                                .prepend_pending_input(&sess.active_turn, remaining_pending_input)
-                                .await;
-                            requeued_pending_input = true;
-                        }
-                        blocked_pending_input_contexts = additional_contexts;
-                        blocked_pending_input = true;
-                        break;
-                    }
-                }
+        let mut accepted_pending_input = false;
+        for pending_input_item in pending_input {
+            let hook_outcome =
+                inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
+            if hook_outcome.should_stop {
+                blocked_pending_input = true;
+                record_additional_contexts(&sess, &turn_context, hook_outcome.additional_contexts)
+                    .await;
+            } else {
+                accepted_pending_input = true;
+                record_pending_input(
+                    &sess,
+                    &turn_context,
+                    pending_input_item,
+                    hook_outcome.additional_contexts,
+                )
+                .await;
             }
         }
-
-        let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for pending_input in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input).await;
-        }
-        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
-
-        if blocked_pending_input && !has_accepted_pending_input {
-            if requeued_pending_input {
-                continue;
-            }
+        if blocked_pending_input && !accepted_pending_input {
             break;
         }
 
@@ -319,14 +277,6 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let sampling_request_input_messages = sampling_request_input
-            .iter()
-            .filter_map(|item| match parse_turn_item(item) {
-                Some(TurnItem::UserMessage(user_message)) => Some(user_message),
-                _ => None,
-            })
-            .map(|user_message| user_message.message())
-            .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
@@ -335,7 +285,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
-            sampling_request_input,
+            sampling_request_input.clone(),
             cancellation_token.child_token(),
         )
         .await
@@ -410,39 +360,13 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    let stop_hook_permission_mode = match turn_context.approval_policy.value() {
-                        AskForApproval::Never => "bypassPermissions",
-                        AskForApproval::UnlessTrusted
-                        | AskForApproval::OnFailure
-                        | AskForApproval::OnRequest
-                        | AskForApproval::Granular(_) => "default",
-                    }
-                    .to_string();
-                    let stop_request = codex_hooks::StopRequest {
-                        session_id: sess.session_id().into(),
-                        turn_id: turn_context.sub_id.clone(),
-                        #[allow(deprecated)]
-                        cwd: turn_context.cwd.clone(),
-                        transcript_path: sess.hook_transcript_path().await,
-                        model: turn_context.model_info.slug.clone(),
-                        permission_mode: stop_hook_permission_mode,
+                    let stop_outcome = run_stop_hooks(
+                        &sess,
+                        &turn_context,
                         stop_hook_active,
-                        last_assistant_message: last_agent_message.clone(),
-                    };
-                    let hooks = sess.hooks();
-                    for run in hooks.preview_stop(&stop_request) {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
-                                turn_id: Some(turn_context.sub_id.clone()),
-                                run,
-                            }),
-                        )
-                        .await;
-                    }
-                    let stop_outcome = hooks.run_stop(stop_request).await;
-                    emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
-                        .await;
+                        last_agent_message.clone(),
+                    )
+                    .await;
                     if stop_outcome.should_block {
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
@@ -467,63 +391,14 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
-                    let hook_outcomes = sess
-                        .hooks()
-                        .dispatch(HookPayload {
-                            session_id: sess.session_id().into(),
-                            #[allow(deprecated)]
-                            cwd: turn_context.cwd.clone(),
-                            client: turn_context.app_server_client_name.clone(),
-                            triggered_at: chrono::Utc::now(),
-                            hook_event: HookEvent::AfterAgent {
-                                event: HookEventAfterAgent {
-                                    thread_id: sess.conversation_id,
-                                    turn_id: turn_context.sub_id.clone(),
-                                    input_messages: sampling_request_input_messages,
-                                    last_assistant_message: last_agent_message.clone(),
-                                },
-                            },
-                        })
-                        .await;
-
-                    let mut abort_message = None;
-                    for hook_outcome in hook_outcomes {
-                        let hook_name = hook_outcome.hook_name;
-                        match hook_outcome.result {
-                            HookResult::Success => {}
-                            HookResult::FailedContinue(error) => {
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; continuing"
-                                );
-                            }
-                            HookResult::FailedAbort(error) => {
-                                let message = format!(
-                                    "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
-                                );
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; aborting operation"
-                                );
-                                if abort_message.is_none() {
-                                    abort_message = Some(message);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(message) = abort_message {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Error(ErrorEvent {
-                                message,
-                                codex_error_info: None,
-                            }),
-                        )
-                        .await;
+                    if run_legacy_after_agent_hook(
+                        &sess,
+                        &turn_context,
+                        &sampling_request_input,
+                        last_agent_message.clone(),
+                    )
+                    .await
+                    {
                         return None;
                     }
                     break;

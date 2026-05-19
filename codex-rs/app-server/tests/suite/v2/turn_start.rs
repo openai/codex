@@ -201,6 +201,107 @@ async fn received_response_input_images(server: &wiremock::MockServer) -> Result
 }
 
 #[tokio::test]
+async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: Vec::new(),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    assert!(!turn.id.is_empty());
+
+    let started_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    let started: TurnStartedNotification =
+        serde_json::from_value(started_notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread_id, thread.id);
+    assert_eq!(started.turn.id, turn.id);
+    assert_eq!(started.turn.status, TurnStatus::InProgress);
+
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let response_requests = requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+        .collect::<Vec<_>>();
+    assert_eq!(response_requests.len(), 1);
+    let body = response_requests[0]
+        .body_json::<Value>()
+        .context("request body should be JSON")?;
+    let input = body
+        .get("input")
+        .and_then(Value::as_array)
+        .context("request body should include input array")?;
+    assert!(
+        !input.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty)
+        }),
+        "empty turn/start should not synthesize an empty user message: {input:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
@@ -2809,7 +2910,12 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
         responses::sse(vec![
             responses::ev_response_created("resp-turn1-1"),
-            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
             responses::ev_completed("resp-turn1-1"),
         ]),
     )
@@ -3006,7 +3112,12 @@ async fn turn_start_emits_spawn_agent_item_with_effective_role_model_metadata_v2
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
         responses::sse(vec![
             responses::ev_response_created("resp-turn1-1"),
-            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
             responses::ev_completed("resp-turn1-1"),
         ]),
     )

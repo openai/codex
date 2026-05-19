@@ -7,6 +7,7 @@
 use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -1347,7 +1348,14 @@ impl Session {
             return;
         }
         self.input_queue
-            .extend_pending_input_for_turn_state(turn_state.as_ref(), candidate.items)
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                candidate
+                    .items
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
             .await;
 
         let turn_context = self
@@ -1626,7 +1634,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
 fn goal_context_input_item(prompt: String) -> ResponseInputItem {
     let context = GoalContext { prompt };
     ResponseInputItem::Message {
-        role: <GoalContext as ContextualUserFragment>::ROLE.to_string(),
+        role: GoalContext::role().to_string(),
         content: vec![ContentItem::InputText {
             text: context.render(),
         }],
