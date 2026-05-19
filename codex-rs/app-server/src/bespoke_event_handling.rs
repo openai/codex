@@ -183,12 +183,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
-            let preserve_terminal_plan_progress =
-                terminal_plan_cleanup_may_be_needed(&thread_state).await
-                    && should_preserve_terminal_plan_progress(
-                        conversation.as_ref(),
-                        conversation_id,
-                    )
+            let has_pending_terminal_plan_cleanup = !thread_state
+                .lock()
+                .await
+                .pending_terminal_plan_cleanups
+                .is_empty();
+            let preserve_terminal_plan_progress = has_pending_terminal_plan_cleanup
+                && should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
                     .await;
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -1379,14 +1380,6 @@ async fn emit_turn_plan_updated(
     outgoing
         .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
         .await;
-}
-
-async fn terminal_plan_cleanup_may_be_needed(thread_state: &Arc<Mutex<ThreadState>>) -> bool {
-    !thread_state
-        .lock()
-        .await
-        .pending_terminal_plan_cleanups
-        .is_empty()
 }
 
 async fn take_flushable_pending_terminal_plan_cleanup(
