@@ -410,7 +410,7 @@ pub(crate) struct SessionSettingsUpdate {
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
-    pub(crate) originator: Option<Originator>,
+    pub(crate) originator: Originator,
 }
 
 impl Session {

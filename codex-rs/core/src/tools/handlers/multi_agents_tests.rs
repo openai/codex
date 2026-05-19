@@ -19,6 +19,7 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
@@ -2583,9 +2584,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
-            /*app_server_client_name*/ None,
-            /*app_server_client_version*/ None,
-            /*originator*/ None,
+            Originator::process_default(),
         )
         .await
         .expect("start thread");

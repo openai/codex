@@ -233,14 +233,14 @@ impl ConnectionSessionState {
         self.initialized
             .get()
             .and_then(|session| session.originator.app_server_client())
-            .map(|client| client.name())
+            .map(codex_login::default_client::AppServerClient::name)
     }
 
     pub(crate) fn client_version(&self) -> Option<&str> {
         self.initialized
             .get()
             .and_then(|session| session.originator.app_server_client())
-            .map(|client| client.version())
+            .map(codex_login::default_client::AppServerClient::version)
     }
 
     pub(crate) fn originator(&self) -> Option<Originator> {
@@ -810,7 +810,12 @@ impl MessageProcessor {
         );
 
         let serialization_scope = codex_request.serialization_scope();
-        let originator = session.originator();
+        let Some(originator) = session.originator() else {
+            return Err(crate::error_code::internal_error(
+                "initialized session is missing originator",
+            ));
+        };
+        let request_context = request_context.with_originator(originator);
         let error_request_id = connection_request_id.clone();
         let rpc_gate = Arc::clone(&session.rpc_gate);
         let processor = Arc::clone(self);
@@ -824,7 +829,6 @@ impl MessageProcessor {
                         connection_request_id,
                         codex_request,
                         request_context,
-                        originator,
                     )
                     .await;
                 if let Err(error) = result {
@@ -852,16 +856,12 @@ impl MessageProcessor {
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         request_context: RequestContext,
-        originator: Option<Originator>,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: codex_request.id().clone(),
         };
-        let app_server_client = originator.as_ref().and_then(Originator::app_server_client);
-        let app_server_client_name = app_server_client.map(|client| client.name().to_string());
-        let client_version = app_server_client.map(|client| client.version().to_string());
 
         let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match codex_request {
             ClientRequest::Initialize { .. } => {
@@ -884,7 +884,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigImport { params, .. } => self
                 .external_agent_config_processor
-                .import(request_id.clone(), params)
+                .import(request_id.clone(), params, &request_context)
                 .await
                 .map(|()| None),
             ClientRequest::ConfigValueWrite { params, .. } => {
@@ -895,11 +895,7 @@ impl MessageProcessor {
             }
             ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
                 self.config_processor
-                    .experimental_feature_enablement_set(
-                        request_id.clone(),
-                        params,
-                        originator.as_ref(),
-                    )
+                    .experimental_feature_enablement_set(&request_context, params)
                     .await
             }
             ClientRequest::RemoteControlEnable { .. } => self
@@ -974,14 +970,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor
-                    .thread_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        originator.clone(),
-                        request_context,
-                    )
+                    .thread_start(request_id.clone(), params, request_context)
                     .await
             }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
@@ -991,24 +980,12 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadResume { params, .. } => {
                 self.thread_processor
-                    .thread_resume(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        originator.clone(),
-                    )
+                    .thread_resume(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
-                    .thread_fork(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        originator.clone(),
-                    )
+                    .thread_fork(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
@@ -1116,52 +1093,52 @@ impl MessageProcessor {
             }
             ClientRequest::PluginList { params, .. } => {
                 self.plugin_processor
-                    .plugin_list(params, originator.as_ref())
+                    .plugin_list(params, &request_context)
                     .await
             }
             ClientRequest::PluginInstalled { params, .. } => {
                 self.plugin_processor
-                    .plugin_installed(params, originator.as_ref())
+                    .plugin_installed(params, &request_context)
                     .await
             }
             ClientRequest::PluginRead { params, .. } => {
                 self.plugin_processor
-                    .plugin_read(params, originator.as_ref())
+                    .plugin_read(params, &request_context)
                     .await
             }
             ClientRequest::PluginSkillRead { params, .. } => {
                 self.plugin_processor
-                    .plugin_skill_read(params, originator.as_ref())
+                    .plugin_skill_read(params, &request_context)
                     .await
             }
             ClientRequest::PluginShareSave { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_save(params, originator.as_ref())
+                    .plugin_share_save(params, &request_context)
                     .await
             }
             ClientRequest::PluginShareUpdateTargets { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_update_targets(params, originator.as_ref())
+                    .plugin_share_update_targets(params, &request_context)
                     .await
             }
             ClientRequest::PluginShareList { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_list(params, originator.as_ref())
+                    .plugin_share_list(params, &request_context)
                     .await
             }
             ClientRequest::PluginShareCheckout { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_checkout(params, originator.as_ref())
+                    .plugin_share_checkout(params, &request_context)
                     .await
             }
             ClientRequest::PluginShareDelete { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_delete(params, originator.as_ref())
+                    .plugin_share_delete(params, &request_context)
                     .await
             }
             ClientRequest::AppsList { params, .. } => {
                 self.apps_processor
-                    .apps_list(&request_id, params, originator.as_ref())
+                    .apps_list(&request_context, params)
                     .await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
@@ -1169,17 +1146,17 @@ impl MessageProcessor {
             }
             ClientRequest::PluginInstall { params, .. } => {
                 self.plugin_processor
-                    .plugin_install(params, originator.as_ref())
+                    .plugin_install(params, &request_context)
                     .await
             }
             ClientRequest::PluginUninstall { params, .. } => {
                 self.plugin_processor
-                    .plugin_uninstall(params, originator.as_ref())
+                    .plugin_uninstall(params, &request_context)
                     .await
             }
             ClientRequest::ModelList { params, .. } => {
                 self.catalog_processor
-                    .model_list(params, originator.clone())
+                    .model_list(params, &request_context)
                     .await
             }
             ClientRequest::ExperimentalFeatureList { params, .. } => {
@@ -1197,13 +1174,7 @@ impl MessageProcessor {
             }
             ClientRequest::TurnStart { params, .. } => {
                 self.turn_processor
-                    .turn_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        originator.clone(),
-                    )
+                    .turn_start(request_id.clone(), params, &request_context)
                     .await
             }
             ClientRequest::ThreadInjectItems { params, .. } => {
@@ -1242,7 +1213,7 @@ impl MessageProcessor {
             }
             ClientRequest::ReviewStart { params, .. } => {
                 self.turn_processor
-                    .review_start(&request_id, params, originator.clone())
+                    .review_start(&request_id, params, &request_context)
                     .await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {

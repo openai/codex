@@ -13,6 +13,7 @@ use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
+use codex_login::default_client::Originator;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -303,7 +304,7 @@ impl AgentControl {
                     crate::session::session::AppServerClientMetadata {
                         client_name: None,
                         client_version: None,
-                        originator: None,
+                        originator: Originator::process_default(),
                     }
                 }
             };

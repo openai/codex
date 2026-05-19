@@ -31,7 +31,7 @@ async fn send_codex_exec_originator() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn supports_originator_override() -> anyhow::Result<()> {
+async fn app_server_client_info_ignores_originator_override() -> anyhow::Result<()> {
     let test = test_codex_exec();
 
     let server = responses::start_mock_server().await;
@@ -40,8 +40,7 @@ async fn supports_originator_override() -> anyhow::Result<()> {
         responses::ev_assistant_message("response_1", "Hello, world!"),
         responses::ev_completed("response_1"),
     ]);
-    responses::mount_sse_once_match(&server, header("Originator", "codex_exec_override"), body)
-        .await;
+    responses::mount_sse_once_match(&server, header("Originator", "codex_exec"), body).await;
 
     test.cmd_with_server(&server)
         .env("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex_exec_override")

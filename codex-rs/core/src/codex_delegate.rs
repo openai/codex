@@ -75,7 +75,6 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let client_metadata = parent_session.app_server_client_metadata().await;
-    let originator = client_metadata.originator.clone();
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: parent_session.installation_id.clone(),
@@ -93,9 +92,7 @@ pub(crate) async fn run_codex_thread_interactive(
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         metrics_service_name: None,
-        app_server_client_name: client_metadata.client_name.clone(),
-        app_server_client_version: client_metadata.client_version.clone(),
-        originator,
+        originator: client_metadata.originator.clone(),
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),

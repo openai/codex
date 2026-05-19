@@ -18,6 +18,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_login::default_client::Originator;
 use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
@@ -697,9 +698,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         metrics_service_name: None,
-        app_server_client_name: None,
-        app_server_client_version: None,
-        originator: None,
+        originator: Originator::process_default(),
         inherited_shell_snapshot: None,
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),

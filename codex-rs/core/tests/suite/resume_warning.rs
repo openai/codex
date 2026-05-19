@@ -2,6 +2,7 @@
 
 use codex_core::NewThread;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -106,9 +107,7 @@ async fn emits_warning_when_resumed_model_differs() {
             auth_manager,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
-            /*app_server_client_name*/ None,
-            /*app_server_client_version*/ None,
-            /*originator*/ None,
+            Originator::process_default(),
         )
         .await
         .expect("resume conversation");

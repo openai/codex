@@ -6,6 +6,7 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_login::default_client::Originator;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -246,18 +247,11 @@ impl CodexThread {
 
     pub async fn set_app_server_client_info(
         &self,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        originator: Option<codex_login::default_client::Originator>,
+        originator: Originator,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.codex
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                originator,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(originator, mcp_elicitations_auto_deny)
             .await
     }
 

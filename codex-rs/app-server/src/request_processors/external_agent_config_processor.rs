@@ -11,6 +11,7 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestContext;
 use codex_app_server_protocol::CommandMigration;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
@@ -34,6 +35,7 @@ use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_external_agent_sessions::PendingSessionImport;
 use codex_external_agent_sessions::prepare_validated_session_imports;
 use codex_external_agent_sessions::record_imported_session;
+use codex_login::default_client::Originator;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InitialHistory;
 use codex_thread_store::ThreadMetadataPatch;
@@ -174,6 +176,7 @@ impl ExternalAgentConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
+        request_context: &RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
@@ -212,6 +215,7 @@ impl ExternalAgentConfigRequestProcessor {
         let plugin_processor = self.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let thread_manager = Arc::clone(&self.thread_manager);
+        let originator = request_context.originator().clone();
         tokio::spawn(async move {
             let session_imports = async move {
                 if !pending_session_imports.is_empty() {
@@ -223,7 +227,10 @@ impl ExternalAgentConfigRequestProcessor {
                         .prepare_validated_session_imports(pending_session_imports);
                     for pending_session_import in pending_session_imports {
                         match session_processor
-                            .import_external_agent_session(pending_session_import.session)
+                            .import_external_agent_session(
+                                pending_session_import.session,
+                                originator.clone(),
+                            )
                             .await
                         {
                             Ok(imported_thread_id) => {
@@ -277,6 +284,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_session(
         &self,
         session: ImportedExternalAgentSession,
+        originator: Originator,
     ) -> Result<ThreadId, JSONRPCErrorError> {
         let ImportedExternalAgentSession {
             cwd,
@@ -313,9 +321,7 @@ impl ExternalAgentConfigRequestProcessor {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
-                app_server_client_name: None,
-                app_server_client_version: None,
-                originator: None,
+                originator,
             })
             .await
             .map_err(|err| internal_error(format!("failed to import session: {err}")))?;

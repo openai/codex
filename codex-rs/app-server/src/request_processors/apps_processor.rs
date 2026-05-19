@@ -28,20 +28,18 @@ impl AppsRequestProcessor {
 
     pub(crate) async fn apps_list(
         &self,
-        request_id: &ConnectionRequestId,
+        request_context: &RequestContext,
         params: AppsListParams,
-        originator: Option<&Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params, originator)
+        self.apps_list_inner(request_context, params)
             .await
             .map(|response| response.map(Into::into))
     }
 
     async fn apps_list_inner(
         &self,
-        request_id: &ConnectionRequestId,
+        request_context: &RequestContext,
         params: AppsListParams,
-        originator: Option<&Originator>,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
@@ -82,12 +80,10 @@ impl AppsRequestProcessor {
             }));
         }
 
-        let request = request_id.clone();
+        let request = request_context.request_id().clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
-        let originator = originator
-            .cloned()
-            .unwrap_or_else(Originator::process_default);
+        let originator = request_context.originator().clone();
         tokio::spawn(async move {
             Self::apps_list_task(
                 outgoing,

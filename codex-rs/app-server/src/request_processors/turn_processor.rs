@@ -66,19 +66,11 @@ impl TurnRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: TurnStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        originator: Option<Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.turn_start_inner(
-            request_id,
-            params,
-            app_server_client_name,
-            app_server_client_version,
-            originator,
-        )
-        .await
-        .map(|response| Some(response.into()))
+        self.turn_start_inner(request_id, params, request_context.originator().clone())
+            .await
+            .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn thread_inject_items(
@@ -165,8 +157,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
-        originator: Option<Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let originator = request_context.originator().clone();
         self.review_start_inner(request_id, params, originator)
             .await
             .map(|()| None)
@@ -333,9 +326,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: TurnStartParams,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        originator: Option<Originator>,
+        originator: Originator,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.track_error_response(
@@ -351,16 +342,11 @@ impl TurnRequestProcessor {
                 .inspect_err(|error| {
                     self.track_error_response(&request_id, error, /*error_type*/ None);
                 })?;
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-            originator,
-        )
-        .await
-        .inspect_err(|error| {
-            self.track_error_response(&request_id, error, /*error_type*/ None);
-        })?;
+        Self::set_app_server_client_info(thread.as_ref(), originator)
+            .await
+            .inspect_err(|error| {
+                self.track_error_response(&request_id, error, /*error_type*/ None);
+            })?;
 
         let collaboration_mode = params
             .collaboration_mode
@@ -600,21 +586,15 @@ impl TurnRequestProcessor {
 
     async fn set_app_server_client_info(
         thread: &CodexThread,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        originator: Option<Originator>,
+        originator: Originator,
     ) -> Result<(), JSONRPCErrorError> {
+        let app_server_client = originator.app_server_client();
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
-            app_server_client_name.as_deref(),
-            app_server_client_version.as_deref(),
+            app_server_client.map(AppServerClient::name),
+            app_server_client.map(AppServerClient::version),
         );
         thread
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                originator,
-                mcp_elicitations_auto_deny,
-            )
+            .set_app_server_client_info(originator, mcp_elicitations_auto_deny)
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
@@ -929,7 +909,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
-        originator: Option<Originator>,
+        originator: Originator,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -968,8 +948,6 @@ impl TurnRequestProcessor {
                 /*thread_source*/ None,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
-                /*app_server_client_name*/ None,
-                /*app_server_client_version*/ None,
                 originator,
             )
             .await
@@ -1042,7 +1020,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
-        originator: Option<Originator>,
+        originator: Originator,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,

@@ -140,11 +140,15 @@ impl CatalogRequestProcessor {
     pub(crate) async fn model_list(
         &self,
         params: ModelListParams,
-        originator: Option<Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Self::list_models(self.thread_manager.clone(), params, originator)
-            .await
-            .map(|response| Some(response.into()))
+        Self::list_models(
+            self.thread_manager.clone(),
+            params,
+            Some(request_context.originator().clone()),
+        )
+        .await
+        .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn experimental_feature_list(

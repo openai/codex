@@ -4,8 +4,8 @@ use crate::config_manager::ConfigManager;
 use crate::config_manager_service::ConfigManagerError;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
-use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestContext;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -146,20 +146,17 @@ impl ConfigRequestProcessor {
 
     pub(crate) async fn experimental_feature_enablement_set(
         &self,
-        request_id: ConnectionRequestId,
+        request_context: &RequestContext,
         params: ExperimentalFeatureEnablementSetParams,
-        originator: Option<&Originator>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let originator = originator
-            .cloned()
-            .unwrap_or_else(Originator::process_default);
+        let originator = request_context.originator().clone();
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
         let response = self
             .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
             .await?;
         self.outgoing
             .send_response_as(
-                request_id,
+                request_context.request_id().clone(),
                 ClientResponsePayload::ExperimentalFeatureEnablementSet(response),
             )
             .await;

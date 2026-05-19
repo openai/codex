@@ -404,9 +404,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
-    pub(crate) app_server_client_name: Option<String>,
-    pub(crate) app_server_client_version: Option<String>,
-    pub(crate) originator: Option<Originator>,
+    pub(crate) originator: Originator,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
@@ -471,8 +469,6 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            app_server_client_name,
-            app_server_client_version,
             originator,
             inherited_shell_snapshot,
             user_shell_override,
@@ -542,7 +538,7 @@ impl Codex {
             )
         {
             let _ = models_manager
-                .list_models(refresh_strategy, originator.clone())
+                .list_models(refresh_strategy, Some(originator.clone()))
                 .await;
         }
         let model = models_manager
@@ -615,6 +611,10 @@ impl Codex {
             account_plan_type,
             config.features.enabled(Feature::FastMode),
         );
+        let app_server_client = originator.app_server_client();
+        let app_server_client_name = app_server_client.map(|client| client.name().to_string());
+        let app_server_client_version =
+            app_server_client.map(|client| client.version().to_string());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -638,7 +638,7 @@ impl Codex {
             metrics_service_name,
             app_server_client_name,
             app_server_client_version,
-            app_server_originator: originator,
+            app_server_originator: Some(originator),
             session_source,
             thread_source,
             dynamic_tools,
@@ -775,16 +775,18 @@ impl Codex {
 
     pub(crate) async fn set_app_server_client_info(
         &self,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        originator: Option<Originator>,
+        originator: Originator,
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
+        let app_server_client = originator.app_server_client();
+        let app_server_client_name = app_server_client.map(|client| client.name().to_string());
+        let app_server_client_version =
+            app_server_client.map(|client| client.version().to_string());
         self.session
             .update_settings(SessionSettingsUpdate {
-                app_server_client_name: app_server_client_name.clone(),
-                app_server_client_version: app_server_client_version.clone(),
-                app_server_originator: originator.clone(),
+                app_server_client_name,
+                app_server_client_version,
+                app_server_originator: Some(originator),
                 ..Default::default()
             })
             .await?;
@@ -896,7 +898,11 @@ impl Session {
                 .session_configuration
                 .app_server_client_version
                 .clone(),
-            originator: state.session_configuration.app_server_originator.clone(),
+            originator: state
+                .session_configuration
+                .app_server_originator
+                .clone()
+                .unwrap_or_else(Originator::process_default),
         }
     }
 

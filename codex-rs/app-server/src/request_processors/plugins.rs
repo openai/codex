@@ -13,7 +13,6 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_rmcp_client::perform_oauth_login_silent;
-use std::borrow::Cow;
 
 #[derive(Clone)]
 pub(crate) struct PluginRequestProcessor {
@@ -49,13 +48,6 @@ fn plugin_skills_to_info(
             enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
-}
-
-fn originator_or_process(originator: Option<&Originator>) -> Cow<'_, Originator> {
-    match originator {
-        Some(originator) => Cow::Borrowed(originator),
-        None => Cow::Owned(Originator::process_default()),
-    }
 }
 
 fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
@@ -304,9 +296,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_list(
         &self,
         params: PluginListParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_list_response(params, originator)
+        self.plugin_list_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -314,9 +306,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_installed(
         &self,
         params: PluginInstalledParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_installed_response(params, originator)
+        self.plugin_installed_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -324,9 +316,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_read(
         &self,
         params: PluginReadParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_read_response(params, originator)
+        self.plugin_read_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -334,9 +326,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_skill_read(
         &self,
         params: PluginSkillReadParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_skill_read_response(params, originator)
+        self.plugin_skill_read_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -344,9 +336,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_save(
         &self,
         params: PluginShareSaveParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_save_response(params, originator)
+        self.plugin_share_save_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -354,9 +346,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_update_targets(
         &self,
         params: PluginShareUpdateTargetsParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_update_targets_response(params, originator)
+        self.plugin_share_update_targets_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -364,9 +356,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_list(
         &self,
         params: PluginShareListParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_list_response(params, originator)
+        self.plugin_share_list_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -374,9 +366,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_checkout(
         &self,
         params: PluginShareCheckoutParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_checkout_response(params, originator)
+        self.plugin_share_checkout_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -384,9 +376,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_delete(
         &self,
         params: PluginShareDeleteParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_delete_response(params, originator)
+        self.plugin_share_delete_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -394,9 +386,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_install(
         &self,
         params: PluginInstallParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_install_response(params, originator)
+        self.plugin_install_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -404,9 +396,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_uninstall(
         &self,
         params: PluginUninstallParams,
-        originator: Option<&Originator>,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_uninstall_response(params, originator)
+        self.plugin_uninstall_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -483,7 +475,7 @@ impl PluginRequestProcessor {
     async fn plugin_list_response(
         &self,
         params: PluginListParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginListResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
@@ -597,14 +589,13 @@ impl PluginRequestProcessor {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
         if !remote_sources.is_empty() {
-            let originator = originator_or_process(originator);
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
             match codex_core_plugins::remote::fetch_remote_marketplaces(
                 &remote_plugin_service_config,
                 auth.as_ref(),
-                originator.as_ref(),
+                originator,
                 &remote_sources,
             )
             .await
@@ -683,7 +674,7 @@ impl PluginRequestProcessor {
     async fn plugin_installed_response(
         &self,
         params: PluginInstalledParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginInstalledResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginInstalledParams {
@@ -834,19 +825,18 @@ impl PluginRequestProcessor {
         plugins_input: &codex_core_plugins::PluginsConfigInput,
         visible_scopes: &[RemotePluginScope],
         auth: Option<&CodexAuth>,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
             plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(visible_scopes)
         {
             Ok(remote_marketplaces)
         } else {
-            let originator = originator_or_process(originator);
             plugins_manager
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     plugins_input,
                     auth,
-                    originator.as_ref(),
+                    originator,
                     visible_scopes,
                     Some(self.effective_plugins_changed_callback()),
                 )
@@ -875,7 +865,7 @@ impl PluginRequestProcessor {
     async fn plugin_read_response(
         &self,
         params: PluginReadParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginReadResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
@@ -921,11 +911,10 @@ impl PluginRequestProcessor {
                         let remote_plugin_service_config = RemotePluginServiceConfig {
                             chatgpt_base_url: config.chatgpt_base_url.clone(),
                         };
-                        let request_originator = originator_or_process(originator);
                         match codex_core_plugins::remote::fetch_remote_plugin_share_context(
                             &remote_plugin_service_config,
                             auth.as_ref(),
-                            request_originator.as_ref(),
+                            originator,
                             &context.remote_plugin_id,
                         )
                         .await
@@ -1031,11 +1020,10 @@ impl PluginRequestProcessor {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
                 validate_remote_plugin_id(&plugin_name)?;
-                let request_originator = originator_or_process(originator);
                 let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
                     auth.as_ref(),
-                    request_originator.as_ref(),
+                    originator,
                     &remote_marketplace_name,
                     &plugin_name,
                 )
@@ -1054,7 +1042,7 @@ impl PluginRequestProcessor {
                     &config,
                     &plugin_apps,
                     &environment_manager,
-                    Some(request_originator.as_ref()),
+                    originator,
                 )
                 .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
@@ -1067,7 +1055,7 @@ impl PluginRequestProcessor {
     async fn plugin_skill_read_response(
         &self,
         params: PluginSkillReadParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
         let PluginSkillReadParams {
             remote_marketplace_name,
@@ -1092,11 +1080,10 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let remote_skill_detail = codex_core_plugins::remote::fetch_remote_plugin_skill_detail(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             &remote_marketplace_name,
             &remote_plugin_id,
             &skill_name,
@@ -1114,7 +1101,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_save_response(
         &self,
         params: PluginShareSaveParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1148,7 +1135,6 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let access_policy = codex_core_plugins::remote::RemotePluginShareAccessPolicy {
             discoverability: discoverability.map(remote_plugin_share_discoverability),
             share_targets: share_targets.map(remote_plugin_share_targets),
@@ -1156,7 +1142,7 @@ impl PluginRequestProcessor {
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &plugin_path,
             remote_plugin_id.as_deref(),
@@ -1175,7 +1161,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_update_targets_response(
         &self,
         params: PluginShareUpdateTargetsParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginShareUpdateTargetsResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1194,11 +1180,10 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let result = codex_core_plugins::remote::update_remote_plugin_share_targets(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             &remote_plugin_id,
             remote_plugin_share_targets(share_targets),
             remote_plugin_share_update_discoverability(discoverability),
@@ -1221,17 +1206,16 @@ impl PluginRequestProcessor {
     async fn plugin_share_list_response(
         &self,
         _params: PluginShareListParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let data = codex_core_plugins::remote::list_remote_plugin_shares(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             config.codex_home.as_path(),
         )
         .await
@@ -1255,7 +1239,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_checkout_response(
         &self,
         params: PluginShareCheckoutParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginShareCheckoutResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1269,11 +1253,10 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let result = codex_core_plugins::remote::checkout_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &remote_plugin_id,
         )
@@ -1294,7 +1277,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_delete_response(
         &self,
         params: PluginShareDeleteParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let PluginShareDeleteParams { remote_plugin_id } = params;
@@ -1305,11 +1288,10 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         codex_core_plugins::remote::delete_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &remote_plugin_id,
         )
@@ -1333,7 +1315,7 @@ impl PluginRequestProcessor {
     async fn plugin_install_response(
         &self,
         params: PluginInstallParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let PluginInstallParams {
             marketplace_path,
@@ -1420,7 +1402,7 @@ impl PluginRequestProcessor {
         &self,
         remote_marketplace_name: String,
         remote_plugin_id: String,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1434,12 +1416,11 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let remote_detail =
             codex_core_plugins::remote::fetch_remote_plugin_detail_with_download_urls(
                 &remote_plugin_service_config,
                 auth.as_ref(),
-                originator.as_ref(),
+                originator,
                 &remote_marketplace_name,
                 &remote_plugin_id,
             )
@@ -1491,7 +1472,7 @@ impl PluginRequestProcessor {
         codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             &actual_remote_marketplace_name,
             &remote_plugin_id,
         )
@@ -1525,7 +1506,7 @@ impl PluginRequestProcessor {
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
-                Some(originator.as_ref()),
+                originator,
             )
             .await;
 
@@ -1541,20 +1522,17 @@ impl PluginRequestProcessor {
         is_chatgpt_auth: bool,
         plugin_id: &str,
         plugin_apps: &[codex_plugin::AppConnectorId],
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Vec<AppSummary> {
         if plugin_apps.is_empty() || !config.features.apps_enabled_for_auth(is_chatgpt_auth) {
             return Vec::new();
         }
 
         let environment_manager = self.thread_manager.environment_manager();
-        let originator = originator_or_process(originator);
         let originator_value = originator.value().to_string();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options_and_originator(
-                config,
-                /*force_refetch*/ true,
-                originator.as_ref(),
+                config, /*force_refetch*/ true, originator,
             ),
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
@@ -1571,7 +1549,7 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors_with_originator(config, originator.as_ref())
+                connectors::list_cached_all_connectors_with_originator(config, originator)
                     .await
                     .unwrap_or_default()
             }
@@ -1698,7 +1676,7 @@ impl PluginRequestProcessor {
     async fn plugin_uninstall_response(
         &self,
         params: PluginUninstallParams,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let PluginUninstallParams { plugin_id } = params;
         if codex_plugin::PluginId::parse(&plugin_id).is_err()
@@ -1792,7 +1770,7 @@ impl PluginRequestProcessor {
     async fn remote_plugin_uninstall_response(
         &self,
         plugin_id: String,
-        originator: Option<&Originator>,
+        originator: &Originator,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1804,11 +1782,10 @@ impl PluginRequestProcessor {
         let remote_plugin_service_config = RemotePluginServiceConfig {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
         };
-        let originator = originator_or_process(originator);
         let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
-            originator.as_ref(),
+            originator,
             config.codex_home.to_path_buf(),
             &plugin_id,
         )
@@ -1840,25 +1817,22 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: &EnvironmentManager,
-    originator: Option<&Originator>,
+    originator: &Originator,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
     }
 
-    let originator = originator_or_process(originator);
     let originator_value = originator.value().to_string();
     let connectors = match connectors::list_all_connectors_with_options_and_originator(
-        config,
-        /*force_refetch*/ false,
-        originator.as_ref(),
+        config, /*force_refetch*/ false, originator,
     )
     .await
     {
         Ok(connectors) => connectors,
         Err(err) => {
             warn!("failed to load app metadata for plugin/read: {err:#}");
-            connectors::list_cached_all_connectors_with_originator(config, originator.as_ref())
+            connectors::list_cached_all_connectors_with_originator(config, originator)
                 .await
                 .unwrap_or_default()
         }

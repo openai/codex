@@ -145,9 +145,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             metrics_service_name: None,
             parent_trace: None,
             environments,
-            app_server_client_name: None,
-            app_server_client_version: None,
-            originator: Some(originator),
+            originator,
         })
         .await
         .context("start Codex thread")?;

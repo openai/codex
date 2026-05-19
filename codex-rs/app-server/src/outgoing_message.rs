@@ -14,6 +14,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ServerResponse;
+use codex_login::default_client::Originator;
 use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
@@ -52,6 +53,7 @@ pub(crate) struct RequestContext {
     request_id: ConnectionRequestId,
     span: Span,
     parent_trace: Option<W3cTraceContext>,
+    originator: Originator,
 }
 
 impl RequestContext {
@@ -64,7 +66,21 @@ impl RequestContext {
             request_id,
             span,
             parent_trace,
+            originator: Originator::process_default(),
         }
+    }
+
+    pub(crate) fn with_originator(mut self, originator: Originator) -> Self {
+        self.originator = originator;
+        self
+    }
+
+    pub(crate) fn request_id(&self) -> &ConnectionRequestId {
+        &self.request_id
+    }
+
+    pub(crate) fn originator(&self) -> &Originator {
+        &self.originator
     }
 
     pub(crate) fn request_trace(&self) -> Option<W3cTraceContext> {

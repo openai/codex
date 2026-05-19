@@ -254,9 +254,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
-                app_server_client_name: None,
-                app_server_client_version: None,
-                originator: Some(self.originator.clone()),
+                originator: self.originator.clone(),
             })
             .await?;
 
