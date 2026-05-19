@@ -16,6 +16,13 @@ Budget:
 - Token budget: {{ token_budget }}
 - Tokens remaining: {{ remaining_tokens }}
 
+Watchdog review:
+The following assessment was produced by a separate model observing the main agent's transcript. Treat it as advisory evidence, not as permission to skip your own audit.
+
+<watchdog_review>
+{{ watchdog_report }}
+</watchdog_review>
+
 Work from evidence:
 Use the current worktree and external state as authoritative. Previous conversation context can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.
 

@@ -8145,8 +8145,16 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
                 ev_completed("resp-2"),
             ]),
             sse(vec![
+                ev_assistant_message("watchdog-1", goal_watchdog_continue_json()),
+                ev_completed("watchdog-resp-1"),
+            ]),
+            sse(vec![
                 ev_assistant_message("msg-2", "I am still working on the benchmark note."),
                 ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("watchdog-2", goal_watchdog_continue_json()),
+                ev_completed("watchdog-resp-2"),
             ]),
             sse(vec![
                 ev_response_created("resp-4"),
@@ -8210,6 +8218,23 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             .to_string()
             .contains("Continue working toward the active thread goal.")
     );
+    assert!(
+        goal_context_message
+            .to_string()
+            .contains("Goal watchdog model assessment:")
+    );
+    assert!(
+        goal_context_message
+            .to_string()
+            .contains("The transcript does not yet prove the goal is complete.")
+    );
+    assert!(
+        responses
+            .requests()
+            .iter()
+            .any(|request| request.body_contains_text("You are a goal watchdog model monitoring")),
+        "expected a model-backed watchdog request before continuation"
+    );
 
     Ok(())
 }
@@ -8243,6 +8268,10 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             sse(vec![
                 ev_assistant_message("msg-1", "Draft ready."),
                 ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("watchdog-1", goal_watchdog_continue_json()),
+                ev_completed("watchdog-resp-1"),
             ]),
             sse(vec![
                 ev_response_created("resp-3"),
@@ -8288,7 +8317,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
         _ => None,
     })
     .await;
-    assert_eq!(3, responses.requests().len());
+    assert_eq!(4, responses.requests().len());
     assert!(
         timeout(Duration::from_millis(200), test.codex.next_event())
             .await
@@ -8296,7 +8325,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
         "waiting for request_user_input should keep the turn open without emitting more events"
     );
     assert_eq!(
-        3,
+        4,
         responses.requests().len(),
         "waiting for request_user_input should not start another continuation request"
     );
@@ -8329,9 +8358,13 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
     })
     .await??;
 
-    assert_eq!(5, responses.requests().len());
+    assert_eq!(6, responses.requests().len());
 
     Ok(())
+}
+
+fn goal_watchdog_continue_json() -> &'static str {
+    r#"{"verdict":"continue","rationale":"The transcript does not yet prove the goal is complete.","next_action":"Continue the main goal turn.","completion_evidence_missing":["completed main-agent work"]}"#
 }
 
 async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
