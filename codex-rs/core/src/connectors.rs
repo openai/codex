@@ -272,11 +272,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         PermissionProfile::default(),
         McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
-            if environment_manager.has_local_environment() {
-                codex_mcp::LocalStdioAvailability::Enabled
-            } else {
-                codex_mcp::LocalStdioAvailability::Disabled
-            },
             config.cwd.to_path_buf(),
         ),
         config.codex_home.to_path_buf(),

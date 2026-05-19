@@ -10,7 +10,6 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
-use crate::runtime::LocalStdioAvailability;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
@@ -916,11 +915,7 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
         String::new(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(
-            /*environment*/ None,
-            LocalStdioAvailability::Disabled,
-            PathBuf::from("/tmp"),
-        ),
+        McpRuntimeEnvironment::new(/*environment*/ None, PathBuf::from("/tmp")),
         codex_home.path().to_path_buf(),
         CodexAppsToolsCacheKey {
             account_id: None,

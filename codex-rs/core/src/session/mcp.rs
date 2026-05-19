@@ -289,23 +289,15 @@ impl Session {
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let local_stdio_availability = if self.services.environment_manager.has_local_environment()
-        {
-            codex_mcp::LocalStdioAvailability::Enabled
-        } else {
-            codex_mcp::LocalStdioAvailability::Disabled
-        };
         let mcp_runtime_environment = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeEnvironment::new(
                 Some(Arc::clone(&turn_environment.environment)),
-                local_stdio_availability,
                 turn_environment.cwd.to_path_buf(),
             ),
             None => McpRuntimeEnvironment::new(
                 self.services
                     .environment_manager
                     .default_or_local_environment(),
-                local_stdio_availability,
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),
