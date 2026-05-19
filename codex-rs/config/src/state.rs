@@ -304,8 +304,8 @@ impl ConfigLayerStack {
     /// Returns all user config layers in the requested precedence order.
     ///
     /// With profile-v2 enabled, `LowestPrecedenceFirst` returns the base user
-    /// config, sibling user override, then profile overlay, while
-    /// `HighestPrecedenceFirst` returns that order in reverse.
+    /// config, then profile overlay, while `HighestPrecedenceFirst` returns
+    /// that order in reverse.
     pub fn get_user_layers(
         &self,
         ordering: ConfigLayerStackOrdering,
@@ -319,8 +319,8 @@ impl ConfigLayerStack {
 
     /// Returns the merged config from enabled user layers only.
     ///
-    /// When profile config is active, this includes the base user config, any
-    /// sibling user override, then the profile override config.
+    /// When profile config is active, this includes the base user config, then
+    /// the profile override config.
     pub fn effective_user_config(&self) -> Option<TomlValue> {
         let user_layers = self.get_user_layers(
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
