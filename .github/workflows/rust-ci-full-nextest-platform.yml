@@ -275,10 +275,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Configure Dev Drive (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: ../.github/scripts/setup-dev-drive.ps1
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
