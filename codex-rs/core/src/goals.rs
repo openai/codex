@@ -1596,7 +1596,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
 fn goal_context_input_item(prompt: String) -> ResponseInputItem {
     let context = GoalContext { prompt };
     ResponseInputItem::Message {
-        role: <GoalContext as ContextualUserFragment>::ROLE.to_string(),
+        role: GoalContext::role().to_string(),
         content: vec![ContentItem::InputText {
             text: context.render(),
         }],
