@@ -30,8 +30,8 @@ use serde::de::DeserializeOwned;
 use sha2::Digest as _;
 use sha2::Sha512;
 
-const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
-const AGENT_IDENTITY_JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_IDENTITY_JWKS_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_IDENTITY_JWT_AUDIENCE: &str = "codex-app-server";
 const AGENT_IDENTITY_JWT_ISSUER: &str = "https://chatgpt.com/codex-backend/agent-identity";
 

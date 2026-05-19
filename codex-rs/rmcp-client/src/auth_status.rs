@@ -55,7 +55,7 @@ pub async fn determine_streamable_http_auth_status(
             debug!(
                 "failed to detect OAuth support for MCP server `{server_name}` at {url}: {error:?}"
             );
-            Ok(McpAuthStatus::Unsupported)
+            Err(error)
         }
     }
 }

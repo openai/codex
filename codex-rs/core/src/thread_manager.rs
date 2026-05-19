@@ -74,6 +74,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tracing::info;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -436,10 +437,19 @@ impl ThreadManager {
     }
 
     pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
-        self.state
+        let list_models_started_at = std::time::Instant::now();
+        let models = self
+            .state
             .models_manager
             .list_models(refresh_strategy)
-            .await
+            .await;
+        tracing::info!(
+            refresh_strategy = %refresh_strategy,
+            model_count = models.len(),
+            total_ms = %list_models_started_at.elapsed().as_millis(),
+            "thread manager list_models timing"
+        );
+        models
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
@@ -1166,6 +1176,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let spawn_thread_started_at = std::time::Instant::now();
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
@@ -1193,7 +1204,9 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        let pre_spawn_setup_duration = spawn_thread_started_at.elapsed();
         let tracked_session_source = session_source.clone();
+        let codex_spawn_started_at = std::time::Instant::now();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1207,7 +1220,7 @@ impl ThreadManagerState {
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
-            session_source,
+            session_source: session_source.clone(),
             thread_source,
             agent_control,
             dynamic_tools,
@@ -1224,9 +1237,24 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
         })
         .await?;
+        let codex_spawn_duration = codex_spawn_started_at.elapsed();
+        let session_configured_wait_started_at = std::time::Instant::now();
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
+        let session_configured_wait_duration = session_configured_wait_started_at.elapsed();
+        let spawn_to_session_configured_duration = codex_spawn_started_at.elapsed();
+        info!(
+            thread_id = %new_thread.thread_id,
+            session_source = %session_source,
+            is_resumed_thread,
+            pre_spawn_setup_ms = %pre_spawn_setup_duration.as_millis(),
+            codex_spawn_ms = %codex_spawn_duration.as_millis(),
+            wait_for_session_configured_ms = %session_configured_wait_duration.as_millis(),
+            spawn_to_session_configured_ms = %spawn_to_session_configured_duration.as_millis(),
+            total_ms = %spawn_thread_started_at.elapsed().as_millis(),
+            "thread startup timing"
+        );
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
             if let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await {

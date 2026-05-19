@@ -25,9 +25,9 @@ const OPENAI_PLUGINS_REPO: &str = "plugins";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
 const CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION: &str = "export-backup";
-const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
-const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
+const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(5);
+const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 

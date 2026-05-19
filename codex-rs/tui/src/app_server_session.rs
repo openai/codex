@@ -120,6 +120,9 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
+use tokio::fs;
+use tokio::io::AsyncReadExt;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -205,27 +208,65 @@ impl AppServerSession {
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
+        let bootstrap_started_at = Instant::now();
+        let account_read_started_at = Instant::now();
         let account = self.read_account().await?;
+        let account_read_ms = account_read_started_at.elapsed().as_millis();
         let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
+        let model_list_rpc_started_at = Instant::now();
+        let model_list_request = ClientRequest::ModelList {
+            request_id: model_request_id,
+            params: ModelListParams {
+                cursor: None,
+                limit: None,
+                include_hidden: Some(true),
+            },
+        };
+        let model_list_raw = self
             .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
+            .request(model_list_request)
             .await
             .map_err(|err| {
-                bootstrap_request_error("model/list failed during TUI bootstrap", err)
+                bootstrap_request_error(
+                    "model/list failed during TUI bootstrap",
+                    TypedRequestError::Transport {
+                        method: "model/list".to_string(),
+                        source: err,
+                    },
+                )
             })?;
+        let model_list_rpc_ms = model_list_rpc_started_at.elapsed().as_millis();
+        let model_list_result_started_at = Instant::now();
+        let model_list_value = model_list_raw.map_err(|source| {
+            bootstrap_request_error(
+                "model/list failed during TUI bootstrap",
+                TypedRequestError::Server {
+                    method: "model/list".to_string(),
+                    source,
+                },
+            )
+        })?;
+        let model_list_result_ms = model_list_result_started_at.elapsed().as_millis();
+        let model_list_decode_started_at = Instant::now();
+        let models: ModelListResponse =
+            serde_json::from_value(model_list_value).map_err(|source| {
+                bootstrap_request_error(
+                    "model/list failed during TUI bootstrap",
+                    TypedRequestError::Deserialize {
+                        method: "model/list".to_string(),
+                        source,
+                    },
+                )
+            })?;
+        let model_list_decode_ms = model_list_decode_started_at.elapsed().as_millis();
+        let model_preset_map_started_at = Instant::now();
         let available_models = models
             .data
             .into_iter()
             .map(model_preset_from_api_model)
             .collect::<Vec<_>>();
+        let model_preset_map_ms = model_preset_map_started_at.elapsed().as_millis();
+        let default_model_select_started_at = Instant::now();
         let default_model = config
             .model
             .clone()
@@ -237,7 +278,9 @@ impl AppServerSession {
             })
             .or_else(|| available_models.first().map(|model| model.model.clone()))
             .wrap_err("model/list returned no models for TUI bootstrap")?;
+        let default_model_select_ms = default_model_select_started_at.elapsed().as_millis();
 
+        let bootstrap_derive_started_at = Instant::now();
         let (
             account_email,
             auth_mode,
@@ -277,6 +320,23 @@ impl AppServerSession {
             }
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
+        let bootstrap_derive_ms = bootstrap_derive_started_at.elapsed().as_millis();
+        tracing::info!(
+            account_read_ms = %account_read_ms,
+            model_list_rpc_ms = %model_list_rpc_ms,
+            model_list_result_ms = %model_list_result_ms,
+            model_list_decode_ms = %model_list_decode_ms,
+            model_preset_map_ms = %model_preset_map_ms,
+            default_model_select_ms = %default_model_select_ms,
+            model_list_total_ms = %(model_list_rpc_ms
+                + model_list_result_ms
+                + model_list_decode_ms
+                + model_preset_map_ms
+                + default_model_select_ms),
+            derive_ms = %bootstrap_derive_ms,
+            total_ms = %bootstrap_started_at.elapsed().as_millis(),
+            "tui bootstrap timing"
+        );
         Ok(AppServerBootstrap {
             account_email,
             auth_mode,
@@ -346,23 +406,37 @@ impl AppServerSession {
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
+        let start_thread_started_at = Instant::now();
         let request_id = self.next_request_id();
+        let params_build_started_at = Instant::now();
+        let params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+            session_start_source,
+        );
+        let params_build_ms = params_build_started_at.elapsed().as_millis();
+        let rpc_started_at = Instant::now();
         let response: ThreadStartResponse = self
             .client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id,
-                params: thread_start_params_from_config(
-                    config,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                    session_start_source,
-                ),
-            })
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
             .await
             .map_err(|err| {
                 bootstrap_request_error("thread/start failed during TUI bootstrap", err)
             })?;
-        started_thread_from_start_response(response, config, self.thread_params_mode()).await
+        let rpc_ms = rpc_started_at.elapsed().as_millis();
+        let response_map_started_at = Instant::now();
+        let started =
+            started_thread_from_start_response(response, config, self.thread_params_mode()).await?;
+        let response_map_ms = response_map_started_at.elapsed().as_millis();
+        tracing::info!(
+            params_build_ms = %params_build_ms,
+            rpc_ms = %rpc_ms,
+            response_map_ms = %response_map_ms,
+            total_ms = %start_thread_started_at.elapsed().as_millis(),
+            "tui thread start timing"
+        );
+        Ok(started)
     }
 
     pub(crate) async fn resume_thread(
@@ -1372,14 +1446,22 @@ async fn started_thread_from_start_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<AppServerStartedThread> {
+    let started_thread_started_at = Instant::now();
     let session =
         thread_session_state_from_thread_start_response(&response, config, thread_params_mode)
             .await
             .map_err(color_eyre::eyre::Report::msg)?;
-    Ok(AppServerStartedThread {
-        session,
-        turns: response.thread.turns,
-    })
+    let session_state_ms = started_thread_started_at.elapsed().as_millis();
+    let turns_attach_started_at = Instant::now();
+    let turns = response.thread.turns;
+    let turns_attach_ms = turns_attach_started_at.elapsed().as_millis();
+    tracing::info!(
+        session_state_ms = %session_state_ms,
+        turns_attach_ms = %turns_attach_ms,
+        total_ms = %started_thread_started_at.elapsed().as_millis(),
+        "tui start response mapping timing"
+    );
+    Ok(AppServerStartedThread { session, turns })
 }
 
 async fn started_thread_from_resume_response(
@@ -1417,13 +1499,17 @@ async fn thread_session_state_from_thread_start_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
+    let session_state_started_at = Instant::now();
+    let permission_profile_started_at = Instant::now();
     let permission_profile = display_permission_profile_from_thread_response(
         &response.sandbox,
         response.cwd.as_path(),
         config,
         thread_params_mode,
     );
-    thread_session_state_from_thread_response(
+    let permission_profile_ms = permission_profile_started_at.elapsed().as_millis();
+    let session_state_core_started_at = Instant::now();
+    let session = thread_session_state_from_thread_response(
         &response.thread.id,
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
@@ -1441,7 +1527,15 @@ async fn thread_session_state_from_thread_start_response(
         response.reasoning_effort,
         config,
     )
-    .await
+    .await?;
+    let session_state_core_ms = session_state_core_started_at.elapsed().as_millis();
+    tracing::info!(
+        permission_profile_ms = %permission_profile_ms,
+        session_state_core_ms = %session_state_core_ms,
+        total_ms = %session_state_started_at.elapsed().as_millis(),
+        "tui thread start session state timing"
+    );
+    Ok(session)
 }
 
 async fn thread_session_state_from_thread_resume_response(
@@ -1553,6 +1647,8 @@ async fn thread_session_state_from_thread_response(
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
+    let session_state_from_response_started_at = Instant::now();
+    let id_parse_started_at = Instant::now();
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
     let forked_from_id = forked_from_id
@@ -1560,10 +1656,21 @@ async fn thread_session_state_from_thread_response(
         .map(ThreadId::from_string)
         .transpose()
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
+    let id_parse_ms = id_parse_started_at.elapsed().as_millis();
+    let history_metadata_started_at = Instant::now();
     let history_config =
         codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
-    let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
-    Ok(ThreadSessionState {
+    let (
+        log_id,
+        entry_count,
+        history_metadata_stat_ms,
+        history_metadata_open_ms,
+        history_metadata_scan_ms,
+        history_metadata_bytes_read,
+    ) = history_metadata_with_timing(&history_config).await;
+    let history_metadata_ms = history_metadata_started_at.elapsed().as_millis();
+    let struct_build_started_at = Instant::now();
+    let session = ThreadSessionState {
         thread_id,
         forked_from_id,
         fork_parent_title: None,
@@ -1585,7 +1692,103 @@ async fn thread_session_state_from_thread_response(
         }),
         network_proxy: None,
         rollout_path,
-    })
+    };
+    let struct_build_ms = struct_build_started_at.elapsed().as_millis();
+    tracing::info!(
+        id_parse_ms = %id_parse_ms,
+        history_metadata_ms = %history_metadata_ms,
+        history_metadata_stat_ms = %history_metadata_stat_ms,
+        history_metadata_open_ms = %history_metadata_open_ms,
+        history_metadata_scan_ms = %history_metadata_scan_ms,
+        history_metadata_bytes_read = %history_metadata_bytes_read,
+        history_metadata_entry_count = %entry_count,
+        struct_build_ms = %struct_build_ms,
+        total_ms = %session_state_from_response_started_at.elapsed().as_millis(),
+        "tui thread session state materialization timing"
+    );
+    Ok(session)
+}
+
+async fn history_metadata_with_timing(
+    config: &codex_message_history::HistoryConfig,
+) -> (u64, usize, u128, u128, u128, usize) {
+    let path = config.codex_home.join("history.jsonl");
+
+    let stat_started_at = Instant::now();
+    let metadata = match fs::metadata(&path).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (0, 0, stat_started_at.elapsed().as_millis(), 0, 0, 0);
+        }
+        Err(_) => return (0, 0, stat_started_at.elapsed().as_millis(), 0, 0, 0),
+    };
+    let stat_ms = stat_started_at.elapsed().as_millis();
+
+    let open_started_at = Instant::now();
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(_) => {
+            return (
+                history_log_identity(&metadata),
+                0,
+                stat_ms,
+                open_started_at.elapsed().as_millis(),
+                0,
+                0,
+            );
+        }
+    };
+    let open_ms = open_started_at.elapsed().as_millis();
+
+    let scan_started_at = Instant::now();
+    let mut buf = [0u8; 8192];
+    let mut entry_count = 0usize;
+    let mut bytes_read = 0usize;
+    loop {
+        match file.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                bytes_read += n;
+                entry_count += buf[..n].iter().filter(|&&b| b == b'\n').count();
+            }
+            Err(_) => {
+                return (
+                    history_log_identity(&metadata),
+                    0,
+                    stat_ms,
+                    open_ms,
+                    scan_started_at.elapsed().as_millis(),
+                    bytes_read,
+                );
+            }
+        }
+    }
+
+    (
+        history_log_identity(&metadata),
+        entry_count,
+        stat_ms,
+        open_ms,
+        scan_started_at.elapsed().as_millis(),
+        bytes_read,
+    )
+}
+
+#[cfg(unix)]
+fn history_log_identity(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.ino()
+}
+
+#[cfg(windows)]
+fn history_log_identity(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::windows::fs::MetadataExt;
+    metadata.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_log_identity(_metadata: &std::fs::Metadata) -> u64 {
+    0
 }
 
 pub(crate) fn app_server_rate_limit_snapshots(

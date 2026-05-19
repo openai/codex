@@ -445,7 +445,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
         required: false,
         supports_parallel_tool_calls: false,
         disabled_reason: None,
-        startup_timeout_sec: Some(Duration::from_secs(30)),
+        startup_timeout_sec: Some(Duration::from_secs(5)),
         tool_timeout_sec: None,
         default_tools_approval_mode: None,
         enabled_tools: None,

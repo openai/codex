@@ -779,13 +779,29 @@ impl App {
                 &initial_images,
             );
         let thread_and_widget_started_at = Instant::now();
-        let (mut chat_widget, initial_started_thread) = match session_selection {
+        let session_selection_label = match &session_selection {
+            SessionSelection::StartFresh => "start_fresh",
+            SessionSelection::Resume(_) => "resume",
+            SessionSelection::Fork(_) => "fork",
+            SessionSelection::Exit => "exit",
+        };
+        let (
+            mut chat_widget,
+            initial_started_thread,
+            thread_rpc_ms,
+            startup_tooltip_ms,
+            widget_construct_ms,
+        ) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                let thread_rpc_started_at = Instant::now();
                 let started = app_server.start_thread(&config).await?;
+                let thread_rpc_ms = thread_rpc_started_at.elapsed().as_millis();
                 // Only count a startup tooltip once the fresh thread can actually render it.
+                let startup_tooltip_started_at = Instant::now();
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
+                let startup_tooltip_ms = startup_tooltip_started_at.elapsed().as_millis();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     environment_manager: environment_manager.clone(),
@@ -813,9 +829,19 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(started))
+                let widget_construct_started_at = Instant::now();
+                let chat_widget = ChatWidget::new_with_app_event(init);
+                let widget_construct_ms = widget_construct_started_at.elapsed().as_millis();
+                (
+                    chat_widget,
+                    Some(started),
+                    thread_rpc_ms,
+                    startup_tooltip_ms,
+                    widget_construct_ms,
+                )
             }
             SessionSelection::Resume(target_session) => {
+                let thread_rpc_started_at = Instant::now();
                 let resumed = app_server
                     .resume_thread(config.clone(), target_session.thread_id)
                     .await
@@ -823,6 +849,7 @@ impl App {
                         let target_label = target_session.display_label();
                         format!("Failed to resume session from {target_label}")
                     })?;
+                let thread_rpc_ms = thread_rpc_started_at.elapsed().as_millis();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     environment_manager: environment_manager.clone(),
@@ -850,7 +877,16 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(resumed))
+                let widget_construct_started_at = Instant::now();
+                let chat_widget = ChatWidget::new_with_app_event(init);
+                let widget_construct_ms = widget_construct_started_at.elapsed().as_millis();
+                (
+                    chat_widget,
+                    Some(resumed),
+                    thread_rpc_ms,
+                    /*startup_tooltip_ms*/ 0,
+                    widget_construct_ms,
+                )
             }
             SessionSelection::Fork(target_session) => {
                 session_telemetry.counter(
@@ -858,6 +894,7 @@ impl App {
                     /*inc*/ 1,
                     &[("source", "cli_subcommand")],
                 );
+                let thread_rpc_started_at = Instant::now();
                 let forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
@@ -865,6 +902,7 @@ impl App {
                         let target_label = target_session.display_label();
                         format!("Failed to fork session from {target_label}")
                     })?;
+                let thread_rpc_ms = thread_rpc_started_at.elapsed().as_millis();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     environment_manager: environment_manager.clone(),
@@ -892,10 +930,30 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(forked))
+                let widget_construct_started_at = Instant::now();
+                let chat_widget = ChatWidget::new_with_app_event(init);
+                let widget_construct_ms = widget_construct_started_at.elapsed().as_millis();
+                (
+                    chat_widget,
+                    Some(forked),
+                    thread_rpc_ms,
+                    /*startup_tooltip_ms*/ 0,
+                    widget_construct_ms,
+                )
             }
         };
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
+        let thread_and_widget_other_ms = thread_and_widget_ms
+            .saturating_sub(thread_rpc_ms + startup_tooltip_ms + widget_construct_ms);
+        tracing::info!(
+            thread_rpc_ms = %thread_rpc_ms,
+            startup_tooltip_ms = %startup_tooltip_ms,
+            widget_construct_ms = %widget_construct_ms,
+            other_ms = %thread_and_widget_other_ms,
+            total_ms = %thread_and_widget_ms,
+            session_selection = session_selection_label,
+            "tui thread and widget startup timing"
+        );
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);
         }

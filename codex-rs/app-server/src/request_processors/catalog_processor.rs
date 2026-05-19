@@ -1,5 +1,6 @@
 use super::*;
 use futures::StreamExt;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
@@ -224,21 +225,33 @@ impl CatalogRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         params: ModelListParams,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
+        let list_models_started_at = Instant::now();
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
         } = params;
+        let supported_models_started_at = Instant::now();
         let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+        let supported_models_ms = supported_models_started_at.elapsed().as_millis();
         let total = models.len();
 
         if total == 0 {
+            tracing::info!(
+                supported_models_ms = %supported_models_ms,
+                pagination_ms = 0,
+                total_models = 0,
+                returned_models = 0,
+                total_ms = %list_models_started_at.elapsed().as_millis(),
+                "app-server model/list timing"
+            );
             return Ok(ModelListResponse {
                 data: Vec::new(),
                 next_cursor: None,
             });
         }
 
+        let pagination_started_at = Instant::now();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
         let start = match cursor {
@@ -261,6 +274,15 @@ impl CatalogRequestProcessor {
         } else {
             None
         };
+        let pagination_ms = pagination_started_at.elapsed().as_millis();
+        tracing::info!(
+            supported_models_ms = %supported_models_ms,
+            pagination_ms = %pagination_ms,
+            total_models = total,
+            returned_models = items.len(),
+            total_ms = %list_models_started_at.elapsed().as_millis(),
+            "app-server model/list timing"
+        );
         Ok(ModelListResponse {
             data: items,
             next_cursor,

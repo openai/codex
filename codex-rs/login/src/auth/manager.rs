@@ -92,6 +92,7 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const REFRESH_TOKEN_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
@@ -827,6 +828,7 @@ async fn request_chatgpt_token_refresh(
     // Use shared client factory to include standard headers
     let response = client
         .post(endpoint.as_str())
+        .timeout(REFRESH_TOKEN_REQUEST_TIMEOUT)
         .header("Content-Type", "application/json")
         .json(&refresh_request)
         .send()

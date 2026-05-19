@@ -25,6 +25,7 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -317,30 +318,97 @@ async fn ensure_owner_only_permissions(_file: &File) -> Result<()> {
 }
 
 async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
+    let history_metadata_started_at = Instant::now();
+    let metadata_started_at = Instant::now();
     let log_id = match fs::metadata(path).await {
         Ok(metadata) => log_identity(&metadata).unwrap_or(0),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (0, 0),
-        Err(_) => return (0, 0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(
+                metadata_ms = %metadata_started_at.elapsed().as_millis(),
+                open_ms = 0,
+                scan_ms = 0,
+                bytes_read = 0,
+                newline_count = 0,
+                total_ms = %history_metadata_started_at.elapsed().as_millis(),
+                file_found = false,
+                "history metadata timing"
+            );
+            return (0, 0);
+        }
+        Err(_) => {
+            tracing::info!(
+                metadata_ms = %metadata_started_at.elapsed().as_millis(),
+                open_ms = 0,
+                scan_ms = 0,
+                bytes_read = 0,
+                newline_count = 0,
+                total_ms = %history_metadata_started_at.elapsed().as_millis(),
+                file_found = false,
+                "history metadata timing"
+            );
+            return (0, 0);
+        }
     };
+    let metadata_ms = metadata_started_at.elapsed().as_millis();
 
     // Open the file.
+    let open_started_at = Instant::now();
     let mut file = match fs::File::open(path).await {
         Ok(f) => f,
-        Err(_) => return (log_id, 0),
+        Err(_) => {
+            tracing::info!(
+                metadata_ms = %metadata_ms,
+                open_ms = %open_started_at.elapsed().as_millis(),
+                scan_ms = 0,
+                bytes_read = 0,
+                newline_count = 0,
+                total_ms = %history_metadata_started_at.elapsed().as_millis(),
+                file_found = true,
+                "history metadata timing"
+            );
+            return (log_id, 0);
+        }
     };
+    let open_ms = open_started_at.elapsed().as_millis();
 
     // Count newline bytes.
+    let scan_started_at = Instant::now();
     let mut buf = [0u8; 8192];
     let mut count = 0usize;
+    let mut bytes_read = 0usize;
     loop {
         match file.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => {
+                bytes_read += n;
                 count += buf[..n].iter().filter(|&&b| b == b'\n').count();
             }
-            Err(_) => return (log_id, 0),
+            Err(_) => {
+                tracing::info!(
+                    metadata_ms = %metadata_ms,
+                    open_ms = %open_ms,
+                    scan_ms = %scan_started_at.elapsed().as_millis(),
+                    bytes_read = %bytes_read,
+                    newline_count = 0,
+                    total_ms = %history_metadata_started_at.elapsed().as_millis(),
+                    file_found = true,
+                    "history metadata timing"
+                );
+                return (log_id, 0);
+            }
         }
     }
+    let scan_ms = scan_started_at.elapsed().as_millis();
+    tracing::info!(
+        metadata_ms = %metadata_ms,
+        open_ms = %open_ms,
+        scan_ms = %scan_ms,
+        bytes_read = %bytes_read,
+        newline_count = %count,
+        total_ms = %history_metadata_started_at.elapsed().as_millis(),
+        file_found = true,
+        "history metadata timing"
+    );
 
     (log_id, count)
 }

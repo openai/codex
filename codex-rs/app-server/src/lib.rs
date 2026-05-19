@@ -17,6 +17,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
@@ -425,6 +426,7 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
+    let startup_started_at = Instant::now();
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -600,6 +602,8 @@ pub async fn run_main_with_transport_options(
         });
     }
 
+    let config_and_state_init_duration = startup_started_at.elapsed();
+
     let feedback = CodexFeedback::new();
 
     // Install a simple subscriber so `tracing` output is visible. Users can
@@ -627,6 +631,7 @@ pub async fn run_main_with_transport_options(
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+    let tracing_init_started_at = Instant::now();
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
         .with(feedback_layer)
@@ -635,6 +640,8 @@ pub async fn run_main_with_transport_options(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    let tracing_init_duration = tracing_init_started_at.elapsed();
+    let runtime_bootstrap_started_at = Instant::now();
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
@@ -650,7 +657,9 @@ pub async fn run_main_with_transport_options(
     let graceful_signal_restart_enabled =
         runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
+    let runtime_bootstrap_duration = runtime_bootstrap_started_at.elapsed();
 
+    let transport_init_started_at = Instant::now();
     match &transport {
         AppServerTransport::Stdio => {
             let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
@@ -683,7 +692,9 @@ pub async fn run_main_with_transport_options(
         }
         AppServerTransport::Off => {}
     }
+    let transport_init_duration = transport_init_started_at.elapsed();
 
+    let remote_control_init_started_at = Instant::now();
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
@@ -717,6 +728,20 @@ pub async fn run_main_with_transport_options(
     )
     .await?;
     transport_accept_handles.push(remote_control_accept_handle);
+    let remote_control_init_duration = remote_control_init_started_at.elapsed();
+
+    info!(
+        total_ms = %startup_started_at.elapsed().as_millis(),
+        config_and_state_init_ms = %config_and_state_init_duration.as_millis(),
+        tracing_init_ms = %tracing_init_duration.as_millis(),
+        runtime_bootstrap_ms = %runtime_bootstrap_duration.as_millis(),
+        transport_init_ms = %transport_init_duration.as_millis(),
+        remote_control_init_ms = %remote_control_init_duration.as_millis(),
+        transport = ?transport,
+        remote_control_requested,
+        remote_control_enabled,
+        "app-server startup complete"
+    );
 
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();

@@ -86,6 +86,7 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tracing::Instrument;
+use tracing::info;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -275,6 +276,7 @@ impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+        let processor_init_started_at = std::time::Instant::now();
         let MessageProcessorArgs {
             outgoing,
             analytics_events_client,
@@ -301,6 +303,7 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let thread_manager_init_started_at = std::time::Instant::now();
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -318,6 +321,7 @@ impl MessageProcessor {
                 )),
             )
         });
+        let thread_manager_init_duration = thread_manager_init_started_at.elapsed();
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
@@ -366,6 +370,7 @@ impl MessageProcessor {
             state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
+        let startup_warning_count = config_warnings.len();
         let initialize_processor = InitializeRequestProcessor::new(
             outgoing.clone(),
             analytics_events_client.clone(),
@@ -472,6 +477,13 @@ impl MessageProcessor {
             outgoing.clone(),
             Arc::clone(&config),
             config_manager,
+        );
+
+        info!(
+            total_init_ms = %processor_init_started_at.elapsed().as_millis(),
+            thread_manager_init_ms = %thread_manager_init_duration.as_millis(),
+            startup_warning_count,
+            "app-server message processor initialized"
         );
 
         Self {
