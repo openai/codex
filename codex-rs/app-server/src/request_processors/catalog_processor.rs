@@ -447,6 +447,7 @@ impl CatalogRequestProcessor {
                     description: profile.description,
                 }),
         );
+        profiles.sort_by(|left, right| left.id.cmp(&right.id));
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
