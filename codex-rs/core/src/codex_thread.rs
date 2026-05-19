@@ -266,14 +266,6 @@ impl CodexThread {
         self.codex.session.preview_settings(&updates).await
     }
 
-    pub async fn validate_thread_settings_overrides(
-        &self,
-        overrides: CodexThreadSettingsOverrides,
-    ) -> ConstraintResult<()> {
-        self.preview_thread_settings_overrides(overrides).await?;
-        Ok(())
-    }
-
     async fn thread_settings_update(
         &self,
         overrides: CodexThreadSettingsOverrides,
