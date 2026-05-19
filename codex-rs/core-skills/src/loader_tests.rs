@@ -138,6 +138,14 @@ fn mark_as_git_repo(dir: &Path) {
     fs::write(dir.join(".git"), "gitdir: fake\n").unwrap();
 }
 
+fn tempdir_outside_ambient_repo() -> TempDir {
+    let home = home_dir().expect("home directory should be available");
+    tempfile::Builder::new()
+        .prefix("core-skills-tests-")
+        .tempdir_in(home)
+        .expect("tempdir outside ambient repo")
+}
+
 fn normalized(path: &Path) -> AbsolutePathBuf {
     canonicalize_path(path)
         .unwrap_or_else(|_| path.to_path_buf())
@@ -1718,7 +1726,7 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
 #[tokio::test]
 async fn non_git_repo_skills_search_does_not_walk_parents() {
     let codex_home = tempfile::tempdir().expect("tempdir");
-    let outer_dir = tempfile::tempdir().expect("tempdir");
+    let outer_dir = tempdir_outside_ambient_repo();
     let nested_dir = outer_dir.path().join("nested/inner");
     fs::create_dir_all(&nested_dir).unwrap();
 
@@ -1776,7 +1784,7 @@ async fn loads_skills_from_system_cache_when_present() {
 
 #[tokio::test]
 async fn skill_roots_include_admin_with_lowest_priority() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
+    let codex_home = tempdir_outside_ambient_repo();
     let cfg = make_config(&codex_home).await;
 
     let scopes: Vec<SkillScope> = super::skill_roots(
