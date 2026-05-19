@@ -283,6 +283,8 @@ pub use public_widgets::composer_input::ComposerInput;
 #[cfg(unix)]
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
+const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(15);
 
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
@@ -994,11 +996,19 @@ pub async fn run_main(
         Some(chatgpt_base_url.clone()),
     )
     .await;
-    if let Err(err) = cloud_auth_manager
-        .refresh_managed_chatgpt_token_if_near_expiry()
-        .await
+    match tokio::time::timeout(
+        CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT,
+        cloud_auth_manager.refresh_managed_chatgpt_token_if_near_expiry(),
+    )
+    .await
     {
-        warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
+        }
+        Err(_) => {
+            warn!("timed out proactively refreshing ChatGPT access token during CLI startup");
+        }
     }
     let cloud_requirements = cloud_requirements_loader(
         cloud_auth_manager,

@@ -157,6 +157,8 @@ use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(15);
 
 enum InitialOperation {
     UserTurn {
@@ -371,11 +373,19 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         Some(chatgpt_base_url.clone()),
     )
     .await;
-    if let Err(err) = cloud_auth_manager
-        .refresh_managed_chatgpt_token_if_near_expiry()
-        .await
+    match tokio::time::timeout(
+        CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT,
+        cloud_auth_manager.refresh_managed_chatgpt_token_if_near_expiry(),
+    )
+    .await
     {
-        warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
+        }
+        Err(_) => {
+            warn!("timed out proactively refreshing ChatGPT access token during CLI startup");
+        }
     }
     let cloud_requirements = cloud_requirements_loader(
         cloud_auth_manager,
