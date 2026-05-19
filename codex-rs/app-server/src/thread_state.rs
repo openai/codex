@@ -66,7 +66,12 @@ pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
-    pub(crate) latest_plan_update: Option<UpdatePlanArgs>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingTerminalPlanCleanup {
+    pub(crate) turn_id: String,
+    pub(crate) plan_update: UpdatePlanArgs,
 }
 
 #[derive(Default)]
@@ -74,6 +79,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
+    pub(crate) pending_terminal_plan_cleanup: Option<PendingTerminalPlanCleanup>,
     pub(crate) last_terminal_turn_id: Option<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
