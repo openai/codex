@@ -14,6 +14,10 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
@@ -194,6 +198,104 @@ async fn handler_rejects_non_function_payloads() {
 }
 
 #[tokio::test]
+async fn spawn_agent_hook_payloads_use_agent_alias_and_support_rewrites() {
+    let (session, turn) = make_session_and_context().await;
+    let handler = SpawnAgentHandler::default();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "agent_type": "explorer"
+        })),
+    );
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_input: json!({
+                "message": "inspect this repo",
+                "agent_type": "explorer"
+            }),
+        })
+    );
+
+    let rewritten = handler
+        .with_updated_hook_input(
+            invocation,
+            json!({
+                "message": "inspect the tests instead",
+                "agent_type": "worker"
+            }),
+        )
+        .expect("spawn hook rewrite should succeed");
+    let ToolPayload::Function { arguments } = rewritten.payload else {
+        panic!("rewritten spawn payload should stay function-shaped");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&arguments)
+            .expect("rewritten spawn args should stay json"),
+        json!({
+            "message": "inspect the tests instead",
+            "agent_type": "worker"
+        })
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_hook_payloads_use_agent_alias_and_support_rewrites() {
+    let (session, turn) = make_session_and_context().await;
+    let handler = SpawnAgentHandlerV2::default();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "task_name": "scan_repo",
+            "fork_turns": "none"
+        })),
+    );
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_input: json!({
+                "message": "inspect this repo",
+                "task_name": "scan_repo",
+                "fork_turns": "none"
+            }),
+        })
+    );
+
+    let rewritten = handler
+        .with_updated_hook_input(
+            invocation,
+            json!({
+                "message": "inspect hook tests",
+                "task_name": "scan_hooks",
+                "fork_turns": "none"
+            }),
+        )
+        .expect("v2 spawn hook rewrite should succeed");
+    let ToolPayload::Function { arguments } = rewritten.payload else {
+        panic!("rewritten v2 spawn payload should stay function-shaped");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&arguments)
+            .expect("rewritten v2 spawn args should stay json"),
+        json!({
+            "message": "inspect hook tests",
+            "task_name": "scan_hooks",
+            "fork_turns": "none"
+        })
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_rejects_empty_message() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
@@ -208,6 +310,87 @@ async fn spawn_agent_rejects_empty_message() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel("Empty message can't be sent to an agent".to_string())
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_post_tool_use_payload_exposes_spawn_result() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let handler = SpawnAgentHandler::default();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo"
+        })),
+    );
+    let result = handler
+        .handle(invocation.clone())
+        .await
+        .expect("spawn_agent should succeed");
+
+    assert_eq!(
+        handler.post_tool_use_payload(&invocation, &result),
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_use_id: "call-1".to_string(),
+            tool_input: json!({
+                "message": "inspect this repo"
+            }),
+            tool_response: serde_json::to_value(&result)
+                .expect("spawn result should serialize for hooks"),
+        })
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_post_tool_use_payload_exposes_spawn_result() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let handler = SpawnAgentHandlerV2::default();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "task_name": "post_hook_worker",
+            "fork_turns": "none"
+        })),
+    );
+    let result = handler
+        .handle(invocation.clone())
+        .await
+        .expect("multi-agent v2 spawn_agent should succeed");
+
+    assert_eq!(
+        handler.post_tool_use_payload(&invocation, &result),
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_use_id: "call-1".to_string(),
+            tool_input: json!({
+                "message": "inspect this repo",
+                "task_name": "post_hook_worker",
+                "fork_turns": "none"
+            }),
+            tool_response: serde_json::to_value(&result)
+                .expect("v2 spawn result should serialize for hooks"),
+        })
     );
 }
 

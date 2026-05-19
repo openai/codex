@@ -43,6 +43,18 @@ impl HookToolName {
         Self::new("Bash")
     }
 
+    /// Returns the hook identity for sub-agent spawning.
+    ///
+    /// The serialized name remains `spawn_agent`, while `Agent` is accepted as
+    /// a matcher alias for compatibility with hook configurations that describe
+    /// agent creation using Claude Code-style names.
+    pub(crate) fn spawn_agent() -> Self {
+        Self {
+            name: "spawn_agent".to_string(),
+            matcher_aliases: vec!["Agent".to_string()],
+        }
+    }
+
     /// Returns the canonical hook name serialized into hook stdin.
     pub(crate) fn name(&self) -> &str {
         &self.name

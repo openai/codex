@@ -8,6 +8,9 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_tools::ToolSpec;
 
@@ -202,6 +205,35 @@ impl ToolHandler for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_input: collab_hook_tool_input(&invocation.payload)?,
+        })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        invocation: ToolInvocation,
+        updated_input: JsonValue,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        rewrite_collab_hook_input(invocation, updated_input)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::spawn_agent(),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: collab_hook_tool_input(&invocation.payload)?,
+            tool_response: result
+                .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,5 +269,9 @@ impl ToolOutput for SpawnAgentResult {
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "spawn_agent")
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        serde_json::to_value(self).ok()
     }
 }

@@ -6,6 +6,7 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
@@ -39,6 +40,41 @@ pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, Functio
             "collab handler received unsupported payload".to_string(),
         )),
     }
+}
+
+pub(crate) fn collab_hook_tool_input(payload: &ToolPayload) -> Option<JsonValue> {
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    if arguments.trim().is_empty() {
+        return Some(JsonValue::Object(serde_json::Map::new()));
+    }
+
+    Some(
+        serde_json::from_str(arguments)
+            .unwrap_or_else(|_| JsonValue::String(arguments.to_string())),
+    )
+}
+
+pub(crate) fn rewrite_collab_hook_input(
+    mut invocation: ToolInvocation,
+    updated_input: JsonValue,
+) -> Result<ToolInvocation, FunctionCallError> {
+    let ToolPayload::Function { .. } = invocation.payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hook input rewrite received unsupported collaboration payload".to_string(),
+        ));
+    };
+
+    invocation.payload = ToolPayload::Function {
+        arguments: serde_json::to_string(&updated_input).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize rewritten collaboration arguments: {err}"
+            ))
+        })?,
+    };
+    Ok(invocation)
 }
 
 pub(crate) fn tool_output_json_text<T>(value: &T, tool_name: &str) -> String
