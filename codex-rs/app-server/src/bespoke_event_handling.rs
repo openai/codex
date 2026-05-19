@@ -1608,16 +1608,14 @@ async fn handle_turn_complete(
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(thread_state).await;
-    emit_terminal_plan_cleanup(
-        conversation_id,
-        if preserve_terminal_plan_progress {
-            Vec::new()
-        } else {
-            take_pending_terminal_plan_cleanup(thread_state).await
-        },
-        outgoing,
-    )
-    .await;
+    if !preserve_terminal_plan_progress {
+        emit_terminal_plan_cleanup(
+            conversation_id,
+            take_pending_terminal_plan_cleanup(thread_state).await,
+            outgoing,
+        )
+        .await;
+    }
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
@@ -1648,16 +1646,14 @@ async fn handle_turn_interrupted(
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(thread_state).await;
-    emit_terminal_plan_cleanup(
-        conversation_id,
-        if preserve_terminal_plan_progress {
-            Vec::new()
-        } else {
-            take_pending_terminal_plan_cleanup(thread_state).await
-        },
-        outgoing,
-    )
-    .await;
+    if !preserve_terminal_plan_progress {
+        emit_terminal_plan_cleanup(
+            conversation_id,
+            take_pending_terminal_plan_cleanup(thread_state).await,
+            outgoing,
+        )
+        .await;
+    }
 
     emit_turn_completed_with_status(
         conversation_id,
