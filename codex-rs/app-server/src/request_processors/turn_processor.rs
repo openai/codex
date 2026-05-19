@@ -441,11 +441,12 @@ impl TurnRequestProcessor {
             return Ok(None);
         }
 
-        let cwd = request.cwd;
-        let effective_cwd = cwd
+        let requested_cwd = request.cwd;
+        let effective_cwd = requested_cwd
             .as_ref()
             .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, base_snapshot.cwd.as_path()))
             .unwrap_or_else(|| base_snapshot.cwd.clone());
+        let cwd = requested_cwd.map(|_| effective_cwd.to_path_buf());
         let runtime_workspace_roots = request.runtime_workspace_roots.map(|workspace_roots| {
             resolve_runtime_workspace_roots(workspace_roots, &effective_cwd)
         });

@@ -191,22 +191,23 @@ async fn thread_settings_update_applies_partial_patch_and_emits_full_state() -> 
 }
 
 #[tokio::test]
-async fn thread_settings_update_retargets_permissions_when_cwd_changes() -> Result<()> {
+async fn thread_settings_update_absolutizes_relative_cwd_before_permissions() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     write_config(&codex_home, &server.uri())?;
-    let next_cwd = TempDir::new()?;
-    let next_cwd_abs = AbsolutePathBuf::try_from(next_cwd.path())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let ThreadStartResponse { thread, .. } = start_thread(&mut mcp).await?;
+    let next_cwd = std::path::PathBuf::from("next-cwd");
+    let next_cwd_abs = thread.cwd.join(&next_cwd);
+    std::fs::create_dir_all(next_cwd_abs.as_path())?;
 
     let response = send_thread_settings_update(
         &mut mcp,
         ThreadSettingsUpdateParams {
             thread_id: thread.id,
-            cwd: Some(next_cwd.path().to_path_buf()),
+            cwd: Some(next_cwd),
             permissions: Some(PermissionProfileSelectionParams::new(":workspace")),
             ..Default::default()
         },
