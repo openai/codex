@@ -11,6 +11,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
@@ -106,7 +107,9 @@ async fn ripgrep_rollout_matches(
         .await
     {
         Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return scan_rollout_matches(root, search_term).await;
+        }
         Err(err) => return Err(err),
     };
     if !output.status.success() {
@@ -144,6 +147,56 @@ async fn ripgrep_rollout_matches(
     }
 
     Ok(matches)
+}
+
+async fn scan_rollout_matches(
+    root: &Path,
+    search_term: &str,
+) -> io::Result<HashMap<PathBuf, ThreadSearchPreview>> {
+    let mut matches = HashMap::new();
+    let mut dirs = vec![root.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if !file_type.is_file()
+                || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            if let Some(preview) = first_matching_preview(path.as_path(), search_term).await? {
+                matches.insert(path, preview);
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+async fn first_matching_preview(
+    path: &Path,
+    search_term: &str,
+) -> io::Result<Option<ThreadSearchPreview>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.contains(search_term)
+            && let Some(preview) = content_match_preview(line.as_str(), search_term)
+        {
+            return Ok(Some(preview));
+        }
+    }
+    Ok(None)
 }
 
 fn content_match_preview(jsonl_line: &str, search_term: &str) -> Option<ThreadSearchPreview> {
