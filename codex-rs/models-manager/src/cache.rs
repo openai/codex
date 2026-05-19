@@ -29,86 +29,46 @@ impl ModelsCacheManager {
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
     pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
-        tracing::info!(
-            target: "codex_core::thread_manager",
-            cache_path = %self.cache_path.display(),
-            expected_version,
-            "models cache load timing"
+        info!(
+                cache_path = %self.cache_path.display(),
+                expected_version,
+            "models cache: attempting load_fresh"
         );
         let cache = match self.load().await {
-            Ok(Some(cache)) => cache,
-            Ok(None) => {
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    cache_path = %self.cache_path.display(),
-                    expected_version,
-                    cache_hit = false,
-                    cache_miss_reason = "not_found",
-                    "models cache decision"
-                );
-                return None;
-            }
+            Ok(cache) => cache?,
             Err(err) => {
                 error!("failed to load models cache: {err}");
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    cache_path = %self.cache_path.display(),
-                    expected_version,
-                    cache_hit = false,
-                    cache_miss_reason = "load_error",
-                    error = %err,
-                    "models cache decision"
-                );
                 return None;
             }
         };
-        let age_secs = Utc::now()
-            .signed_duration_since(cache.fetched_at)
-            .num_milliseconds() as f64
-            / 1000.0;
-        tracing::info!(
-            target: "codex_core::thread_manager",
+        info!(
             cache_path = %self.cache_path.display(),
             cached_version = ?cache.client_version,
             fetched_at = %cache.fetched_at,
-            age_secs = %age_secs,
-            model_count = cache.models.len(),
             "models cache: loaded cache file"
         );
         if cache.client_version.as_deref() != Some(expected_version) {
-            tracing::info!(
-                target: "codex_core::thread_manager",
+            info!(
                 cache_path = %self.cache_path.display(),
                 expected_version,
                 cached_version = ?cache.client_version,
-                cache_hit = false,
-                cache_miss_reason = "version_mismatch",
-                "models cache decision"
+                "models cache: cache version mismatch"
             );
             return None;
         }
         if !cache.is_fresh(self.cache_ttl) {
-            tracing::info!(
-                target: "codex_core::thread_manager",
+            info!(
                 cache_path = %self.cache_path.display(),
                 cache_ttl_secs = self.cache_ttl.as_secs(),
                 fetched_at = %cache.fetched_at,
-                age_secs = %age_secs,
-                cache_hit = false,
-                cache_miss_reason = "stale",
-                "models cache decision"
+                "models cache: cache is stale"
             );
             return None;
         }
-        tracing::info!(
-            target: "codex_core::thread_manager",
+        info!(
             cache_path = %self.cache_path.display(),
             cache_ttl_secs = self.cache_ttl.as_secs(),
-            age_secs = %age_secs,
-            cache_hit = true,
-            cache_miss_reason = "none",
-            model_count = cache.models.len(),
-            "models cache decision"
+            "models cache: cache hit"
         );
         Some(cache)
     }

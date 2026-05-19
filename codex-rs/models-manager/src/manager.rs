@@ -268,154 +268,51 @@ impl ModelsManager for OpenAiModelsManager {
 impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
-        let refresh_started_at = std::time::Instant::now();
-        let should_refresh_started_at = std::time::Instant::now();
-        let should_refresh = self.should_refresh_models().await;
-        let should_refresh_ms = should_refresh_started_at.elapsed().as_millis();
-        if !should_refresh {
+        if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
             ) {
-                let cache_started_at = std::time::Instant::now();
-                let cache_hit = self.try_load_cache().await;
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    refresh_strategy = %refresh_strategy,
-                    should_refresh = false,
-                    should_refresh_ms = %should_refresh_ms,
-                    cache_lookup_ms = %cache_started_at.elapsed().as_millis(),
-                    cache_hit,
-                    total_ms = %refresh_started_at.elapsed().as_millis(),
-                    "model list refresh timing"
-                );
+                self.try_load_cache().await;
             }
             return Ok(());
         }
 
-        let result = match refresh_strategy {
+        match refresh_strategy {
             RefreshStrategy::Offline => {
                 // Only try to load from cache, never fetch
-                let cache_started_at = std::time::Instant::now();
-                let cache_hit = self.try_load_cache().await;
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    refresh_strategy = %refresh_strategy,
-                    should_refresh = true,
-                    should_refresh_ms = %should_refresh_ms,
-                    cache_lookup_ms = %cache_started_at.elapsed().as_millis(),
-                    cache_hit,
-                    fetch_ms = 0,
-                    total_ms = %refresh_started_at.elapsed().as_millis(),
-                    "model list refresh timing"
-                );
+                self.try_load_cache().await;
                 Ok(())
             }
             RefreshStrategy::OnlineIfUncached => {
                 // Try cache first, fall back to online if unavailable
-                let cache_started_at = std::time::Instant::now();
                 if self.try_load_cache().await {
                     info!("models cache: using cached models for OnlineIfUncached");
-                    tracing::info!(
-                        target: "codex_core::thread_manager",
-                        refresh_strategy = %refresh_strategy,
-                        should_refresh = true,
-                        should_refresh_ms = %should_refresh_ms,
-                        cache_lookup_ms = %cache_started_at.elapsed().as_millis(),
-                        cache_hit = true,
-                        fetch_ms = 0,
-                        total_ms = %refresh_started_at.elapsed().as_millis(),
-                        "model list refresh timing"
-                    );
                     return Ok(());
                 }
                 info!("models cache: cache miss, fetching remote models");
-                let fetch_started_at = std::time::Instant::now();
-                let result = self.fetch_and_update_models().await;
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    refresh_strategy = %refresh_strategy,
-                    should_refresh = true,
-                    should_refresh_ms = %should_refresh_ms,
-                    cache_lookup_ms = %cache_started_at.elapsed().as_millis(),
-                    cache_hit = false,
-                    fetch_ms = %fetch_started_at.elapsed().as_millis(),
-                    total_ms = %refresh_started_at.elapsed().as_millis(),
-                    "model list refresh timing"
-                );
-                result
+                self.fetch_and_update_models().await
             }
             RefreshStrategy::Online => {
                 // Always fetch from network
-                let fetch_started_at = std::time::Instant::now();
-                let result = self.fetch_and_update_models().await;
-                tracing::info!(
-                    target: "codex_core::thread_manager",
-                    refresh_strategy = %refresh_strategy,
-                    should_refresh = true,
-                    should_refresh_ms = %should_refresh_ms,
-                    cache_lookup_ms = 0,
-                    cache_hit = false,
-                    fetch_ms = %fetch_started_at.elapsed().as_millis(),
-                    total_ms = %refresh_started_at.elapsed().as_millis(),
-                    "model list refresh timing"
-                );
-                result
+                self.fetch_and_update_models().await
             }
-        };
-
-        result
+        }
     }
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
-        let fetch_started_at = std::time::Instant::now();
         let client_version = crate::client_version_to_whole();
-        let remote_list_started_at = std::time::Instant::now();
         let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
-        let remote_list_ms = remote_list_started_at.elapsed().as_millis();
-        let apply_started_at = std::time::Instant::now();
         self.apply_remote_models(models.clone()).await;
-        let apply_ms = apply_started_at.elapsed().as_millis();
-        let etag_write_started_at = std::time::Instant::now();
         *self.etag.write().await = etag.clone();
-        let etag_write_ms = etag_write_started_at.elapsed().as_millis();
-        let persist_cache_started_at = std::time::Instant::now();
         self.cache_manager
             .persist_cache(&models, etag, client_version)
             .await;
-        tracing::info!(
-            target: "codex_core::thread_manager",
-            remote_list_ms = %remote_list_ms,
-            apply_ms = %apply_ms,
-            etag_write_ms = %etag_write_ms,
-            persist_cache_ms = %persist_cache_started_at.elapsed().as_millis(),
-            model_count = models.len(),
-            total_ms = %fetch_started_at.elapsed().as_millis(),
-            "model list fetch timing"
-        );
         Ok(())
     }
 
     async fn should_refresh_models(&self) -> bool {
-        let should_refresh_started_at = std::time::Instant::now();
-        let uses_codex_backend_started_at = std::time::Instant::now();
-        let uses_codex_backend = self.endpoint_client.uses_codex_backend().await;
-        let uses_codex_backend_ms = uses_codex_backend_started_at.elapsed().as_millis();
-        let has_command_auth_started_at = std::time::Instant::now();
-        let has_command_auth = self.endpoint_client.has_command_auth();
-        let has_command_auth_ms = has_command_auth_started_at.elapsed().as_millis();
-        let should_refresh = uses_codex_backend || has_command_auth;
-        tracing::info!(
-            target: "codex_core::thread_manager",
-            uses_codex_backend,
-            uses_codex_backend_ms = %uses_codex_backend_ms,
-            has_command_auth,
-            has_command_auth_ms = %has_command_auth_ms,
-            should_refresh,
-            total_ms = %should_refresh_started_at.elapsed().as_millis(),
-            "model list refresh gate timing"
-        );
-        should_refresh
+        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
     }
 
     async fn get_etag(&self) -> Option<String> {

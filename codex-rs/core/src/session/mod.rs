@@ -5,7 +5,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -452,7 +451,6 @@ impl Codex {
     }
 
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
-        let spawn_started_at = Instant::now();
         let CodexSpawnArgs {
             mut config,
             installation_id,
@@ -483,13 +481,11 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
         let fs = environment_selections.primary_filesystem();
-        let plugin_skills_started_at = Instant::now();
         let plugins_input = config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
-        let plugin_skills_duration = plugin_skills_started_at.elapsed();
 
         for err in &loaded_skills.errors {
             error!(
@@ -508,13 +504,10 @@ impl Codex {
         }
 
         let primary_environment = environment_selections.primary_environment();
-        let user_instructions_started_at = Instant::now();
         let user_instructions = AgentsMdManager::new(&config)
             .user_instructions(primary_environment.as_deref())
             .await;
-        let user_instructions_duration = user_instructions_started_at.elapsed();
 
-        let exec_policy_started_at = Instant::now();
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
@@ -529,10 +522,8 @@ impl Codex {
                     .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
             )
         };
-        let exec_policy_duration = exec_policy_started_at.elapsed();
 
         let config = Arc::new(config);
-        let model_and_session_config_started_at = Instant::now();
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -646,13 +637,11 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
         };
-        let model_and_session_config_duration = model_and_session_config_started_at.elapsed();
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session_new_started_at = Instant::now();
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -663,7 +652,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
-            session_source_clone.clone(),
+            session_source_clone,
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
@@ -680,20 +669,7 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
-        let session_new_duration = session_new_started_at.elapsed();
         let thread_id = session.conversation_id;
-
-        info!(
-            thread_id = %thread_id,
-            session_source = %session_source_clone,
-            plugin_skills_ms = %plugin_skills_duration.as_millis(),
-            user_instructions_ms = %user_instructions_duration.as_millis(),
-            exec_policy_ms = %exec_policy_duration.as_millis(),
-            model_and_session_config_ms = %model_and_session_config_duration.as_millis(),
-            session_new_ms = %session_new_duration.as_millis(),
-            total_ms = %spawn_started_at.elapsed().as_millis(),
-            "codex spawn timing"
-        );
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);

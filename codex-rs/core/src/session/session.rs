@@ -6,7 +6,6 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use std::time::Instant;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -443,7 +442,6 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> anyhow::Result<Arc<Self>> {
-        let session_init_started_at = Instant::now();
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.collaboration_mode.model(),
@@ -579,10 +577,8 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let parallel_setup_started_at = Instant::now();
         let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
-        let parallel_setup_duration = parallel_setup_started_at.elapsed();
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -590,7 +586,6 @@ impl Session {
                 e
             })?);
         let session_result: anyhow::Result<Arc<Self>> = async {
-            let pre_session_configured_started_at = Instant::now();
             let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {
@@ -859,9 +854,7 @@ impl Session {
                     }),
                 });
             }
-            let pre_session_configured_duration = pre_session_configured_started_at.elapsed();
 
-            let services_build_started_at = Instant::now();
             let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
                 AnalyticsEventsClient::new(
                     Arc::clone(&auth_manager),
@@ -982,8 +975,6 @@ impl Session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
             }
-            let services_build_duration = services_build_started_at.elapsed();
-            let session_configured_emit_started_at = Instant::now();
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
@@ -1019,9 +1010,7 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
-            let session_configured_emit_duration = session_configured_emit_started_at.elapsed();
 
-            let mcp_init_started_at = Instant::now();
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
                 .filter(|(_, server)| server.enabled() && server.required())
@@ -1130,8 +1119,6 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
-            let mcp_init_duration = mcp_init_started_at.elapsed();
-            let post_session_configured_started_at = Instant::now();
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1148,20 +1135,6 @@ impl Session {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));
             }
-            let post_session_configured_duration = post_session_configured_started_at.elapsed();
-
-            tracing::info!(
-                thread_id = %thread_id,
-                session_source = %session_configuration.session_source,
-                parallel_setup_ms = %parallel_setup_duration.as_millis(),
-                pre_session_configured_ms = %pre_session_configured_duration.as_millis(),
-                services_build_ms = %services_build_duration.as_millis(),
-                session_configured_emit_ms = %session_configured_emit_duration.as_millis(),
-                mcp_init_ms = %mcp_init_duration.as_millis(),
-                post_session_configured_ms = %post_session_configured_duration.as_millis(),
-                total_ms = %session_init_started_at.elapsed().as_millis(),
-                "session init timing"
-            );
 
             Ok(sess)
         }

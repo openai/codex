@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelServiceTier;
@@ -14,29 +13,13 @@ pub async fn supported_models(
     thread_manager: Arc<ThreadManager>,
     include_hidden: bool,
 ) -> Vec<Model> {
-    let supported_models_started_at = Instant::now();
-    let list_models_started_at = Instant::now();
-    let presets = thread_manager
+    thread_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
-        .await;
-    let list_models_ms = list_models_started_at.elapsed().as_millis();
-    let preset_count = presets.len();
-    let filter_and_map_started_at = Instant::now();
-    let models = presets
+        .await
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)
-        .collect::<Vec<_>>();
-    tracing::info!(
-        include_hidden,
-        list_models_ms = %list_models_ms,
-        filter_and_map_ms = %filter_and_map_started_at.elapsed().as_millis(),
-        preset_count,
-        returned_count = models.len(),
-        total_ms = %supported_models_started_at.elapsed().as_millis(),
-        "app-server supported models timing"
-    );
-    models
+        .collect()
 }
 
 fn model_from_preset(preset: ModelPreset) -> Model {
