@@ -352,6 +352,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 duration_ms: None,
             },
         ],
+        search_preview: None,
     };
 
     assert_eq!(
@@ -607,6 +608,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             git_info: None,
             name: Some("thread".to_string()),
             turns: vec![],
+            search_preview: None,
         },
         model: "gpt-5.4".to_string(),
         model_provider: "openai".to_string(),

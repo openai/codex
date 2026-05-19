@@ -15264,6 +15264,52 @@
       "title": "ThreadRollbackResponse",
       "type": "object"
     },
+    "ThreadSearchPreview": {
+      "oneOf": [
+        {
+          "properties": {
+            "assistantMessage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "conversation"
+              ],
+              "type": "string"
+            },
+            "userMessage": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "userMessage"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "contentMatch"
+              ],
+              "type": "string"
+            },
+            "snippet": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "snippet"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ThreadSetNameParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

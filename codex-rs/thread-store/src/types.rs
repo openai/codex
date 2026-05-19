@@ -368,6 +368,8 @@ pub struct StoredThread {
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Search-only preview context populated for thread discovery responses.
+    pub search_preview: Option<codex_rollout::ThreadSearchPreview>,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
 }

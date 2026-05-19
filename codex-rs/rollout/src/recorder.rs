@@ -42,6 +42,9 @@ use super::list::get_threads_in_root;
 use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
+use super::policy::EventPersistenceMode;
+use super::policy::is_persisted_rollout_item;
+use super::search::ThreadSearchMatches;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
 use crate::default_client::originator;
@@ -418,6 +421,14 @@ impl RolloutRecorder {
                 sort_key,
             ));
         }
+        if search_term.is_some() {
+            return Ok(page_from_filesystem_scan(
+                fs_page,
+                sort_direction,
+                page_size,
+                sort_key,
+            ));
+        }
 
         // For metadata-filtered listings the filesystem page is the page we return. Track those
         // IDs so the later DB page only triggers full reconciliation for DB-only hits.
@@ -429,28 +440,15 @@ impl RolloutRecorder {
 
         // Warm the DB by repairing every filesystem hit before querying SQLite. Source/provider/cwd
         // filters are already validated from rollout head metadata, so lightweight read-repair is
-        // enough there. Search can depend on full title metadata, so keep full reconciliation.
+        // enough there.
         for item in &fs_page.items {
-            if search_term.is_some() {
-                state_db::reconcile_rollout(
-                    state_db_ctx.as_deref(),
-                    item.path.as_path(),
-                    default_provider,
-                    /*builder*/ None,
-                    &[],
-                    Some(archived),
-                    /*new_thread_memory_mode*/ None,
-                )
-                .await;
-            } else {
-                state_db::read_repair_rollout_path(
-                    state_db_ctx.as_deref(),
-                    item.thread_id,
-                    Some(archived),
-                    item.path.as_path(),
-                )
-                .await;
-            }
+            state_db::read_repair_rollout_path(
+                state_db_ctx.as_deref(),
+                item.thread_id,
+                Some(archived),
+                item.path.as_path(),
+            )
+            .await;
         }
 
         let db_page = state_db::list_threads_db(
@@ -468,38 +466,6 @@ impl RolloutRecorder {
         )
         .await;
         if let Some(db_page) = db_page {
-            if search_term.is_some() && (!db_page.items.is_empty() || cursor.is_some()) {
-                for item in &db_page.items {
-                    state_db::reconcile_rollout(
-                        state_db_ctx.as_deref(),
-                        item.rollout_path.as_path(),
-                        default_provider,
-                        /*builder*/ None,
-                        &[],
-                        Some(archived),
-                        /*new_thread_memory_mode*/ None,
-                    )
-                    .await;
-                }
-                if let Some(repaired_db_page) = state_db::list_threads_db(
-                    state_db_ctx.as_deref(),
-                    codex_home,
-                    page_size,
-                    cursor,
-                    sort_key,
-                    sort_direction,
-                    allowed_sources,
-                    model_providers,
-                    cwd_filters,
-                    archived,
-                    search_term,
-                )
-                .await
-                {
-                    return Ok(repaired_db_page.into());
-                }
-                return Ok(db_page.into());
-            }
             if listing_has_metadata_filters {
                 for item in &db_page.items {
                     // Rows that also appeared in the filesystem page were just validated from the
@@ -1024,6 +990,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         cli_version,
         created_at,
         updated_at,
+        search_preview: _search_preview,
     } = state_item;
 
     if item.first_user_message.is_none() {
@@ -1081,6 +1048,7 @@ async fn list_threads_from_files_desc(
     search_term: Option<&str>,
 ) -> std::io::Result<ThreadsPage> {
     if let Some(search_term) = search_term {
+        let search_matches = ThreadSearchMatches::load(codex_home, archived, search_term).await?;
         let mut matching_items = Vec::new();
         let mut scanned_files = 0usize;
         let mut reached_scan_cap = false;
@@ -1102,7 +1070,8 @@ async fn list_threads_from_files_desc(
             .await?;
             scanned_files = scanned_files.saturating_add(page.num_scanned_files);
             reached_scan_cap |= page.reached_scan_cap;
-            filter_thread_items_by_search_term(codex_home, &mut page.items, Some(search_term))
+            search_matches
+                .retain_matching_items(codex_home, &mut page.items)
                 .await?;
             matching_items.extend(page.items);
             page_cursor = page.next_cursor;
@@ -1228,7 +1197,12 @@ async fn list_threads_from_files_asc(
         }
     }
 
-    filter_thread_items_by_search_term(codex_home, &mut all_items, search_term).await?;
+    if let Some(search_term) = search_term {
+        ThreadSearchMatches::load(codex_home, archived, search_term)
+            .await?
+            .retain_matching_items(codex_home, &mut all_items)
+            .await?;
+    }
 
     let mut keyed_items = all_items
         .into_iter()
@@ -1262,31 +1236,6 @@ async fn list_threads_from_files_asc(
         num_scanned_files: scanned_files,
         reached_scan_cap,
     })
-}
-
-async fn filter_thread_items_by_search_term(
-    codex_home: &Path,
-    items: &mut Vec<ThreadItem>,
-    search_term: Option<&str>,
-) -> std::io::Result<()> {
-    let Some(search_term) = search_term else {
-        return Ok(());
-    };
-
-    // The file-backed fallback only has the thread title in the sidecar session index.
-    // Match the SQLite path's title substring filter so search pagination behaves the same
-    // whether the state DB is available or not.
-    let thread_ids = items
-        .iter()
-        .filter_map(|item| item.thread_id)
-        .collect::<HashSet<_>>();
-    let thread_names = find_thread_names_by_ids(codex_home, &thread_ids).await?;
-    items.retain(|item| {
-        item.thread_id
-            .and_then(|thread_id| thread_names.get(&thread_id))
-            .is_some_and(|title| title.contains(search_term))
-    });
-    Ok(())
 }
 
 fn thread_item_sort_key(
@@ -1691,6 +1640,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        search_preview: None,
     }
 }
 

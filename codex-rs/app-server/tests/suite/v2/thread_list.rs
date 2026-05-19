@@ -17,6 +17,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSearchPreview;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -28,11 +29,13 @@ use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
@@ -171,6 +174,20 @@ fn set_rollout_cwd(path: &Path, cwd: &Path) -> Result<()> {
     rollout_line.item = RolloutItem::SessionMeta(session_meta_line);
     *first_line = serde_json::to_string(&rollout_line)?;
     fs::write(path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn append_rollout_item(path: &Path, timestamp: &str, item: RolloutItem) -> Result<()> {
+    let mut content = fs::read_to_string(path)?;
+    content.push_str(
+        serde_json::to_string(&RolloutLine {
+            timestamp: timestamp.to_string(),
+            item,
+        })?
+        .as_str(),
+    );
+    content.push('\n');
+    fs::write(path, content)?;
     Ok(())
 }
 
@@ -580,54 +597,61 @@ sqlite = true
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-    let _non_match = create_fake_rollout(
+    let title_match = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T11-00-00",
         "2025-01-02T11:00:00Z",
-        "no hit here",
+        "opening title-only conversation",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
+    append_rollout_item(
+        rollout_path(
+            codex_home.path(),
+            "2025-01-02T11-00-00",
+            title_match.as_str(),
+        )
+        .as_path(),
+        "2025-01-02T11:01:00Z",
+        RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "opening title-only answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        )),
+    )?;
+    codex_rollout::append_thread_name(
+        codex_home.path(),
+        ThreadId::from_string(title_match.as_str())?,
+        "needle custom title",
+    )
+    .await?;
     let newer_match = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
-        "needle suffix",
+        "no body hit in preview",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-
-    // `thread/list` applies `search_term` on the sqlite fast path. This test creates
-    // rollouts manually, so mark the DB backfill complete and then run an unsearched
-    // list large enough to repair every rollout the searched list should find.
-    let state_db =
-        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
-            .await?;
-    state_db
-        .mark_backfill_complete(/*last_watermark*/ None)
-        .await?;
-    let rollout_config = codex_rollout::RolloutConfig {
-        codex_home: codex_home.path().to_path_buf(),
-        sqlite_home: codex_home.path().to_path_buf(),
-        cwd: codex_home.path().to_path_buf(),
-        model_provider_id: "mock_provider".to_string(),
-        generate_memories: false,
-    };
-    let repaired_page = codex_core::RolloutRecorder::list_threads(
-        Some(state_db.clone()),
-        &rollout_config,
-        /*page_size*/ 10,
-        /*cursor*/ None,
-        codex_core::ThreadSortKey::CreatedAt,
-        codex_core::SortDirection::Desc,
-        &[],
-        /*model_providers*/ None,
-        /*cwd_filters*/ None,
-        "mock_provider",
-        /*search_term*/ None,
-    )
-    .await?;
-    assert_eq!(repaired_page.items.len(), 3);
+    append_rollout_item(
+        rollout_path(
+            codex_home.path(),
+            "2025-01-02T12-00-00",
+            newer_match.as_str(),
+        )
+        .as_path(),
+        "2025-01-02T12:05:00Z",
+        RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "later message with needle suffix".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+    )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
@@ -655,7 +679,20 @@ sqlite = true
 
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids, vec![newer_match, older_match]);
+    assert_eq!(ids, vec![newer_match, title_match, older_match]);
+    assert_eq!(
+        data[0].search_preview,
+        Some(ThreadSearchPreview::ContentMatch {
+            snippet: "later message with needle suffix".to_string(),
+        })
+    );
+    assert_eq!(
+        data[1].search_preview,
+        Some(ThreadSearchPreview::Conversation {
+            user_message: "opening title-only conversation".to_string(),
+            assistant_message: Some("opening title-only answer".to_string()),
+        })
+    );
 
     Ok(())
 }

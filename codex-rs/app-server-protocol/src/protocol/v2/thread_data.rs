@@ -5,6 +5,7 @@ use super::TurnStatus;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadSource as CoreThreadSource;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -99,7 +100,9 @@ pub struct GitInfo {
     pub origin_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
@@ -140,11 +143,31 @@ pub struct Thread {
     pub git_info: Option<GitInfo>,
     /// Optional user-facing thread title.
     pub name: Option<String>,
+    /// Search-only preview context populated on matching `thread/list` results.
+    #[experimental("thread.searchPreview")]
+    pub search_preview: Option<ThreadSearchPreview>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
     pub turns: Vec<Turn>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(tag = "kind", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadSearchPreview {
+    Conversation {
+        #[serde(rename = "userMessage")]
+        #[ts(rename = "userMessage")]
+        user_message: String,
+        #[serde(rename = "assistantMessage")]
+        #[ts(rename = "assistantMessage")]
+        assistant_message: Option<String>,
+    },
+    ContentMatch {
+        snippet: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

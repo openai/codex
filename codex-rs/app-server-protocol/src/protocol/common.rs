@@ -2321,6 +2321,7 @@ mod tests {
                     agent_role: None,
                     git_info: None,
                     name: None,
+                    search_preview: None,
                     turns: Vec::new(),
                 },
                 model: "gpt-5".to_string(),
@@ -2365,6 +2366,7 @@ mod tests {
                         "agentRole": null,
                         "gitInfo": null,
                         "name": null,
+                        "searchPreview": null,
                         "turns": []
                     },
                     "model": "gpt-5",

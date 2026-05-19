@@ -320,6 +320,7 @@ pub(crate) fn summary_to_thread(
         thread_source: None,
         git_info,
         name: None,
+        search_preview: None,
         turns: Vec::new(),
     }
 }

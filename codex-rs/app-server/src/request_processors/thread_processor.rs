@@ -3777,9 +3777,29 @@ pub(crate) fn thread_from_stored_thread(
         thread_source: thread.thread_source.map(Into::into),
         git_info,
         name: thread.name,
+        search_preview: thread
+            .search_preview
+            .map(thread_search_preview_from_rollout),
         turns: Vec::new(),
     };
     (thread, history)
+}
+
+fn thread_search_preview_from_rollout(
+    preview: codex_rollout::ThreadSearchPreview,
+) -> codex_app_server_protocol::ThreadSearchPreview {
+    match preview {
+        codex_rollout::ThreadSearchPreview::Conversation {
+            user_message,
+            assistant_message,
+        } => codex_app_server_protocol::ThreadSearchPreview::Conversation {
+            user_message,
+            assistant_message,
+        },
+        codex_rollout::ThreadSearchPreview::ContentMatch { snippet } => {
+            codex_app_server_protocol::ThreadSearchPreview::ContentMatch { snippet }
+        }
+    }
 }
 
 fn summary_from_stored_thread(
@@ -3981,6 +4001,7 @@ fn build_thread_from_snapshot(
         thread_source: config_snapshot.thread_source.map(Into::into),
         git_info: None,
         name: None,
+        search_preview: None,
         turns: Vec::new(),
     }
 }
