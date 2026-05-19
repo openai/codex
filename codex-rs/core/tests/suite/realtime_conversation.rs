@@ -649,6 +649,8 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
 async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let sideband_accept_delay = Duration::from_millis(700);
+    let stale_sideband_observation_window = Duration::from_secs(1);
     let server = start_mock_server().await;
     Mock::given(method("POST"))
         .and(path_regex(".*/realtime/calls$"))
@@ -662,10 +664,9 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![]],
         response_headers: Vec::new(),
-        // Keep the sideband handshake pending beyond the stale-event observation window below.
-        // Slow CI runners can otherwise complete the mock accept before the close path gets to
-        // abort the sideband task, which makes the negative handshake assertion scheduler-racy.
-        accept_delay: Some(Duration::from_secs(5)),
+        // Keep the sideband handshake pending through the close path on slow CI without adding a
+        // multi-second fixed tail when the mock websocket server shuts down.
+        accept_delay: Some(sideband_accept_delay),
         close_after_requests: false,
     }])
     .await;
@@ -711,7 +712,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let stale_event = timeout(Duration::from_millis(700), async {
+    let stale_event = timeout(stale_sideband_observation_window, async {
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                 payload: RealtimeEvent::Error(message),
