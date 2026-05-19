@@ -448,6 +448,7 @@ fn session_configured_event(model: &str) -> ThreadSessionState {
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile: None,
         cwd: test_path_buf("/tmp/project").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         message_history: None,
@@ -1469,11 +1470,10 @@ fn session_header_indicates_yolo_mode() {
 
 #[test]
 fn yolo_mode_includes_managed_full_access_profiles() {
-    let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: true },
-        file_system: PermissionProfileFileSystemPermissions::Unrestricted,
-    }
-    .into();
+    let permission_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Enabled,
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+    };
 
     assert!(has_yolo_permissions(
         AskForApproval::Never,
@@ -1483,10 +1483,9 @@ fn yolo_mode_includes_managed_full_access_profiles() {
 
 #[test]
 fn yolo_mode_excludes_external_sandbox_profiles() {
-    let permission_profile: PermissionProfile = AppServerPermissionProfile::External {
-        network: PermissionProfileNetworkPermissions { enabled: true },
-    }
-    .into();
+    let permission_profile: PermissionProfile = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Enabled,
+    };
 
     assert!(!has_yolo_permissions(
         AskForApproval::Never,

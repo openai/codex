@@ -161,7 +161,6 @@ pub(super) async fn make_chatwidget_manual(
     let model_catalog = test_model_catalog(&cfg);
     let common = ChatWidgetInit {
         config: cfg,
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx,
         workspace_command_runner: None,

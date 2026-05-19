@@ -188,6 +188,25 @@
         }
       ]
     },
+    "AutoCompactTokenLimitScope": {
+      "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
+      "oneOf": [
+        {
+          "description": "Count the full active context against the limit.",
+          "enum": [
+            "total"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Count sampled output and later growth after the carried window prefix.",
+          "enum": [
+            "body_after_prefix"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "Config": {
       "additionalProperties": true,
       "properties": {
@@ -278,6 +297,16 @@
           "type": [
             "integer",
             "null"
+          ]
+        },
+        "model_auto_compact_token_limit_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AutoCompactTokenLimitScope"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "model_context_window": {

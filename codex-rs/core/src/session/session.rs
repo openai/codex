@@ -1,5 +1,7 @@
+use super::input_queue::InputQueue;
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -27,9 +29,7 @@ pub(crate) struct Session {
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    pub(super) mailbox: Mailbox,
-    pub(super) mailbox_rx: Mutex<MailboxReceiver>,
-    pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    pub(crate) input_queue: InputQueue,
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -63,9 +63,9 @@ pub(crate) struct SessionConfiguration {
     /// When to escalate for approval for execution
     pub(super) approval_policy: Constrained<AskForApproval>,
     pub(super) approvals_reviewer: ApprovalsReviewer,
-    /// Permission profile state for the session. Keep the constrained profile
-    /// and selected profile id in sync by using the methods below instead of
-    /// mutating the fields independently.
+    /// Permission profile state for the session. Keep the constrained profile,
+    /// active profile id, and profile-defined workspace roots in sync by using
+    /// the methods below instead of mutating the fields independently.
     pub(super) permission_profile_state: PermissionProfileState,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
@@ -74,6 +74,9 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     pub(super) cwd: AbsolutePathBuf,
+    /// Thread-scoped runtime workspace roots for materializing symbolic
+    /// workspace permissions at session runtime.
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -107,11 +110,18 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile_state.permission_profile().clone()
+        self.permission_profile_state
+            .permission_profile()
+            .clone()
+            .materialize_project_roots_with_workspace_roots(&self.workspace_roots)
     }
 
     pub(super) fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
         self.permission_profile_state.active_permission_profile()
+    }
+
+    pub(super) fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.permission_profile_state.profile_workspace_roots()
     }
 
     pub(super) fn apply_permission_profile_to_permissions(
@@ -164,9 +174,13 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
+            profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
+            collaboration_mode: self.collaboration_mode.clone(),
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
         }
@@ -243,6 +257,23 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
+        if let Some(workspace_roots) = updates.workspace_roots.clone() {
+            next_configuration.workspace_roots = workspace_roots;
+        } else if cwd_changed && self.workspace_roots.contains(&self.cwd) {
+            let mut retargeted_workspace_roots =
+                Vec::with_capacity(next_configuration.workspace_roots.len());
+            for root in &self.workspace_roots {
+                let root = if root == &self.cwd {
+                    next_configuration.cwd.clone()
+                } else {
+                    root.clone()
+                };
+                if !retargeted_workspace_roots.contains(&root) {
+                    retargeted_workspace_roots.push(root);
+                }
+            }
+            next_configuration.workspace_roots = retargeted_workspace_roots;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -256,6 +287,7 @@ impl SessionConfiguration {
             next_configuration.set_permission_profile_projection(
                 permission_profile,
                 active_permission_profile,
+                updates.profile_workspace_roots.clone().unwrap_or_default(),
                 Some(&current_file_system_sandbox_policy),
             )?;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
@@ -311,6 +343,7 @@ impl SessionConfiguration {
         &mut self,
         permission_profile: PermissionProfile,
         active_permission_profile: Option<ActivePermissionProfile>,
+        profile_workspace_roots: Vec<AbsolutePathBuf>,
         preserve_deny_reads_from: Option<&FileSystemSandboxPolicy>,
     ) -> ConstraintResult<()> {
         let enforcement = permission_profile.enforcement();
@@ -326,17 +359,28 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        self.permission_profile_state.set_active_permission_profile(
-            effective_permission_profile,
-            active_permission_profile,
-            Vec::new(),
-        )
+
+        let permission_snapshot = match active_permission_profile {
+            Some(active_permission_profile) => {
+                PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                    effective_permission_profile,
+                    active_permission_profile,
+                    profile_workspace_roots,
+                )
+            }
+            None => PermissionProfileSnapshot::legacy(effective_permission_profile),
+        };
+
+        self.permission_profile_state
+            .set_permission_profile_snapshot(permission_snapshot)
     }
 }
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
@@ -835,7 +879,7 @@ impl Session {
                     config: config.as_ref(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
-                });
+                }).await;
             }
 
             let services = SessionServices {
@@ -908,7 +952,6 @@ impl Session {
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
-            let (mailbox, mailbox_rx) = Mailbox::new();
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
@@ -921,9 +964,7 @@ impl Session {
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
-                mailbox,
-                mailbox_rx: Mutex::new(mailbox_rx),
-                idle_pending_input: Mutex::new(Vec::new()),
+                input_queue: InputQueue::new(),
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
@@ -1088,7 +1129,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            sess.record_initial_history(initial_history).await;
+            Box::pin(sess.record_initial_history(initial_history)).await;
             {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));

@@ -2,7 +2,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -88,23 +87,19 @@ pub(crate) struct ResolvedCommand {
 
 fn post_unified_exec_tool_use_payload(
     invocation: &ToolInvocation,
-    result: &ExecCommandToolOutput,
+    result: &dyn ToolOutput,
 ) -> Option<PostToolUsePayload> {
     let ToolPayload::Function { .. } = &invocation.payload else {
         return None;
     };
 
-    let command = result.hook_command.clone()?;
-    let tool_use_id = if result.event_call_id.is_empty() {
-        invocation.call_id.clone()
-    } else {
-        result.event_call_id.clone()
-    };
+    let tool_input = result.post_tool_use_input(&invocation.payload)?;
+    let tool_use_id = result.post_tool_use_id(&invocation.call_id);
     let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
     Some(PostToolUsePayload {
         tool_name: HookToolName::bash(),
         tool_use_id,
-        tool_input: serde_json::json!({ "command": command }),
+        tool_input,
         tool_response,
     })
 }

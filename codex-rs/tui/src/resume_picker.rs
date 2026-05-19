@@ -477,6 +477,9 @@ async fn run_session_picker_with_loader(
                             return Ok(sel);
                         }
                     }
+                    TuiEvent::Paste(pasted) => {
+                        state.handle_paste(pasted);
+                    }
                     TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
                             let list_height =
@@ -489,7 +492,6 @@ async fn run_session_picker_with_loader(
                             state.open_pending_transcript_if_ready();
                         }
                     }
-                    _ => {}
                 }
             }
             Some(event) = background_events.next() => {
@@ -541,6 +543,11 @@ fn picker_cwd_filter(
     } else {
         Some(config_cwd.to_path_buf())
     }
+}
+
+fn normalize_pasted_query(pasted: &str) -> Option<String> {
+    let normalized = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn spawn_app_server_page_loader(
@@ -1225,6 +1232,21 @@ impl PickerState {
             _ => {}
         }
         Ok(None)
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if self.is_transcript_loading() {
+            return;
+        }
+        let Some(pasted) = normalize_pasted_query(&pasted) else {
+            return;
+        };
+        let mut new_query = self.query.clone();
+        if !new_query.is_empty() && !new_query.ends_with(char::is_whitespace) {
+            new_query.push(' ');
+        }
+        new_query.push_str(&pasted);
+        self.set_query(new_query);
     }
 
     fn start_initial_load(&mut self) {
@@ -2929,12 +2951,12 @@ fn render_expanded_session_details(
     width: u16,
 ) -> Vec<Line<'static>> {
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
-    let session = row
-        .thread_name
-        .as_deref()
-        .map(str::to_string)
-        .or_else(|| row.thread_id.map(|thread_id| thread_id.to_string()))
-        .unwrap_or_else(|| "-".to_string());
+    let session = match (row.thread_name.as_deref(), row.thread_id) {
+        (Some(thread_name), Some(thread_id)) => format!("{thread_name} ({thread_id})"),
+        (Some(thread_name), None) => thread_name.to_string(),
+        (None, Some(thread_id)) => thread_id.to_string(),
+        (None, None) => "-".to_string(),
+    };
     let directory = row
         .cwd
         .as_ref()
@@ -3387,7 +3409,9 @@ mod tests {
         let expected_directory =
             format_directory_display(row.cwd.as_deref().expect("cwd"), /*max_width*/ None);
 
-        assert!(rendered.contains("Session:    feat(tui): add raw scrollback mode"));
+        assert!(rendered.contains(
+            "Session:    feat(tui): add raw scrollback mode (019dabc1-0ef5-7431-b81c-03037f51f62c)"
+        ));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
         assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
@@ -6214,6 +6238,87 @@ session_picker_view = "dense"
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn paste_appends_to_existing_query() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("resize");
+
+        state.handle_paste(String::from("results"));
+
+        assert_eq!(state.query, "resize results");
+    }
+
+    #[test]
+    fn normalize_pasted_query_collapses_whitespace() {
+        assert_eq!(
+            normalize_pasted_query("  alpha\n\tbeta\r\n gamma  "),
+            Some(String::from("alpha beta gamma"))
+        );
+    }
+
+    #[tokio::test]
+    async fn whitespace_only_paste_is_ignored() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("resize");
+
+        state.handle_paste(String::from("  \n\t  "));
+
+        assert_eq!(state.query, "resize");
+    }
+
+    #[tokio::test]
+    async fn paste_uses_existing_search_loading_path() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![make_row(
+                "/tmp/start.jsonl",
+                "2025-01-01T00:00:00Z",
+                "alpha",
+            )],
+            Some("2025-01-02T00:00:00Z"),
+            /*num_scanned_files*/ 1,
+            /*reached_scan_cap*/ false,
+        ));
+        recorded_requests.lock().unwrap().clear();
+
+        state.handle_paste(String::from("target"));
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(state.query, "target");
+        assert_eq!(guard.len(), 1);
+        assert!(guard[0].search_token.is_some());
     }
 
     #[tokio::test]

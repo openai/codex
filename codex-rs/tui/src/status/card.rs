@@ -106,6 +106,7 @@ struct StatusHistoryCell {
     agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
+    show_chatgpt_usage_link: bool,
     account: Option<StatusAccountDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
@@ -256,7 +257,7 @@ impl StatusHistoryCell {
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
         let permission_profile = config.permissions.effective_permission_profile();
-        let workspace_roots = config.permissions.user_visible_workspace_roots();
+        let workspace_roots = config.effective_workspace_roots();
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
@@ -267,7 +268,11 @@ impl StatusHistoryCell {
             ),
             (
                 "sandbox",
-                summarize_permission_profile(&permission_profile, &config.cwd, workspace_roots),
+                summarize_permission_profile(
+                    &permission_profile,
+                    &config.cwd,
+                    workspace_roots.as_slice(),
+                ),
             ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
@@ -291,8 +296,9 @@ impl StatusHistoryCell {
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
         let active_permission_profile = config.permissions.active_permission_profile();
-        let sandbox = status_permission_summary(&permission_profile, &config.cwd, workspace_roots);
-        let workspace_root_suffix = workspace_root_suffix(workspace_roots, &config.cwd);
+        let sandbox =
+            status_permission_summary(&permission_profile, &config.cwd, workspace_roots.as_slice());
+        let workspace_root_suffix = workspace_root_suffix(workspace_roots.as_slice(), &config.cwd);
         let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
         let permissions = status_permissions_label(
             active_permission_profile.as_ref(),
@@ -303,6 +309,7 @@ impl StatusHistoryCell {
             workspace_root_suffix.as_deref(),
         );
         let model_provider = format_model_provider(config, runtime_model_provider_base_url);
+        let show_chatgpt_usage_link = config.model_provider.requires_openai_auth;
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
@@ -342,6 +349,7 @@ impl StatusHistoryCell {
                 permissions,
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
+                show_chatgpt_usage_link,
                 account,
                 thread_name,
                 session_id,
@@ -760,8 +768,12 @@ impl HistoryCell for StatusHistoryCell {
             [note_first_line, note_second_line],
             RtOptions::new(available_inner_width),
         );
-        lines.extend(note_lines);
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        // The ChatGPT usage page only applies to providers backed by OpenAI auth;
+        // providers like Bedrock manage limits and billing elsewhere.
+        if self.show_chatgpt_usage_link {
+            lines.extend(note_lines);
+            lines.push(Line::from(Vec::<Span<'static>>::new()));
+        }
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {

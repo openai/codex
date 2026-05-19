@@ -10,6 +10,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_api::AuthProvider;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -22,12 +23,15 @@ use codex_exec_server::InitializeResponse;
 use codex_exec_server::RemoteExecutorConfig;
 use futures::SinkExt;
 use futures::StreamExt;
+use http::HeaderMap;
+use http::HeaderValue;
 use pretty_assertions::assert_eq;
 use prost::Message as ProstMessage;
 use relay_proto::RelayData;
 use relay_proto::RelayMessageFrame;
 use relay_proto::RelayReset;
 use relay_proto::relay_message_frame;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
@@ -46,6 +50,22 @@ const REGISTRY_TOKEN: &str = "registry-token";
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug)]
+struct StaticRegistryAuthProvider;
+
+impl AuthProvider for StaticRegistryAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let _ = headers.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer registry-token"),
+        );
+    }
+}
+
+fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
+    Arc::new(StaticRegistryAuthProvider)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -63,10 +83,10 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
-    let config = RemoteExecutorConfig::with_bearer_token(
+    let config = RemoteExecutorConfig::new(
         registry.uri(),
         EXECUTOR_ID.to_string(),
-        REGISTRY_TOKEN.to_string(),
+        static_registry_auth_provider(),
     )?;
     let remote_executor = tokio::spawn(codex_exec_server::run_remote_executor(
         config,
