@@ -2448,11 +2448,13 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             ..Default::default()
         })
         .await?;
-    timeout(
+    let running_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
     )
     .await??;
+    let TurnStartResponse { turn: running_turn } =
+        to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -2464,6 +2466,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
+            include_turns_page: true,
             ..Default::default()
         })
         .await?;
@@ -2472,9 +2475,23 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, model, .. } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread,
+        model,
+        initial_turns_page,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.4");
+    let initial_turns_page = initial_turns_page.expect("resume should include initial turns page");
+    let resumed_running_turn = initial_turns_page
+        .data
+        .first()
+        .expect("resume page should include the running turn");
+    assert_eq!(resumed_running_turn.id, running_turn.id);
+    assert_eq!(resumed_running_turn.items_view, TurnItemsView::Summary);
+    assert_eq!(resumed_running_turn.status, TurnStatus::InProgress);
+    assert!(initial_turns_page.backwards_cursor.is_some());
+    assert_eq!(initial_turns_page.next_cursor, None);
     // The running-thread resume response is queued onto the thread listener task.
     // If the in-flight turn completes before that queued command runs, the response
     // can legitimately observe the thread as idle.
