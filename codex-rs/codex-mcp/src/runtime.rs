@@ -245,8 +245,9 @@ mod tests {
             Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
                 .expect("remote environment"),
         );
-        let local_environment =
-            Arc::new(Environment::create_for_tests(None).expect("local environment"));
+        let local_environment = Arc::new(
+            Environment::create_for_tests(/*exec_server_url*/ None).expect("local environment"),
+        );
         let runtime_environment = McpRuntimeEnvironment::new(
             Some(remote_environment),
             Some(local_environment),
