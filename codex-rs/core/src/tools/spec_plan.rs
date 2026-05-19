@@ -269,6 +269,14 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
     multi_agent_v2_enabled(turn_context) || turn_context.features.get().enabled(Feature::Collab)
 }
 
+fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.goal_tools_enabled()
+        && !matches!(
+            turn_context.session_source,
+            SessionSource::SubAgent(SubAgentSource::Review)
+        )
+}
+
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.features.get().enabled(Feature::SpawnCsv)
 }
@@ -496,7 +504,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let environment_mode = turn_context.tool_environment_mode();
 
     planned_tools.add_runtime(PlanHandler);
-    if turn_context.goal_tools_enabled() {
+    if goal_tools_enabled(turn_context) {
         planned_tools.add_runtime(GetGoalHandler);
         planned_tools.add_runtime(CreateGoalHandler);
         planned_tools.add_runtime(UpdateGoalHandler);

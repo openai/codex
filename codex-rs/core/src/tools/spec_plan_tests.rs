@@ -408,6 +408,14 @@ async fn host_context_gates_goal_and_agent_job_tools() {
     .await;
     enabled.assert_visible_contains(&["get_goal", "create_goal", "update_goal"]);
 
+    let review_thread = probe(|turn| {
+        set_feature(turn, Feature::Goals, /*enabled*/ true);
+        turn.goal_tools_supported = true;
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    })
+    .await;
+    review_thread.assert_visible_lacks(&["get_goal", "create_goal", "update_goal"]);
+
     let normal_agent_job = probe(|turn| {
         set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
     })
