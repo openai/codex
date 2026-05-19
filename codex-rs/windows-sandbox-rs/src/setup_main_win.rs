@@ -214,6 +214,18 @@ fn apply_read_acls(
     Ok(())
 }
 
+fn user_profile_metadata_read_root(read_roots: &[PathBuf]) -> Option<PathBuf> {
+    let user_profile = PathBuf::from(std::env::var("USERPROFILE").ok()?);
+    let canonical_profile = canonicalize_path(&user_profile);
+
+    let needs_profile_root = read_roots.iter().any(|root| {
+        let canonical_root = canonicalize_path(root);
+        canonical_root != canonical_profile && canonical_root.starts_with(&canonical_profile)
+    });
+
+    needs_profile_root.then_some(user_profile)
+}
+
 fn read_mask_allows_or_log(
     root: &Path,
     psids: &[*mut c_void],
@@ -472,6 +484,20 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
         sandbox_group_psid,
         rx_psids: &rx_psids,
     };
+    if let Some(user_profile_root) = user_profile_metadata_read_root(&payload.read_roots) {
+        // Some Windows tools call `realpath` on USERPROFILE itself before descending into a
+        // readable child. Grant a non-inheriting root ACE so those metadata probes succeed
+        // without re-exposing excluded profile children like `.ssh`.
+        apply_read_acls(
+            &[user_profile_root],
+            &subjects,
+            log,
+            &mut refresh_errors,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            "read",
+            0,
+        )?;
+    }
     apply_read_acls(
         &payload.read_roots,
         &subjects,
@@ -914,9 +940,11 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::user_profile_metadata_read_root;
     use codex_otel::StatsigMetricsSettings;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tempfile::TempDir;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -953,5 +981,42 @@ mod tests {
                 environment: "prod".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn user_profile_metadata_root_is_added_for_profile_descendants() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path().join("user");
+        let docs = user_profile.join("Documents");
+        std::fs::create_dir_all(&docs).expect("create docs");
+        let previous = std::env::var_os("USERPROFILE");
+        std::env::set_var("USERPROFILE", &user_profile);
+
+        let root = user_profile_metadata_read_root(&[docs]);
+
+        match previous {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        assert_eq!(root, Some(user_profile));
+    }
+
+    #[test]
+    fn user_profile_metadata_root_is_not_added_for_non_descendants() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path().join("user");
+        let outside = tmp.path().join("workspace");
+        std::fs::create_dir_all(&user_profile).expect("create profile");
+        std::fs::create_dir_all(&outside).expect("create workspace");
+        let previous = std::env::var_os("USERPROFILE");
+        std::env::set_var("USERPROFILE", &user_profile);
+
+        let root = user_profile_metadata_read_root(&[outside]);
+
+        match previous {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+        assert_eq!(root, None);
     }
 }
