@@ -213,6 +213,7 @@ impl ConfigRequestProcessor {
 
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let runtime_capabilities = self.thread_manager.runtime_capabilities();
         tokio::spawn(async move {
             let (all_connectors_result, accessible_connectors_result) = tokio::join!(
                 connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
@@ -220,6 +221,7 @@ impl ConfigRequestProcessor {
                     &config,
                     /*force_refetch*/ true,
                     &environment_manager,
+                    &runtime_capabilities,
                 ),
             );
             let all_connectors = match all_connectors_result {

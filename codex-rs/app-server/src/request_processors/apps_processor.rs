@@ -75,8 +75,17 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let runtime_capabilities = self.thread_manager.runtime_capabilities();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
+            Self::apps_list_task(
+                outgoing,
+                request,
+                params,
+                config,
+                environment_manager,
+                runtime_capabilities,
+            )
+            .await;
         });
         Ok(None)
     }
@@ -87,8 +96,16 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
     ) {
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let result = Self::apps_list_response(
+            &outgoing,
+            params,
+            config,
+            environment_manager,
+            runtime_capabilities,
+        )
+        .await;
         outgoing.send_result(request_id, result).await;
     }
 
@@ -97,6 +114,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
     ) -> Result<AppsListResponse, JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -128,6 +146,7 @@ impl AppsRequestProcessor {
                     &accessible_config,
                     force_refetch,
                     &environment_manager,
+                    &runtime_capabilities,
                 )
                 .await
                 .map(|status| status.connectors)

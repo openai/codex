@@ -423,6 +423,10 @@ impl ThreadManager {
         self.state.environment_manager.clone()
     }
 
+    pub fn runtime_capabilities(&self) -> Arc<RuntimeCapabilities> {
+        Arc::clone(&self.state.runtime_capabilities)
+    }
+
     pub fn default_environment_selections(
         &self,
         cwd: &AbsolutePathBuf,

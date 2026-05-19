@@ -16,6 +16,8 @@ use codex_config::types::AppsDefaultConfig;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -114,6 +116,42 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = previous;
     result
+}
+
+fn test_runtime_paths() -> ExecServerRuntimePaths {
+    ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths")
+}
+
+#[tokio::test]
+async fn mcp_runtime_environment_preserves_configured_default_environment() {
+    let environment_manager = EnvironmentManager::create_for_tests(
+        Some("ws://127.0.0.1:8765".to_string()),
+        test_runtime_paths(),
+    )
+    .await;
+
+    let environment =
+        mcp_runtime_environment(&environment_manager, &RuntimeCapabilities::isolated())
+            .expect("configured default environment should be available");
+
+    assert!(environment.is_remote());
+}
+
+#[test]
+fn mcp_runtime_environment_requires_local_capability_without_default_environment() {
+    let environment_manager = EnvironmentManager::disabled_for_tests(test_runtime_paths());
+
+    let err = mcp_runtime_environment(&environment_manager, &RuntimeCapabilities::isolated())
+        .expect_err("isolated runtime should not get ambient local environment");
+
+    assert_eq!(
+        err.to_string(),
+        "list accessible connectors requires ambient worker-local environment"
+    );
 }
 
 #[test]

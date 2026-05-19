@@ -936,9 +936,14 @@ impl PluginRequestProcessor {
                     None => None,
                 };
                 let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &outcome.plugin.apps, &environment_manager)
-                        .await;
+                let runtime_capabilities = self.thread_manager.runtime_capabilities();
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &outcome.plugin.apps,
+                    &environment_manager,
+                    &runtime_capabilities,
+                )
+                .await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1014,8 +1019,14 @@ impl PluginRequestProcessor {
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
                 let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &plugin_apps, &environment_manager).await;
+                let runtime_capabilities = self.thread_manager.runtime_capabilities();
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &plugin_apps,
+                    &environment_manager,
+                    &runtime_capabilities,
+                )
+                .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1477,12 +1488,14 @@ impl PluginRequestProcessor {
         }
 
         let environment_manager = self.thread_manager.environment_manager();
+        let runtime_capabilities = self.thread_manager.runtime_capabilities();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options(config, /*force_refetch*/ true),
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,
-                &environment_manager
+                &environment_manager,
+                &runtime_capabilities,
             ),
         );
 
@@ -1749,6 +1762,7 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: &EnvironmentManager,
+    runtime_capabilities: &RuntimeCapabilities,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1772,6 +1786,7 @@ async fn load_plugin_app_summaries(
             config,
             /*force_refetch*/ false,
             environment_manager,
+            runtime_capabilities,
         )
         .await
         {

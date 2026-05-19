@@ -12,6 +12,7 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
+use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_protocol::models::PermissionProfile;
@@ -23,6 +24,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::runtime_capabilities::RuntimeCapabilities;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
@@ -199,10 +201,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     )?;
     let environment_manager =
         EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?;
+    let runtime_capabilities = RuntimeCapabilities::local(&environment_manager);
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
         &environment_manager,
+        &runtime_capabilities,
     )
     .await
 }
@@ -211,6 +215,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     config: &Config,
     force_refetch: bool,
     environment_manager: &EnvironmentManager,
+    runtime_capabilities: &RuntimeCapabilities,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -261,9 +266,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let environment = environment_manager
-        .default_environment()
-        .unwrap_or_else(|| environment_manager.local_environment());
+    let environment = mcp_runtime_environment(environment_manager, runtime_capabilities)?;
 
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
@@ -353,6 +356,16 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         connectors: accessible_connectors,
         codex_apps_ready,
     })
+}
+
+fn mcp_runtime_environment(
+    environment_manager: &EnvironmentManager,
+    runtime_capabilities: &RuntimeCapabilities,
+) -> anyhow::Result<Arc<Environment>> {
+    match environment_manager.default_environment() {
+        Some(environment) => Ok(environment),
+        None => Ok(runtime_capabilities.require_local_environment("list accessible connectors")?),
+    }
 }
 
 fn accessible_connectors_cache_key(

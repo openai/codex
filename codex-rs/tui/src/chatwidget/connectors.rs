@@ -49,11 +49,14 @@ impl ChatWidget {
         let environment_manager = Arc::clone(&self.environment_manager);
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
+            let runtime_capabilities =
+                codex_app_server_client::RuntimeCapabilities::local(environment_manager.as_ref());
             let accessible_result =
                 match chatgpt_connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &config,
                     force_refetch,
                     &environment_manager,
+                    &runtime_capabilities,
                 )
                 .await
                 {
