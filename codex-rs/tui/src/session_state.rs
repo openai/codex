@@ -58,16 +58,25 @@ impl ThreadSessionState {
         cwd: AbsolutePathBuf,
     ) {
         let previous_cwd = std::mem::replace(&mut self.cwd, cwd.clone());
-        if !self.runtime_workspace_roots.contains(&previous_cwd) {
-            return;
-        }
+        retarget_implicit_workspace_root(&mut self.runtime_workspace_roots, previous_cwd, cwd);
+    }
+}
 
-        let previous_roots = std::mem::take(&mut self.runtime_workspace_roots);
-        self.runtime_workspace_roots.push(cwd);
-        for root in previous_roots {
-            if root != previous_cwd && !self.runtime_workspace_roots.contains(&root) {
-                self.runtime_workspace_roots.push(root);
-            }
+pub(crate) fn retarget_implicit_workspace_root(
+    workspace_roots: &mut Vec<AbsolutePathBuf>,
+    previous_cwd: AbsolutePathBuf,
+    cwd: AbsolutePathBuf,
+) -> bool {
+    if !workspace_roots.contains(&previous_cwd) {
+        return false;
+    }
+
+    let previous_roots = std::mem::take(workspace_roots);
+    workspace_roots.push(cwd);
+    for root in previous_roots {
+        if root != previous_cwd && !workspace_roots.contains(&root) {
+            workspace_roots.push(root);
         }
     }
+    true
 }

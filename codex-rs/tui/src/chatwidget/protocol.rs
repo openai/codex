@@ -220,7 +220,6 @@ impl ChatWidget {
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
-            | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
@@ -249,8 +248,17 @@ impl ChatWidget {
         &mut self,
         thread_settings: codex_app_server_protocol::ThreadSettings,
     ) {
+        let previous_cwd = std::mem::replace(&mut self.config.cwd, thread_settings.cwd.clone());
         self.current_cwd = Some(thread_settings.cwd.to_path_buf());
-        self.config.cwd = thread_settings.cwd;
+        if crate::session_state::retarget_implicit_workspace_root(
+            &mut self.config.workspace_roots,
+            previous_cwd,
+            thread_settings.cwd.clone(),
+        ) {
+            self.config
+                .permissions
+                .set_workspace_roots(self.config.workspace_roots.clone());
+        }
         self.config.model_reasoning_summary = thread_settings.summary;
         self.config.personality = thread_settings.personality;
         self.effective_service_tier = thread_settings.service_tier.clone();

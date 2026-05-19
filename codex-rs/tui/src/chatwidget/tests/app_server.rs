@@ -4,7 +4,14 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn thread_settings_updated_notification_refreshes_active_ui_state_without_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let previous_cwd = test_path_buf("/tmp/thread-settings-previous").abs();
     let cwd = test_path_buf("/tmp/thread-settings").abs();
+    let extra_root = test_path_buf("/tmp/thread-settings-extra-root").abs();
+    chat.config.cwd = previous_cwd.clone();
+    chat.config.workspace_roots = vec![previous_cwd, extra_root.clone()];
+    chat.config
+        .permissions
+        .set_workspace_roots(chat.config.workspace_roots.clone());
     let permission_profile = PermissionProfile::workspace_write();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Plan,
@@ -63,6 +70,12 @@ async fn thread_settings_updated_notification_refreshes_active_ui_state_without_
     );
     assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
     assert_eq!(chat.current_collaboration_mode(), &collaboration_mode);
+    let expected_workspace_roots = vec![cwd, extra_root];
+    assert_eq!(chat.config_ref().workspace_roots, expected_workspace_roots);
+    assert_eq!(
+        chat.config_ref().permissions.user_visible_workspace_roots(),
+        expected_workspace_roots.as_slice()
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 

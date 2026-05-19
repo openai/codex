@@ -234,29 +234,33 @@ async fn thread_settings_updated_notification_reaches_active_thread_ui() -> Resu
 }
 
 #[tokio::test]
-async fn thread_settings_updated_notification_for_hidden_thread_updates_cache_only() -> Result<()> {
+async fn hidden_thread_settings_update_buffers_for_replay() -> Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let active_thread_id = ThreadId::new();
     let hidden_thread_id = ThreadId::new();
     let active_cwd = test_path_buf("/tmp/active").abs();
     let hidden_cwd = test_path_buf("/tmp/hidden").abs();
+    let hidden_next_cwd = test_path_buf("/tmp/hidden-next").abs();
+    let shared_root = test_path_buf("/tmp/shared").abs();
     app.enqueue_primary_thread_session(
         test_thread_session(active_thread_id, active_cwd.to_path_buf()),
         Vec::new(),
     )
     .await?;
+    let mut hidden_session = test_thread_session(hidden_thread_id, hidden_cwd.to_path_buf());
+    hidden_session.runtime_workspace_roots = vec![hidden_cwd.clone(), shared_root.clone()];
     app.thread_event_channels.insert(
         hidden_thread_id,
         ThreadEventChannel::new_with_session(
             THREAD_EVENT_CHANNEL_CAPACITY,
-            test_thread_session(hidden_thread_id, hidden_cwd.to_path_buf()),
+            hidden_session,
             Vec::new(),
         ),
     );
 
     app.handle_thread_settings_updated_notification(ThreadSettingsUpdatedNotification {
         thread_id: hidden_thread_id.to_string(),
-        thread_settings: test_thread_settings("gpt-hidden", hidden_cwd),
+        thread_settings: test_thread_settings("gpt-hidden", hidden_next_cwd.clone()),
     })
     .await;
 
@@ -272,6 +276,21 @@ async fn thread_settings_updated_notification_for_hidden_thread_updates_cache_on
             .as_ref()
             .map(|session| session.model.as_str()),
         Some("gpt-hidden")
+    );
+    let hidden_session = hidden_store.session.as_ref().expect("hidden session");
+    assert_eq!(hidden_session.cwd, hidden_next_cwd);
+    assert_eq!(
+        hidden_session.runtime_workspace_roots,
+        vec![hidden_next_cwd.clone(), shared_root]
+    );
+    assert!(
+        hidden_store.buffer.iter().any(|event| matches!(
+            event,
+            ThreadBufferedEvent::Notification(ServerNotification::ThreadSettingsUpdated(
+                notification
+            )) if notification.thread_settings.model == "gpt-hidden"
+        )),
+        "hidden thread settings update should be buffered for replay"
     );
     Ok(())
 }

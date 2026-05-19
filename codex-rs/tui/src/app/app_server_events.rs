@@ -163,7 +163,9 @@ impl App {
             session.model = notification.thread_settings.model.clone();
             session.model_provider_id = notification.thread_settings.model_provider.clone();
             session.service_tier = notification.thread_settings.service_tier.clone();
-            session.cwd = notification.thread_settings.cwd.clone();
+            session.set_cwd_retargeting_implicit_runtime_workspace_root(
+                notification.thread_settings.cwd.clone(),
+            );
             session.approval_policy = notification.thread_settings.approval_policy;
             session.approvals_reviewer = notification.thread_settings.approvals_reviewer.to_core();
             session.permission_profile = notification
@@ -178,6 +180,7 @@ impl App {
                 .map(codex_protocol::models::ActivePermissionProfile::from);
             session.reasoning_effort = notification.thread_settings.effort;
         };
+        let server_notification = ServerNotification::ThreadSettingsUpdated(notification.clone());
 
         if self.primary_thread_id == Some(thread_id)
             && let Some(session) = self.primary_session_configured.as_mut()
@@ -189,16 +192,15 @@ impl App {
             if let Some(session) = store.session.as_mut() {
                 update_session(session);
             }
+            store.push_notification(server_notification.clone());
         }
 
         if self.chat_widget.thread_id() != Some(thread_id) {
             return;
         }
 
-        self.chat_widget.handle_server_notification(
-            ServerNotification::ThreadSettingsUpdated(notification),
-            /*replay_kind*/ None,
-        );
+        self.chat_widget
+            .handle_server_notification(server_notification, /*replay_kind*/ None);
     }
 
     async fn handle_server_request_event(
