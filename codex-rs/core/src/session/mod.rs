@@ -1384,12 +1384,15 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn validate_settings(
+    pub(crate) async fn preview_settings(
         &self,
         updates: &SessionSettingsUpdate,
-    ) -> ConstraintResult<()> {
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
         let state = self.state.lock().await;
-        state.session_configuration.apply(updates).map(|_| ())
+        state
+            .session_configuration
+            .apply(updates)
+            .map(|configuration| configuration.thread_config_snapshot())
     }
 
     pub(crate) async fn set_session_startup_prewarm(
