@@ -234,11 +234,9 @@ impl McpConnectionManager {
                 join_set.spawn(async move {
                     let outcome = Err(StartupOutcomeError::Failed { error: reason });
                     let error = match &outcome {
-                        Err(error) => mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        ),
+                        Err(error) => {
+                            mcp_init_error_display(server_name.as_str(), auth_entry.as_ref(), error)
+                        }
                         Ok(_) => unreachable!("preflight failure cannot start an MCP client"),
                     };
                     let _ = emit_update(

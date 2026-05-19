@@ -932,9 +932,11 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
 
     assert!(!manager.clients.contains_key("stdio"));
     assert!(manager.clients.contains_key("http"));
-    assert!(!manager
-        .wait_for_server_ready("stdio", Duration::from_millis(10))
-        .await);
+    assert!(
+        !manager
+            .wait_for_server_ready("stdio", Duration::from_millis(10))
+            .await
+    );
     let failures = manager
         .required_startup_failures(&["stdio".to_string()])
         .await;
