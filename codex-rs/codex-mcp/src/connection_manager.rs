@@ -211,6 +211,8 @@ impl McpConnectionManager {
             let startup_unavailable_reason =
                 runtime_environment.startup_unavailable_reason(&server_name, configured_server);
             if let Some(reason) = startup_unavailable_reason.as_deref() {
+                // Treat placement mismatch like a per-server startup failure
+                // so usable MCP servers in the same config can still start.
                 warn!(server = %server_name, "{reason}; skipping MCP server");
             }
             let cancel_token = cancel_token.child_token();

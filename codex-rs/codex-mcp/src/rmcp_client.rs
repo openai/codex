@@ -597,6 +597,8 @@ async fn make_rmcp_client(
                     .collect::<HashMap<_, _>>()
             });
             let launcher = if remote_environment {
+                // Preflight should reject this first, but keep client startup
+                // defensive if optional runtime placement is mis-threaded.
                 let Some(environment) = runtime_environment.environment() else {
                     return Err(StartupOutcomeError::from(anyhow!(
                         "remote MCP server requires a runtime environment"

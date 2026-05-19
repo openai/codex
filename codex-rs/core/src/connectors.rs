@@ -270,6 +270,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         PermissionProfile::default(),
+        // Connector discovery is threadless. Use an actually configured env if
+        // one exists, but do not reintroduce the old hidden-local fallback.
         McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
             config.cwd.to_path_buf(),

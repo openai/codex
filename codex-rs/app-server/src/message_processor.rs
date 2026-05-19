@@ -281,6 +281,9 @@ impl MessageProcessor {
     }
 
     fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
+        // CCA filters these local-only RPCs before they reach app-server, but
+        // keep a Codex-side backstop so no-local app-server modes fail safely
+        // if a client still invokes one directly.
         self.environment_manager
             .has_local_environment()
             .then_some(())
@@ -476,6 +479,8 @@ impl MessageProcessor {
         );
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
+        // `fs/*` is a local-host filesystem surface. Do not construct it when
+        // the manager intentionally has no local environment.
         let fs_processor = thread_manager
             .environment_manager()
             .try_local_environment()

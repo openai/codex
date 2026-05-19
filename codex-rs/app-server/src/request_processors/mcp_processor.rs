@@ -205,8 +205,9 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Status listing has no turn cwd. This fallback is used only by
-        // executor-backed stdio MCPs whose config omits `cwd`.
+        // Status listing has no turn cwd. Prefer the configured default env,
+        // then configured local if present; do not manufacture a hidden local
+        // env in no-local modes.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
             config.cwd.to_path_buf(),
@@ -365,8 +366,9 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Resource reads without a thread have no turn cwd. This fallback is
-        // used only by executor-backed stdio MCPs whose config omits `cwd`.
+        // Resource reads without a thread have no turn cwd. Prefer the
+        // configured default env, then configured local if present; do not
+        // manufacture a hidden local env in no-local modes.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
             config.cwd.to_path_buf(),

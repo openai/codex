@@ -63,6 +63,9 @@ impl McpRuntimeEnvironment {
         server_name: &str,
         config: &codex_config::McpServerConfig,
     ) -> Option<String> {
+        // This is intentionally narrower than "no env means no MCP": local
+        // stdio needs a local process launcher, while local HTTP can still use
+        // the ambient HTTP client with no local environment configured.
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
                 if !self

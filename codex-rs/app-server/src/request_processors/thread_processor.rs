@@ -1738,6 +1738,8 @@ impl ThreadRequestProcessor {
         if command.is_empty() {
             return Err(invalid_request("command must not be empty"));
         }
+        // `thread/shellCommand` is app-server's local-host shell escape hatch,
+        // not the normal turn-selected shell tool path.
         if self
             .thread_manager
             .environment_manager()
