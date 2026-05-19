@@ -5,9 +5,9 @@ use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
@@ -33,6 +33,7 @@ pub(crate) struct ConfigManager {
     strict_config: bool,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     arg0_paths: Arg0DispatchPaths,
+    runtime_capabilities: Arc<RuntimeCapabilities>,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
 }
 
@@ -44,6 +45,7 @@ impl ConfigManager {
         strict_config: bool,
         cloud_requirements: CloudRequirementsLoader,
         arg0_paths: Arg0DispatchPaths,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
     ) -> Self {
         Self {
@@ -54,6 +56,7 @@ impl ConfigManager {
             strict_config,
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
             arg0_paths,
+            runtime_capabilities,
             thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
         }
     }
@@ -219,6 +222,10 @@ impl ConfigManager {
         typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
+        let file_system = self
+            .runtime_capabilities
+            .require_local_filesystem("load app-server config")
+            .map_err(std::io::Error::other)?;
         let merged_cli_overrides = cli_overrides
             .iter()
             .cloned()
@@ -239,7 +246,7 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
             .thread_config_loader(self.current_thread_config_loader())
-            .build()
+            .build_with_file_system(file_system.as_ref())
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
@@ -258,8 +265,12 @@ impl ConfigManager {
         cwd: Option<AbsolutePathBuf>,
     ) -> std::io::Result<ConfigLayerStack> {
         let thread_config_loader = self.current_thread_config_loader();
+        let file_system = self
+            .runtime_capabilities
+            .require_local_filesystem("load app-server config layers")
+            .map_err(std::io::Error::other)?;
         load_config_layers_state(
-            LOCAL_FS.as_ref(),
+            file_system.as_ref(),
             &self.codex_home,
             cwd,
             &self.current_cli_overrides(),
@@ -297,6 +308,7 @@ impl ConfigManager {
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
+        let environment_manager = codex_exec_server::EnvironmentManager::default_for_tests();
         Self::new(
             codex_home,
             cli_overrides,
@@ -304,6 +316,7 @@ impl ConfigManager {
             /*strict_config*/ false,
             cloud_requirements,
             Arg0DispatchPaths::default(),
+            Arc::new(RuntimeCapabilities::local(&environment_manager)),
             Arc::new(codex_config::NoopThreadConfigLoader),
         )
     }

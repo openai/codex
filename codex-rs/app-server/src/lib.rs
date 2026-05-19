@@ -47,6 +47,7 @@ use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_config::ConfigLoadError;
 use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
+use codex_core::RuntimeCapabilities;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::find_codex_home;
 use codex_exec_server::EnvironmentManager;
@@ -451,6 +452,7 @@ pub async fn run_main_with_transport_options(
     }
     .map(Arc::new)
     .map_err(std::io::Error::other)?;
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let config_manager = ConfigManager::new(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
@@ -458,6 +460,7 @@ pub async fn run_main_with_transport_options(
         strict_config,
         Default::default(),
         arg0_paths.clone(),
+        Arc::clone(&runtime_capabilities),
         Arc::new(NoopThreadConfigLoader),
     );
     match config_manager
@@ -791,6 +794,7 @@ pub async fn run_main_with_transport_options(
             config: Arc::new(config),
             config_manager,
             environment_manager,
+            runtime_capabilities,
             feedback: feedback.clone(),
             log_db,
             state_db: state_db.clone(),

@@ -1069,11 +1069,18 @@ impl ConfigBuilder {
     }
 
     pub async fn build(self) -> std::io::Result<Config> {
-        // Keep the large config-loading future off small runtime thread stacks.
-        Box::pin(self.build_inner()).await
+        self.build_with_file_system(LOCAL_FS.as_ref()).await
     }
 
-    async fn build_inner(self) -> std::io::Result<Config> {
+    pub async fn build_with_file_system(
+        self,
+        file_system: &dyn ExecutorFileSystem,
+    ) -> std::io::Result<Config> {
+        // Keep the large config-loading future off small runtime thread stacks.
+        Box::pin(self.build_inner(file_system)).await
+    }
+
+    async fn build_inner(self, file_system: &dyn ExecutorFileSystem) -> std::io::Result<Config> {
         let Self {
             codex_home,
             cli_overrides,
@@ -1098,7 +1105,7 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
-            LOCAL_FS.as_ref(),
+            file_system,
             &codex_home,
             Some(cwd),
             &cli_overrides,
@@ -1159,7 +1166,7 @@ impl ConfigBuilder {
                 config_layer_stack.requirements_toml().clone(),
             )?;
             let mut config = Config::load_config_with_layer_stack(
-                LOCAL_FS.as_ref(),
+                file_system,
                 lock_config_toml,
                 harness_overrides,
                 codex_home,
@@ -1173,7 +1180,7 @@ impl ConfigBuilder {
             return Ok(config);
         }
         Config::load_config_with_layer_stack(
-            LOCAL_FS.as_ref(),
+            file_system,
             config_toml,
             harness_overrides,
             codex_home,
@@ -2425,10 +2432,9 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions =
-            AgentsMdManager::load_global_instructions(LOCAL_FS.as_ref(), Some(&codex_home))
-                .await
-                .map(|loaded| loaded.contents);
+        let user_instructions = AgentsMdManager::load_global_instructions(fs, Some(&codex_home))
+            .await
+            .map(|loaded| loaded.contents);
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()

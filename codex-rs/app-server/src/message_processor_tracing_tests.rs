@@ -25,6 +25,7 @@ use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
+use codex_core::RuntimeCapabilities;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
@@ -235,6 +236,8 @@ async fn build_test_processor(
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let auth_manager =
         AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false).await;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let config_manager = ConfigManager::new(
         config.codex_home.to_path_buf(),
         Vec::new(),
@@ -242,6 +245,7 @@ async fn build_test_processor(
         /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         Arg0DispatchPaths::default(),
+        Arc::clone(&runtime_capabilities),
         Arc::new(codex_config::NoopThreadConfigLoader),
     );
     let analytics_events_client =
@@ -256,7 +260,8 @@ async fn build_test_processor(
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         config_manager,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        environment_manager,
+        runtime_capabilities,
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,

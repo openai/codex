@@ -330,6 +330,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) arg0_paths: Arg0DispatchPaths,
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
+    pub(super) runtime_capabilities: Arc<RuntimeCapabilities>,
     pub(super) thread_store: Arc<dyn ThreadStore>,
     pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     pub(super) thread_state_manager: ThreadStateManager,
@@ -350,6 +351,7 @@ impl ThreadRequestProcessor {
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         config_manager: ConfigManager,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
         thread_store: Arc<dyn ThreadStore>,
         pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
         thread_state_manager: ThreadStateManager,
@@ -366,6 +368,7 @@ impl ThreadRequestProcessor {
             arg0_paths,
             config,
             config_manager,
+            runtime_capabilities,
             thread_store,
             pending_thread_unloads,
             thread_state_manager,
@@ -880,12 +883,14 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let runtime_capabilities = Arc::clone(&self.runtime_capabilities);
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
                 config_manager,
+                runtime_capabilities,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
@@ -970,6 +975,7 @@ impl ThreadRequestProcessor {
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
         config_manager: ConfigManager,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -1006,9 +1012,13 @@ impl ThreadRequestProcessor {
             && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project || effective_permissions_trust_project)
         {
-            let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
-                .await
-                .unwrap_or_else(|| config.cwd.clone());
+            let file_system = runtime_capabilities
+                .require_local_filesystem("trust requested thread cwd")
+                .map_err(|err| internal_error(err.to_string()))?;
+            let trust_target =
+                resolve_root_git_project_for_trust(file_system.as_ref(), &config.cwd)
+                    .await
+                    .unwrap_or_else(|| config.cwd.clone());
             let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =

@@ -6,6 +6,7 @@ pub(crate) struct CommandExecRequestProcessor {
     config: Arc<Config>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
+    runtime_capabilities: Arc<RuntimeCapabilities>,
     command_exec_manager: CommandExecManager,
 }
 
@@ -15,12 +16,14 @@ impl CommandExecRequestProcessor {
         config: Arc<Config>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
     ) -> Self {
         Self {
             arg0_paths,
             config,
             outgoing,
             config_manager,
+            runtime_capabilities,
             command_exec_manager: CommandExecManager::default(),
         }
     }
@@ -89,6 +92,9 @@ impl CommandExecRequestProcessor {
         params: CommandExecParams,
     ) -> Result<(), JSONRPCErrorError> {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
+        self.runtime_capabilities
+            .require_local_environment("command/exec")
+            .map_err(|err| method_not_found(err.to_string()))?;
 
         let request = request_id.clone();
 

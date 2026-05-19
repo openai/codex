@@ -65,6 +65,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
+use codex_core::RuntimeCapabilities;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
@@ -259,6 +260,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    pub(crate) runtime_capabilities: Arc<RuntimeCapabilities>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
@@ -282,6 +284,7 @@ impl MessageProcessor {
             config,
             config_manager,
             environment_manager,
+            runtime_capabilities,
             feedback,
             log_db,
             state_db,
@@ -355,8 +358,10 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
+            Arc::clone(&runtime_capabilities),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
+        let process_exec_processor =
+            ProcessExecRequestProcessor::new(outgoing.clone(), Arc::clone(&runtime_capabilities));
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -365,7 +370,7 @@ impl MessageProcessor {
             log_db,
             state_db.clone(),
         );
-        let git_processor = GitRequestProcessor::new();
+        let git_processor = GitRequestProcessor::new(Arc::clone(&runtime_capabilities));
         let initialize_processor = InitializeRequestProcessor::new(
             outgoing.clone(),
             analytics_events_client.clone(),
@@ -408,6 +413,7 @@ impl MessageProcessor {
             arg0_paths.clone(),
             Arc::clone(&config),
             config_manager.clone(),
+            Arc::clone(&runtime_capabilities),
             Arc::clone(&thread_store),
             Arc::clone(&pending_thread_unloads),
             thread_state_manager.clone(),
@@ -461,13 +467,8 @@ impl MessageProcessor {
         );
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
-        let fs_processor = FsRequestProcessor::new(
-            thread_manager
-                .environment_manager()
-                .local_environment()
-                .get_filesystem(),
-            fs_watch_manager,
-        );
+        let fs_processor =
+            FsRequestProcessor::new(runtime_capabilities.local_filesystem(), fs_watch_manager);
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),
             Arc::clone(&config),

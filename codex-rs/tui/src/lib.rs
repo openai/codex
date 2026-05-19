@@ -27,6 +27,7 @@ use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
 pub use codex_app_server_client::RemoteAppServerEndpoint;
+use codex_app_server_client::RuntimeCapabilities;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -575,6 +576,7 @@ where
         feedback,
         log_db,
         state_db,
+        runtime_capabilities: Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
         environment_manager,
         config_warnings,
         session_source: serde_json::from_value(serde_json::json!("cli"))

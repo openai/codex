@@ -56,6 +56,7 @@ use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
+use codex_core::RuntimeCapabilities;
 use codex_core::StateDbHandle;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
@@ -536,6 +537,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
+        runtime_capabilities: std::sync::Arc::new(RuntimeCapabilities::local(&environment_manager)),
         environment_manager: std::sync::Arc::new(environment_manager),
         config_warnings,
         session_source: SessionSource::Exec,

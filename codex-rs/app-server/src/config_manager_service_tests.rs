@@ -4,12 +4,15 @@ use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
 use codex_config::FeatureRequirementsToml;
 use codex_config::LoaderOverrides;
+use codex_core::RuntimeCapabilities;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 #[test]
@@ -104,6 +107,31 @@ personality = true
 "#;
     assert_eq!(updated, expected);
     Ok(())
+}
+
+#[tokio::test]
+async fn load_latest_config_rejects_isolated_runtime_without_local_filesystem() {
+    let tmp = tempdir().expect("tempdir");
+    let service = ConfigManager::new(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
+        /*strict_config*/ false,
+        CloudRequirementsLoader::default(),
+        Arg0DispatchPaths::default(),
+        Arc::new(RuntimeCapabilities::isolated()),
+        Arc::new(codex_config::NoopThreadConfigLoader),
+    );
+
+    let error = service
+        .load_latest_config(/*fallback_cwd*/ None)
+        .await
+        .expect_err("isolated config reload should be unsupported");
+
+    assert_eq!(
+        error.to_string(),
+        "load app-server config requires ambient worker-local filesystem"
+    );
 }
 
 #[tokio::test]

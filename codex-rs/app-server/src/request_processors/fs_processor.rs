@@ -1,5 +1,6 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::error_code::method_not_found;
 use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
 use base64::Engine;
@@ -33,19 +34,25 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct FsRequestProcessor {
-    file_system: Arc<dyn ExecutorFileSystem>,
+    file_system: Option<Arc<dyn ExecutorFileSystem>>,
     fs_watch_manager: FsWatchManager,
 }
 
 impl FsRequestProcessor {
     pub(crate) fn new(
-        file_system: Arc<dyn ExecutorFileSystem>,
+        file_system: Option<Arc<dyn ExecutorFileSystem>>,
         fs_watch_manager: FsWatchManager,
     ) -> Self {
         Self {
             file_system,
             fs_watch_manager,
         }
+    }
+
+    fn file_system(&self) -> Result<&Arc<dyn ExecutorFileSystem>, JSONRPCErrorError> {
+        self.file_system
+            .as_ref()
+            .ok_or_else(|| method_not_found("fs requests require ambient worker-local filesystem"))
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
@@ -57,7 +64,7 @@ impl FsRequestProcessor {
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
-            .file_system
+            .file_system()?
             .read_file(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -75,7 +82,7 @@ impl FsRequestProcessor {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        self.file_system
+        self.file_system()?
             .write_file(&params.path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -86,7 +93,7 @@ impl FsRequestProcessor {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .create_directory(
                 &params.path,
                 CreateDirectoryOptions {
@@ -104,7 +111,7 @@ impl FsRequestProcessor {
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
-            .file_system
+            .file_system()?
             .get_metadata(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -122,7 +129,7 @@ impl FsRequestProcessor {
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
-            .file_system
+            .file_system()?
             .read_directory(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -142,7 +149,7 @@ impl FsRequestProcessor {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .remove(
                 &params.path,
                 RemoveOptions {
@@ -160,7 +167,7 @@ impl FsRequestProcessor {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        self.file_system
+        self.file_system()?
             .copy(
                 &params.source_path,
                 &params.destination_path,
@@ -179,6 +186,7 @@ impl FsRequestProcessor {
         connection_id: ConnectionId,
         params: FsWatchParams,
     ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+        self.file_system()?;
         self.fs_watch_manager.watch(connection_id, params).await
     }
 
