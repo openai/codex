@@ -7672,6 +7672,15 @@
               "null"
             ]
           },
+          "allowedPermissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "allowedSandboxModes": {
             "items": {
               "$ref": "#/definitions/v2/SandboxMode"
@@ -7698,6 +7707,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "defaultPermissions": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "enforceResidency": {
