@@ -33,6 +33,7 @@ use serde_json::Value;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
+use crate::context::StickyHookAdditionalContext;
 use crate::context_manager::updates::build_developer_update_item;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
@@ -126,15 +127,16 @@ pub(crate) async fn run_pending_session_start_hooks(
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_session_start(&request);
-    run_context_injecting_hook(
+    let outcome = run_context_injecting_hook(
         sess,
         turn_context,
         preview_runs,
         hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
     )
-    .await
-    .record_additional_contexts(sess, turn_context)
-    .await
+    .await;
+    // SessionStart context is durable developer state; rollback should not trim it.
+    record_sticky_additional_contexts(sess, turn_context, outcome.additional_contexts).await;
+    outcome.should_stop
 }
 
 /// Runs matching `PreToolUse` hooks before a tool executes.
@@ -433,18 +435,6 @@ where
     outcome.outcome
 }
 
-impl HookRuntimeOutcome {
-    async fn record_additional_contexts(
-        self,
-        sess: &Arc<Session>,
-        turn_context: &Arc<TurnContext>,
-    ) -> bool {
-        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
-
-        self.should_stop
-    }
-}
-
 pub(crate) async fn record_additional_contexts(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -459,10 +449,35 @@ pub(crate) async fn record_additional_contexts(
         .await;
 }
 
+async fn record_sticky_additional_contexts(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    additional_contexts: Vec<String>,
+) {
+    // Use this for hook context that should survive rollback as persistent developer state.
+    let developer_messages = sticky_additional_context_messages(additional_contexts);
+    if developer_messages.is_empty() {
+        return;
+    }
+
+    sess.record_conversation_items(turn_context, developer_messages.as_slice())
+        .await;
+}
+
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
     let sections = additional_contexts
         .into_iter()
         .map(HookAdditionalContext::new)
+        .map(|context| context.render())
+        .collect();
+
+    build_developer_update_item(sections).into_iter().collect()
+}
+
+fn sticky_additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
+    let sections = additional_contexts
+        .into_iter()
+        .map(StickyHookAdditionalContext::new)
         .map(|context| context.render())
         .collect();
 

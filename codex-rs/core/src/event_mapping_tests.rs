@@ -1,3 +1,5 @@
+use super::has_non_contextual_dev_message_content;
+use super::is_contextual_dev_message_content;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
@@ -302,6 +304,21 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
         }
         other => panic!("expected TurnItem::HookPrompt, got {other:?}"),
     }
+}
+
+#[test]
+fn hook_context_fragments_distinguish_thread_scoped_from_sticky_state() {
+    let trimmable_context = vec![ContentItem::InputText {
+        text: "<hook_context>thread scoped note</hook_context>".to_string(),
+    }];
+    assert!(is_contextual_dev_message_content(&trimmable_context));
+    assert!(!has_non_contextual_dev_message_content(&trimmable_context));
+
+    let sticky_context = vec![ContentItem::InputText {
+        text: "<hook_context_sticky>session scoped note</hook_context_sticky>".to_string(),
+    }];
+    assert!(!is_contextual_dev_message_content(&sticky_context));
+    assert!(has_non_contextual_dev_message_content(&sticky_context));
 }
 
 #[test]

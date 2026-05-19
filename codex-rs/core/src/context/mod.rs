@@ -43,6 +43,7 @@ pub(crate) use fragment::FragmentRegistrationProxy;
 pub(crate) use goal_context::GoalContext;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;
 pub(crate) use hook_additional_context::HookAdditionalContext;
+pub(crate) use hook_additional_context::StickyHookAdditionalContext;
 pub(crate) use image_generation_instructions::ImageGenerationInstructions;
 pub(crate) use legacy_apply_patch_exec_command_warning::LegacyApplyPatchExecCommandWarning;
 pub(crate) use legacy_model_mismatch_warning::LegacyModelMismatchWarning;

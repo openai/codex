@@ -27,6 +27,7 @@ use crate::web_search::web_search_action_detail;
 const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<permissions instructions>",
     "<model_switch>",
+    "<hook_context>",
     COLLABORATION_MODE_OPEN_TAG,
     REALTIME_CONVERSATION_OPEN_TAG,
     "<personality_spec>",

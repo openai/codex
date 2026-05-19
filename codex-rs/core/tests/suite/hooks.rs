@@ -785,7 +785,11 @@ fn request_hook_prompt_texts(
 fn spilled_hook_output_path(text: &str) -> Option<&str> {
     text.lines()
         .find_map(|line| line.strip_prefix("Full hook output saved to: "))
-        .map(|path| path.trim_end_matches("</hook_context>"))
+        .map(|path| {
+            path.strip_suffix("</hook_context>")
+                .or_else(|| path.strip_suffix("</hook_context_sticky>"))
+                .unwrap_or(path)
+        })
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -1103,6 +1107,7 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
         .find(|message| spilled_hook_output_path(message).is_some())
         .context("spilled developer hook message")?;
     assert!(developer_message.contains("tokens truncated"));
+    assert!(developer_message.contains("<hook_context_sticky>"));
     let path = spilled_hook_output_path(developer_message).context("spill path")?;
     assert_eq!(fs::read_to_string(path)?, additional_context);
 
@@ -1149,9 +1154,11 @@ async fn parallel_session_start_additional_contexts_share_one_developer_message(
                 .filter_map(|content| content.get("text").and_then(Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n");
-            contexts
-                .iter()
-                .all(|context| joined.contains(&format!("<hook_context>{context}</hook_context>")))
+            contexts.iter().all(|context| {
+                joined.contains(&format!(
+                    "<hook_context_sticky>{context}</hook_context_sticky>"
+                ))
+            })
         })
         .count();
     assert_eq!(merged_developer_messages, 1);
