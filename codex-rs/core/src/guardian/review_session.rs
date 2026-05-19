@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::PermissionProfile;
@@ -138,6 +139,7 @@ struct GuardianReviewSessionReuseKey {
     model_provider: ModelProviderInfo,
     model_context_window: Option<i64>,
     model_auto_compact_token_limit: Option<i64>,
+    model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
     model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
     permissions: Permissions,
@@ -162,6 +164,7 @@ impl GuardianReviewSessionReuseKey {
             model_provider: spawn_config.model_provider.clone(),
             model_context_window: spawn_config.model_context_window,
             model_auto_compact_token_limit: spawn_config.model_auto_compact_token_limit,
+            model_auto_compact_token_limit_scope: spawn_config.model_auto_compact_token_limit_scope,
             model_reasoning_effort: spawn_config.model_reasoning_effort,
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
@@ -706,22 +709,29 @@ async fn run_review_on_session(
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(review_session.codex.submit(Op::UserTurn {
-            environments: None,
+        Box::pin(review_session.codex.submit(Op::UserInput {
             items: prompt_items.items,
-            #[allow(deprecated)]
-            cwd: params.parent_turn.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: legacy_sandbox_policy,
-            permission_profile: Some(guardian_permission_profile),
-            model: params.model.clone(),
-            effort: params.reasoning_effort,
-            summary: Some(params.reasoning_summary),
-            service_tier: None,
+            environments: None,
             final_output_json_schema: Some(params.schema.clone()),
-            collaboration_mode: None,
-            personality: params.personality,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                #[allow(deprecated)]
+                cwd: Some(params.parent_turn.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(legacy_sandbox_policy),
+                permission_profile: Some(guardian_permission_profile),
+                summary: Some(params.reasoning_summary),
+                personality: params.personality,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: params.model.clone(),
+                        reasoning_effort: params.reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })),
     )
     .await;
@@ -1146,6 +1156,34 @@ mod tests {
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
         );
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_compact_scope_change_invalidates_cached_session() {
+        let parent_config = crate::config::test_config().await;
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
+        let cached_reuse_key =
+            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+
+        let mut changed_parent_config = parent_config;
+        changed_parent_config.model_auto_compact_token_limit_scope =
+            AutoCompactTokenLimitScope::BodyAfterPrefix;
+        let next_spawn_config = build_guardian_review_session_config(
+            &changed_parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("next guardian config");
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+
+        assert_ne!(cached_reuse_key, next_reuse_key);
     }
 
     #[tokio::test]

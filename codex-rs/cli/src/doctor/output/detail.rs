@@ -294,6 +294,7 @@ fn state_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
     push_row_if_present(&mut out, parsed, "sqlite home", "sqlite home");
     push_database_row(&mut out, parsed, "state DB");
     push_database_row(&mut out, parsed, "log DB");
+    push_database_row(&mut out, parsed, "goals DB");
 
     for (source, label) in [
         ("active rollout files", "active rollouts"),
@@ -317,8 +318,10 @@ fn state_details(parsed: &[ParsedDetail]) -> Vec<HumanDetail> {
             "sqlite home",
             "state DB",
             "log DB",
+            "goals DB",
             "state DB integrity",
             "log DB integrity",
+            "goals DB integrity",
             "active rollout files",
             "archived rollout files",
         ],

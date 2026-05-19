@@ -14,10 +14,6 @@ use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
-    auth_manager.is_some_and(AuthManager::current_auth_uses_codex_backend)
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
@@ -84,7 +80,9 @@ pub struct TurnContext {
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
-    pub(crate) tools_config: ToolsConfig,
+    pub(crate) available_models: Vec<ModelPreset>,
+    pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
+    pub(crate) goal_tools_supported: bool,
     pub features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
@@ -156,6 +154,14 @@ impl TurnContext {
         self.features.apps_enabled_for_auth(uses_codex_backend)
     }
 
+    pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
+        ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
+    }
+
+    pub(crate) fn goal_tools_enabled(&self) -> bool {
+        self.goal_tools_supported && self.features.get().enabled(Feature::Goals)
+    }
+
     pub(crate) async fn with_model(
         &self,
         model: String,
@@ -195,61 +201,9 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
-        let provider_capabilities = self.provider.capabilities();
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            available_models: &models_manager
-                .list_models(RefreshStrategy::OnlineIfUncached)
-                .await,
-            features: &features,
-            image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(
-                self.auth_manager.as_deref(),
-            ),
-            web_search_mode: self.tools_config.web_search_mode,
-            session_source: self.session_source.clone(),
-            permission_profile: &self.permission_profile,
-            windows_sandbox_level: self.windows_sandbox_level,
-        })
-        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
-        .with_image_generation_capability(provider_capabilities.image_generation)
-        .with_web_search_capability(provider_capabilities.web_search)
-        .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
-        .with_web_search_config(self.tools_config.web_search_config.clone())
-        .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_environment_mode(self.tools_config.environment_mode)
-        .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
-        .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
-        .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_multi_agent_v2_tool_namespace(config.multi_agent_v2.tool_namespace.clone())
-        .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
-        .with_goal_tools_allowed(self.tools_config.goal_tools)
-        .with_max_concurrent_threads_per_session(
-            config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(config.multi_agent_v2.max_concurrent_threads_per_session),
-        )
-        .with_wait_agent_min_timeout_ms(
-            config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(config.multi_agent_v2.min_wait_timeout_ms),
-        )
-        .with_wait_agent_max_timeout_ms(
-            config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(config.multi_agent_v2.max_wait_timeout_ms),
-        )
-        .with_wait_agent_default_timeout_ms(
-            config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(config.multi_agent_v2.default_wait_timeout_ms),
-        )
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &config.agent_roles,
-        ));
+        let available_models = models_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await;
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -283,7 +237,9 @@ impl TurnContext {
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
-            tools_config,
+            available_models,
+            unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
+            goal_tools_supported: self.goal_tools_supported,
             features,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -503,72 +459,18 @@ impl Session {
             model_info.slug.as_str(),
         );
         let session_source = session_configuration.session_source.clone();
-        let image_generation_tool_auth_allowed =
-            image_generation_tool_auth_allowed(auth_manager.as_deref());
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
-        let provider_capabilities = provider_for_context.capabilities();
         let session_telemetry_for_context = session_telemetry;
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            available_models: &models_manager.try_list_models().unwrap_or_default(),
-            features: &per_turn_config.features,
-            image_generation_tool_auth_allowed,
-            web_search_mode: Some(per_turn_config.web_search_mode.value()),
-            session_source: session_source.clone(),
-            permission_profile: &session_configuration.permission_profile(),
-            windows_sandbox_level: session_configuration.windows_sandbox_level,
-        })
-        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
-        .with_image_generation_capability(provider_capabilities.image_generation)
-        .with_web_search_capability(provider_capabilities.web_search)
-        .with_unified_exec_shell_mode_for_session(
+        let available_models = models_manager.try_list_models().unwrap_or_default();
+        let shell_command_backend =
+            shell_command_backend_for_features(per_turn_config.features.get());
+        let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+            shell_command_backend,
             crate::tools::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
-        )
-        .with_web_search_config(per_turn_config.web_search_config.clone())
-        .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_environment_mode(ToolEnvironmentMode::from_count(
-            environments.turn_environments.len(),
-        ))
-        .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
-        .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
-        .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_multi_agent_v2_tool_namespace(per_turn_config.multi_agent_v2.tool_namespace.clone())
-        .with_multi_agent_v2_non_code_mode_only(per_turn_config.multi_agent_v2.non_code_mode_only)
-        .with_goal_tools_allowed(goal_tools_supported)
-        .with_max_concurrent_threads_per_session(
-            per_turn_config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(
-                    per_turn_config
-                        .multi_agent_v2
-                        .max_concurrent_threads_per_session,
-                ),
-        )
-        .with_wait_agent_min_timeout_ms(
-            per_turn_config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(per_turn_config.multi_agent_v2.min_wait_timeout_ms),
-        )
-        .with_wait_agent_max_timeout_ms(
-            per_turn_config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(per_turn_config.multi_agent_v2.max_wait_timeout_ms),
-        )
-        .with_wait_agent_default_timeout_ms(
-            per_turn_config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(per_turn_config.multi_agent_v2.default_wait_timeout_ms),
-        )
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &per_turn_config.agent_roles,
-        ));
+        );
 
         let mut per_turn_config = per_turn_config;
         per_turn_config.service_tier = per_turn_config
@@ -616,7 +518,9 @@ impl Session {
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
-            tools_config,
+            available_models,
+            unified_exec_shell_mode,
+            goal_tools_supported,
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,

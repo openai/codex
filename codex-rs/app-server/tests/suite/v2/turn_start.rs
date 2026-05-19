@@ -900,7 +900,11 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
     .await??;
 
     assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
-    assert!(err.error.message.contains("invalid turn context override"));
+    assert!(
+        err.error
+            .message
+            .contains("invalid thread settings override")
+    );
     assert!(
         err.error.message.contains("allowed set [ReadOnly]"),
         "unexpected error message: {}",

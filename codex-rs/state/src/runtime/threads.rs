@@ -51,6 +51,29 @@ WHERE threads.id = ?
         Ok(row.and_then(|row| row.try_get("memory_mode").ok()))
     }
 
+    pub async fn set_thread_preview_if_empty(
+        &self,
+        thread_id: ThreadId,
+        preview: &str,
+    ) -> anyhow::Result<bool> {
+        let preview = preview.trim();
+        if preview.is_empty() {
+            return Ok(false);
+        }
+        let result = sqlx::query(
+            r#"
+UPDATE threads
+SET preview = ?
+WHERE id = ? AND preview = ''
+            "#,
+        )
+        .bind(preview)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Get dynamic tools for a thread, if present.
     pub async fn get_dynamic_tools(
         &self,
@@ -1567,6 +1590,47 @@ mod tests {
             .expect("thread should load")
             .expect("thread should exist");
         assert_eq!(persisted.preview.as_deref(), Some("migrated goal preview"));
+    }
+
+    #[tokio::test]
+    async fn set_thread_preview_if_empty_only_fills_blank_preview() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000460").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.first_user_message = None;
+        metadata.preview = None;
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial upsert should succeed");
+
+        let empty_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "  ")
+            .await
+            .expect("empty preview update should succeed");
+        assert!(!empty_updated);
+        let goal_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "  goal preview  ")
+            .await
+            .expect("goal preview update should succeed");
+        assert!(goal_updated);
+        let overwrite_updated = runtime
+            .set_thread_preview_if_empty(thread_id, "new preview")
+            .await
+            .expect("overwrite preview update should succeed");
+        assert!(!overwrite_updated);
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.preview.as_deref(), Some("goal preview"));
     }
 
     #[tokio::test]

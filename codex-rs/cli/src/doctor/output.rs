@@ -669,10 +669,14 @@ fn terminal_summary(check: &DoctorCheck) -> String {
 }
 
 fn state_summary(check: &DoctorCheck) -> String {
-    let state_ok =
-        detail::detail_value(check, "state DB integrity").is_some_and(|value| value == "ok");
-    let log_ok = detail::detail_value(check, "log DB integrity").is_some_and(|value| value == "ok");
-    if state_ok && log_ok {
+    let databases_ok = [
+        "state DB integrity",
+        "log DB integrity",
+        "goals DB integrity",
+    ]
+    .into_iter()
+    .all(|label| detail::detail_value(check, label).is_some_and(|value| value == "ok"));
+    if check.status == CheckStatus::Ok && databases_ok {
         "databases healthy".to_string()
     } else {
         check.summary.clone()
