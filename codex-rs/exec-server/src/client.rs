@@ -1228,7 +1228,7 @@ mod tests {
                 },
                 initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             },
-            None,
+            /*resume_session_id*/ None,
         )
         .await
         .expect("stdio transport should connect");
@@ -1618,7 +1618,12 @@ mod tests {
         );
         let server = tokio::spawn(async move {
             let mut first = accept_websocket(&listener).await;
-            complete_websocket_initialize(&mut first, "session-1", None).await;
+            complete_websocket_initialize(
+                &mut first,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
             first
                 .close(None)
                 .await
@@ -1657,7 +1662,12 @@ mod tests {
         );
         let server = tokio::spawn(async move {
             let mut first = accept_websocket(&listener).await;
-            complete_websocket_initialize(&mut first, "session-1", None).await;
+            complete_websocket_initialize(
+                &mut first,
+                "session-1",
+                /*expected_resume_session_id*/ None,
+            )
+            .await;
             first
                 .close(None)
                 .await
