@@ -48,45 +48,6 @@ pub(super) fn async_subagent_startup_enabled(
         )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ConfigBuilder;
-    use codex_protocol::AgentPath;
-
-    #[tokio::test]
-    async fn async_subagent_startup_requires_a_multi_agent_v2_pathful_child() {
-        let mut config = ConfigBuilder::default()
-            .build()
-            .await
-            .expect("default test config should load");
-        let _ = config.features.enable(Feature::MultiAgentV2);
-        config.multi_agent_v2.async_subagent_startup = true;
-
-        assert!(async_subagent_startup_enabled(
-            &config,
-            &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: ThreadId::new(),
-                depth: 1,
-                agent_path: Some(AgentPath::root().join("worker").expect("worker path")),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })
-        ));
-
-        assert!(!async_subagent_startup_enabled(
-            &config,
-            &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: ThreadId::new(),
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })
-        ));
-    }
-}
-
 impl Session {
     pub(crate) fn startup_state(&self) -> SessionStartupState {
         self.startup_state.borrow().clone()
@@ -301,5 +262,44 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn set_startup_state_for_tests(&self, state: SessionStartupState) {
         self.startup_state.send_replace(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConfigBuilder;
+    use codex_protocol::AgentPath;
+
+    #[tokio::test]
+    async fn async_subagent_startup_requires_a_multi_agent_v2_pathful_child() {
+        let mut config = ConfigBuilder::default()
+            .build()
+            .await
+            .expect("default test config should load");
+        let _ = config.features.enable(Feature::MultiAgentV2);
+        config.multi_agent_v2.async_subagent_startup = true;
+
+        assert!(async_subagent_startup_enabled(
+            &config,
+            &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: Some(AgentPath::root().join("worker").expect("worker path")),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })
+        ));
+
+        assert!(!async_subagent_startup_enabled(
+            &config,
+            &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })
+        ));
     }
 }
