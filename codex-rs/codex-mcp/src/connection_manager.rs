@@ -188,7 +188,6 @@ impl McpConnectionManager {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_metadata = HashMap::new();
-        let mut preflight_failures = Vec::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
@@ -205,16 +204,7 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
-            let Some(configured_server) = server.configured_config() else {
-                unreachable!("effective MCP servers are configured");
-            };
-            let startup_unavailable_reason =
-                runtime_environment.startup_unavailable_reason(&server_name, configured_server);
-            if let Some(reason) = startup_unavailable_reason.as_deref() {
-                // Treat placement mismatch like a per-server startup failure
-                // so usable MCP servers in the same config can still start.
-                warn!(server = %server_name, "{reason}; skipping MCP server");
-            }
+            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
@@ -225,31 +215,6 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            if let Some(reason) = startup_unavailable_reason {
-                let auth_entry = auth_entries.get(&server_name).cloned();
-                let error = mcp_init_error_display(
-                    server_name.as_str(),
-                    auth_entry.as_ref(),
-                    &StartupOutcomeError::Failed {
-                        error: reason.clone(),
-                    },
-                );
-                let _ = emit_update(
-                    startup_submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status: McpStartupStatus::Failed { error },
-                    },
-                )
-                .await;
-                preflight_failures.push(McpStartupFailure {
-                    server: server_name,
-                    error: reason,
-                });
-                continue;
-            }
-            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
@@ -332,10 +297,7 @@ impl McpConnectionManager {
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
-            let mut summary = McpStartupCompleteEvent {
-                failed: preflight_failures,
-                ..Default::default()
-            };
+            let mut summary = McpStartupCompleteEvent::default();
             for (server_name, outcome) in outcomes {
                 match outcome {
                     Ok(_) => summary.ready.push(server_name),

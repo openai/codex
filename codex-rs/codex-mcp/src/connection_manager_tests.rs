@@ -848,7 +848,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
 }
 
 #[tokio::test]
-async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
+async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let (tx_event, rx_event) = async_channel::unbounded();
     drop(rx_event);
@@ -930,7 +930,7 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
     )
     .await;
 
-    assert!(!manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("stdio"));
     assert!(manager.clients.contains_key("http"));
     assert!(
         !manager
@@ -942,6 +942,10 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
         .await;
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].server, "stdio");
+    assert_eq!(
+        failures[0].error,
+        "local stdio MCP server `stdio` requires a local environment"
+    );
     cancel_token.cancel();
 }
 
