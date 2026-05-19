@@ -783,8 +783,7 @@ fn build_payload_roots(
     } else {
         gather_read_roots(request.command_cwd, request.policy, request.codex_home)
     };
-    read_roots = expand_user_profile_root(read_roots);
-    read_roots = filter_user_profile_root(read_roots);
+    read_roots = expand_user_profile_read_roots(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
@@ -824,11 +823,35 @@ fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     expand_user_profile_root_for(roots, Path::new(&user_profile))
 }
 
+fn expand_user_profile_read_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return roots;
+    };
+    expand_user_profile_read_roots_for(roots, Path::new(&user_profile))
+}
+
 fn expand_user_profile_root_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
     let user_profile_key = canonical_path_key(user_profile);
     let mut expanded = Vec::new();
     for root in roots {
         if canonical_path_key(&root) == user_profile_key {
+            expanded.extend(profile_read_roots(user_profile));
+        } else {
+            expanded.push(root);
+        }
+    }
+
+    expanded.sort_by_key(|root| canonical_path_key(root));
+    expanded.dedup_by(|a, b| canonical_path_key(a.as_path()) == canonical_path_key(b.as_path()));
+    expanded
+}
+
+fn expand_user_profile_read_roots_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
+    let user_profile_key = canonical_path_key(user_profile);
+    let mut expanded = Vec::new();
+    for root in roots {
+        if canonical_path_key(&root) == user_profile_key {
+            expanded.push(user_profile.to_path_buf());
             expanded.extend(profile_read_roots(user_profile));
         } else {
             expanded.push(root);
@@ -1237,6 +1260,26 @@ mod tests {
         );
         let actual: HashSet<PathBuf> = roots.into_iter().collect();
         let expected: HashSet<PathBuf> = [documents, excluded, other_root].into_iter().collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn expand_user_profile_read_roots_for_keeps_profile_root_for_metadata_access() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path().join("user-profile");
+        let documents = user_profile.join("Documents");
+        let other_root = tmp.path().join("other-root");
+        fs::create_dir_all(&documents).expect("create documents");
+        fs::create_dir_all(&other_root).expect("create other root");
+
+        let roots = super::expand_user_profile_read_roots_for(
+            vec![user_profile.clone(), other_root.clone()],
+            &user_profile,
+        );
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> =
+            [user_profile, documents, other_root].into_iter().collect();
 
         assert_eq!(expected, actual);
     }
