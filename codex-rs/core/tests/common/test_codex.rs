@@ -65,7 +65,6 @@ type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_CODEX_PATH_ENV_VAR: &str = "CODEX_TEST_REMOTE_CODEX_PATH";
-const DEFAULT_REMOTE_CODEX_PATH: &str = "/tmp/codex-remote-env/codex";
 const REMOTE_CODEX_LINUX_SANDBOX_BASENAME: &str = "codex-linux-sandbox";
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -128,6 +127,11 @@ pub async fn test_env() -> Result<TestEnv> {
             let environment =
                 codex_exec_server::Environment::create_for_tests(Some(websocket_url.clone()))?;
             let cwd = remote_aware_cwd_path();
+            let remote_codex_path = remote_codex_path()?;
+            let remote_codex_linux_sandbox_exe = remote_codex_path
+                .as_deref()
+                .map(remote_codex_linux_sandbox_exe)
+                .transpose()?;
             environment
                 .get_filesystem()
                 .create_directory(
@@ -139,8 +143,8 @@ pub async fn test_env() -> Result<TestEnv> {
             Ok(TestEnv {
                 environment,
                 exec_server_url: Some(websocket_url),
-                remote_codex_path: Some(remote_codex_path()?),
-                remote_codex_linux_sandbox_exe: Some(remote_codex_linux_sandbox_exe()?),
+                remote_codex_path,
+                remote_codex_linux_sandbox_exe,
                 cwd,
                 local_cwd_temp_dir: None,
                 remote_container_name: Some(remote_env.container_name),
@@ -171,18 +175,19 @@ fn remote_exec_server_url() -> Result<String> {
     Ok(listen_url.to_string())
 }
 
-fn remote_codex_path() -> Result<PathBuf> {
-    let codex_path = std::env::var(REMOTE_CODEX_PATH_ENV_VAR)
-        .unwrap_or_else(|_| DEFAULT_REMOTE_CODEX_PATH.to_string());
+fn remote_codex_path() -> Result<Option<PathBuf>> {
+    let Some(codex_path) = std::env::var_os(REMOTE_CODEX_PATH_ENV_VAR) else {
+        return Ok(None);
+    };
+    let codex_path = codex_path.to_string_lossy();
     let codex_path = codex_path.trim();
     if codex_path.is_empty() {
         return Err(anyhow!("{REMOTE_CODEX_PATH_ENV_VAR} must not be empty"));
     }
-    Ok(PathBuf::from(codex_path))
+    Ok(Some(PathBuf::from(codex_path)))
 }
 
-fn remote_codex_linux_sandbox_exe() -> Result<PathBuf> {
-    let remote_codex_path = remote_codex_path()?;
+fn remote_codex_linux_sandbox_exe(remote_codex_path: &Path) -> Result<PathBuf> {
     let remote_codex_dir = remote_codex_path
         .parent()
         .ok_or_else(|| anyhow!("{REMOTE_CODEX_PATH_ENV_VAR} must have a parent directory"))?;

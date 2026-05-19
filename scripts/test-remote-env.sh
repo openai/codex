@@ -19,16 +19,17 @@ setup_remote_env() {
   local container_name
   local codex_binary_path
   local container_ip
+  local remote_codex_dir
   local remote_codex_path
   local remote_codex_linux_sandbox_path
+  local remote_exec_server_dir
   local remote_exec_server_pid
   local remote_exec_server_port
   local remote_exec_server_stdout_path
 
   container_name="${CODEX_TEST_REMOTE_ENV_CONTAINER_NAME:-codex-remote-test-env-local-$(date +%s)-${RANDOM}}"
   codex_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex"
-  remote_codex_path="${CODEX_TEST_REMOTE_CODEX_PATH:-/tmp/codex-remote-env/codex}"
-  remote_codex_linux_sandbox_path="$(dirname "${remote_codex_path}")/codex-linux-sandbox"
+  remote_codex_path="${CODEX_TEST_REMOTE_CODEX_PATH:-}"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "docker is required (Colima or Docker Desktop)" >&2
@@ -68,9 +69,14 @@ setup_remote_env() {
   fi
 
   if [[ -z "${CODEX_TEST_REMOTE_EXEC_SERVER_URL:-}" ]]; then
+    remote_codex_path="${remote_codex_path:-/tmp/codex-remote-env/codex}"
+    remote_codex_dir="$(dirname "${remote_codex_path}")"
+    remote_codex_linux_sandbox_path="${remote_codex_dir}/codex-linux-sandbox"
     remote_exec_server_port="31987"
     remote_exec_server_stdout_path="/tmp/codex-remote-env/exec-server.stdout"
-    docker exec "${container_name}" sh -lc "mkdir -p /tmp/codex-remote-env"
+    remote_exec_server_dir="$(dirname "${remote_exec_server_stdout_path}")"
+    docker exec "${container_name}" sh -lc \
+      "mkdir -p ${remote_codex_dir} ${remote_exec_server_dir}"
     docker cp "${codex_binary_path}" "${container_name}:${remote_codex_path}"
     docker exec "${container_name}" sh -lc \
       "chmod +x ${remote_codex_path} && ln -sf ${remote_codex_path} ${remote_codex_linux_sandbox_path}"
@@ -92,7 +98,11 @@ setup_remote_env() {
   fi
 
   export CODEX_TEST_REMOTE_ENV="${container_name}"
-  export CODEX_TEST_REMOTE_CODEX_PATH="${remote_codex_path}"
+  if [[ -n "${remote_codex_path}" ]]; then
+    export CODEX_TEST_REMOTE_CODEX_PATH="${remote_codex_path}"
+  else
+    unset CODEX_TEST_REMOTE_CODEX_PATH
+  fi
 }
 
 wait_for_remote_exec_server_port() {
