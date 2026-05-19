@@ -160,6 +160,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
@@ -499,6 +500,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            skills_watcher,
             account_processor,
             apps_processor,
             catalog_processor,
@@ -527,6 +529,7 @@ impl MessageProcessor {
 
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
+        self.skills_watcher.shutdown();
     }
 
     pub(crate) async fn process_request(
