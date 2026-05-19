@@ -48,6 +48,11 @@ on:
         default: false
         type: boolean
 
+# Caller workflow-level env does not flow through workflow_call, so keep the
+# Cargo git transport hardening on the archive and shard jobs directly here.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   archive:
     name: Build nextest archive
