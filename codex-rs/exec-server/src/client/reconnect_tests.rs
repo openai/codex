@@ -823,7 +823,7 @@ async fn remote_client_retries_transient_resume_conflict() -> Result<()> {
         second
             .write_error(
                 request.id,
-                -32600,
+                /*code*/ -32600,
                 "session session-1 is already attached to another connection",
             )
             .await;
@@ -868,7 +868,11 @@ async fn remote_client_caches_unknown_session_resume_failure() -> Result<()> {
         server_connections.fetch_add(1, Ordering::SeqCst);
         let request = second.read_request(INITIALIZE_METHOD).await;
         second
-            .write_error(request.id, -32600, "unknown session id session-1")
+            .write_error(
+                request.id,
+                /*code*/ -32600,
+                "unknown session id session-1",
+            )
             .await;
 
         let extra_connection = timeout(Duration::from_millis(200), listener.accept()).await;
