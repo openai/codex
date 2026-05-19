@@ -449,27 +449,8 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         ..ToolPlanInputs::default()
     };
 
-    let missing_feature = probe_with(
-        |turn| {
-            set_feature(turn, Feature::ToolSearch, /*enabled*/ false);
-            turn.model_info.supports_search_tool = true;
-        },
-        ToolPlanInputs {
-            deferred_mcp_tools: searchable_mcp.deferred_mcp_tools.clone(),
-            ..ToolPlanInputs::default()
-        },
-    )
-    .await;
-    missing_feature.assert_visible_lacks(&["tool_search"]);
-    missing_feature.assert_visible_lacks(&[
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
-    ]);
-
     let missing_model_capability = probe_with(
         |turn| {
-            set_feature(turn, Feature::ToolSearch, /*enabled*/ true);
             turn.model_info.supports_search_tool = false;
         },
         ToolPlanInputs {
@@ -481,15 +462,18 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
 
     let missing_deferred_tools = probe(|turn| {
-        set_feature(turn, Feature::ToolSearch, /*enabled*/ true);
         turn.model_info.supports_search_tool = true;
     })
     .await;
     missing_deferred_tools.assert_visible_lacks(&["tool_search"]);
+    missing_deferred_tools.assert_visible_lacks(&[
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ]);
 
     let missing_namespace_capability = probe_with(
         |turn| {
-            set_feature(turn, Feature::ToolSearch, /*enabled*/ true);
             turn.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
         },
@@ -503,7 +487,6 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 
     let enabled = probe_with(
         |turn| {
-            set_feature(turn, Feature::ToolSearch, /*enabled*/ true);
             turn.model_info.supports_search_tool = true;
         },
         searchable_mcp,

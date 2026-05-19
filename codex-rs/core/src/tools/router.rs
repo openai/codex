@@ -18,6 +18,7 @@ use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -135,6 +136,7 @@ impl ToolRouter {
         }
     }
 
+    #[allow(dead_code)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
@@ -144,6 +146,53 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            /*terminal_outcome_reached*/ None,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Arc<AtomicBool>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            Some(terminal_outcome_reached),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_tool_call_with_code_mode_result_inner(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -162,7 +211,9 @@ impl ToolRouter {
             payload,
         };
 
-        self.registry.dispatch_any(invocation).await
+        self.registry
+            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
+            .await
     }
 }
 

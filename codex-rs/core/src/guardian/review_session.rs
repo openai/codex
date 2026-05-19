@@ -706,22 +706,29 @@ async fn run_review_on_session(
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(review_session.codex.submit(Op::UserTurn {
-            environments: None,
+        Box::pin(review_session.codex.submit(Op::UserInput {
             items: prompt_items.items,
-            #[allow(deprecated)]
-            cwd: params.parent_turn.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: legacy_sandbox_policy,
-            permission_profile: Some(guardian_permission_profile),
-            model: params.model.clone(),
-            effort: params.reasoning_effort,
-            summary: Some(params.reasoning_summary),
-            service_tier: None,
+            environments: None,
             final_output_json_schema: Some(params.schema.clone()),
-            collaboration_mode: None,
-            personality: params.personality,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                #[allow(deprecated)]
+                cwd: Some(params.parent_turn.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(legacy_sandbox_policy),
+                permission_profile: Some(guardian_permission_profile),
+                summary: Some(params.reasoning_summary),
+                personality: params.personality,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: params.model.clone(),
+                        reasoning_effort: params.reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })),
     )
     .await;

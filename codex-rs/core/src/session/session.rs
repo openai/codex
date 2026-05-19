@@ -1,5 +1,7 @@
+use super::input_queue::InputQueue;
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -27,9 +29,7 @@ pub(crate) struct Session {
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    pub(super) mailbox: Mailbox,
-    pub(super) mailbox_rx: Mutex<MailboxReceiver>,
-    pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    pub(crate) input_queue: InputQueue,
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -178,7 +178,9 @@ impl SessionConfiguration {
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
+            collaboration_mode: self.collaboration_mode.clone(),
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
         }
@@ -877,7 +879,7 @@ impl Session {
                     config: config.as_ref(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
-                });
+                }).await;
             }
 
             let services = SessionServices {
@@ -950,7 +952,6 @@ impl Session {
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
-            let (mailbox, mailbox_rx) = Mailbox::new();
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
@@ -963,9 +964,7 @@ impl Session {
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
-                mailbox,
-                mailbox_rx: Mutex::new(mailbox_rx),
-                idle_pending_input: Mutex::new(Vec::new()),
+                input_queue: InputQueue::new(),
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
@@ -1130,7 +1129,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            sess.record_initial_history(initial_history).await;
+            Box::pin(sess.record_initial_history(initial_history)).await;
             {
                 let mut state = sess.state.lock().await;
                 state.set_pending_session_start_source(Some(session_start_source));

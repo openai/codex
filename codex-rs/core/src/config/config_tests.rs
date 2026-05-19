@@ -1822,6 +1822,8 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     )
     .await?;
 
+    assert!(config.explicit_permission_profile_mode);
+    assert!(config.custom_permission_profile_ids.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -2377,6 +2379,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
+    assert_eq!(
+        config.custom_permission_profile_ids,
+        vec!["workspace".to_string()]
+    );
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
@@ -3849,6 +3855,63 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         mcp_config.configured_mcp_servers.get("sample"),
         Some(&http_mcp("https://sample.example/mcp"))
     );
+    assert_eq!(
+        mcp_config.plugin_ids_by_mcp_server_name,
+        HashMap::from([("sample".to_string(), "sample@test".to_string())])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_omits_plugin_id_when_user_server_shadows_plugin_mcp() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://plugin.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[mcp_servers.sample]
+url = "https://user.example/mcp"
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config.configured_mcp_servers.get("sample"),
+        Some(&http_mcp("https://user.example/mcp"))
+    );
+    assert!(mcp_config.plugin_ids_by_mcp_server_name.is_empty());
 
     Ok(())
 }
@@ -7664,6 +7727,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
             },
+            explicit_permission_profile_mode: false,
+            custom_permission_profile_ids: Vec::new(),
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
@@ -8115,6 +8180,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8280,6 +8347,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8430,6 +8499,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,

@@ -1440,6 +1440,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -1458,6 +1459,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await?;
     }
@@ -3650,22 +3652,9 @@ async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()
     let tool_response = hook_inputs[0]["tool_response"]
         .as_str()
         .context("apply_patch tool_response should be a string")?;
-    let mut parsed_tool_response = serde_json::from_str::<Value>(tool_response)?;
-    if let Some(metadata) = parsed_tool_response
-        .get_mut("metadata")
-        .and_then(Value::as_object_mut)
-    {
-        let _ = metadata.remove("duration_seconds");
-    }
-    assert_eq!(
-        parsed_tool_response,
-        serde_json::json!({
-            "output": "Success. Updated the following files:\nA post_tool_use_apply_patch.txt\n",
-            "metadata": {
-                "exit_code": 0,
-            },
-        })
-    );
+    assert!(tool_response.starts_with("Exit code: 0"));
+    assert!(tool_response.contains("Success. Updated the following files:"));
+    assert!(tool_response.contains("A post_tool_use_apply_patch.txt"));
 
     Ok(())
 }

@@ -3,6 +3,22 @@
 use super::*;
 
 impl App {
+    pub(super) fn disable_ambient_pet_before_shutdown(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.chat_widget.disable_ambient_pet_for_session();
+        if let Err(clear_err) = tui.clear_ambient_pet_image() {
+            match clear_err {
+                crate::pets::PetImageRenderError::Terminal(err) => return Err(err.into()),
+                crate::pets::PetImageRenderError::Asset(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to clear ambient pet image before shutdown feedback"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn handle_ambient_pet_image_render_error(
         &mut self,
         tui: &mut tui::Tui,

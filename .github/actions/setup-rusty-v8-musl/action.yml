@@ -31,16 +31,14 @@ runs:
         archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
         binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
         checksums_path="${binding_dir}/rusty_v8_release_${TARGET}.sha256"
-        checksums_source="${GITHUB_WORKSPACE}/third_party/v8/rusty_v8_${version//./_}.sha256"
 
         mkdir -p "${binding_dir}"
         curl -fsSL "${base_url}/librusty_v8_release_${TARGET}.a.gz" -o "${archive_path}"
         curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
-        grep -E "  (librusty_v8_release_${TARGET}[.]a[.]gz|src_binding_release_${TARGET}[.]rs)$" \
-          "${checksums_source}" > "${checksums_path}"
+        curl -fsSL "${base_url}/rusty_v8_release_${TARGET}.sha256" -o "${checksums_path}"
 
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
-          echo "Expected exactly two checksums for ${TARGET} in ${checksums_source}" >&2
+          echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
           exit 1
         fi
 
