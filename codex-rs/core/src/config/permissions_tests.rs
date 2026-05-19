@@ -340,7 +340,7 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
             "/tmp/**/*.log".to_string(),
             ":workspace_roots/src/**/*.rs".to_string()
         ],
-        "`none` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
+        "`none`/`deny` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
     );
 }
 
@@ -435,7 +435,7 @@ fn read_write_glob_patterns_still_reject_non_subpath_globs() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         err.to_string()
-            .contains("filesystem glob path `src/**/*.rs` only supports `none` access"),
+            .contains("filesystem glob path `src/**/*.rs` only supports `none` or `deny` access"),
         "{err}"
     );
 }

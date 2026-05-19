@@ -9,8 +9,14 @@ use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use globset::GlobBuilder;
 use globset::GlobMatcher;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use strum_macros::Display;
 use tracing::error;
 use ts_rs::TS;
@@ -98,26 +104,42 @@ impl NetworkSandboxPolicy {
 /// conflict precedence rather than by capability breadth: `none` beats
 /// `write`, and `write` beats `read`.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    Display,
-    JsonSchema,
-    TS,
+    Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display, TS,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum FileSystemAccessMode {
     Read,
     Write,
+    #[serde(alias = "deny")]
     None,
+}
+
+impl JsonSchema for FileSystemAccessMode {
+    fn schema_name() -> String {
+        "FileSystemAccessMode".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            metadata: Some(Box::new(Metadata {
+                description: Some(
+                    "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`. `deny` is accepted as an input alias for `none`."
+                        .to_string(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        schema.enum_values = Some(
+            ["read", "write", "none", "deny"]
+                .into_iter()
+                .map(|value| Value::String(value.to_string()))
+                .collect(),
+        );
+        Schema::Object(schema)
+    }
 }
 
 impl FileSystemAccessMode {

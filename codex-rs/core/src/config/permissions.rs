@@ -243,7 +243,7 @@ pub(crate) fn compile_permission_profile(
                     push_warning(
                         startup_warnings,
                         format!(
-                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `none` deny-read globs are supported."
+                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `none` or `deny` deny-read globs are supported."
                         ),
                     );
                 }
@@ -523,7 +523,7 @@ fn compile_scoped_filesystem_pattern(
     if access != FileSystemAccessMode::None {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("filesystem glob subpath `{subpath}` only supports `none` access"),
+            format!("filesystem glob subpath `{subpath}` only supports `none` or `deny` access"),
         ));
     }
     let subpath = parse_relative_subpath(subpath)?;
@@ -559,7 +559,7 @@ fn compile_read_write_glob_path(path: &str, access: FileSystemAccessMode) -> io:
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "filesystem glob path `{path}` only supports `none` access; use an exact path or trailing `/**` for `{access}` subtree access"
+            "filesystem glob path `{path}` only supports `none` or `deny` access; use an exact path or trailing `/**` for `{access}` subtree access"
         ),
     ))
 }

@@ -740,6 +740,7 @@ default_permissions = "workspace"
 
 [permissions.workspace.filesystem]
 ":minimal" = "read"
+"/tmp/secret.env" = "deny"
 
 [permissions.workspace.filesystem.":workspace_roots"]
 "." = "write"
@@ -776,6 +777,10 @@ allow_upstream_proxy = false
                             (
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                "/tmp/secret.env".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::None),
                             ),
                             (
                                 ":workspace_roots".to_string(),

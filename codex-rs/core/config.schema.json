@@ -817,11 +817,12 @@
       "type": "object"
     },
     "FileSystemAccessMode": {
-      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`. `deny` is accepted as an input alias for `none`.",
       "enum": [
         "read",
         "write",
-        "none"
+        "none",
+        "deny"
       ],
       "type": "string"
     },
