@@ -718,10 +718,8 @@ impl TurnRequestProcessor {
             let tracked_turn_id = turn_id.clone();
             tokio::spawn(async move {
                 let _thread_settings_notification_guard = thread_settings_notification_guard;
-                match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied)
-                    .await
-                {
-                    Ok(Ok(Ok(payload))) => {
+                match thread_settings_applied.await {
+                    Ok(Ok(payload)) => {
                         let after_thread_settings = thread_settings_from_applied_event(&payload);
                         processor
                             .maybe_emit_thread_settings_updated(
@@ -732,19 +730,14 @@ impl TurnRequestProcessor {
                             )
                             .await;
                     }
-                    Ok(Ok(Err(err))) => {
+                    Ok(Err(err)) => {
                         tracing::warn!(
                             "failed to apply thread settings overrides for turn {tracked_turn_id}: {err}"
                         );
                     }
-                    Ok(Err(_)) => {
-                        tracing::warn!(
-                            "thread settings override acknowledgement was cancelled for turn {tracked_turn_id}"
-                        );
-                    }
                     Err(_) => {
                         tracing::warn!(
-                            "timed out waiting for thread settings overrides to apply for turn {tracked_turn_id}"
+                            "thread settings override acknowledgement was cancelled for turn {tracked_turn_id}"
                         );
                     }
                 }
