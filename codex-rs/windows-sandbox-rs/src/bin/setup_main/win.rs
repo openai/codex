@@ -12,6 +12,7 @@ use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::add_deny_write_ace;
+use codex_windows_sandbox::canonical_path_key;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
@@ -487,6 +488,108 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
     }
 }
 
+fn path_is_descendant_of(path: &Path, root: &Path) -> bool {
+    let path_key = canonical_path_key(path);
+    let root_key = canonical_path_key(root);
+    if path_key == root_key {
+        return false;
+    }
+    let root_prefix = format!("{}/", root_key.trim_end_matches('/'));
+    path_key.starts_with(&root_prefix)
+}
+
+fn payload_needs_user_profile_traverse_acl(payload: &Payload, user_profile: &Path) -> bool {
+    payload
+        .read_roots
+        .iter()
+        .chain(payload.write_roots.iter())
+        .any(|root| path_is_descendant_of(root, user_profile))
+}
+
+fn apply_user_profile_traverse_acl_if_needed(
+    payload: &Payload,
+    sandbox_group_psid: *mut c_void,
+    log: &mut File,
+    refresh_errors: &mut Vec<String>,
+) -> Result<()> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return Ok(());
+    };
+    let user_profile = PathBuf::from(user_profile);
+    if !payload_needs_user_profile_traverse_acl(payload, &user_profile) {
+        return Ok(());
+    }
+    if !user_profile.exists() {
+        log_line(
+            log,
+            &format!(
+                "USERPROFILE {} missing; skipping traverse ACL",
+                user_profile.display()
+            ),
+        )?;
+        return Ok(());
+    }
+
+    let access_mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    let has_access = match path_mask_allows(
+        &user_profile,
+        &[sandbox_group_psid],
+        access_mask,
+        /*require_all_bits*/ true,
+    ) {
+        Ok(has_access) => has_access,
+        Err(err) => {
+            refresh_errors.push(format!(
+                "user profile traverse check failed on {}: {}",
+                user_profile.display(),
+                err
+            ));
+            log_line(
+                log,
+                &format!(
+                    "user profile traverse check failed on {}: {}; continuing",
+                    user_profile.display(),
+                    err
+                ),
+            )?;
+            false
+        }
+    };
+    if has_access {
+        return Ok(());
+    }
+
+    log_line(
+        log,
+        &format!(
+            "granting non-inheriting traverse ACL to {} for sandbox users",
+            user_profile.display()
+        ),
+    )?;
+    let result = unsafe {
+        ensure_allow_mask_aces_with_inheritance(
+            &user_profile,
+            &[sandbox_group_psid],
+            access_mask,
+            /*inheritance*/ 0,
+        )
+    };
+    if let Err(err) = result {
+        refresh_errors.push(format!(
+            "grant traverse ACL failed on {} for sandbox_group: {err}",
+            user_profile.display()
+        ));
+        log_line(
+            log,
+            &format!(
+                "grant traverse ACL failed on {} for sandbox_group: {err}",
+                user_profile.display()
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     let _read_acl_guard = match acquire_read_acl_mutex()? {
         Some(guard) => guard,
@@ -499,6 +602,12 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
     let mut refresh_errors: Vec<String> = Vec::new();
+    apply_user_profile_traverse_acl_if_needed(
+        payload,
+        sandbox_group_psid,
+        log,
+        &mut refresh_errors,
+    )?;
     if !payload.read_roots.is_empty() {
         let users_sid = resolve_sid("Users")?;
         let users_psid = sid_bytes_to_psid(&users_sid)?;
@@ -964,6 +1073,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::payload_needs_user_profile_traverse_acl;
     use super::workspace_write_cap_sids_for_path;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::load_or_create_cap_sids;
@@ -971,6 +1081,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::fs;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -1107,5 +1219,57 @@ mod tests {
         .expect("deny sids");
 
         assert_eq!(deny_sids, vec![workspace_sid, nested_sid]);
+    }
+
+    #[test]
+    fn payload_needs_user_profile_traverse_acl_for_profile_children() {
+        let payload = Payload {
+            version: SETUP_VERSION,
+            offline_username: "CodexSandboxOffline".into(),
+            online_username: "CodexSandboxOnline".into(),
+            codex_home: PathBuf::from(r"C:\codex-home"),
+            command_cwd: PathBuf::from(r"C:\workspace"),
+            read_roots: vec![PathBuf::from(r"C:\Users\alice\AppData\Local\pnpm-cache")],
+            write_roots: vec![PathBuf::from(r"C:\Users\alice\AppData\Local\pnpm")],
+            deny_read_paths: Vec::new(),
+            deny_write_paths: Vec::new(),
+            proxy_ports: Vec::new(),
+            allow_local_binding: false,
+            otel: None,
+            real_user: "alice".into(),
+            mode: super::SetupMode::Full,
+            refresh_only: false,
+        };
+
+        assert!(payload_needs_user_profile_traverse_acl(
+            &payload,
+            Path::new(r"C:\Users\alice")
+        ));
+    }
+
+    #[test]
+    fn payload_does_not_need_user_profile_traverse_acl_for_unrelated_roots() {
+        let payload = Payload {
+            version: SETUP_VERSION,
+            offline_username: "CodexSandboxOffline".into(),
+            online_username: "CodexSandboxOnline".into(),
+            codex_home: PathBuf::from(r"C:\codex-home"),
+            command_cwd: PathBuf::from(r"C:\workspace"),
+            read_roots: vec![PathBuf::from(r"C:\workspace")],
+            write_roots: vec![PathBuf::from(r"D:\tmp")],
+            deny_read_paths: Vec::new(),
+            deny_write_paths: Vec::new(),
+            proxy_ports: Vec::new(),
+            allow_local_binding: false,
+            otel: None,
+            real_user: "alice".into(),
+            mode: super::SetupMode::Full,
+            refresh_only: false,
+        };
+
+        assert!(!payload_needs_user_profile_traverse_acl(
+            &payload,
+            Path::new(r"C:\Users\alice")
+        ));
     }
 }
