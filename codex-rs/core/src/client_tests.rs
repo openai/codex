@@ -2,6 +2,7 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use super::WEBSOCKET_AUTH_RECOVERY_RETRY_REASON;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
@@ -11,12 +12,18 @@ use super::handle_unauthorized;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use async_trait::async_trait;
 use base64::Engine;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthRefreshContext;
+use codex_login::ExternalAuthRefreshReason;
+use codex_login::ExternalAuthTokens;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
@@ -131,12 +138,12 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
-fn write_managed_chatgpt_auth(codex_home: &Path, access_token: &str) {
+fn fake_chatgpt_jwt(signature: &str) -> String {
     let encode_json = |value: serde_json::Value| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&value).expect("managed auth JWT segment should serialize"))
     };
-    let id_token = format!(
+    format!(
         "{}.{}.{}",
         encode_json(json!({"alg": "none", "typ": "JWT"})),
         encode_json(json!({
@@ -147,8 +154,12 @@ fn write_managed_chatgpt_auth(codex_home: &Path, access_token: &str) {
                 "user_id": "user-12345"
             }
         })),
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig"),
-    );
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.as_bytes()),
+    )
+}
+
+fn write_managed_chatgpt_auth(codex_home: &Path, access_token: &str) {
+    let id_token = fake_chatgpt_jwt("managed-auth");
     let auth_json = json!({
         "tokens": {
             "id_token": id_token,
@@ -176,6 +187,35 @@ async fn managed_chatgpt_auth_manager(access_token: &str) -> (TempDir, Arc<AuthM
     )
     .await;
     (codex_home, manager)
+}
+
+struct RefreshingExternalChatgptAuth {
+    refreshed_token: String,
+    refresh_count: AtomicUsize,
+}
+
+#[async_trait]
+impl ExternalAuth for RefreshingExternalChatgptAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    async fn refresh(
+        &self,
+        context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        assert_eq!(
+            context.reason,
+            ExternalAuthRefreshReason::Unauthorized,
+            "websocket revoked-token recovery should use unauthorized external refresh"
+        );
+        self.refresh_count.fetch_add(1, Ordering::SeqCst);
+        Ok(ExternalAuthTokens::chatgpt(
+            self.refreshed_token.clone(),
+            "account_id",
+            Some("pro".to_string()),
+        ))
+    }
 }
 
 #[derive(Default)]
@@ -401,6 +441,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         api_stream,
         test_session_telemetry(),
         attempt,
+        /*revoked_auth_recovery*/ None,
     );
 
     let observed = stream
@@ -450,6 +491,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         api_stream,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
+        /*revoked_auth_recovery*/ None,
     );
 
     while stream.next().await.is_some() {}
@@ -491,6 +533,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         api_stream,
         test_session_telemetry(),
         attempt,
+        /*revoked_auth_recovery*/ None,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output
@@ -743,6 +786,171 @@ async fn token_revoked_error_code_401_clears_auth_and_requires_relogin() {
         "Your ChatGPT session is no longer valid. Please sign in again."
     );
     assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
+async fn token_revoked_error_type_401_clears_auth_and_requires_relogin() {
+    let (_codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    let mut recovery = Some(manager.unauthorized_recovery());
+
+    let err = handle_unauthorized(
+        TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"type":"token_revoked"}}"#.to_string()),
+        },
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect_err("revoked access tokens should force relogin");
+
+    let CodexErr::RefreshTokenFailed(failed) = err else {
+        panic!("expected revoked access token to force relogin, got {err:?}");
+    };
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
+async fn websocket_stream_token_revoked_401_clears_auth_and_requires_relogin() {
+    let (_codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    let api_stream = futures::stream::iter([Err(ApiError::Transport(TransportError::Http {
+        status: StatusCode::UNAUTHORIZED,
+        url: None,
+        headers: None,
+        body: Some(r#"{"type":"error","status":401,"error":{"type":"token_revoked"}}"#.to_string()),
+    }))]);
+
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        Some(manager.unauthorized_recovery()),
+    );
+    let err = stream
+        .next()
+        .await
+        .expect("revoked websocket stream should emit an error")
+        .expect_err("revoked websocket stream should require relogin");
+
+    let CodexErr::RefreshTokenFailed(failed) = err else {
+        panic!("expected revoked websocket stream to force relogin, got {err:?}");
+    };
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
+async fn websocket_stream_token_revoked_401_retries_after_loading_replacement_auth() {
+    let (codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    write_managed_chatgpt_auth(codex_home.path(), "replacement-access-token");
+    let api_stream = futures::stream::iter([Err(ApiError::Transport(TransportError::Http {
+        status: StatusCode::UNAUTHORIZED,
+        url: None,
+        headers: None,
+        body: Some(r#"{"type":"error","status":401,"error":{"type":"token_revoked"}}"#.to_string()),
+    }))]);
+
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        Some(manager.unauthorized_recovery()),
+    );
+    let err = stream
+        .next()
+        .await
+        .expect("recovered websocket stream should emit a retryable error")
+        .expect_err("recovered websocket stream should ask the turn loop to retry");
+
+    let CodexErr::Stream(message, None) = err else {
+        panic!(
+            "expected recovered websocket revocation to surface a retryable stream error, got {err:?}"
+        );
+    };
+    assert_eq!(message, WEBSOCKET_AUTH_RECOVERY_RETRY_REASON);
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+}
+
+#[tokio::test]
+async fn websocket_stream_token_revoked_401_refreshes_external_auth_before_retry() {
+    let codex_home = TempDir::new().expect("external auth tempdir");
+    let initial_access_token = fake_chatgpt_jwt("external-initial");
+    let refreshed_access_token = fake_chatgpt_jwt("external-refreshed");
+    codex_login::auth::login_with_chatgpt_auth_tokens(
+        codex_home.path(),
+        &initial_access_token,
+        "account_id",
+        Some("pro"),
+    )
+    .expect("external ChatGPT auth should seed");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        codex_login::AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let external_auth = Arc::new(RefreshingExternalChatgptAuth {
+        refreshed_token: refreshed_access_token.clone(),
+        refresh_count: AtomicUsize::new(0),
+    });
+    manager.set_external_auth(external_auth.clone());
+
+    let api_stream = futures::stream::iter([Err(ApiError::Transport(TransportError::Http {
+        status: StatusCode::UNAUTHORIZED,
+        url: None,
+        headers: None,
+        body: Some(r#"{"type":"error","status":401,"error":{"type":"token_revoked"}}"#.to_string()),
+    }))]);
+
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        Some(manager.unauthorized_recovery()),
+    );
+    let err = stream
+        .next()
+        .await
+        .expect("refreshed websocket stream should emit a retryable error")
+        .expect_err("refreshed websocket stream should ask the turn loop to retry");
+
+    let CodexErr::Stream(message, None) = err else {
+        panic!(
+            "expected external websocket revocation to surface a retryable stream error, got {err:?}"
+        );
+    };
+    assert_eq!(message, WEBSOCKET_AUTH_RECOVERY_RETRY_REASON);
+    assert_eq!(external_auth.refresh_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("refreshed external auth should remain cached")
+            .get_token()
+            .expect("refreshed token should resolve"),
+        refreshed_access_token
+    );
 }
 
 #[tokio::test]

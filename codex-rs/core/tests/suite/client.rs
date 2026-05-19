@@ -1099,7 +1099,7 @@ async fn revoked_chatgpt_auth_user_turn_clears_auth_and_requests_relogin() -> an
     .await?
     .expect("managed ChatGPT auth should load");
 
-    let mut model_provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
     model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
     model_provider.supports_websockets = false;
     let mut builder = test_codex()
@@ -1120,6 +1120,7 @@ async fn revoked_chatgpt_auth_user_turn_clears_auth_and_requests_relogin() -> an
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 

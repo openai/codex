@@ -1059,6 +1059,11 @@ enum ReloadOutcome {
     Skipped,
 }
 
+enum InvalidatedAuthLogoutOutcome {
+    LoggedOut,
+    AuthChanged,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UnauthorizedRecoveryMode {
     Managed,
@@ -1088,6 +1093,7 @@ enum UnauthorizedRecoveryMode {
 pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
+    expected_auth: Option<CodexAuth>,
     expected_account_id: Option<String>,
     mode: UnauthorizedRecoveryMode,
 }
@@ -1123,6 +1129,7 @@ impl UnauthorizedRecovery {
         Self {
             manager,
             step,
+            expected_auth: cached_auth,
             expected_account_id,
             mode,
         }
@@ -1219,6 +1226,7 @@ impl UnauthorizedRecovery {
                     .await
                 {
                     ReloadOutcome::ReloadedChanged => {
+                        self.update_expected_auth_from_cache();
                         self.step = UnauthorizedRecoveryStep::RefreshToken;
                         return Ok(UnauthorizedRecoveryStepResult {
                             auth_state_changed: Some(true),
@@ -1241,6 +1249,7 @@ impl UnauthorizedRecovery {
             }
             UnauthorizedRecoveryStep::RefreshToken => {
                 self.manager.refresh_token_from_authority().await?;
+                self.update_expected_auth_from_cache();
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
@@ -1250,6 +1259,7 @@ impl UnauthorizedRecovery {
                 self.manager
                     .refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
                     .await?;
+                self.update_expected_auth_from_cache();
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
@@ -1262,47 +1272,125 @@ impl UnauthorizedRecovery {
         })
     }
 
-    pub async fn handle_invalidated_access_token_auth(
-        &self,
-    ) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenFailedError> {
-        let reload_outcome = match self.expected_account_id.as_deref() {
-            Some(expected_account_id) => {
-                self.manager
-                    .reload_if_account_id_matches(Some(expected_account_id))
-                    .await
-            }
-            None => self.manager.reload_if_auth_snapshot_changed().await,
-        };
+    fn update_expected_auth_from_cache(&mut self) {
+        let expected_auth = self.manager.auth_cached();
+        self.expected_account_id = expected_auth.as_ref().and_then(CodexAuth::get_account_id);
+        self.expected_auth = expected_auth;
+    }
 
-        match reload_outcome {
-            ReloadOutcome::ReloadedChanged => {
-                if self.manager.auth_cached().is_none() {
-                    return Err(RefreshTokenFailedError::new(
-                        RefreshTokenFailedReason::Revoked,
-                        ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
-                    ));
+    pub async fn handle_invalidated_access_token_auth(
+        &mut self,
+    ) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenFailedError> {
+        let (result, next_expected_auth) = {
+            let _refresh_guard = self.manager.refresh_lock.acquire().await.map_err(|_| {
+                RefreshTokenFailedError::new(
+                    RefreshTokenFailedReason::Other,
+                    REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+                )
+            })?;
+            let cached_auth = self.manager.auth_cached();
+            if !AuthManager::auths_equal_for_refresh(
+                cached_auth.as_ref(),
+                self.expected_auth.as_ref(),
+            ) {
+                self.invalidated_auth_state_changed_result()
+            } else {
+                let reload_outcome = self
+                    .manager
+                    .reload_if_auth_snapshot_changed()
+                    .await
+                    .map_err(Self::invalidated_auth_storage_error)?;
+
+                match reload_outcome {
+                    ReloadOutcome::ReloadedChanged => self.invalidated_auth_state_changed_result(),
+                    ReloadOutcome::ReloadedNoChange => {
+                        match self.manager.logout_if_auth_snapshot_unchanged().await {
+                            Ok(InvalidatedAuthLogoutOutcome::AuthChanged) => {
+                                self.invalidated_auth_state_changed_result()
+                            }
+                            Ok(InvalidatedAuthLogoutOutcome::LoggedOut) => (
+                                Err(RefreshTokenFailedError::new(
+                                    RefreshTokenFailedReason::Revoked,
+                                    ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+                                )),
+                                None,
+                            ),
+                            Err(err) => (
+                                Err(RefreshTokenFailedError::new(
+                                    RefreshTokenFailedReason::Revoked,
+                                    format!(
+                                        "{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not clear saved auth: {err}"
+                                    ),
+                                )),
+                                None,
+                            ),
+                        }
+                    }
+                    ReloadOutcome::Skipped => {
+                        if self
+                            .manager
+                            .clear_cached_auth_if_storage_missing()
+                            .await
+                            .map_err(Self::invalidated_auth_storage_error)?
+                        {
+                            (
+                                Err(RefreshTokenFailedError::new(
+                                    RefreshTokenFailedReason::Revoked,
+                                    ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+                                )),
+                                None,
+                            )
+                        } else {
+                            (
+                                Err(RefreshTokenFailedError::new(
+                                    RefreshTokenFailedReason::Other,
+                                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                                )),
+                                None,
+                            )
+                        }
+                    }
                 }
-                Ok(UnauthorizedRecoveryStepResult {
-                    auth_state_changed: Some(true),
-                })
             }
-            ReloadOutcome::ReloadedNoChange => {
-                let message = match self.manager.logout().await {
-                    Ok(_) => ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
-                    Err(err) => format!(
-                        "{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not clear saved auth: {err}"
-                    ),
-                };
+        };
+        if result.is_ok() {
+            self.expected_account_id = next_expected_auth
+                .as_ref()
+                .and_then(CodexAuth::get_account_id);
+            self.expected_auth = next_expected_auth;
+        }
+        result
+    }
+
+    fn invalidated_auth_state_changed_result(
+        &self,
+    ) -> (
+        Result<UnauthorizedRecoveryStepResult, RefreshTokenFailedError>,
+        Option<CodexAuth>,
+    ) {
+        let cached_auth = self.manager.auth_cached();
+        if cached_auth.is_none() {
+            return (
                 Err(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Revoked,
-                    message,
-                ))
-            }
-            ReloadOutcome::Skipped => Err(RefreshTokenFailedError::new(
-                RefreshTokenFailedReason::Other,
-                REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
-            )),
+                    ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+                )),
+                None,
+            );
         }
+        (
+            Ok(UnauthorizedRecoveryStepResult {
+                auth_state_changed: Some(true),
+            }),
+            cached_auth,
+        )
+    }
+
+    fn invalidated_auth_storage_error(err: std::io::Error) -> RefreshTokenFailedError {
+        RefreshTokenFailedError::new(
+            RefreshTokenFailedReason::Revoked,
+            format!("{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not inspect saved auth: {err}"),
+        )
     }
 }
 
@@ -1545,18 +1633,46 @@ impl AuthManager {
         }
     }
 
-    async fn reload_if_auth_snapshot_changed(&self) -> ReloadOutcome {
-        let new_auth = self.load_auth_from_storage().await;
+    async fn reload_if_auth_snapshot_changed(&self) -> std::io::Result<ReloadOutcome> {
+        let new_auth = self.try_load_auth_from_storage().await?;
         let cached_before_reload = self.auth_cached();
         let auth_changed =
             !Self::auths_equal_for_refresh(cached_before_reload.as_ref(), new_auth.as_ref());
         if !auth_changed {
-            return ReloadOutcome::ReloadedNoChange;
+            return Ok(ReloadOutcome::ReloadedNoChange);
         }
 
         tracing::info!("Reloading auth because the persisted auth snapshot changed.");
         self.set_cached_auth(new_auth);
-        ReloadOutcome::ReloadedChanged
+        Ok(ReloadOutcome::ReloadedChanged)
+    }
+
+    async fn clear_cached_auth_if_storage_missing(&self) -> std::io::Result<bool> {
+        if self.try_load_auth_from_storage().await?.is_some() {
+            return Ok(false);
+        }
+
+        tracing::info!("Clearing cached auth because persisted auth is no longer available.");
+        self.set_cached_auth(/*new_auth*/ None);
+        Ok(true)
+    }
+
+    async fn logout_if_auth_snapshot_unchanged(
+        &self,
+    ) -> std::io::Result<InvalidatedAuthLogoutOutcome> {
+        let persisted_auth = self.try_load_auth_from_storage().await?;
+        let cached_auth = self.auth_cached();
+        if !Self::auths_equal_for_refresh(cached_auth.as_ref(), persisted_auth.as_ref()) {
+            tracing::info!(
+                "Skipping auth logout because the persisted auth snapshot changed before deletion."
+            );
+            self.set_cached_auth(persisted_auth);
+            return Ok(InvalidatedAuthLogoutOutcome::AuthChanged);
+        }
+
+        logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        self.reload().await;
+        Ok(InvalidatedAuthLogoutOutcome::LoggedOut)
     }
 
     fn auths_equal_for_refresh(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {
@@ -1607,7 +1723,7 @@ impl AuthManager {
         }
     }
 
-    async fn load_auth_from_storage(&self) -> Option<CodexAuth> {
+    async fn try_load_auth_from_storage(&self) -> std::io::Result<Option<CodexAuth>> {
         load_auth(
             &self.codex_home,
             self.enable_codex_api_key_env,
@@ -1615,8 +1731,10 @@ impl AuthManager {
             self.chatgpt_base_url.as_deref(),
         )
         .await
-        .ok()
-        .flatten()
+    }
+
+    async fn load_auth_from_storage(&self) -> Option<CodexAuth> {
+        self.try_load_auth_from_storage().await.ok().flatten()
     }
 
     fn set_cached_auth(&self, new_auth: Option<CodexAuth>) -> bool {

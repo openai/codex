@@ -186,6 +186,7 @@ async fn run_compact_task_inner_impl(
 
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut websocket_auth_recovery_retries = 0;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
     // request tracking)
@@ -234,6 +235,13 @@ async fn run_compact_task_inner_impl(
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 return Err(e);
+            }
+            Err(e)
+                if crate::client::is_websocket_auth_recovery_retry(&e)
+                    && websocket_auth_recovery_retries == 0 =>
+            {
+                websocket_auth_recovery_retries += 1;
+                continue;
             }
             Err(e) => {
                 if retries < max_retries {

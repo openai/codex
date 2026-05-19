@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
 use codex_core::Prompt;
@@ -65,6 +66,42 @@ const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
+
+fn write_managed_chatgpt_auth(codex_home: &TempDir, access_token: &str) {
+    use base64::Engine as _;
+
+    let encode_json = |value: serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&value).expect("managed auth JWT segment should serialize"))
+    };
+    let id_token = format!(
+        "{}.{}.{}",
+        encode_json(json!({"alg": "none", "typ": "JWT"})),
+        encode_json(json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "account_id",
+                "chatgpt_user_id": "user-12345",
+                "user_id": "user-12345"
+            }
+        })),
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig"),
+    );
+    let auth_json = json!({
+        "tokens": {
+            "id_token": id_token,
+            "access_token": access_token,
+            "refresh_token": "test-refresh-token",
+            "account_id": "account_id"
+        },
+        "last_refresh": chrono::Utc::now(),
+    });
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        serde_json::to_vec_pretty(&auth_json).expect("managed auth should serialize"),
+    )
+    .expect("managed auth should persist");
+}
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
@@ -1424,6 +1461,360 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
             .contains("does not support image inputs"),
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_revoked_managed_auth_clears_auth_and_requests_relogin() {
+    skip_if_no_network!();
+
+    let revoked_token_error = json!({
+        "type": "error",
+        "status": 401,
+        "error": {
+            "type": "token_revoked",
+            "message": "revoked"
+        }
+    });
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![revoked_token_error],
+    ]])
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().expect("managed auth tempdir"));
+    write_managed_chatgpt_auth(codex_home.as_ref(), "revoked-access-token");
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("managed ChatGPT auth should load")
+    .expect("managed ChatGPT auth should exist");
+
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    let submission_id = test
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submission should emit relogin events");
+
+    let error_event = wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event
+            .message
+            .contains("Your ChatGPT session is no longer valid. Please sign in again."),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
+    );
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        !test.codex_home_path().join("auth.json").exists(),
+        "revoked managed ChatGPT auth should be removed"
+    );
+    assert_eq!(server.single_connection().len(), 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_revoked_managed_auth_retries_reloaded_auth() {
+    skip_if_no_network!();
+
+    let revoked_token_error = json!({
+        "type": "error",
+        "status": 401,
+        "error": {
+            "type": "token_revoked",
+            "message": "revoked"
+        }
+    });
+    let server = start_websocket_server(vec![
+        vec![
+            vec![
+                ev_response_created("resp-prewarm"),
+                ev_completed("resp-prewarm"),
+            ],
+            vec![revoked_token_error],
+        ],
+        vec![vec![
+            ev_response_created("resp-retry"),
+            ev_completed("resp-retry"),
+        ]],
+    ])
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().expect("managed auth tempdir"));
+    write_managed_chatgpt_auth(codex_home.as_ref(), "revoked-access-token");
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("managed ChatGPT auth should load")
+    .expect("managed ChatGPT auth should exist");
+
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    write_managed_chatgpt_auth(codex_home.as_ref(), "replacement-access-token");
+
+    test.submit_turn("hello")
+        .await
+        .expect("reloaded managed auth should retry the websocket turn");
+
+    let persisted_auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("replacement managed auth should load")
+    .expect("replacement managed auth should persist");
+    assert_eq!(
+        persisted_auth
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 2);
+    assert_eq!(connections[1].len(), 1);
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[0].header("authorization").as_deref(),
+        Some("Bearer revoked-access-token")
+    );
+    assert_eq!(
+        handshakes[1].header("authorization").as_deref(),
+        Some("Bearer replacement-access-token")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_revoked_managed_auth_prewarm_retries_reloaded_auth() {
+    skip_if_no_network!();
+
+    let revoked_token_error = json!({
+        "type": "error",
+        "status": 401,
+        "error": {
+            "type": "token_revoked",
+            "message": "revoked"
+        }
+    });
+    let server = start_websocket_server(vec![
+        vec![vec![revoked_token_error]],
+        vec![
+            vec![
+                ev_response_created("warm-retry"),
+                ev_completed("warm-retry"),
+            ],
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        ],
+    ])
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().expect("managed auth tempdir"));
+    write_managed_chatgpt_auth(codex_home.as_ref(), "revoked-access-token");
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("managed ChatGPT auth should load")
+    .expect("managed ChatGPT auth should exist");
+    write_managed_chatgpt_auth(codex_home.as_ref(), "replacement-access-token");
+
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("reloaded managed auth should retry startup websocket prewarm");
+
+    let persisted_auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("replacement managed auth should load")
+    .expect("replacement managed auth should persist");
+    assert_eq!(
+        persisted_auth
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 1);
+    assert_eq!(connections[1].len(), 2);
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[0].header("authorization").as_deref(),
+        Some("Bearer revoked-access-token")
+    );
+    assert_eq!(
+        handshakes[1].header("authorization").as_deref(),
+        Some("Bearer replacement-access-token")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_revoked_managed_auth_compact_retries_reloaded_auth() {
+    skip_if_no_network!();
+
+    let revoked_token_error = json!({
+        "type": "error",
+        "status": 401,
+        "error": {
+            "type": "token_revoked",
+            "message": "revoked"
+        }
+    });
+    let server = start_websocket_server(vec![
+        vec![
+            vec![
+                ev_response_created("resp-prewarm"),
+                ev_completed("resp-prewarm"),
+            ],
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+            vec![revoked_token_error],
+        ],
+        vec![vec![
+            ev_response_created("compact-retry"),
+            ev_assistant_message("msg-compact", "COMPACT_SUMMARY"),
+            ev_completed("compact-retry"),
+        ]],
+    ])
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().expect("managed auth tempdir"));
+    write_managed_chatgpt_auth(codex_home.as_ref(), "revoked-access-token");
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("managed ChatGPT auth should load")
+    .expect("managed ChatGPT auth should exist");
+
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.submit_turn("hello")
+        .await
+        .expect("initial websocket turn should complete");
+    write_managed_chatgpt_auth(codex_home.as_ref(), "replacement-access-token");
+
+    test.codex
+        .submit(Op::Compact)
+        .await
+        .expect("compact submission should succeed");
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    let persisted_auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("replacement managed auth should load")
+    .expect("replacement managed auth should persist");
+    assert_eq!(
+        persisted_auth
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 3);
+    assert_eq!(connections[1].len(), 1);
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[0].header("authorization").as_deref(),
+        Some("Bearer revoked-access-token")
+    );
+    assert_eq!(
+        handshakes[1].header("authorization").as_deref(),
+        Some("Bearer replacement-access-token")
     );
 
     server.shutdown().await;

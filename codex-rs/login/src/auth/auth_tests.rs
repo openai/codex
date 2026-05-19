@@ -308,6 +308,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
     let managed = UnauthorizedRecovery {
         manager: Arc::clone(&manager),
         step: UnauthorizedRecoveryStep::Reload,
+        expected_auth: None,
         expected_account_id: None,
         mode: UnauthorizedRecoveryMode::Managed,
     };
@@ -317,6 +318,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
     let external = UnauthorizedRecovery {
         manager,
         step: UnauthorizedRecoveryStep::ExternalRefresh,
+        expected_auth: None,
         expected_account_id: None,
         mode: UnauthorizedRecoveryMode::External,
     };
@@ -325,8 +327,10 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn invalidated_access_token_logout_clears_cached_auth() {
     let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
     write_auth_file(
         AuthFileParams {
             openai_api_key: None,
@@ -343,7 +347,7 @@ async fn invalidated_access_token_logout_clears_cached_auth() {
         /*chatgpt_base_url*/ None,
     )
     .await;
-    let recovery = manager.unauthorized_recovery();
+    let mut recovery = manager.unauthorized_recovery();
 
     assert!(recovery.handles_invalidated_access_token_auth());
     let failed = recovery
@@ -361,8 +365,10 @@ async fn invalidated_access_token_logout_clears_cached_auth() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn invalidated_access_token_logout_clears_cached_auth_without_account_id() {
     let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
     write_auth_file(
         AuthFileParams {
             openai_api_key: None,
@@ -379,7 +385,7 @@ async fn invalidated_access_token_logout_clears_cached_auth_without_account_id()
         /*chatgpt_base_url*/ None,
     )
     .await;
-    let recovery = manager.unauthorized_recovery();
+    let mut recovery = manager.unauthorized_recovery();
 
     let failed = recovery
         .handle_invalidated_access_token_auth()
@@ -396,8 +402,10 @@ async fn invalidated_access_token_logout_clears_cached_auth_without_account_id()
 }
 
 #[tokio::test]
-async fn invalidated_access_token_preserves_reloaded_auth() {
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_clears_cached_auth_when_persisted_auth_was_removed() {
     let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
     write_auth_file(
         AuthFileParams {
             openai_api_key: None,
@@ -414,7 +422,85 @@ async fn invalidated_access_token_preserves_reloaded_auth() {
         /*chatgpt_base_url*/ None,
     )
     .await;
-    let recovery = manager.unauthorized_recovery();
+    let mut recovery = manager.unauthorized_recovery();
+
+    std::fs::remove_file(codex_home.path().join("auth.json"))
+        .expect("auth file should be removable");
+
+    let failed = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect_err("removed persisted auth should force login");
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_preserves_cached_auth_when_storage_inspection_fails() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
+
+    std::fs::write(codex_home.path().join("auth.json"), "{not-json")
+        .expect("auth file should be corruptible");
+
+    let failed = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect_err("storage inspection failures should stop invalidation cleanup");
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert!(failed.message.starts_with(
+        "Your ChatGPT session is no longer valid. Please sign in again. Codex could not inspect saved auth:"
+    ));
+    assert!(manager.auth_cached().is_some());
+    assert!(codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_preserves_reloaded_auth() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
 
     let mut reauthenticated = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
         .expect("auth should load")
@@ -437,6 +523,294 @@ async fn invalidated_access_token_preserves_reloaded_auth() {
         .expect("new persisted auth should be retried");
 
     assert_eq!(step_result.auth_state_changed(), Some(true));
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+    assert!(codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_logs_out_reloaded_auth_if_retry_is_also_revoked() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
+
+    let mut reauthenticated = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("auth should load")
+        .expect("auth should exist");
+    reauthenticated
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .access_token = "replacement-access-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &reauthenticated,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("replacement auth should persist");
+
+    recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect("first revoked token should retry the replacement auth");
+
+    let failed = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect_err("repeated revocation of the replacement auth should force login");
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+    assert!(!codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_logs_out_auth_reloaded_by_normal_recovery() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
+
+    let mut reauthenticated = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("auth should load")
+        .expect("auth should exist");
+    reauthenticated
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .access_token = "replacement-access-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &reauthenticated,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("replacement auth should persist");
+
+    let reloaded = recovery
+        .next()
+        .await
+        .expect("normal unauthorized recovery should reload replacement auth");
+    assert_eq!(reloaded.auth_state_changed(), Some(true));
+
+    let failed = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect_err("revoking the just-reloaded auth should force login");
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+    assert!(!codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_preserves_auth_refreshed_after_request_started() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
+
+    let mut refreshed_auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("auth should load")
+        .expect("auth should exist");
+    refreshed_auth
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .access_token = "replacement-access-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &refreshed_auth,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("replacement auth should persist");
+    manager.reload().await;
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should load into cache")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+
+    let step_result = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect("auth refreshed after request start should be retried");
+
+    assert_eq!(step_result.auth_state_changed(), Some(true));
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+    assert!(codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_preserves_reloaded_auth_from_a_different_account() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut recovery = manager.unauthorized_recovery();
+
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_elsewhere".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("replacement auth should persist");
+
+    let step_result = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect("new persisted auth should be retried across account changes");
+
+    assert_eq!(step_result.auth_state_changed(), Some(true));
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_account_id()
+            .as_deref(),
+        Some("org_elsewhere")
+    );
+    let follow_up_step = recovery
+        .next()
+        .await
+        .expect("follow-up refreshable 401 should use the replacement account");
+    assert_eq!(follow_up_step.auth_state_changed(), Some(false));
+    assert_eq!(recovery.step_name(), "refresh_token");
+    assert!(codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn invalidated_access_token_logout_preserves_auth_changed_before_delete() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+
+    let mut reauthenticated = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("auth should load")
+        .expect("auth should exist");
+    reauthenticated
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .access_token = "replacement-access-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &reauthenticated,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("replacement auth should persist");
+
+    let outcome = manager
+        .logout_if_auth_snapshot_unchanged()
+        .await
+        .expect("replaced persisted auth should avoid logout");
+    assert!(matches!(outcome, InvalidatedAuthLogoutOutcome::AuthChanged));
     assert_eq!(
         manager
             .auth_cached()

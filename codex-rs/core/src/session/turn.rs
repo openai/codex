@@ -943,6 +943,7 @@ async fn run_sampling_request(
         )
         .await;
     let mut retries = 0;
+    let mut websocket_auth_recovery_retries = 0;
     let mut initial_input = Some(input);
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
@@ -990,6 +991,15 @@ async fn run_sampling_request(
 
         if !err.is_retryable() {
             return Err(err);
+        }
+
+        // Auth recovery already loaded replacement credentials. Give that one immediate retry
+        // without spending the transport reconnect budget.
+        if crate::client::is_websocket_auth_recovery_retry(&err)
+            && websocket_auth_recovery_retries == 0
+        {
+            websocket_auth_recovery_retries += 1;
+            continue;
         }
 
         // Use the configured provider-specific stream retry budget.

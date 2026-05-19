@@ -1283,6 +1283,7 @@ impl ModelClientSession {
                         stream,
                         session_telemetry.clone(),
                         inference_trace_attempt,
+                        /*revoked_auth_recovery*/ None,
                     );
                     return Ok(stream);
                 }
@@ -1466,6 +1467,7 @@ impl ModelClientSession {
                 stream_result,
                 session_telemetry.clone(),
                 inference_trace_attempt,
+                auth_recovery,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1526,37 +1528,52 @@ impl ModelClientSession {
         }
 
         let disabled_trace = InferenceTraceContext::disabled();
-        match self
-            .stream_responses_websocket(
-                prompt,
-                model_info,
-                session_telemetry,
-                effort,
-                summary,
-                service_tier,
-                turn_metadata_header,
-                /*warmup*/ true,
-                current_span_w3c_trace_context(),
-                &disabled_trace,
-            )
-            .await
-        {
-            Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
-                // Wait for the v2 warmup request to complete before sending the first turn request.
-                while let Some(event) = stream.next().await {
-                    match event {
-                        Ok(ResponseEvent::Completed { .. }) => break,
-                        Err(err) => return Err(err),
-                        _ => {}
+        let mut retried_after_auth_recovery = false;
+        loop {
+            match self
+                .stream_responses_websocket(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier.clone(),
+                    turn_metadata_header,
+                    /*warmup*/ true,
+                    current_span_w3c_trace_context(),
+                    &disabled_trace,
+                )
+                .await
+            {
+                Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
+                    // Wait for the v2 warmup request to complete before sending the first turn request.
+                    let mut retry_after_auth_recovery = false;
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            Ok(ResponseEvent::Completed { .. }) => return Ok(()),
+                            Err(err)
+                                if !retried_after_auth_recovery
+                                    && is_websocket_auth_recovery_retry(&err) =>
+                            {
+                                retried_after_auth_recovery = true;
+                                retry_after_auth_recovery = true;
+                                break;
+                            }
+                            Err(err) => return Err(err),
+                            _ => {}
+                        }
                     }
+                    if retry_after_auth_recovery {
+                        continue;
+                    }
+                    return Ok(());
                 }
-                Ok(())
+                Ok(WebsocketStreamOutcome::FallbackToHttp) => {
+                    self.try_switch_fallback_transport(session_telemetry, model_info);
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
             }
-            Ok(WebsocketStreamOutcome::FallbackToHttp) => {
-                self.try_switch_fallback_transport(session_telemetry, model_info);
-                Ok(())
-            }
-            Err(err) => Err(err),
         }
     }
 
@@ -1736,11 +1753,22 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
 
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
+const WEBSOCKET_AUTH_RECOVERY_RETRY_REASON: &str =
+    "responses websocket auth recovered after unauthorized response";
+
+pub(crate) fn is_websocket_auth_recovery_retry(err: &CodexErr) -> bool {
+    matches!(
+        err,
+        CodexErr::Stream(message, _)
+            if message == WEBSOCKET_AUTH_RECOVERY_RETRY_REASON
+    )
+}
 
 fn map_response_stream(
     api_stream: codex_api::ResponseStream,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
+    revoked_auth_recovery: Option<UnauthorizedRecovery>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1755,6 +1783,7 @@ fn map_response_stream(
         api_stream,
         session_telemetry,
         inference_trace_attempt,
+        revoked_auth_recovery,
     )
 }
 
@@ -1763,6 +1792,7 @@ fn map_response_events<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
+    mut revoked_auth_recovery: Option<UnauthorizedRecovery>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1873,7 +1903,12 @@ where
                     if let Some(upstream_request_id) = upstream_request_id {
                         feedback_tags!(last_model_request_id = upstream_request_id);
                     }
-                    let mapped = map_api_error(err);
+                    let mapped = map_response_stream_error(
+                        err,
+                        &mut revoked_auth_recovery,
+                        &session_telemetry,
+                    )
+                    .await;
                     inference_trace_attempt.record_failed(
                         &mapped,
                         upstream_request_id,
@@ -1903,6 +1938,59 @@ where
         },
         rx_last_response,
     )
+}
+
+async fn map_response_stream_error(
+    err: ApiError,
+    revoked_auth_recovery: &mut Option<UnauthorizedRecovery>,
+    session_telemetry: &SessionTelemetry,
+) -> CodexErr {
+    match err {
+        ApiError::Transport(
+            transport @ TransportError::Http {
+                status: StatusCode::UNAUTHORIZED,
+                ..
+            },
+        ) if stream_error_has_revoked_access_token(&transport) => {
+            let recovery_transport = clone_http_transport_error(&transport);
+            match handle_unauthorized(recovery_transport, revoked_auth_recovery, session_telemetry)
+                .await
+            {
+                Ok(_) => CodexErr::Stream(
+                    WEBSOCKET_AUTH_RECOVERY_RETRY_REASON.to_string(),
+                    /*requested_delay*/ None,
+                ),
+                Err(err) => err,
+            }
+        }
+        err => map_api_error(err),
+    }
+}
+
+fn stream_error_has_revoked_access_token(transport: &TransportError) -> bool {
+    let debug = extract_response_debug_context(transport);
+    access_token_revocation_recovery_reason(
+        debug.auth_error_code.as_deref(),
+        debug.auth_error_type.as_deref(),
+    )
+    .is_some()
+}
+
+fn clone_http_transport_error(transport: &TransportError) -> TransportError {
+    match transport {
+        TransportError::Http {
+            status,
+            url,
+            headers,
+            body,
+        } => TransportError::Http {
+            status: *status,
+            url: url.clone(),
+            headers: headers.clone(),
+            body: body.clone(),
+        },
+        _ => unreachable!("stream auth recovery only clones HTTP transport errors"),
+    }
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.
@@ -1986,7 +2074,7 @@ async fn handle_unauthorized(
         debug.auth_error_type.as_deref(),
     );
     if let Some(recovery_reason) = revocation_recovery_reason
-        && let Some(recovery) = auth_recovery.as_ref()
+        && let Some(recovery) = auth_recovery.as_mut()
         && recovery.handles_invalidated_access_token_auth()
     {
         let mode = recovery.mode_name();
