@@ -994,7 +994,10 @@ pub async fn run_main(
         Some(chatgpt_base_url.clone()),
     )
     .await;
-    if let Err(err) = cloud_auth_manager.refresh_managed_chatgpt_token().await {
+    if let Err(err) = cloud_auth_manager
+        .refresh_managed_chatgpt_token_if_near_expiry()
+        .await
+    {
         warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
     }
     let cloud_requirements = cloud_requirements_loader(

@@ -160,7 +160,7 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn refresh_managed_chatgpt_token_refreshes_even_when_auth_is_fresh() -> Result<()> {
+async fn refresh_managed_chatgpt_token_refreshes_when_auth_is_near_expiry() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -176,7 +176,8 @@ async fn refresh_managed_chatgpt_token_refreshes_even_when_auth_is_fresh() -> Re
 
     let ctx = RefreshTokenTestContext::new(&server).await?;
     let initial_last_refresh = Utc::now();
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let near_expiry_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(4));
+    let initial_tokens = build_tokens(&near_expiry_access_token, INITIAL_REFRESH_TOKEN);
     let initial_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -187,7 +188,7 @@ async fn refresh_managed_chatgpt_token_refreshes_even_when_auth_is_fresh() -> Re
     ctx.write_auth(&initial_auth).await?;
 
     ctx.auth_manager
-        .refresh_managed_chatgpt_token()
+        .refresh_managed_chatgpt_token_if_near_expiry()
         .await
         .context("managed ChatGPT refresh should succeed")?;
 
@@ -209,6 +210,37 @@ async fn refresh_managed_chatgpt_token_refreshes_even_when_auth_is_fresh() -> Re
     );
 
     server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn refresh_managed_chatgpt_token_skips_auth_outside_refresh_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let fresh_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(6));
+    let initial_tokens = build_tokens(&fresh_access_token, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    ctx.auth_manager
+        .refresh_managed_chatgpt_token_if_near_expiry()
+        .await
+        .context("managed ChatGPT refresh should no-op")?;
+
+    assert_eq!(ctx.load_auth()?, initial_auth);
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(requests.is_empty(), "expected no refresh token requests");
+
     Ok(())
 }
 

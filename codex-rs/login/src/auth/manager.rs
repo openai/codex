@@ -84,6 +84,7 @@ struct ChatgptAuthState {
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
+const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -1715,13 +1716,27 @@ impl AuthManager {
         }
     }
 
-    /// Refresh managed ChatGPT auth even when its access token has not expired yet.
+    /// Refresh managed ChatGPT auth when its access token is nearly expired.
     ///
-    /// CLI startup uses this to begin sessions with a freshly issued access token.
-    /// Other auth modes either cannot be refreshed locally or have separate refresh
-    /// ownership, so they intentionally no-op here.
-    pub async fn refresh_managed_chatgpt_token(&self) -> Result<(), RefreshTokenError> {
-        if !matches!(self.auth_cached(), Some(CodexAuth::Chatgpt(_))) {
+    /// CLI startup uses the same five-minute refresh window as ChatGPT web so a
+    /// new session does not begin with a token that is about to expire. Other auth
+    /// modes either cannot be refreshed locally or have separate refresh ownership,
+    /// so they intentionally no-op here.
+    pub async fn refresh_managed_chatgpt_token_if_near_expiry(
+        &self,
+    ) -> Result<(), RefreshTokenError> {
+        let Some(CodexAuth::Chatgpt(chatgpt_auth)) = self.auth_cached() else {
+            return Ok(());
+        };
+        let should_refresh = chatgpt_auth
+            .current_token_data()
+            .and_then(|tokens| parse_jwt_expiration(&tokens.access_token).ok().flatten())
+            .is_some_and(|expires_at| {
+                expires_at
+                    <= Utc::now()
+                        + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES)
+            });
+        if !should_refresh {
             return Ok(());
         }
 
