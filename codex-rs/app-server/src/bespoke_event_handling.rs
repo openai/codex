@@ -99,6 +99,7 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
@@ -182,8 +183,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
-            let has_active_goal =
-                thread_has_active_goal(conversation.as_ref(), conversation_id).await;
+            let preserve_terminal_plan_progress =
+                should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
+                    .await;
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
@@ -191,7 +193,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_complete_event,
-                has_active_goal,
+                preserve_terminal_plan_progress,
                 &outgoing,
                 &thread_state,
             )
@@ -1117,8 +1119,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
 
-            let has_active_goal =
-                thread_has_active_goal(conversation.as_ref(), conversation_id).await;
+            let preserve_terminal_plan_progress = turn_aborted_event.reason
+                != TurnAbortReason::Interrupted
+                && should_preserve_terminal_plan_progress(conversation.as_ref(), conversation_id)
+                    .await;
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
                 .await;
@@ -1126,7 +1130,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_aborted_event,
-                has_active_goal,
+                preserve_terminal_plan_progress,
                 &outgoing,
                 &thread_state,
             )
@@ -1293,10 +1297,10 @@ async fn emit_terminal_plan_cleanup(
     conversation_id: ThreadId,
     event_turn_id: &str,
     latest_plan_update: Option<UpdatePlanArgs>,
-    has_active_goal: bool,
+    preserve_terminal_plan_progress: bool,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    if has_active_goal {
+    if preserve_terminal_plan_progress {
         return;
     }
 
@@ -1340,7 +1344,10 @@ async fn emit_turn_plan_updated(
         .await;
 }
 
-async fn thread_has_active_goal(conversation: &CodexThread, conversation_id: ThreadId) -> bool {
+async fn should_preserve_terminal_plan_progress(
+    conversation: &CodexThread,
+    conversation_id: ThreadId,
+) -> bool {
     let Some(state_db) = conversation.state_db() else {
         return false;
     };
@@ -1512,7 +1519,7 @@ async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_complete_event: TurnCompleteEvent,
-    has_active_goal: bool,
+    preserve_terminal_plan_progress: bool,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -1521,7 +1528,7 @@ async fn handle_turn_complete(
         conversation_id,
         &event_turn_id,
         turn_summary.latest_plan_update,
-        has_active_goal,
+        preserve_terminal_plan_progress,
         outgoing,
     )
     .await;
@@ -1550,7 +1557,7 @@ async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_aborted_event: TurnAbortedEvent,
-    has_active_goal: bool,
+    preserve_terminal_plan_progress: bool,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -1559,7 +1566,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         &event_turn_id,
         turn_summary.latest_plan_update,
-        has_active_goal,
+        preserve_terminal_plan_progress,
         outgoing,
     )
     .await;
@@ -3376,7 +3383,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3430,7 +3437,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3481,7 +3488,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3626,7 +3633,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3639,7 +3646,7 @@ mod tests {
                     n,
                     TurnPlanUpdatedNotification {
                         thread_id: conversation_id.to_string(),
-                        turn_id: event_turn_id,
+                        turn_id: event_turn_id.clone(),
                         explanation: None,
                         plan: vec![
                             TurnPlanStep {
@@ -3664,7 +3671,7 @@ mod tests {
         let second = recv_broadcast_message(&mut rx).await?;
         match second {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, "complete_with_plan");
+                assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -3701,7 +3708,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3714,7 +3721,7 @@ mod tests {
                     n,
                     TurnPlanUpdatedNotification {
                         thread_id: conversation_id.to_string(),
-                        turn_id: event_turn_id,
+                        turn_id: event_turn_id.clone(),
                         explanation: None,
                         plan: vec![TurnPlanStep {
                             step: "first".to_string(),
@@ -3729,7 +3736,7 @@ mod tests {
         let second = recv_broadcast_message(&mut rx).await?;
         match second {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, "interrupt_with_plan");
+                assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Interrupted);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -3765,7 +3772,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*has_active_goal*/ true,
+            /*preserve_terminal_plan_progress*/ true,
             &outgoing,
             &thread_state,
         )
@@ -3942,7 +3949,7 @@ mod tests {
             conversation_a,
             a_turn1.clone(),
             turn_complete_event(&a_turn1),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3964,7 +3971,7 @@ mod tests {
             conversation_b,
             b_turn1.clone(),
             turn_complete_event(&b_turn1),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3976,7 +3983,7 @@ mod tests {
             conversation_a,
             a_turn2.clone(),
             turn_complete_event(&a_turn2),
-            /*has_active_goal*/ false,
+            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
