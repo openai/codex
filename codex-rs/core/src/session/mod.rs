@@ -49,6 +49,7 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::PromptSlot;
 use codex_features::FEATURES;
@@ -480,6 +481,12 @@ impl Codex {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+        spawn_plugin_and_skill_load_warmup(
+            config.clone(),
+            Arc::clone(&plugins_manager),
+            Arc::clone(&skills_manager),
+            environment_selections.primary_filesystem(),
+        );
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
@@ -510,12 +517,6 @@ impl Codex {
         };
 
         let config = Arc::new(config);
-        spawn_plugin_and_skill_load_warmup(
-            Arc::clone(&config),
-            Arc::clone(&plugins_manager),
-            Arc::clone(&skills_manager),
-            &environment_selections,
-        );
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -3293,17 +3294,16 @@ pub(crate) fn emit_subagent_session_started(
 }
 
 fn spawn_plugin_and_skill_load_warmup(
-    config: Arc<Config>,
+    config: Config,
     plugins_manager: Arc<PluginsManager>,
     skills_manager: Arc<SkillsManager>,
-    environment_selections: &ResolvedTurnEnvironments,
+    fs: Option<Arc<dyn ExecutorFileSystem>>,
 ) {
-    let fs = environment_selections.primary_filesystem();
     drop(tokio::spawn(async move {
         let plugins_input = config.plugins_config_input();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
+        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
         let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
         for err in &loaded_skills.errors {
             error!(
