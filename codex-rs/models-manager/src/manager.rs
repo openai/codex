@@ -5,6 +5,7 @@ use crate::model_info;
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
+use codex_login::default_client::Originator;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
@@ -41,6 +42,7 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     async fn list_models(
         &self,
         client_version: &str,
+        originator: Option<Originator>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)>;
 }
 
@@ -79,9 +81,13 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
-    async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
+    async fn list_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> Vec<ModelPreset> {
         async move {
-            let catalog = self.raw_model_catalog(refresh_strategy).await;
+            let catalog = self.raw_model_catalog(refresh_strategy, originator).await;
             self.build_available_models(catalog.models)
         }
         .instrument(tracing::info_span!(
@@ -92,7 +98,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     }
 
     /// Return the active raw model catalog, refreshing according to the specified strategy.
-    async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse;
+    async fn raw_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> ModelsResponse;
 
     /// Return the current in-memory remote model catalog without refreshing or loading cache state.
     async fn get_remote_models(&self) -> Vec<ModelInfo>;
@@ -147,7 +157,10 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
             if let Some(model) = model.as_ref() {
                 return model.to_string();
             }
-            default_model_from_available(self.list_models(refresh_strategy).await)
+            default_model_from_available(
+                self.list_models(refresh_strategy, /*originator*/ None)
+                    .await,
+            )
         }
         .instrument(tracing::info_span!(
             "get_default_model",
@@ -226,8 +239,15 @@ impl StaticModelsManager {
 
 #[async_trait]
 impl ModelsManager for OpenAiModelsManager {
-    async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
-        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
+    async fn raw_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> ModelsResponse {
+        if let Err(err) = self
+            .refresh_available_models_with_originator(refresh_strategy, originator)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
         ModelsResponse {
@@ -268,6 +288,15 @@ impl ModelsManager for OpenAiModelsManager {
 impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        self.refresh_available_models_with_originator(refresh_strategy, /*originator*/ None)
+            .await
+    }
+
+    async fn refresh_available_models_with_originator(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> CoreResult<()> {
         if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
@@ -291,18 +320,21 @@ impl OpenAiModelsManager {
                     return Ok(());
                 }
                 info!("models cache: cache miss, fetching remote models");
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(originator).await
             }
             RefreshStrategy::Online => {
                 // Always fetch from network
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(originator).await
             }
         }
     }
 
-    async fn fetch_and_update_models(&self) -> CoreResult<()> {
+    async fn fetch_and_update_models(&self, originator: Option<Originator>) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
-        let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
+        let (models, etag) = self
+            .endpoint_client
+            .list_models(&client_version, originator)
+            .await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
@@ -381,7 +413,11 @@ impl OpenAiModelsManager {
 
 #[async_trait]
 impl ModelsManager for StaticModelsManager {
-    async fn raw_model_catalog(&self, _refresh_strategy: RefreshStrategy) -> ModelsResponse {
+    async fn raw_model_catalog(
+        &self,
+        _refresh_strategy: RefreshStrategy,
+        _originator: Option<Originator>,
+    ) -> ModelsResponse {
         ModelsResponse {
             models: self.get_remote_models().await,
         }

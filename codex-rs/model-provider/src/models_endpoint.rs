@@ -82,6 +82,7 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
     async fn list_models(
         &self,
         client_version: &str,
+        originator: Option<Originator>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
@@ -89,8 +90,9 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
         let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
-        let originator = Originator::process_default();
-        let transport = ReqwestTransport::new(build_reqwest_client(&originator));
+        let originator = originator.unwrap_or_else(Originator::process_default);
+        let reqwest_client = build_reqwest_client(&originator);
+        let transport = ReqwestTransport::new(reqwest_client);
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),

@@ -28,7 +28,10 @@ pub(super) async fn spawn_review_thread(
     let available_models = sess
         .services
         .models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            Some(parent_turn_context.originator.clone()),
+        )
         .await;
     let shell_command_backend = shell_command_backend_for_features(review_features.get());
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(

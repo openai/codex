@@ -302,7 +302,7 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
         let available_models = session
             .services
             .models_manager
-            .list_models(RefreshStrategy::Offline)
+            .list_models(RefreshStrategy::Offline, /*originator*/ None)
             .await;
         let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
         let selected_model_info = session

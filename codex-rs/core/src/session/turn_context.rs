@@ -204,7 +204,10 @@ impl TurnContext {
         );
         let features = self.features.clone();
         let available_models = models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
+            .list_models(
+                RefreshStrategy::OnlineIfUncached,
+                Some(self.originator.clone()),
+            )
             .await;
 
         Self {

@@ -537,7 +537,9 @@ impl Codex {
                 codex_models_manager::manager::RefreshStrategy::Offline
             )
         {
-            let _ = models_manager.list_models(refresh_strategy).await;
+            let _ = models_manager
+                .list_models(refresh_strategy, Some(originator.clone()))
+                .await;
         }
         let model = models_manager
             .get_default_model(&config.model, refresh_strategy)

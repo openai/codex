@@ -1750,7 +1750,7 @@ async fn run_debug_models_command(
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
         let models_manager = build_models_manager(&config, auth_manager);
         models_manager
-            .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
+            .raw_model_catalog(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
             .await
     };
 

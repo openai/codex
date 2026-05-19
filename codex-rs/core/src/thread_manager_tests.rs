@@ -980,7 +980,9 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*attestation_provider*/ None,
     );
 
-    let _ = manager.list_models(RefreshStrategy::Online).await;
+    let _ = manager
+        .list_models(RefreshStrategy::Online, /*originator*/ None)
+        .await;
     assert_eq!(models_mock.requests().len(), 1);
 }
 

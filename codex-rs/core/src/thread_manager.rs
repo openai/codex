@@ -437,10 +437,14 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
-    pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
+    pub async fn list_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        originator: Option<Originator>,
+    ) -> Vec<ModelPreset> {
         self.state
             .models_manager
-            .list_models(refresh_strategy)
+            .list_models(refresh_strategy, originator)
             .await
     }
 

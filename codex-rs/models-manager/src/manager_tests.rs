@@ -157,6 +157,7 @@ impl ModelsEndpointClient for TestModelsEndpoint {
     async fn list_models(
         &self,
         _client_version: &str,
+        _originator: Option<Originator>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         self.fetch_count.fetch_add(1, Ordering::SeqCst);
         let models = self
@@ -350,7 +351,9 @@ async fn refresh_available_models_sorts_by_priority() {
     let cached_remote = manager.get_remote_models().await;
     assert_models_contain(&cached_remote, &remote_models);
 
-    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+    let available = manager
+        .list_models(RefreshStrategy::OnlineIfUncached, /*originator*/ None)
+        .await;
     let high_idx = available
         .iter()
         .position(|model| model.model == "priority-high")
@@ -733,6 +736,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
     async fn list_models(
         &self,
         _client_version: &str,
+        _originator: Option<Originator>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         self.fetch_count.fetch_add(1, Ordering::SeqCst);
         let models = self
@@ -897,7 +901,9 @@ async fn static_manager_reads_latest_auth_mode() {
         },
     );
 
-    let chatgpt_models = manager.list_models(RefreshStrategy::Online).await;
+    let chatgpt_models = manager
+        .list_models(RefreshStrategy::Online, /*originator*/ None)
+        .await;
     assert_eq!(
         chatgpt_models
             .iter()
@@ -907,7 +913,9 @@ async fn static_manager_reads_latest_auth_mode() {
     );
 
     auth_manager.set_external_auth(Arc::new(TestExternalApiKeyAuth));
-    let api_models = manager.list_models(RefreshStrategy::Online).await;
+    let api_models = manager
+        .list_models(RefreshStrategy::Online, /*originator*/ None)
+        .await;
 
     assert_eq!(
         api_models
