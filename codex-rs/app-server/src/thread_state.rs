@@ -3,6 +3,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
@@ -76,6 +77,7 @@ pub(crate) struct ThreadState {
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
+    last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
@@ -95,11 +97,13 @@ impl ThreadState {
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
         watch_registration: WatchRegistration,
+        thread_settings_baseline: ThreadSettings,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
         self.listener_generation = self.listener_generation.wrapping_add(1);
+        self.last_thread_settings = Some(thread_settings_baseline);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
@@ -142,6 +146,12 @@ impl ThreadState {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
         }
+    }
+
+    pub(crate) fn note_thread_settings(&mut self, thread_settings: ThreadSettings) -> bool {
+        let changed = self.last_thread_settings.as_ref() != Some(&thread_settings);
+        self.last_thread_settings = Some(thread_settings);
+        changed
     }
 }
 
