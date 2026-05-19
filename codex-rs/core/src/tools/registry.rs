@@ -287,8 +287,15 @@ impl ToolRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
-        self.tool(name).is_some()
+    pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
+        let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
+        self.tools.get(name).map(|tool| tool.exposure())
     }
 
     pub(crate) fn create_diff_consumer(

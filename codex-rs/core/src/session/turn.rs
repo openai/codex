@@ -55,6 +55,8 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
+use crate::tools::spec_plan::search_tool_enabled;
+use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::backoff;
@@ -1120,7 +1122,7 @@ pub(crate) async fn built_tools(
         None
     };
     let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
+    let discoverable_tools = if apps_enabled && tool_suggest_enabled(turn_context) {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
@@ -1152,12 +1154,12 @@ pub(crate) async fn built_tools(
         &all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
-        &turn_context.tools_config,
+        search_tool_enabled(turn_context),
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
+    Ok(Arc::new(ToolRouter::from_turn_context(
+        turn_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,

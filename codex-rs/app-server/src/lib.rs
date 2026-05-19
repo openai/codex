@@ -519,10 +519,9 @@ pub async fn run_main_with_transport_options(
     let state_db = match rollout_state_db::try_init(&config).await {
         Ok(state_db) => Some(state_db),
         Err(err) => {
-            let state_db_path = codex_state::state_db_path(config.sqlite_home.as_path());
             return Err(std::io::Error::other(format!(
-                "failed to initialize sqlite state db at {}: {err}",
-                state_db_path.display()
+                "failed to initialize sqlite state runtime under {}: {err}",
+                config.sqlite_home.display()
             )));
         }
     };

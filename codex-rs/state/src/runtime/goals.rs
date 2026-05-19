@@ -115,8 +115,6 @@ RETURNING
         .fetch_one(self.pool.as_ref())
         .await?;
 
-        self.set_thread_preview_if_empty(thread_id, objective)
-            .await?;
         thread_goal_from_row(&row)
     }
 
@@ -166,10 +164,6 @@ RETURNING
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        if row.is_some() {
-            self.set_thread_preview_if_empty(thread_id, objective)
-                .await?;
-        }
         row.map(|row| thread_goal_from_row(&row)).transpose()
     }
 
@@ -478,29 +472,6 @@ RETURNING
         let updated = thread_goal_from_row(&row)?;
         Ok(ThreadGoalAccountingOutcome::Updated(updated))
     }
-
-    async fn set_thread_preview_if_empty(
-        &self,
-        thread_id: ThreadId,
-        preview: &str,
-    ) -> anyhow::Result<()> {
-        let preview = preview.trim();
-        if preview.is_empty() {
-            return Ok(());
-        }
-        sqlx::query(
-            r#"
-UPDATE threads
-SET preview = ?
-WHERE id = ? AND preview = ''
-            "#,
-        )
-        .bind(preview)
-        .bind(thread_id.to_string())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(())
-    }
 }
 
 fn thread_goal_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<crate::ThreadGoal> {
@@ -641,42 +612,6 @@ mod tests {
                 .await
                 .unwrap()
         );
-    }
-
-    #[tokio::test]
-    async fn replace_thread_goal_sets_preview_when_empty() {
-        let runtime = test_runtime().await;
-        let thread_id = test_thread_id();
-        let mut metadata = test_thread_metadata(
-            runtime.codex_home(),
-            thread_id,
-            runtime.codex_home().join("workspace"),
-        );
-        metadata.preview = None;
-        metadata.first_user_message = None;
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("test thread should be upserted");
-
-        runtime
-            .thread_goals()
-            .replace_thread_goal(
-                thread_id,
-                "optimize the benchmark",
-                crate::ThreadGoalStatus::Active,
-                /*token_budget*/ None,
-            )
-            .await
-            .expect("goal replacement should succeed");
-
-        let metadata = runtime
-            .get_thread(thread_id)
-            .await
-            .expect("thread metadata should load")
-            .expect("thread should exist");
-        assert_eq!(metadata.preview.as_deref(), Some("optimize the benchmark"));
-        assert_eq!(metadata.first_user_message, None);
     }
 
     #[tokio::test]
