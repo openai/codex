@@ -67,6 +67,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -285,6 +286,7 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
             entries: BTreeMap::from([(
                 "workspace".to_string(),
                 PermissionProfileToml {
+                    description: None,
                     workspace_roots: Some(WorkspaceRootsToml {
                         entries: BTreeMap::from([
                             ("backend".to_string(), true),
@@ -394,6 +396,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
             entries: BTreeMap::from([(
                 "workspace".to_string(),
                 PermissionProfileToml {
+                    description: None,
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
