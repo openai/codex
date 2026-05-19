@@ -14,6 +14,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CloudRequirementsLoader;
 use codex_core::CodexThread;
+use codex_core::RuntimeCapabilities;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
@@ -471,6 +472,7 @@ impl TestCodexBuilder {
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
+            Arc::new(RuntimeCapabilities::local(environment_manager.as_ref())),
             empty_extension_registry(),
             /*analytics_events_client*/ None,
             thread_store,

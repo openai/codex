@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::RuntimeCapabilities;
 use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -63,11 +64,14 @@ impl MessageProcessor {
             /*enable_codex_api_key_env*/ false,
         )
         .await;
+        let runtime_capabilities =
+            Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
+            runtime_capabilities,
             empty_extension_registry(),
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),

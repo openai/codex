@@ -39,6 +39,7 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::RuntimeCapabilities;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::TerminalResizeReflowConfig;
@@ -117,12 +118,14 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let environment_manager = Arc::new(
         EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?,
     );
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
         environment_manager,
+        runtime_capabilities,
         empty_extension_registry(),
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),

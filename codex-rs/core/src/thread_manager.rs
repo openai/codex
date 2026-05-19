@@ -8,6 +8,7 @@ use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
+use crate::runtime_capabilities::RuntimeCapabilities;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
@@ -202,6 +203,8 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
+    #[allow(dead_code)] // Forwarded into CodexSpawnArgs by the next stacked slice.
+    runtime_capabilities: Arc<RuntimeCapabilities>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
@@ -247,6 +250,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
+        runtime_capabilities: Arc<RuntimeCapabilities>,
         extensions: Arc<ExtensionRegistry<Config>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
@@ -273,6 +277,7 @@ impl ThreadManager {
                 thread_created_tx,
                 models_manager: build_models_manager(config, auth_manager.clone()),
                 environment_manager,
+                runtime_capabilities,
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -367,6 +372,8 @@ impl ThreadManager {
             },
             state_db.clone(),
         ));
+        let runtime_capabilities =
+            Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -374,6 +381,7 @@ impl ThreadManager {
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
+                runtime_capabilities,
                 skills_manager,
                 plugins_manager,
                 mcp_manager,

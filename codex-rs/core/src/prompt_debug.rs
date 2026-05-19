@@ -12,6 +12,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
+use crate::RuntimeCapabilities;
 use crate::config::Config;
 use crate::resolve_installation_id;
 use crate::session::session::Session;
@@ -41,15 +42,18 @@ pub async fn build_prompt_input(
 
     let thread_store = thread_store_from_config(&config, state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
+            .await
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+    );
+    let runtime_capabilities = Arc::new(RuntimeCapabilities::local(environment_manager.as_ref()));
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
         SessionSource::Exec,
-        Arc::new(
-            EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
-                .await
-                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
-        ),
+        environment_manager,
+        runtime_capabilities,
         empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store,
