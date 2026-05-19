@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
-use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
@@ -166,11 +165,10 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
-    environment_manager: Arc<EnvironmentManager>,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
-    fs_processor: Option<FsRequestProcessor>,
+    fs_processor: FsRequestProcessor,
     git_processor: GitRequestProcessor,
     initialize_processor: InitializeRequestProcessor,
     marketplace_processor: MarketplaceRequestProcessor,
@@ -274,23 +272,6 @@ pub(crate) struct MessageProcessorArgs {
 }
 
 impl MessageProcessor {
-    fn fs_processor(&self) -> Result<&FsRequestProcessor, JSONRPCErrorError> {
-        self.fs_processor
-            .as_ref()
-            .ok_or_else(|| internal_error("local filesystem is not configured"))
-    }
-
-    fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
-        // CCA filters these local-only RPCs before they reach app-server, but
-        // keep a Codex-side backstop so no-local app-server modes fail safely
-        // if a client still invokes one directly.
-        self.environment_manager
-            .try_local_environment()
-            .is_some()
-            .then_some(())
-            .ok_or_else(|| internal_error("local environment is not configured"))
-    }
-
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
@@ -375,8 +356,12 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
+            Arc::clone(&environment_manager_for_requests),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
+        let process_exec_processor = ProcessExecRequestProcessor::new(
+            outgoing.clone(),
+            Arc::clone(&environment_manager_for_requests),
+        );
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -480,17 +465,10 @@ impl MessageProcessor {
         );
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
-        // `fs/*` is a local-host filesystem surface. Do not construct it when
-        // the manager intentionally has no local environment.
-        let fs_processor = thread_manager
-            .environment_manager()
-            .try_local_environment()
-            .map(|environment| {
-                FsRequestProcessor::new(
-                    environment.get_filesystem(),
-                    FsWatchManager::new(outgoing.clone()),
-                )
-            });
+        let fs_processor = FsRequestProcessor::new(
+            Arc::clone(&environment_manager_for_requests),
+            FsWatchManager::new(outgoing.clone()),
+        );
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),
             Arc::clone(&config),
@@ -505,7 +483,6 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
-            environment_manager: environment_manager_for_requests,
             environment_processor,
             external_agent_config_processor,
             feedback_processor,
@@ -729,9 +706,7 @@ impl MessageProcessor {
     ) {
         session_state.rpc_gate.shutdown().await;
         self.outgoing.connection_closed(connection_id).await;
-        if let Some(fs_processor) = &self.fs_processor {
-            fs_processor.connection_closed(connection_id).await;
-        }
+        self.fs_processor.connection_closed(connection_id).await;
         self.command_exec_processor
             .connection_closed(connection_id)
             .await;
@@ -937,47 +912,47 @@ impl MessageProcessor {
                 self.environment_processor.environment_add(params).await
             }
             ClientRequest::FsReadFile { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .read_file(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsWriteFile { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .write_file(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsCreateDirectory { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .create_directory(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsGetMetadata { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .get_metadata(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsReadDirectory { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .read_directory(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsRemove { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .remove(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsCopy { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .copy(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsWatch { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .watch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::FsUnwatch { params, .. } => self
-                .fs_processor()?
+                .fs_processor
                 .unwatch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
@@ -1306,7 +1281,6 @@ impl MessageProcessor {
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::OneOffCommandExec { params, .. } => {
-                self.require_local_environment()?;
                 self.command_exec_processor
                     .one_off_command_exec(&request_id, params)
                     .await
@@ -1327,7 +1301,6 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::ProcessSpawn { params, .. } => {
-                self.require_local_environment()?;
                 self.process_exec_processor
                     .process_spawn(request_id.clone(), params)
                     .await
