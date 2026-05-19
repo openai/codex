@@ -9,7 +9,7 @@ use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
-use crate::ExecServerClient;
+use crate::ExecServerConnection;
 use crate::ExecServerError;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
@@ -17,9 +17,9 @@ use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::relay::harness_connection_from_websocket;
 
-const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
+pub(crate) const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
-impl ExecServerClient {
+impl ExecServerConnection {
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {

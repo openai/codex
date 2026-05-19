@@ -23,8 +23,9 @@ mod runtime_paths;
 mod sandboxed_file_system;
 mod server;
 
-pub use client::ExecServerClient;
+pub use client::ExecServerConnection;
 pub use client::ExecServerError;
+pub type ExecServerClient = ExecServerConnection;
 pub use client::http_client::HttpResponseBodyStream;
 pub use client::http_client::ReqwestHttpClient;
 pub use client_api::ExecServerClientConnectOptions;

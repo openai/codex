@@ -3,7 +3,7 @@
 //! This module is the facade for the environment-owned [`crate::HttpClient`]
 //! capability:
 //! - [`ReqwestHttpClient`] executes requests directly with `reqwest`
-//! - [`ExecServerClient`] forwards requests over the JSON-RPC transport
+//! - [`ExecServerConnection`] forwards requests over the JSON-RPC transport
 //! - [`HttpResponseBodyStream`] presents buffered local bodies and streamed
 //!   remote `http/request/bodyDelta` notifications through one byte-stream API
 //!
@@ -11,7 +11,7 @@
 //! - orchestrator process: holds an `Arc<dyn HttpClient>` and chooses local or
 //!   remote execution
 //! - remote runtime: serves the `http/request` RPC and runs the concrete local
-//!   HTTP request there when the orchestrator uses [`ExecServerClient`]
+//!   HTTP request there when the orchestrator uses [`ExecServerConnection`]
 
 #[path = "reqwest_http_client.rs"]
 mod reqwest_http_client;

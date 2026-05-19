@@ -9,23 +9,23 @@ use crate::ExecProcess;
 use crate::ExecProcessEventReceiver;
 use crate::ExecServerError;
 use crate::StartedExecProcess;
-use crate::client::LazyRemoteExecServerClient;
-use crate::client::Session;
+use crate::client::ProcessSessionHandle;
+use crate::client::RemoteExecServerClient;
 use crate::protocol::ExecParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
-    client: LazyRemoteExecServerClient,
+    client: RemoteExecServerClient,
 }
 
 struct RemoteExecProcess {
-    session: Session,
+    session: ProcessSessionHandle,
 }
 
 impl RemoteProcess {
-    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
+    pub(crate) fn new(client: RemoteExecServerClient) -> Self {
         trace!("remote process new");
         Self { client }
     }
@@ -35,9 +35,9 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
-        let client = self.client.get().await?;
-        let session = client.register_session(&process_id).await?;
-        if let Err(err) = client.exec(params).await {
+        let session = self.client.register_process_session(&process_id).await?;
+        let connection = self.client.connection().await?;
+        if let Err(err) = connection.exec(params).await {
             session.unregister().await;
             return Err(err);
         }

@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use super::HttpResponseBodyStream;
 use super::response_body_stream::HttpBodyStreamRegistration;
 use crate::HttpClient;
-use crate::client::ExecServerClient;
+use crate::client::ExecServerConnection;
 use crate::client::ExecServerError;
 use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
@@ -23,7 +23,7 @@ use crate::protocol::HttpRequestResponse;
 /// Maximum queued body frames per streamed HTTP response.
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: usize = 256;
 
-impl ExecServerClient {
+impl ExecServerConnection {
     /// Performs an HTTP request and buffers the response body.
     pub async fn http_request(
         &self,
@@ -67,14 +67,14 @@ impl ExecServerClient {
     }
 }
 
-impl HttpClient for ExecServerClient {
+impl HttpClient for ExecServerConnection {
     /// Orchestrator-side adapter that forwards buffered HTTP requests to the
     /// remote runtime over the shared JSON-RPC connection.
     fn http_request(
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
-        async move { ExecServerClient::http_request(self, params).await }.boxed()
+        async move { ExecServerConnection::http_request(self, params).await }.boxed()
     }
 
     /// Orchestrator-side adapter that forwards streamed HTTP requests to the
@@ -83,6 +83,6 @@ impl HttpClient for ExecServerClient {
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
-        async move { ExecServerClient::http_request_stream(self, params).await }.boxed()
+        async move { ExecServerConnection::http_request_stream(self, params).await }.boxed()
     }
 }

@@ -14,7 +14,7 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
-use crate::client::LazyRemoteExecServerClient;
+use crate::client::RemoteExecServerClient;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -28,11 +28,11 @@ const NOT_FOUND_ERROR_CODE: i64 = -32004;
 
 #[derive(Clone)]
 pub(crate) struct RemoteFileSystem {
-    client: LazyRemoteExecServerClient,
+    client: RemoteExecServerClient,
 }
 
 impl RemoteFileSystem {
-    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
+    pub(crate) fn new(client: RemoteExecServerClient) -> Self {
         trace!("remote fs new");
         Self { client }
     }
@@ -46,8 +46,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
         trace!("remote fs read_file");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        let response = connection
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
@@ -69,8 +69,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        connection
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
@@ -88,8 +88,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs create_directory");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        connection
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
@@ -106,8 +106,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
         trace!("remote fs get_metadata");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        let response = connection
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
@@ -129,8 +129,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         trace!("remote fs read_directory");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        let response = client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        let response = connection
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
                 sandbox: remote_sandbox_context(sandbox),
@@ -155,8 +155,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs remove");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        connection
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
                 recursive: Some(options.recursive),
@@ -176,8 +176,8 @@ impl ExecutorFileSystem for RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs copy");
-        let client = self.client.get().await.map_err(map_remote_error)?;
-        client
+        let connection = self.client.connection().await.map_err(map_remote_error)?;
+        connection
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
