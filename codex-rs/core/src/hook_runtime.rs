@@ -395,11 +395,16 @@ pub(crate) async fn run_legacy_after_agent_hook(
     last_assistant_message: Option<String>,
 ) -> bool {
     let mut abort_message = None;
-    let input_messages = input.iter().filter_map(|item| match parse_turn_item(item) {
-        Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
-        _ => None,
-    }).collect();
-    for hook_outcome in sess.hooks().dispatch(codex_hooks::HookPayload {
+    let input_messages = input
+        .iter()
+        .filter_map(|item| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
+            _ => None,
+        })
+        .collect();
+    let hooks = sess.hooks();
+    for hook_outcome in hooks
+        .dispatch(codex_hooks::HookPayload {
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
@@ -422,24 +427,29 @@ pub(crate) async fn run_legacy_after_agent_hook(
             codex_hooks::HookResult::FailedContinue(error) => (error, false),
             codex_hooks::HookResult::FailedAbort(error) => (error, true),
         };
-        let action = if should_abort { "aborting operation" } else { "continuing" };
+        let action = should_abort
+            .then_some("aborting operation")
+            .unwrap_or("continuing");
         tracing::warn!(
             turn_id = %turn_context.sub_id,
             hook_name = %hook_name,
             error = %error,
             "after_agent hook failed; {action}"
         );
-        if should_abort {
-            abort_message.get_or_insert_with(|| {
-                format!("after_agent hook '{hook_name}' failed and aborted turn completion: {error}")
-            });
+        if should_abort && abort_message.is_none() {
+            abort_message = Some(format!(
+                "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
+            ));
         }
     }
-    let Some(message) = abort_message else { return false; };
-    sess.send_event(turn_context, EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+    let Some(message) = abort_message else {
+        return false;
+    };
+    let event = EventMsg::Error(codex_protocol::protocol::ErrorEvent {
         message,
         codex_error_info: None,
-    })).await;
+    });
+    sess.send_event(turn_context, event).await;
     true
 }
 
