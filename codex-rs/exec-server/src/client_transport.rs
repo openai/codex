@@ -22,6 +22,7 @@ const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
+        resume_session_id: Option<String>,
     ) -> Result<Self, ExecServerError> {
         match transport_params {
             crate::client_api::ExecServerTransportParams::WebSocketUrl {
@@ -34,7 +35,7 @@ impl ExecServerClient {
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                     connect_timeout,
                     initialize_timeout,
-                    resume_session_id: None,
+                    resume_session_id,
                 })
                 .await
             }
