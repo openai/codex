@@ -2,6 +2,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -77,6 +78,20 @@ fn effective_max_output_tokens(
     truncation_policy: TruncationPolicy,
 ) -> usize {
     resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
+}
+
+fn effective_max_output_tokens_for_source(
+    source: &ToolCallSource,
+    max_output_tokens: Option<usize>,
+    truncation_policy: TruncationPolicy,
+) -> Option<usize> {
+    match source {
+        ToolCallSource::Direct => Some(effective_max_output_tokens(
+            max_output_tokens,
+            truncation_policy,
+        )),
+        ToolCallSource::CodeMode { .. } => max_output_tokens,
+    }
 }
 
 #[derive(Debug)]

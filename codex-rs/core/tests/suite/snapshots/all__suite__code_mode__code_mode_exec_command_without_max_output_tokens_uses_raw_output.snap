@@ -1,0 +1,5 @@
+---
+source: core/tests/suite/code_mode.rs
+expression: output
+---
+0123456789012345678901234567890123456789

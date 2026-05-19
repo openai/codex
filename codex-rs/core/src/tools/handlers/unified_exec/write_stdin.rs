@@ -14,7 +14,7 @@ use codex_tools::ToolSpec;
 use serde::Deserialize;
 
 use super::super::shell_spec::create_write_stdin_tool;
-use super::effective_max_output_tokens;
+use super::effective_max_output_tokens_for_source;
 use super::post_unified_exec_tool_use_payload;
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +48,7 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         let ToolInvocation {
             session,
             turn,
+            source,
             payload,
             ..
         } = invocation;
@@ -62,8 +63,11 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         };
 
         let args: WriteStdinArgs = parse_arguments(&arguments)?;
-        let max_output_tokens =
-            effective_max_output_tokens(args.max_output_tokens, turn.truncation_policy);
+        let max_output_tokens = effective_max_output_tokens_for_source(
+            &source,
+            args.max_output_tokens,
+            turn.truncation_policy,
+        );
         let response = session
             .services
             .unified_exec_manager
@@ -71,7 +75,7 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
                 process_id: args.session_id,
                 input: &args.chars,
                 yield_time_ms: args.yield_time_ms,
-                max_output_tokens: Some(max_output_tokens),
+                max_output_tokens,
             })
             .await
             .map_err(|err| {

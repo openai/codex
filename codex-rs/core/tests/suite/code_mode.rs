@@ -43,6 +43,9 @@ use std::time::Duration;
 use std::time::Instant;
 use wiremock::MockServer;
 
+const CODE_MODE_EXEC_LONG_OUTPUT_COMMAND: &str =
+    "printf '0123456789012345678901234567890123456789'";
+
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
@@ -173,6 +176,20 @@ async fn run_code_mode_turn(
 
     test.submit_turn(prompt).await?;
     Ok((test, second_mock))
+}
+
+async fn assert_code_mode_exec_output_snapshot(snapshot_name: &str, code: &str) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) =
+        run_code_mode_turn(&server, "use exec_command from code mode", code).await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    let output = text_item(&items, /*index*/ 1);
+    insta::assert_snapshot!(snapshot_name, output);
+
+    Ok(())
 }
 
 async fn run_code_mode_turn_with_rmcp(
@@ -645,40 +662,70 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
+async fn code_mode_exec_command_explicit_max_output_tokens_truncates_snapshot() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_mock_server().await;
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to truncate the final result",
-        r#"// @exec: {"max_output_tokens": 6}
-text(JSON.stringify(await tools.exec_command({
-  cmd: "printf 'token one token two token three token four token five token six token seven'",
-  max_output_tokens: 100
-})));
-"#,
+    let code = format!(
+        r#"
+const result = await tools.exec_command({{
+  cmd: {CODE_MODE_EXEC_LONG_OUTPUT_COMMAND:?},
+  max_output_tokens: 5
+}});
+text(result.output);
+"#
+    );
+
+    assert_code_mode_exec_output_snapshot(
+        "code_mode_exec_command_explicit_max_output_tokens_truncates",
+        &code,
     )
     .await?;
 
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_command_without_max_output_tokens_uses_raw_output_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let code = format!(
+        r#"
+const result = await tools.exec_command({{
+  cmd: {CODE_MODE_EXEC_LONG_OUTPUT_COMMAND:?}
+}});
+text(result.output);
+"#
     );
-    let expected_pattern = r#"(?sx)
-\A
-Total\ output\ lines:\ 1\n
-\n
-.*…\d+\ tokens\ truncated….*
-\z
-"#;
-    assert_regex_match(expected_pattern, text_item(&items, /*index*/ 1));
+
+    assert_code_mode_exec_output_snapshot(
+        "code_mode_exec_command_without_max_output_tokens_uses_raw_output",
+        &code,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_output_tokens_truncates_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let code = format!(
+        r#"// @exec: {{"max_output_tokens": 5}}
+const result = await tools.exec_command({{
+  cmd: {CODE_MODE_EXEC_LONG_OUTPUT_COMMAND:?}
+}});
+text(result.output);
+"#
+    );
+
+    assert_code_mode_exec_output_snapshot(
+        "code_mode_exec_explicit_max_output_tokens_truncates",
+        &code,
+    )
+    .await?;
 
     Ok(())
 }

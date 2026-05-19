@@ -36,7 +36,7 @@ use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
 use super::ExecCommandArgs;
 use super::ExecCommandEnvironmentArgs;
-use super::effective_max_output_tokens;
+use super::effective_max_output_tokens_for_source;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
 
@@ -98,6 +98,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             turn,
             tracker,
             call_id,
+            source,
             payload,
             ..
         } = invocation;
@@ -162,8 +163,11 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             prefix_rule,
             ..
         } = args;
-        let max_output_tokens =
-            effective_max_output_tokens(max_output_tokens, turn.truncation_policy);
+        let max_output_tokens = effective_max_output_tokens_for_source(
+            &source,
+            max_output_tokens,
+            turn.truncation_policy,
+        );
 
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
@@ -241,7 +245,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
-                max_output_tokens: Some(max_output_tokens),
+                max_output_tokens,
                 process_id: None,
                 exit_code: None,
                 original_token_count: None,
@@ -258,7 +262,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     hook_command: hook_command.clone(),
                     process_id,
                     yield_time_ms,
-                    max_output_tokens: Some(max_output_tokens),
+                    max_output_tokens,
                     cwd,
                     sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
@@ -284,7 +288,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
-                    max_output_tokens: Some(max_output_tokens),
+                    max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.
                     process_id: None,

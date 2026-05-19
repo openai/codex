@@ -1,0 +1,7 @@
+---
+source: core/tests/suite/code_mode.rs
+expression: output
+---
+Total output lines: 1
+
+0123456789…5 tokens truncated…0123456789

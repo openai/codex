@@ -381,7 +381,7 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: self.truncated_output(),
+            output: self.code_mode_output(),
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
@@ -391,6 +391,13 @@ impl ToolOutput for ExecCommandToolOutput {
 }
 
 impl ExecCommandToolOutput {
+    fn code_mode_output(&self) -> String {
+        match self.max_output_tokens {
+            Some(_) => self.truncated_output(),
+            None => String::from_utf8_lossy(&self.raw_output).to_string(),
+        }
+    }
+
     pub(crate) fn truncated_output(&self) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
         let max_tokens = resolve_max_tokens(self.max_output_tokens);
