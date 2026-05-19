@@ -1265,14 +1265,27 @@ impl UnauthorizedRecovery {
     pub async fn handle_invalidated_access_token_auth(
         &self,
     ) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenFailedError> {
-        match self
-            .manager
-            .reload_if_account_id_matches(self.expected_account_id.as_deref())
-            .await
-        {
-            ReloadOutcome::ReloadedChanged => Ok(UnauthorizedRecoveryStepResult {
-                auth_state_changed: Some(true),
-            }),
+        let reload_outcome = match self.expected_account_id.as_deref() {
+            Some(expected_account_id) => {
+                self.manager
+                    .reload_if_account_id_matches(Some(expected_account_id))
+                    .await
+            }
+            None => self.manager.reload_if_auth_snapshot_changed().await,
+        };
+
+        match reload_outcome {
+            ReloadOutcome::ReloadedChanged => {
+                if self.manager.auth_cached().is_none() {
+                    return Err(RefreshTokenFailedError::new(
+                        RefreshTokenFailedReason::Revoked,
+                        ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+                    ));
+                }
+                Ok(UnauthorizedRecoveryStepResult {
+                    auth_state_changed: Some(true),
+                })
+            }
             ReloadOutcome::ReloadedNoChange => {
                 let message = match self.manager.logout().await {
                     Ok(_) => ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
@@ -1530,6 +1543,20 @@ impl AuthManager {
         } else {
             ReloadOutcome::ReloadedNoChange
         }
+    }
+
+    async fn reload_if_auth_snapshot_changed(&self) -> ReloadOutcome {
+        let new_auth = self.load_auth_from_storage().await;
+        let cached_before_reload = self.auth_cached();
+        let auth_changed =
+            !Self::auths_equal_for_refresh(cached_before_reload.as_ref(), new_auth.as_ref());
+        if !auth_changed {
+            return ReloadOutcome::ReloadedNoChange;
+        }
+
+        tracing::info!("Reloading auth because the persisted auth snapshot changed.");
+        self.set_cached_auth(new_auth);
+        ReloadOutcome::ReloadedChanged
     }
 
     fn auths_equal_for_refresh(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {

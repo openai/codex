@@ -361,6 +361,41 @@ async fn invalidated_access_token_logout_clears_cached_auth() {
 }
 
 #[tokio::test]
+async fn invalidated_access_token_logout_clears_cached_auth_without_account_id() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: None,
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let recovery = manager.unauthorized_recovery();
+
+    let failed = recovery
+        .handle_invalidated_access_token_auth()
+        .await
+        .expect_err("unchanged revoked auth without an account id should force login");
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+    assert!(!codex_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
 async fn invalidated_access_token_preserves_reloaded_auth() {
     let codex_home = tempdir().unwrap();
     write_auth_file(
