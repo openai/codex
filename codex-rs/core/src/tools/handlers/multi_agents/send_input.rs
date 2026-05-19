@@ -9,7 +9,7 @@ pub(crate) struct Handler;
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("send_input")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
     }
 
     fn spec(&self) -> Option<ToolSpec> {

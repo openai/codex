@@ -13,6 +13,7 @@ use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
@@ -74,15 +75,6 @@ fn tool_parameter_description(tool: &Value, parameter_name: &str) -> Option<Stri
         .and_then(|parameter| parameter.get("description"))
         .and_then(Value::as_str)
         .map(str::to_owned)
-}
-
-fn tool_search_output_tools(request: &ResponsesRequest, call_id: &str) -> Vec<Value> {
-    request
-        .tool_search_output(call_id)
-        .get("tools")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
 }
 
 fn role_block(description: &str, role_name: &str) -> Option<String> {
@@ -695,14 +687,11 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 2);
-    let tools = tool_search_output_tools(&requests[1], call_id);
-    let spawn_agent = tools
-        .iter()
-        .find(|tool| {
-            tool.get("type").and_then(Value::as_str) == Some("function")
-                && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
-        })
-        .unwrap_or_else(|| panic!("expected tool_search to return spawn_agent: {tools:?}"));
+    let output = requests[1].tool_search_output(call_id);
+    let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
+        .unwrap_or_else(|| {
+            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
+        });
     let agent_type_description = tool_parameter_description(spawn_agent, "agent_type")
         .expect("spawn_agent agent_type description");
     let custom_role_description =
