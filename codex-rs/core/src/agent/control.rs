@@ -18,6 +18,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
@@ -125,6 +126,22 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         RolloutItem::TurnContext(_) => preserve_reference_context_item,
         RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
+}
+
+fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    if role != "developer" {
+        return false;
+    }
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        return false;
+    };
+
+    usage_hint_texts
+        .iter()
+        .any(|usage_hint_text| usage_hint_text == text)
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -396,9 +413,72 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+            if let Some(parent_thread) = parent_thread.as_ref() {
+                if parent_thread.enabled(Feature::MultiAgentV2) {
+                    let parent_config = parent_thread.codex.session.get_config().await;
+                    [
+                        parent_config
+                            .multi_agent_v2
+                            .root_agent_usage_hint_text
+                            .clone(),
+                        parent_config
+                            .multi_agent_v2
+                            .subagent_usage_hint_text
+                            .clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+                } else {
+                    Vec::new()
+                }
+            } else if config.features.enabled(Feature::MultiAgentV2) {
+                [
+                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                Vec::new()
+            };
         let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
-        forked_rollout_items
-            .retain(|item| keep_forked_rollout_item(item, preserve_reference_context_item));
+        forked_rollout_items.retain(|item| {
+            keep_forked_rollout_item(item, preserve_reference_context_item)
+                && !matches!(
+                    item,
+                    RolloutItem::ResponseItem(response_item)
+                        if is_multi_agent_v2_usage_hint_message(
+                            response_item,
+                            &multi_agent_v2_usage_hint_texts_to_filter,
+                        )
+                )
+        });
+        for item in &mut forked_rollout_items {
+            if let RolloutItem::Compacted(compacted) = item
+                && let Some(replacement_history) = compacted.replacement_history.as_mut()
+            {
+                replacement_history.retain(|response_item| {
+                    !is_multi_agent_v2_usage_hint_message(
+                        response_item,
+                        &multi_agent_v2_usage_hint_texts_to_filter,
+                    )
+                });
+            }
+        }
+        if preserve_reference_context_item
+            && config.features.enabled(Feature::MultiAgentV2)
+            && let Some(subagent_usage_hint_text) =
+                config.multi_agent_v2.subagent_usage_hint_text.clone()
+            && let Some(subagent_usage_hint_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![
+                    subagent_usage_hint_text,
+                ])
+        {
+            forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
+        }
 
         state
             .fork_thread_with_source(
