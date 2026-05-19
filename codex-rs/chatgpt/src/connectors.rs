@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::chatgpt_client::chatgpt_get_request_with_timeout;
+use crate::chatgpt_client::chatgpt_get_request_with_timeout_and_originator;
 
 use codex_app_server_protocol::AppInfo;
 use codex_connectors::ConnectorDirectoryCacheContext;
@@ -52,9 +52,11 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
+    let originator = Originator::process_default();
+    let originator_value = originator.value().to_string();
     let (connectors_result, accessible_result) = tokio::join!(
-        list_all_connectors(config),
-        list_accessible_connectors_from_mcp_tools(config),
+        list_all_connectors_with_originator(config, &originator),
+        list_accessible_connectors_from_mcp_tools(config, &originator_value),
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
@@ -67,10 +69,24 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch*/ false).await
+    let originator = Originator::process_default();
+    list_all_connectors_with_options_and_originator(
+        config,
+        /*force_refetch*/ false,
+        &originator,
+    )
+    .await
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
+    let originator = Originator::process_default();
+    list_cached_all_connectors_with_originator(config, &originator).await
+}
+
+pub async fn list_cached_all_connectors_with_originator(
+    config: &Config,
+    originator: &Originator,
+) -> Option<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Some(Vec::new());
     }
@@ -85,13 +101,31 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
             .into_iter()
             .map(|connector_id| connector_id.0),
     );
-    let originator = Originator::process_default();
     Some(filter_disallowed_connectors(connectors, originator.value()))
 }
 
 pub async fn list_all_connectors_with_options(
     config: &Config,
     force_refetch: bool,
+) -> anyhow::Result<Vec<AppInfo>> {
+    let originator = Originator::process_default();
+    list_all_connectors_with_options_and_originator(config, force_refetch, &originator).await
+}
+
+pub async fn list_all_connectors_with_originator(
+    config: &Config,
+    originator: &Originator,
+) -> anyhow::Result<Vec<AppInfo>> {
+    list_all_connectors_with_options_and_originator(
+        config, /*force_refetch*/ false, originator,
+    )
+    .await
+}
+
+pub async fn list_all_connectors_with_options_and_originator(
+    config: &Config,
+    force_refetch: bool,
+    originator: &Originator,
 ) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
@@ -103,10 +137,11 @@ pub async fn list_all_connectors_with_options(
         auth.is_workspace_account(),
         force_refetch,
         |path| async move {
-            chatgpt_get_request_with_timeout::<DirectoryListResponse>(
+            chatgpt_get_request_with_timeout_and_originator::<DirectoryListResponse>(
                 config,
                 path,
                 Some(DIRECTORY_CONNECTORS_TIMEOUT),
+                originator,
             )
             .await
         },
@@ -119,7 +154,6 @@ pub async fn list_all_connectors_with_options(
             .into_iter()
             .map(|connector_id| connector_id.0),
     );
-    let originator = Originator::process_default();
     Ok(filter_disallowed_connectors(connectors, originator.value()))
 }
 
@@ -150,6 +184,15 @@ pub fn connectors_for_plugin_apps(
     connectors: Vec<AppInfo>,
     plugin_apps: &[AppConnectorId],
 ) -> Vec<AppInfo> {
+    let originator = Originator::process_default();
+    connectors_for_plugin_apps_for_originator(connectors, plugin_apps, originator.value())
+}
+
+pub fn connectors_for_plugin_apps_for_originator(
+    connectors: Vec<AppInfo>,
+    plugin_apps: &[AppConnectorId],
+    originator_value: &str,
+) -> Vec<AppInfo> {
     let plugin_app_ids = plugin_apps
         .iter()
         .map(|connector_id| connector_id.0.as_str())
@@ -161,8 +204,7 @@ pub fn connectors_for_plugin_apps(
             .iter()
             .map(|connector_id| connector_id.0.clone()),
     );
-    let originator = Originator::process_default();
-    filter_disallowed_connectors(connectors, originator.value())
+    filter_disallowed_connectors(connectors, originator_value)
         .into_iter()
         .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
         .collect()
@@ -172,6 +214,21 @@ pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
     all_connectors_loaded: bool,
+) -> Vec<AppInfo> {
+    let originator = Originator::process_default();
+    merge_connectors_with_accessible_for_originator(
+        connectors,
+        accessible_connectors,
+        all_connectors_loaded,
+        originator.value(),
+    )
+}
+
+pub fn merge_connectors_with_accessible_for_originator(
+    connectors: Vec<AppInfo>,
+    accessible_connectors: Vec<AppInfo>,
+    all_connectors_loaded: bool,
+    originator_value: &str,
 ) -> Vec<AppInfo> {
     let accessible_connectors = if all_connectors_loaded {
         let connector_ids: HashSet<&str> = connectors
@@ -186,8 +243,7 @@ pub fn merge_connectors_with_accessible(
         accessible_connectors
     };
     let merged = merge_connectors(connectors, accessible_connectors);
-    let originator = Originator::process_default();
-    filter_disallowed_connectors(merged, originator.value())
+    filter_disallowed_connectors(merged, originator_value)
 }
 
 #[cfg(test)]

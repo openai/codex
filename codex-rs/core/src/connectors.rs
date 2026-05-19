@@ -32,7 +32,6 @@ use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::Originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeEnvironment;
@@ -86,10 +85,13 @@ pub struct AccessibleConnectorsStatus {
 
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
+    originator_value: &str,
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
         list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config, /*force_refetch*/ false,
+            config,
+            /*force_refetch*/ false,
+            originator_value,
         )
         .await?
         .connectors,
@@ -113,6 +115,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
+    originator_value: &str,
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let connector_ids = tool_suggest_connector_ids(config).await;
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
@@ -124,7 +127,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
             directory_connectors,
             accessible_connectors,
             &connector_ids,
-            Originator::process_default().value(),
+            originator_value,
         )
         .into_iter()
         .map(DiscoverableTool::from);
@@ -139,6 +142,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
+    originator_value: &str,
 ) -> Option<Vec<AppInfo>> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -151,10 +155,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     read_cached_accessible_connectors(&cache_key).map(|connectors| {
-        codex_connectors::filter::filter_disallowed_connectors(
-            connectors,
-            Originator::process_default().value(),
-        )
+        codex_connectors::filter::filter_disallowed_connectors(connectors, originator_value)
     })
 }
 
@@ -162,6 +163,7 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
     mcp_tools: &[ToolInfo],
+    originator_value: &str,
 ) {
     if !config.features.enabled(Feature::Apps) {
         return;
@@ -170,7 +172,7 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     let cache_key = accessible_connectors_cache_key(config, auth);
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
         accessible_connectors_from_mcp_tools(mcp_tools),
-        Originator::process_default().value(),
+        originator_value,
     );
     write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
@@ -178,17 +180,23 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
     force_refetch: bool,
+    originator_value: &str,
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
-        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, force_refetch)
-            .await?
-            .connectors,
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(
+            config,
+            force_refetch,
+            originator_value,
+        )
+        .await?
+        .connectors,
     )
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
+    originator_value: &str,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     // TODO: Wire callers that already own an EnvironmentManager into
     // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
@@ -203,6 +211,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config,
         force_refetch,
         &environment_manager,
+        originator_value,
     )
     .await
 }
@@ -211,6 +220,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     config: &Config,
     force_refetch: bool,
     environment_manager: &EnvironmentManager,
+    originator_value: &str,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -232,7 +242,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
             cached_connectors,
-            Originator::process_default().value(),
+            originator_value,
         );
         let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
@@ -341,7 +351,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
 
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
         accessible_connectors_from_mcp_tools(&tools),
-        Originator::process_default().value(),
+        originator_value,
     );
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);

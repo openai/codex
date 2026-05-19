@@ -28,17 +28,17 @@ impl AppsRequestProcessor {
 
     pub(crate) async fn apps_list(
         &self,
-        request_id: &ConnectionRequestId,
+        request_context: &RequestContext,
         params: AppsListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params)
+        self.apps_list_inner(request_context, params)
             .await
             .map(|response| response.map(Into::into))
     }
 
     async fn apps_list_inner(
         &self,
-        request_id: &ConnectionRequestId,
+        request_context: &RequestContext,
         params: AppsListParams,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
@@ -80,11 +80,20 @@ impl AppsRequestProcessor {
             }));
         }
 
-        let request = request_id.clone();
+        let request = request_context.request_id().clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let originator = request_context.originator().clone();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
+            Self::apps_list_task(
+                outgoing,
+                request,
+                params,
+                config,
+                environment_manager,
+                originator,
+            )
+            .await;
         });
         Ok(None)
     }
@@ -95,11 +104,15 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        originator: Originator,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let retry_originator = originator.clone();
+        let result =
+            Self::apps_list_response(&outgoing, params, config, environment_manager, originator)
+                .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -115,6 +128,7 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
+                retry_originator,
             )
             .await
             {
@@ -128,6 +142,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        originator: Originator,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -143,9 +158,13 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
+        let originator_value = originator.value().to_string();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
-            connectors::list_cached_all_connectors(&config)
+            connectors::list_cached_accessible_connectors_from_mcp_tools(
+                &config,
+                &originator_value
+            ),
+            connectors::list_cached_all_connectors_with_originator(&config, &originator)
         );
         let cached_all_connectors = all_connectors.clone();
 
@@ -153,12 +172,14 @@ impl AppsRequestProcessor {
 
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
+        let accessible_originator_value = originator_value.clone();
         tokio::spawn(async move {
             let result =
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &accessible_config,
                     force_refetch,
                     &environment_manager,
+                    &accessible_originator_value,
                 )
                 .await
                 .map_err(|err| format!("failed to load accessible apps: {err}"));
@@ -166,10 +187,15 @@ impl AppsRequestProcessor {
         });
 
         let all_config = config.clone();
+        let all_originator = originator.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
-                .await
-                .map_err(|err| format!("failed to list apps: {err}"));
+            let result = connectors::list_all_connectors_with_options_and_originator(
+                &all_config,
+                force_refetch,
+                &all_originator,
+            )
+            .await
+            .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
         });
 
@@ -181,7 +207,11 @@ impl AppsRequestProcessor {
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
             let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
+                merge_loaded_apps(
+                    all_connectors.as_deref(),
+                    accessible_connectors.as_deref(),
+                    &originator_value,
+                ),
                 &config,
             );
             if should_send_app_list_updated_notification(
@@ -240,7 +270,11 @@ impl AppsRequestProcessor {
                     accessible_connectors.as_deref()
                 };
             let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
+                merge_loaded_apps(
+                    all_connectors_for_update,
+                    accessible_connectors_for_update,
+                    &originator_value,
+                ),
                 &config,
             );
             if should_send_app_list_updated_notification(
@@ -319,11 +353,17 @@ enum AppListLoadResult {
 fn merge_loaded_apps(
     all_connectors: Option<&[AppInfo]>,
     accessible_connectors: Option<&[AppInfo]>,
+    originator_value: &str,
 ) -> Vec<AppInfo> {
     let all_connectors_loaded = all_connectors.is_some();
     let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-    connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
+    connectors::merge_connectors_with_accessible_for_originator(
+        all,
+        accessible,
+        all_connectors_loaded,
+        originator_value,
+    )
 }
 
 fn should_send_app_list_updated_notification(

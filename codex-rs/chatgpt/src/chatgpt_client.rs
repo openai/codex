@@ -23,6 +23,16 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     path: String,
     timeout: Option<Duration>,
 ) -> anyhow::Result<T> {
+    let originator = Originator::process_default();
+    chatgpt_get_request_with_timeout_and_originator(config, path, timeout, &originator).await
+}
+
+pub(crate) async fn chatgpt_get_request_with_timeout_and_originator<T: DeserializeOwned>(
+    config: &Config,
+    path: String,
+    timeout: Option<Duration>,
+    originator: &Originator,
+) -> anyhow::Result<T> {
     let chatgpt_base_url = &config.chatgpt_base_url;
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -40,8 +50,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
 
     // Make direct HTTP request to ChatGPT backend API with the token
-    let originator = Originator::process_default();
-    let client = create_client(&originator);
+    let client = create_client(originator);
     let url = format!(
         "{}/{}",
         chatgpt_base_url.trim_end_matches('/'),

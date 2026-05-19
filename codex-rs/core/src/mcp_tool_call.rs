@@ -690,6 +690,7 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
                 &turn_context.config,
                 auth.as_ref(),
                 &mcp_tools,
+                turn_context.originator.value(),
             );
         }
         Err(err) => {
@@ -1500,15 +1501,17 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
+            turn_context.originator.value(),
         )
         .await
         {
             Some(connectors) => Some(connectors),
-            None => {
-                connectors::list_accessible_connectors_from_mcp_tools(turn_context.config.as_ref())
-                    .await
-                    .ok()
-            }
+            None => connectors::list_accessible_connectors_from_mcp_tools(
+                turn_context.config.as_ref(),
+                turn_context.originator.value(),
+            )
+            .await
+            .ok(),
         };
         connectors.and_then(|connectors| {
             let connector_id = tool_info.connector_id.as_deref()?;

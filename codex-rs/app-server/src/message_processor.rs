@@ -899,7 +899,7 @@ impl MessageProcessor {
                 .map(Some),
             ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
                 self.config_processor
-                    .experimental_feature_enablement_set(request_id.clone(), params)
+                    .experimental_feature_enablement_set(&request_context, params)
                     .await
             }
             ClientRequest::RemoteControlEnable { .. } => self
@@ -1125,7 +1125,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_share_delete(params).await
             }
             ClientRequest::AppsList { params, .. } => {
-                self.apps_processor.apps_list(&request_id, params).await
+                self.apps_processor
+                    .apps_list(&request_context, params)
+                    .await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
                 self.catalog_processor.skills_config_write(params).await

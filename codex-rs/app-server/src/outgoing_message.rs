@@ -75,6 +75,10 @@ impl RequestContext {
         self
     }
 
+    pub(crate) fn request_id(&self) -> &ConnectionRequestId {
+        &self.request_id
+    }
+
     pub(crate) fn originator(&self) -> &Originator {
         &self.originator
     }

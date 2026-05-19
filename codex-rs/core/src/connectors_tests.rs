@@ -193,7 +193,12 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
     ];
 
     let cached = with_accessible_connectors_cache_cleared(|| {
-        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
+        refresh_accessible_connectors_cache_from_mcp_tools(
+            &config,
+            /*auth*/ None,
+            &tools,
+            "codex_vscode",
+        );
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
     });
 
@@ -1254,7 +1259,7 @@ discoverables = [
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], "codex_vscode")
             .await
             .expect("discoverable tools should load");
 

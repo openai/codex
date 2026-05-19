@@ -1097,6 +1097,7 @@ pub(crate) async fn built_tools(
                 &turn_context.config,
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
+                turn_context.originator.value(),
             )
             .await
             .map(|discoverable_tools| {

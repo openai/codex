@@ -1486,12 +1486,19 @@ impl PluginRequestProcessor {
         }
 
         let environment_manager = self.thread_manager.environment_manager();
+        let originator = Originator::process_default();
+        let originator_value = originator.value().to_string();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ true),
+            connectors::list_all_connectors_with_options_and_originator(
+                config,
+                /*force_refetch*/ true,
+                &originator,
+            ),
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,
-                &environment_manager
+                &environment_manager,
+                &originator_value,
             ),
         );
 
@@ -1502,12 +1509,16 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors(config)
+                connectors::list_cached_all_connectors_with_originator(config, &originator)
                     .await
                     .unwrap_or_default()
             }
         };
-        let all_connectors = connectors::connectors_for_plugin_apps(all_connectors, plugin_apps);
+        let all_connectors = connectors::connectors_for_plugin_apps_for_originator(
+            all_connectors,
+            plugin_apps,
+            &originator_value,
+        );
         let (accessible_connectors, codex_apps_ready) = match accessible_connectors_result {
             Ok(status) => (status.connectors, status.codex_apps_ready),
             Err(err) => {
@@ -1516,9 +1527,12 @@ impl PluginRequestProcessor {
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
                 (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config)
-                        .await
-                        .unwrap_or_default(),
+                    connectors::list_cached_accessible_connectors_from_mcp_tools(
+                        config,
+                        &originator_value,
+                    )
+                    .await
+                    .unwrap_or_default(),
                     false,
                 )
             }
@@ -1764,24 +1778,36 @@ async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors =
-        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config)
-                    .await
-                    .unwrap_or_default()
-            }
-        };
+    let originator = Originator::process_default();
+    let originator_value = originator.value().to_string();
+    let connectors = match connectors::list_all_connectors_with_options_and_originator(
+        config,
+        /*force_refetch*/ false,
+        &originator,
+    )
+    .await
+    {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to load app metadata for plugin/read: {err:#}");
+            connectors::list_cached_all_connectors_with_originator(config, &originator)
+                .await
+                .unwrap_or_default()
+        }
+    };
 
-    let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
+    let plugin_connectors = connectors::connectors_for_plugin_apps_for_originator(
+        connectors,
+        plugin_apps,
+        &originator_value,
+    );
 
     let accessible_connectors =
         match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
             config,
             /*force_refetch*/ false,
             environment_manager,
+            &originator_value,
         )
         .await
         {
