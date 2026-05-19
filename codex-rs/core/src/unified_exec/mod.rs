@@ -94,7 +94,6 @@ pub(crate) struct ExecCommandRequest {
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub truncation_policy: TruncationPolicy,
     pub cwd: AbsolutePathBuf,
     pub sandbox_cwd: AbsolutePathBuf,
     pub environment: Arc<Environment>,

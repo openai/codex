@@ -257,7 +257,6 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     process_id,
                     yield_time_ms,
                     max_output_tokens,
-                    truncation_policy: turn.truncation_policy,
                     cwd,
                     sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
