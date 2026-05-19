@@ -9,7 +9,6 @@ use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
@@ -40,7 +39,6 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
-use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -145,7 +143,7 @@ pub(crate) async fn run_turn(
     turn_context: Arc<TurnContext>,
     turn_extension_data: Arc<codex_extension_api::ExtensionData>,
     input: Vec<UserInput>,
-    prewarmed_client_session: Option<ModelClientSession>,
+    client_session: &mut ModelClientSession,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() && !sess.input_queue.has_pending_input(&sess.active_turn).await {
@@ -154,14 +152,12 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     let pre_sampling_compact =
-        match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+        match run_pre_sampling_compact(&sess, &turn_context, client_session).await {
             Ok(pre_sampling_compact) => pre_sampling_compact,
             Err(err) => {
                 if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
@@ -241,14 +237,6 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let config = turn_context.config.clone();
-    if config
-        .features
-        .enabled(Feature::SkillEnvVarDependencyPrompt)
-    {
-        let env_var_dependencies = collect_env_var_dependencies(&mentioned_skills);
-        resolve_skill_dependencies_for_turn(&sess, &turn_context, &env_var_dependencies).await;
-    }
 
     maybe_prompt_and_install_mcp_dependencies(
         sess.as_ref(),
@@ -405,10 +393,6 @@ pub(crate) async fn run_turn(
     let mut can_drain_pending_input = input.is_empty();
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
-        }
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -482,7 +466,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_context),
             Arc::clone(&turn_extension_data),
             Arc::clone(&turn_diff_tracker),
-            &mut client_session,
+            client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
             &explicitly_enabled_connectors,
@@ -522,7 +506,7 @@ pub(crate) async fn run_turn(
                     let reset_client_session = match run_auto_compact(
                         &sess,
                         &turn_context,
-                        &mut client_session,
+                        client_session,
                         InitialContextInjection::BeforeLastUserMessage,
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
