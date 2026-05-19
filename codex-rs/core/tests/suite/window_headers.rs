@@ -112,6 +112,7 @@ async fn submit_user_turn(codex: &Arc<CodexThread>, text: &str) -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;

@@ -12,7 +12,7 @@ from ._approval_mode import (
 from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
     ImageInput as ImageInput,
-    Input,
+    Input as Input,
     InputItem as InputItem,
     LocalImageInput as LocalImageInput,
     MentionInput as MentionInput,
@@ -33,9 +33,9 @@ from ._login import (
     start_device_code_login,
 )
 from ._run import (
-    RunResult,
-    _collect_async_run_result,
-    _collect_run_result,
+    TurnResult,
+    _collect_async_turn_result,
+    _collect_turn_result,
 )
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
@@ -65,7 +65,6 @@ from .generated.v2_all import (
     ThreadSourceKind,
     ThreadStartParams,
     ThreadStartSource,
-    Turn as AppServerTurn,
     TurnCompletedNotification,
     TurnInterruptResponse,
     TurnStartParams,
@@ -533,9 +532,9 @@ class Thread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> RunResult:
+    ) -> TurnResult:
         turn = self.turn(
-            _normalize_run_input(input),
+            input,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -548,14 +547,14 @@ class Thread:
         )
         stream = turn.stream()
         try:
-            return _collect_run_result(stream, turn_id=turn.id)
+            return _collect_turn_result(stream, turn_id=turn.id)
         finally:
             stream.close()
 
     # BEGIN GENERATED: Thread.flat_methods
     def turn(
         self,
-        input: Input,
+        input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
@@ -567,7 +566,7 @@ class Thread:
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
-        wire_input = _to_wire_input(input)
+        wire_input = _to_wire_input(_normalize_run_input(input))
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
@@ -616,9 +615,9 @@ class AsyncThread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: str | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> RunResult:
+    ) -> TurnResult:
         turn = await self.turn(
-            _normalize_run_input(input),
+            input,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -631,14 +630,14 @@ class AsyncThread:
         )
         stream = turn.stream()
         try:
-            return await _collect_async_run_result(stream, turn_id=turn.id)
+            return await _collect_async_turn_result(stream, turn_id=turn.id)
         finally:
             await stream.aclose()
 
     # BEGIN GENERATED: AsyncThread.flat_methods
     async def turn(
         self,
-        input: Input,
+        input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
@@ -651,7 +650,7 @@ class AsyncThread:
         summary: ReasoningSummary | None = None,
     ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
-        wire_input = _to_wire_input(input)
+        wire_input = _to_wire_input(_normalize_run_input(input))
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
@@ -695,8 +694,12 @@ class TurnHandle:
     thread_id: str
     id: str
 
-    def steer(self, input: Input) -> TurnSteerResponse:
-        return self._client.turn_steer(self.thread_id, self.id, _to_wire_input(input))
+    def steer(self, input: RunInput) -> TurnSteerResponse:
+        return self._client.turn_steer(
+            self.thread_id,
+            self.id,
+            _to_wire_input(_normalize_run_input(input)),
+        )
 
     def interrupt(self) -> TurnInterruptResponse:
         return self._client.turn_interrupt(self.thread_id, self.id)
@@ -717,20 +720,12 @@ class TurnHandle:
         finally:
             self._client.unregister_turn_notifications(self.id)
 
-    def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
+    def run(self) -> TurnResult:
         stream = self.stream()
         try:
-            for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
+            return _collect_turn_result(stream, turn_id=self.id)
         finally:
             stream.close()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn
 
 
 @dataclass(slots=True)
@@ -739,12 +734,12 @@ class AsyncTurnHandle:
     thread_id: str
     id: str
 
-    async def steer(self, input: Input) -> TurnSteerResponse:
+    async def steer(self, input: RunInput) -> TurnSteerResponse:
         await self._codex._ensure_initialized()
         return await self._codex._client.turn_steer(
             self.thread_id,
             self.id,
-            _to_wire_input(input),
+            _to_wire_input(_normalize_run_input(input)),
         )
 
     async def interrupt(self) -> TurnInterruptResponse:
@@ -768,17 +763,9 @@ class AsyncTurnHandle:
         finally:
             self._codex._client.unregister_turn_notifications(self.id)
 
-    async def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
+    async def run(self) -> TurnResult:
         stream = self.stream()
         try:
-            async for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
+            return await _collect_async_turn_result(stream, turn_id=self.id)
         finally:
             await stream.aclose()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn

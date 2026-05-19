@@ -524,10 +524,9 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Perhaps we can bring this back down to 30m once we finish the cutover
-    # from tui_app_server/ to tui/. Incidentally, windows-arm64 was the main
-    # offender for exceeding the timeout.
-    timeout-minutes: 45
+    # Windows ARM64 is the long pole here, and nextest retries plus targeted
+    # Windows timeout headroom need more than 45m to finish reliably.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: codex-rs
@@ -687,6 +686,14 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_MIN_STACK: "8388608" # 8 MiB
           NEXTEST_STATUS_LEVEL: leak
+
+      - name: Upload nextest JUnit report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nextest-junit-rust-ci-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
+          path: codex-rs/target/nextest/default/junit.xml
+          if-no-files-found: warn
 
       - name: Upload Cargo timings (nextest)
         if: always()

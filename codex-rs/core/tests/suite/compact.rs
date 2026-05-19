@@ -88,24 +88,29 @@ fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
 fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
-    Op::UserTurn {
-        environments: None,
+    Op::UserInput {
         items: vec![UserInput::Text {
             text: text.into(),
             text_elements: Vec::new(),
         }],
+        environments: None,
         final_output_json_schema: None,
-        cwd,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: None,
-        sandbox_policy,
-        permission_profile,
-        model,
-        effort: None,
-        summary: None,
-        service_tier: None,
-        collaboration_mode: None,
-        personality: None,
+        responsesapi_client_metadata: None,
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd: Some(cwd),
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: Some(sandbox_policy),
+            permission_profile,
+            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Default,
+                settings: codex_protocol::config_types::Settings {
+                    model,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -386,6 +391,7 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -410,6 +416,7 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -586,6 +593,7 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -658,6 +666,7 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -727,6 +736,7 @@ async fn manual_compact_uses_custom_prompt() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -873,6 +883,7 @@ async fn manual_compact_emits_context_compaction_items() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1038,6 +1049,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -1509,6 +1521,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1524,6 +1537,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1539,6 +1553,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1709,6 +1724,7 @@ async fn auto_compact_emits_context_compaction_items() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -1789,6 +1805,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1803,6 +1820,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1817,6 +1835,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2250,6 +2269,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2264,6 +2284,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2278,6 +2299,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2366,6 +2388,7 @@ async fn manual_compact_retries_after_context_window_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2469,6 +2492,7 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -2563,6 +2587,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2580,6 +2605,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2597,6 +2623,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2760,6 +2787,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -2864,6 +2892,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -3063,6 +3092,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -3181,6 +3211,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -3242,28 +3273,21 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .expect("submit user input");
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
-    codex
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await
-        .expect("override turn context");
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("override thread settings");
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
     codex
@@ -3281,6 +3305,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -3469,6 +3494,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user");
@@ -3483,6 +3509,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit second user");
@@ -3555,6 +3582,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit follow-up user input");

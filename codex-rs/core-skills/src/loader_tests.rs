@@ -400,11 +400,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
   "dependencies": {
     "tools": [
       {
-        "type": "env_var",
-        "value": "GITHUB_TOKEN",
-        "description": "GitHub API token with repo scopes"
-      },
-      {
         "type": "mcp",
         "value": "github",
         "description": "GitHub MCP server",
@@ -446,14 +441,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             interface: None,
             dependencies: Some(SkillDependencies {
                 tools: vec![
-                    SkillToolDependency {
-                        r#type: "env_var".to_string(),
-                        value: "GITHUB_TOKEN".to_string(),
-                        description: Some("GitHub API token with repo scopes".to_string()),
-                        transport: None,
-                        command: None,
-                        url: None,
-                    },
                     SkillToolDependency {
                         r#type: "mcp".to_string(),
                         value: "github".to_string(),

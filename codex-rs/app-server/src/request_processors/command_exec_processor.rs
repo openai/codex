@@ -117,13 +117,6 @@ impl CommandExecRequestProcessor {
                 "`permissionProfile` cannot be combined with `sandboxPolicy`",
             ));
         }
-        let permission_profile = if let Some(active_permission_profile) = permission_profile {
-            Some(PermissionProfileSelectionParams::new(
-                active_permission_profile.id,
-            ))
-        } else {
-            None
-        };
 
         if size.is_some() && !tty {
             return Err(invalid_params("command/exec size requires tty: true"));
@@ -199,14 +192,11 @@ impl CommandExecRequestProcessor {
             network_proxy_permission_profile,
             managed_network_requirements_enabled,
         ) = if let Some(permission_profile) = permission_profile {
-            let mut overrides = ConfigOverrides {
+            let overrides = ConfigOverrides {
                 cwd: Some(cwd.to_path_buf()),
+                default_permissions: Some(permission_profile),
                 ..Default::default()
             };
-            apply_permission_profile_selection_to_config_overrides(
-                &mut overrides,
-                Some(permission_profile),
-            );
             let config = self
                 .config_manager
                 .load_for_cwd(

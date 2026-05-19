@@ -947,7 +947,11 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
-        Ok(result.rows_affected())
+        let rows_affected = result.rows_affected();
+        if rows_affected > 0 {
+            self.thread_goals.delete_thread_goal(thread_id).await?;
+        }
+        Ok(rows_affected)
     }
 }
 
