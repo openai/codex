@@ -446,7 +446,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         responses::ev_completed("resp-turn"),
     ]);
     let unauthorized = ResponseTemplate::new(401).set_body_json(json!({
-        "error": { "message": "unauthorized" }
+        "error": { "message": "unauthorized", "type": "token_invalidated" }
     }));
     let responses_mock = responses::mount_response_sequence(
         &mock_server,

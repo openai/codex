@@ -17,7 +17,6 @@ use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
-use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
@@ -49,6 +48,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -129,6 +129,53 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+fn write_managed_chatgpt_auth(codex_home: &Path, access_token: &str) {
+    let encode_json = |value: serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&value).expect("managed auth JWT segment should serialize"))
+    };
+    let id_token = format!(
+        "{}.{}.{}",
+        encode_json(json!({"alg": "none", "typ": "JWT"})),
+        encode_json(json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "account_id",
+                "chatgpt_user_id": "user-12345",
+                "user_id": "user-12345"
+            }
+        })),
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig"),
+    );
+    let auth_json = json!({
+        "tokens": {
+            "id_token": id_token,
+            "access_token": access_token,
+            "refresh_token": "test-refresh-token",
+            "account_id": "account_id"
+        },
+        "last_refresh": chrono::Utc::now(),
+    });
+    std::fs::write(
+        codex_home.join("auth.json"),
+        serde_json::to_vec_pretty(&auth_json).expect("managed auth should serialize"),
+    )
+    .expect("managed auth should persist");
+}
+
+async fn managed_chatgpt_auth_manager(access_token: &str) -> (TempDir, Arc<AuthManager>) {
+    let codex_home = TempDir::new().expect("managed auth tempdir");
+    write_managed_chatgpt_auth(codex_home.path(), access_token);
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        codex_login::AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    (codex_home, manager)
 }
 
 #[derive(Default)]
@@ -592,8 +639,7 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
 
 #[tokio::test]
 async fn token_invalidated_401_clears_auth_and_requires_relogin() {
-    let manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let (_codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
     let mut recovery = Some(manager.unauthorized_recovery());
     let x_error_json = base64::engine::general_purpose::STANDARD
         .encode(r#"{"error":{"code":"token_invalidated"}}"#);
@@ -636,8 +682,7 @@ async fn token_invalidated_401_clears_auth_and_requires_relogin() {
 
 #[tokio::test]
 async fn token_invalidated_error_type_401_clears_auth_and_requires_relogin() {
-    let manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let (_codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
     let mut recovery = Some(manager.unauthorized_recovery());
 
     let err = handle_unauthorized(
@@ -668,5 +713,36 @@ async fn token_invalidated_error_type_401_clears_auth_and_requires_relogin() {
             .expect("recovery state should remain available")
             .step_name(),
         "reload"
+    );
+}
+
+#[tokio::test]
+async fn token_invalidated_401_retries_when_persisted_auth_changed() {
+    let (codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    write_managed_chatgpt_auth(codex_home.path(), "replacement-access-token");
+    let mut recovery = Some(manager.unauthorized_recovery());
+
+    let retry = handle_unauthorized(
+        TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"type":"token_invalidated"}}"#.to_string()),
+        },
+        &mut recovery,
+        &test_session_telemetry(),
+    )
+    .await
+    .expect("new persisted auth should retry instead of logging out");
+
+    assert_eq!(retry.mode, "managed");
+    assert_eq!(retry.phase, "reload");
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
     );
 }

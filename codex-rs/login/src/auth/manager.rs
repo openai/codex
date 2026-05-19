@@ -1066,8 +1066,9 @@ enum UnauthorizedRecoveryMode {
 }
 
 // UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests
-// to API fail with a refreshable 401 status code. Callers must leave explicit access-token revocation signals
-// outside this flow so those sessions can be cleared instead of refreshed.
+// to API fail with a refreshable 401 status code. Managed ChatGPT access-token revocation is handled beside
+// this flow so persisted credentials can be guarded before they are cleared; externally owned auth stays here
+// so its owner can supply replacement credentials.
 // The client calls next() every time it encounters a 401 error, one time per retry.
 // For API key based authentication, we don't do anything and let the error bubble to the user.
 //
@@ -1193,6 +1194,15 @@ impl UnauthorizedRecovery {
         }
     }
 
+    pub fn handles_invalidated_access_token_auth(&self) -> bool {
+        self.mode == UnauthorizedRecoveryMode::Managed
+            && self
+                .manager
+                .auth_cached()
+                .as_ref()
+                .is_some_and(|auth| matches!(auth, CodexAuth::Chatgpt(_)))
+    }
+
     pub async fn next(&mut self) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenError> {
         if !self.has_next() {
             return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
@@ -1252,14 +1262,34 @@ impl UnauthorizedRecovery {
         })
     }
 
-    pub async fn clear_invalidated_access_token_auth(&self) -> RefreshTokenFailedError {
-        let message = match self.manager.logout().await {
-            Ok(_) => ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
-            Err(err) => format!(
-                "{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not clear saved auth: {err}"
-            ),
-        };
-        RefreshTokenFailedError::new(RefreshTokenFailedReason::Revoked, message)
+    pub async fn handle_invalidated_access_token_auth(
+        &self,
+    ) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenFailedError> {
+        match self
+            .manager
+            .reload_if_account_id_matches(self.expected_account_id.as_deref())
+            .await
+        {
+            ReloadOutcome::ReloadedChanged => Ok(UnauthorizedRecoveryStepResult {
+                auth_state_changed: Some(true),
+            }),
+            ReloadOutcome::ReloadedNoChange => {
+                let message = match self.manager.logout().await {
+                    Ok(_) => ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+                    Err(err) => format!(
+                        "{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not clear saved auth: {err}"
+                    ),
+                };
+                Err(RefreshTokenFailedError::new(
+                    RefreshTokenFailedReason::Revoked,
+                    message,
+                ))
+            }
+            ReloadOutcome::Skipped => Err(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+            )),
+        }
     }
 }
 

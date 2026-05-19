@@ -1987,31 +1987,58 @@ async fn handle_unauthorized(
     );
     if let Some(recovery_reason) = revocation_recovery_reason
         && let Some(recovery) = auth_recovery.as_ref()
+        && recovery.handles_invalidated_access_token_auth()
     {
         let mode = recovery.mode_name();
         let phase = recovery.step_name();
-        let failed = recovery.clear_invalidated_access_token_auth().await;
-        session_telemetry.record_auth_recovery(
-            mode,
-            phase,
-            "recovery_not_run",
-            debug.request_id.as_deref(),
-            debug.cf_ray.as_deref(),
-            debug.auth_error.as_deref(),
-            debug.auth_error_code.as_deref(),
-            Some(recovery_reason),
-            /*auth_state_changed*/ None,
-        );
-        emit_feedback_auth_recovery_tags(
-            mode,
-            phase,
-            "recovery_not_run",
-            debug.request_id.as_deref(),
-            debug.cf_ray.as_deref(),
-            debug.auth_error.as_deref(),
-            debug.auth_error_code.as_deref(),
-        );
-        return Err(CodexErr::RefreshTokenFailed(failed));
+        return match recovery.handle_invalidated_access_token_auth().await {
+            Ok(step_result) => {
+                session_telemetry.record_auth_recovery(
+                    mode,
+                    phase,
+                    "recovery_succeeded",
+                    debug.request_id.as_deref(),
+                    debug.cf_ray.as_deref(),
+                    debug.auth_error.as_deref(),
+                    debug.auth_error_code.as_deref(),
+                    Some(recovery_reason),
+                    step_result.auth_state_changed(),
+                );
+                emit_feedback_auth_recovery_tags(
+                    mode,
+                    phase,
+                    "recovery_succeeded",
+                    debug.request_id.as_deref(),
+                    debug.cf_ray.as_deref(),
+                    debug.auth_error.as_deref(),
+                    debug.auth_error_code.as_deref(),
+                );
+                Ok(UnauthorizedRecoveryExecution { mode, phase })
+            }
+            Err(failed) => {
+                session_telemetry.record_auth_recovery(
+                    mode,
+                    phase,
+                    "recovery_failed_permanent",
+                    debug.request_id.as_deref(),
+                    debug.cf_ray.as_deref(),
+                    debug.auth_error.as_deref(),
+                    debug.auth_error_code.as_deref(),
+                    Some(recovery_reason),
+                    /*auth_state_changed*/ None,
+                );
+                emit_feedback_auth_recovery_tags(
+                    mode,
+                    phase,
+                    "recovery_failed_permanent",
+                    debug.request_id.as_deref(),
+                    debug.cf_ray.as_deref(),
+                    debug.auth_error.as_deref(),
+                    debug.auth_error_code.as_deref(),
+                );
+                Err(CodexErr::RefreshTokenFailed(failed))
+            }
+        };
     }
 
     if let Some(recovery) = auth_recovery
