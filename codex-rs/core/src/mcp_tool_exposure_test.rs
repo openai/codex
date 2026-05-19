@@ -120,13 +120,8 @@ async fn directly_exposes_small_effective_tool_sets() {
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
 
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        /*connectors*/ None,
-        &[],
-        &config,
-        &tools_config,
-    );
+    let exposure =
+        build_mcp_tool_exposure(&mcp_tools, /*connectors*/ None, &config, &tools_config);
 
     assert_eq!(tool_names(&exposure.direct_tools), tool_names(&mcp_tools));
     assert!(exposure.deferred_tools.is_none());
@@ -138,13 +133,8 @@ async fn searches_large_effective_tool_sets() {
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        /*connectors*/ None,
-        &[],
-        &config,
-        &tools_config,
-    );
+    let exposure =
+        build_mcp_tool_exposure(&mcp_tools, /*connectors*/ None, &config, &tools_config);
 
     assert!(exposure.direct_tools.is_empty());
     let deferred_tools = exposure
@@ -155,58 +145,7 @@ async fn searches_large_effective_tool_sets() {
 }
 
 #[tokio::test]
-async fn directly_exposes_explicit_apps_without_deferred_overlap() {
-    let config = test_config().await;
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
-    mcp_tools.push(make_mcp_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_create_event",
-        "mcp__codex_apps__calendar",
-        "_create_event",
-        Some("calendar"),
-        Some("Calendar"),
-    ));
-    let connectors = vec![make_connector("calendar", "Calendar")];
-
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        Some(connectors.as_slice()),
-        connectors.as_slice(),
-        &config,
-        &tools_config,
-    );
-
-    let direct_tool_names = tool_names(&exposure.direct_tools);
-    assert_eq!(
-        direct_tool_names,
-        HashSet::from([ToolName::namespaced(
-            "mcp__codex_apps__calendar",
-            "_create_event"
-        )])
-    );
-    assert_eq!(
-        exposure.deferred_tools.as_ref().map(Vec::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
-    );
-    let deferred_tools = exposure
-        .deferred_tools
-        .as_ref()
-        .expect("large tool sets should be discoverable through tool_search");
-    let deferred_tool_names = tool_names(deferred_tools);
-    assert!(
-        direct_tool_names.is_disjoint(&deferred_tool_names),
-        "direct tools should not also be deferred: {direct_tool_names:?}"
-    );
-    assert!(!deferred_tool_names.contains(&ToolName::namespaced(
-        "mcp__codex_apps__calendar",
-        "_create_event"
-    )));
-    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool_0")));
-}
-
-#[tokio::test]
-async fn always_defer_feature_preserves_explicit_apps() {
+async fn always_defer_feature_defers_apps_too() {
     let mut config = test_config().await;
     config
         .features
@@ -236,26 +175,18 @@ async fn always_defer_feature_preserves_explicit_apps() {
     let exposure = build_mcp_tool_exposure(
         &mcp_tools,
         Some(connectors.as_slice()),
-        connectors.as_slice(),
         &config,
         &tools_config,
     );
 
-    let direct_tool_names = tool_names(&exposure.direct_tools);
-    assert_eq!(
-        direct_tool_names,
-        HashSet::from([ToolName::namespaced(
-            "mcp__codex_apps__calendar",
-            "_create_event"
-        )])
-    );
+    assert!(exposure.direct_tools.is_empty());
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
         .expect("MCP tools should be discoverable through tool_search");
     let deferred_tool_names = tool_names(deferred_tools);
     assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool")));
-    assert!(!deferred_tool_names.contains(&ToolName::namespaced(
+    assert!(deferred_tool_names.contains(&ToolName::namespaced(
         "mcp__codex_apps__calendar",
         "_create_event"
     )));
