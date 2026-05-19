@@ -40,6 +40,11 @@ pub(crate) fn profile_scoped_key_path(profile: Option<&str>, key_path: &str) -> 
     }
 }
 
+pub(crate) fn app_scoped_key_path(app_id: &str, key_path: &str) -> String {
+    let app_id = serde_json::Value::String(app_id.to_string()).to_string();
+    format!("apps.{app_id}.{key_path}")
+}
+
 pub(crate) fn build_model_selection_edits(
     profile: Option<&str>,
     model: &str,
@@ -116,9 +121,9 @@ pub(crate) async fn write_skill_enabled(
     request_handle: AppServerRequestHandle,
     path: AbsolutePathBuf,
     enabled: bool,
-) -> Result<SkillsConfigWriteResponse> {
+) -> Result<()> {
     let request_id = RequestId::String(format!("tui-skill-config-write-{}", Uuid::new_v4()));
-    request_handle
+    let _: SkillsConfigWriteResponse = request_handle
         .request_typed(ClientRequest::SkillsConfigWrite {
             request_id,
             params: SkillsConfigWriteParams {
@@ -128,7 +133,8 @@ pub(crate) async fn write_skill_enabled(
             },
         })
         .await
-        .wrap_err("skills/config/write failed in TUI")
+        .wrap_err("skills/config/write failed in TUI")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -141,6 +147,14 @@ mod tests {
         assert_eq!(
             profile_scoped_key_path(Some("team.prod"), "model"),
             "profiles.\"team.prod\".model"
+        );
+    }
+
+    #[test]
+    fn app_scoped_key_path_quotes_dotted_app_ids() {
+        assert_eq!(
+            app_scoped_key_path("plugin.linear", "enabled"),
+            "apps.\"plugin.linear\".enabled"
         );
     }
 }

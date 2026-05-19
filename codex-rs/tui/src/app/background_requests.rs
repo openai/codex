@@ -102,8 +102,11 @@ impl App {
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let thread_id = self
+            .current_displayed_thread_id()
+            .map(|thread_id| thread_id.to_string());
         tokio::spawn(async move {
-            let result = fetch_connectors_list(request_handle, force_refetch)
+            let result = fetch_connectors_list(request_handle, force_refetch, thread_id)
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::ConnectorsLoaded {
@@ -658,6 +661,7 @@ pub(super) async fn fetch_skills_list(
 pub(super) async fn fetch_connectors_list(
     request_handle: AppServerRequestHandle,
     force_refetch: bool,
+    thread_id: Option<String>,
 ) -> Result<ConnectorsSnapshot> {
     let request_id = RequestId::String(format!("apps-list-{}", Uuid::new_v4()));
     let response: AppsListResponse = request_handle
@@ -666,7 +670,7 @@ pub(super) async fn fetch_connectors_list(
             params: AppsListParams {
                 cursor: None,
                 limit: None,
-                thread_id: None,
+                thread_id,
                 force_refetch,
             },
         })

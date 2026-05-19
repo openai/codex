@@ -1672,7 +1672,7 @@ impl App {
                 )
                 .await
                 {
-                    Ok(_) => {
+                    Ok(()) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
                         if !app_server.is_remote()
                             && let Err(err) = self.refresh_in_memory_config_from_disk().await
@@ -1694,19 +1694,21 @@ impl App {
             AppEvent::SetAppEnabled { id, enabled } => {
                 let edits = if enabled {
                     vec![
-                        crate::config_update::clear_config_value(format!("apps.{id}.enabled")),
-                        crate::config_update::clear_config_value(format!(
-                            "apps.{id}.disabled_reason"
-                        )),
+                        crate::config_update::clear_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "enabled"),
+                        ),
+                        crate::config_update::clear_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
+                        ),
                     ]
                 } else {
                     vec![
                         crate::config_update::replace_config_value(
-                            format!("apps.{id}.enabled"),
+                            crate::config_update::app_scoped_key_path(&id, "enabled"),
                             serde_json::json!(false),
                         ),
                         crate::config_update::replace_config_value(
-                            format!("apps.{id}.disabled_reason"),
+                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
                             serde_json::json!("user"),
                         ),
                     ]
