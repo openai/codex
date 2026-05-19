@@ -4,8 +4,10 @@ use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
+use semver::Version;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::cmp::Ordering;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -75,7 +77,7 @@ impl PluginStore {
             })
             .filter(|version| validate_plugin_version_segment(version).is_ok())
             .collect::<Vec<_>>();
-        discovered_versions.sort_unstable();
+        discovered_versions.sort_unstable_by(|left, right| compare_plugin_versions(left, right));
         if discovered_versions.is_empty() {
             None
         } else if discovered_versions
@@ -366,7 +368,15 @@ fn remove_old_plugin_versions(
 }
 
 fn old_plugin_version_would_stay_active(old_version: &str, new_version: &str) -> bool {
-    old_version == DEFAULT_PLUGIN_VERSION || old_version > new_version
+    old_version == DEFAULT_PLUGIN_VERSION
+        || compare_plugin_versions(old_version, new_version).is_gt()
+}
+
+fn compare_plugin_versions(left: &str, right: &str) -> Ordering {
+    match (Version::parse(left), Version::parse(right)) {
+        (Ok(left), Ok(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
