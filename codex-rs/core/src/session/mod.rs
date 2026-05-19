@@ -3144,10 +3144,6 @@ impl Session {
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        if input.is_empty() {
-            return Err(SteerInputError::EmptyInput);
-        }
-
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
             return Err(SteerInputError::NoActiveTurn(input));
@@ -3179,6 +3175,10 @@ impl Session {
                 });
             }
             None => return Err(SteerInputError::NoActiveTurn(input)),
+        }
+
+        if input.is_empty() {
+            return Err(SteerInputError::EmptyInput);
         }
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
