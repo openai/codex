@@ -3773,12 +3773,14 @@ dependencies = [
  "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-string",
+ "jsonptr",
  "pretty_assertions",
  "rmcp",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]
@@ -8124,6 +8126,12 @@ dependencies = [
  "once_cell",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "jsonptr"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5a3cc660ba5d72bce0b3bb295bf20847ccbb40fd423f3f05b61273672e561fe"
 
 [[package]]
 name = "jsonwebtoken"

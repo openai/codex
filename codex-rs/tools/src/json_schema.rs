@@ -461,38 +461,24 @@ fn definition_for_pointer<'a>(
 }
 
 fn parse_local_definition_ref(schema_ref: &str) -> Option<DefinitionPointer> {
-    let (table, name) = if let Some(name) = schema_ref.strip_prefix("#/$defs/") {
-        (DefinitionTable::Defs, name)
-    } else if let Some(name) = schema_ref.strip_prefix("#/definitions/") {
-        (DefinitionTable::Definitions, name)
-    } else {
-        return None;
+    let fragment = schema_ref.strip_prefix('#')?;
+    let pointer = urlencoding::decode(fragment).ok()?;
+    let pointer = jsonptr::Pointer::parse(pointer.as_ref()).ok()?;
+
+    let (table_token, pointer) = pointer.split_front()?;
+    let table = match table_token.decoded().as_ref() {
+        "$defs" => DefinitionTable::Defs,
+        "definitions" => DefinitionTable::Definitions,
+        _ => return None,
     };
 
-    if name.contains('/') {
-        return None;
-    }
-    decode_json_pointer_segment(name).map(|name| DefinitionPointer { table, name })
-}
-
-fn decode_json_pointer_segment(segment: &str) -> Option<String> {
-    let mut decoded = String::with_capacity(segment.len());
-    let mut chars = segment.chars();
-
-    while let Some(ch) = chars.next() {
-        if ch != '~' {
-            decoded.push(ch);
-            continue;
-        }
-
-        match chars.next()? {
-            '0' => decoded.push('~'),
-            '1' => decoded.push('/'),
-            _ => return None,
-        }
-    }
-
-    Some(decoded)
+    // Responses API non-strict mode accepts nested local refs such as
+    // `#/$defs/User/properties/name`, so keep the parent definition reachable.
+    let (name, _) = pointer.split_front()?;
+    Some(DefinitionPointer {
+        table,
+        name: name.decoded().into_owned(),
+    })
 }
 
 fn normalized_schema_types(
