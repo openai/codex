@@ -1,9 +1,12 @@
 use super::*;
+use crate::session::turn_context::TurnContext;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
 use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-fn startup_failure_test_request(turn: &TurnContext, process_id: u64) -> ExecCommandRequest {
+fn startup_failure_test_request(turn: &TurnContext, process_id: i32) -> ExecCommandRequest {
     ExecCommandRequest {
         command: Vec::new(),
         shell_type: crate::shell::ShellType::Sh,
