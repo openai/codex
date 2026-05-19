@@ -186,9 +186,20 @@ mod tests {
     use codex_keyring_store::tests::MockKeyringStore;
     use pretty_assertions::assert_eq;
 
+    fn tempdir_outside_ambient_repo() -> tempfile::TempDir {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .expect("home directory should be available");
+        tempfile::Builder::new()
+            .prefix("secrets-tests-")
+            .tempdir_in(home)
+            .expect("tempdir outside ambient repo")
+    }
+
     #[test]
     fn environment_id_fallback_has_cwd_prefix() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempdir_outside_ambient_repo();
         let env_id = environment_id_from_cwd(dir.path());
         let canonical = dir
             .path()
