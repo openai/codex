@@ -477,7 +477,6 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
         disabled_tools: None,
         scopes: None,
         oauth: None,
-        environment_id: None,
         oauth_resource: None,
         tools: HashMap::new(),
     }
