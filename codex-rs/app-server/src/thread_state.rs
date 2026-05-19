@@ -68,7 +68,6 @@ pub(crate) struct TurnSummary {
     pub(crate) last_error: Option<TurnError>,
 }
 
-#[derive(Clone)]
 pub(crate) struct PendingTerminalPlanCleanup {
     pub(crate) turn_id: String,
     pub(crate) plan_update: UpdatePlanArgs,
