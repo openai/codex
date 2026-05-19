@@ -1235,8 +1235,8 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
     let environment = session
         .services
         .environment_manager
-        .default_environment()
-        .unwrap_or_else(|| session.services.environment_manager.local_environment());
+        .default_or_local_environment()
+        .expect("test session should have an MCP runtime environment");
     let (manager, _cancel_token) = codex_mcp::McpConnectionManager::new(
         &HashMap::new(),
         turn_context.config.mcp_oauth_credentials_store_mode,
@@ -1245,10 +1245,14 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.sub_id.clone(),
         session.get_tx_event(),
         turn_context.permission_profile(),
-        codex_mcp::McpRuntimeEnvironment::new(environment, {
-            #[allow(deprecated)]
-            turn_context.cwd.to_path_buf()
-        }),
+        codex_mcp::McpRuntimeEnvironment::new(
+            Some(environment),
+            session.services.environment_manager.try_local_environment(),
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        ),
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,

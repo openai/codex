@@ -661,7 +661,8 @@ async fn maybe_request_codex_apps_auth_elicitation(
     };
     let response = sess
         .request_mcp_server_elicitation(turn_context, request_id, params)
-        .await;
+        .await
+        .response;
     if !response
         .as_ref()
         .is_some_and(|response| response.action == ElicitationAction::Accept)
@@ -1325,7 +1326,8 @@ async fn maybe_request_mcp_tool_approval(
         );
         let decision = parse_mcp_tool_approval_elicitation_response(
             sess.request_mcp_server_elicitation(turn_context.as_ref(), request_id, params)
-                .await,
+                .await
+                .response,
             &question_id,
         );
         let decision = normalize_approval_decision_for_mode(decision, approval_mode);

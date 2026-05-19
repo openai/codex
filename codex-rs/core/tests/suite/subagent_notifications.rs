@@ -42,6 +42,7 @@ const REQUESTED_MODEL: &str = "gpt-5.4";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.4";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
+const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     let is_zstd = req
@@ -98,6 +99,96 @@ fn write_home_skill(codex_home: &Path, dir: &str, name: &str, description: &str)
     let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
     fs::write(skill_dir.join("SKILL.md"), contents)?;
     Ok(())
+}
+
+fn write_subagent_start_hooks(home: &Path) -> Result<()> {
+    let session_start_script_path = home.join("session_start_hook.py");
+    let session_start_log_path = home.join("session_start_hook_log.jsonl");
+    let session_start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{session_start_log_path}")
+payload = json.load(sys.stdin)
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        session_start_log_path = session_start_log_path.display(),
+    );
+
+    let start_script_path = home.join("subagent_start_hook.py");
+    let start_log_path = home.join("subagent_start_hook_log.jsonl");
+    let start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{start_log_path}")
+payload = json.load(sys.stdin)
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+print(json.dumps({{"hookSpecificOutput": {{"hookEventName": "SubagentStart", "additionalContext": {SUBAGENT_START_CONTEXT:?}}}}}))
+"#,
+        start_log_path = start_log_path.display(),
+    );
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "startup",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", session_start_script_path.display()),
+                }]
+            }],
+            "SubagentStart": [{
+                "matcher": "worker",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", start_script_path.display()),
+                }]
+            }]
+        }
+    });
+
+    fs::write(&session_start_script_path, session_start_script)?;
+    fs::write(&start_script_path, start_script)?;
+    fs::write(home.join("hooks.json"), hooks.to_string())?;
+    Ok(())
+}
+
+fn read_hook_log(home: &Path, filename: &str) -> Result<Vec<serde_json::Value>> {
+    let path = home.join(filename);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(Into::into))
+        .collect()
+}
+
+async fn wait_for_hook_log(
+    home: &Path,
+    filename: &str,
+    expected_len: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let inputs = read_hook_log(home, filename)?;
+        if inputs.len() >= expected_len {
+            return Ok(inputs);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "expected at least {expected_len} entries in {filename}, got {}",
+                inputs.len()
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
 }
 
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
@@ -277,6 +368,110 @@ async fn spawn_child_and_capture_snapshot(
         .await?
         .config_snapshot()
         .await)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subagent_start_replaces_session_start_and_injects_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "child",
+        "agent_type": "worker",
+    }))?;
+
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT)
+                && body_contains(req, SUBAGENT_START_CONTEXT)
+                && !body_contains(req, "<subagent_notification>")
+                && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_subagent_start_hooks(home) {
+                panic!("failed to write subagent hook fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            core_test_support::hooks::trust_discovered_hooks(config);
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let child_requests = wait_for_requests(&child_request_log).await?;
+    assert_eq!(child_requests.len(), 1);
+
+    let start_inputs = wait_for_hook_log(
+        test.codex_home_path(),
+        "subagent_start_hook_log.jsonl",
+        /*expected_len*/ 1,
+    )
+    .await?;
+    assert_eq!(start_inputs.len(), 1);
+    assert_eq!(start_inputs[0]["agent_type"].as_str(), Some("worker"));
+    let spawned_id = wait_for_spawned_thread_id(&test).await?;
+    assert_eq!(
+        start_inputs[0]["agent_id"].as_str(),
+        Some(spawned_id.as_str())
+    );
+
+    let session_start_inputs = wait_for_hook_log(
+        test.codex_home_path(),
+        "session_start_hook_log.jsonl",
+        /*expected_len*/ 1,
+    )
+    .await?;
+    assert_eq!(session_start_inputs.len(), 1);
+    assert_eq!(session_start_inputs[0]["source"].as_str(), Some("startup"));
+    assert_ne!(
+        session_start_inputs[0]["session_id"].as_str(),
+        Some(spawned_id.as_str())
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
