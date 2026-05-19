@@ -211,6 +211,10 @@ impl CoreToolRuntime for ShellCommandHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        true
+    }
+
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: HookToolName::bash(),
