@@ -365,7 +365,7 @@ impl CodexThread {
         if self
             .codex
             .session
-            .inject_response_items(vec![pending_item])
+            .inject_into_active_turn(vec![pending_item])
             .await
             .is_err()
         {

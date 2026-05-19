@@ -689,7 +689,7 @@ impl Session {
                     .await;
                 if let Some(goal) = goal_for_steering {
                     let item = goal_context_input_item(objective_updated_prompt(&goal));
-                    if self.inject_response_items(vec![item]).await.is_err() {
+                    if self.inject_into_active_turn(vec![item]).await.is_err() {
                         tracing::debug!(
                             "skipping objective-updated goal steering because no turn is active"
                         );
@@ -1095,7 +1095,7 @@ impl Session {
         .await;
         if should_steer_budget_limit {
             let item = budget_limit_steering_item(&goal);
-            if self.inject_response_items(vec![item]).await.is_err() {
+            if self.inject_into_active_turn(vec![item]).await.is_err() {
                 tracing::debug!("skipping budget-limit goal steering because no turn is active");
             }
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = Some(goal_id);

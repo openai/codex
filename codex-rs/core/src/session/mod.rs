@@ -1860,7 +1860,7 @@ impl Session {
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
+            .inject_into_active_turn(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
                 phase: None,
@@ -1957,7 +1957,7 @@ impl Session {
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
+            .inject_into_active_turn(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
                 phase: None,
@@ -3200,12 +3200,12 @@ impl Session {
         Ok(active_turn_id.clone())
     }
 
-    /// Returns the input if there was no task running to inject into.
+    /// Returns the input if there was no active turn to inject into.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and input queue updates must remain atomic"
     )]
-    pub async fn inject_response_items(
+    pub async fn inject_into_active_turn(
         &self,
         input: Vec<ResponseInputItem>,
     ) -> Result<(), Vec<ResponseInputItem>> {
