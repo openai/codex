@@ -892,10 +892,10 @@ impl ChatWidget {
 fn five_hour_status_window(
     snapshot: &RateLimitSnapshotDisplay,
 ) -> Option<(&RateLimitWindowDisplay, bool)> {
-    find_codex_window(snapshot, "5h")
+    find_primary_codex_window(snapshot, "5h")
+        .or_else(|| secondary_window_with_label_when_weekly_is_available(snapshot, "5h"))
         .or_else(|| non_weekly_primary_window(snapshot))
-        .or_else(|| non_weekly_secondary_window(snapshot))
-        .or_else(|| only_non_weekly_codex_window(snapshot))
+        .or_else(|| non_weekly_secondary_window_when_primary_is_weekly(snapshot))
 }
 
 fn weekly_status_window(
@@ -924,6 +924,34 @@ fn find_codex_window<'a>(
     None
 }
 
+fn find_primary_codex_window<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, label) {
+        Some((primary, false))
+    } else {
+        None
+    }
+}
+
+fn secondary_window_with_label_when_weekly_is_available<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    if find_codex_window(snapshot, "weekly").is_none() {
+        return None;
+    }
+
+    let secondary = snapshot.secondary.as_ref()?;
+    if matches_window_label(secondary, label) {
+        Some((secondary, true))
+    } else {
+        None
+    }
+}
+
 fn non_weekly_primary_window(
     snapshot: &RateLimitSnapshotDisplay,
 ) -> Option<(&RateLimitWindowDisplay, bool)> {
@@ -935,30 +963,19 @@ fn non_weekly_primary_window(
     }
 }
 
-fn non_weekly_secondary_window(
+fn non_weekly_secondary_window_when_primary_is_weekly(
     snapshot: &RateLimitSnapshotDisplay,
 ) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if !matches_window_label(primary, "weekly") {
+        return None;
+    }
+
     let secondary = snapshot.secondary.as_ref()?;
     if matches_window_label(secondary, "weekly") {
         None
     } else {
         Some((secondary, true))
-    }
-}
-
-fn only_non_weekly_codex_window(
-    snapshot: &RateLimitSnapshotDisplay,
-) -> Option<(&RateLimitWindowDisplay, bool)> {
-    let (window, is_secondary) = match (snapshot.primary.as_ref(), snapshot.secondary.as_ref()) {
-        (Some(primary), None) => Some((primary, false)),
-        (None, Some(secondary)) => Some((secondary, true)),
-        _ => None,
-    }?;
-
-    if matches_window_label(window, "weekly") {
-        None
-    } else {
-        Some((window, is_secondary))
     }
 }
 
