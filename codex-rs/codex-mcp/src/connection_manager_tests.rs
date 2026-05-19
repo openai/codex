@@ -847,6 +847,94 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
 }
 
+#[tokio::test]
+async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let (tx_event, rx_event) = async_channel::unbounded();
+    drop(rx_event);
+    let codex_home = tempdir().expect("tempdir");
+    let mcp_servers = HashMap::from([
+        (
+            "stdio".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                experimental_environment: None,
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+        (
+            "http".to_string(),
+            EffectiveMcpServer::configured(McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "http://127.0.0.1:1".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                experimental_environment: None,
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            }),
+        ),
+    ]);
+
+    let (manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        OAuthCredentialsStoreMode::default(),
+        HashMap::new(),
+        &approval_policy,
+        String::new(),
+        tx_event,
+        PermissionProfile::default(),
+        McpRuntimeEnvironment::new(None, false, PathBuf::from("/tmp")),
+        codex_home.path().to_path_buf(),
+        CodexAppsToolsCacheKey {
+            account_id: None,
+            chatgpt_user_id: None,
+            is_workspace_account: false,
+        },
+        false,
+        ElicitationCapability::default(),
+        ToolPluginProvenance::default(),
+        None,
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+
+    assert!(!manager.clients.contains_key("stdio"));
+    assert!(manager.clients.contains_key("http"));
+    cancel_token.cancel();
+}
+
 #[test]
 fn elicitation_capability_uses_2025_06_18_shape_for_form_only_support() {
     let capability = Some(ElicitationCapability::default());
