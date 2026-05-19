@@ -7,6 +7,7 @@
 use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -23,6 +24,7 @@ use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -530,6 +532,14 @@ impl Session {
                 })?
         };
 
+        if objective.is_some() {
+            set_thread_preview_from_goal_objective(
+                &state_db,
+                self.conversation_id,
+                goal.objective.as_str(),
+            )
+            .await;
+        }
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let previous_status_for_goal = if replacing_goal {
@@ -611,6 +621,12 @@ impl Session {
                 )
             })?;
 
+        set_thread_preview_from_goal_objective(
+            &state_db,
+            self.conversation_id,
+            goal.objective.as_str(),
+        )
+        .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
@@ -1331,12 +1347,16 @@ impl Session {
                 .await;
             return;
         }
-        {
-            let mut turn_state = turn_state.lock().await;
-            for item in candidate.items {
-                turn_state.push_pending_input(item);
-            }
-        }
+        self.input_queue
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                candidate
+                    .items
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
+            .await;
 
         let turn_context = self
             .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
@@ -1374,11 +1394,15 @@ impl Session {
             tracing::debug!("skipping active goal continuation because a turn is already active");
             return None;
         }
-        if self.has_queued_response_items_for_next_turn().await {
+        if self
+            .input_queue
+            .has_queued_response_items_for_next_turn()
+            .await
+        {
             tracing::debug!("skipping active goal continuation because queued input exists");
             return None;
         }
-        if self.has_trigger_turn_mailbox_items().await {
+        if self.input_queue.has_trigger_turn_mailbox_items().await {
             tracing::debug!(
                 "skipping active goal continuation because trigger-turn mailbox input is pending"
             );
@@ -1415,8 +1439,11 @@ impl Session {
             return None;
         }
         if self.active_turn.lock().await.is_some()
-            || self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await
+            || self
+                .input_queue
+                .has_queued_response_items_for_next_turn()
+                .await
+            || self.input_queue.has_trigger_turn_mailbox_items().await
         {
             tracing::debug!("skipping active goal continuation because pending work appeared");
             return None;
@@ -1501,6 +1528,21 @@ impl Session {
         self.state_db_for_thread_goals().await?.ok_or_else(|| {
             anyhow::anyhow!("thread goals require a persisted thread; this thread is ephemeral")
         })
+    }
+}
+
+async fn set_thread_preview_from_goal_objective(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    objective: &str,
+) {
+    if let Err(err) = state_db
+        .set_thread_preview_if_empty(thread_id, objective)
+        .await
+    {
+        tracing::warn!(
+            "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+        );
     }
 }
 

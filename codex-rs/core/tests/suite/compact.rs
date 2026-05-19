@@ -7,6 +7,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
@@ -88,24 +89,29 @@ fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
 fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: String) -> Op {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
-    Op::UserTurn {
-        environments: None,
+    Op::UserInput {
         items: vec![UserInput::Text {
             text: text.into(),
             text_elements: Vec::new(),
         }],
+        environments: None,
         final_output_json_schema: None,
-        cwd,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: None,
-        sandbox_policy,
-        permission_profile,
-        model,
-        effort: None,
-        summary: None,
-        service_tier: None,
-        collaboration_mode: None,
-        personality: None,
+        responsesapi_client_metadata: None,
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd: Some(cwd),
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: Some(sandbox_policy),
+            permission_profile,
+            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Default,
+                settings: codex_protocol::config_types::Settings {
+                    model,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -119,6 +125,22 @@ fn summary_with_prefix(summary: &str) -> String {
 
 fn set_test_compact_prompt(config: &mut Config) {
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+}
+
+fn ev_completed_with_usage(id: &str, input_tokens: i64, output_tokens: i64) -> Value {
+    json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": null,
+                "output_tokens": output_tokens,
+                "output_tokens_details": null,
+                "total_tokens": input_tokens + output_tokens
+            }
+        }
+    })
 }
 
 fn body_contains_text(body: &str, text: &str) -> bool {
@@ -386,6 +408,7 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -410,6 +433,7 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -586,6 +610,7 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -658,6 +683,7 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -727,6 +753,7 @@ async fn manual_compact_uses_custom_prompt() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user turn");
@@ -873,6 +900,7 @@ async fn manual_compact_emits_context_compaction_items() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1038,6 +1066,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -1509,6 +1538,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1524,6 +1554,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1539,6 +1570,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1709,6 +1741,7 @@ async fn auto_compact_emits_context_compaction_items() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -1789,6 +1822,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1803,6 +1837,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -1817,6 +1852,7 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2056,6 +2092,100 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn body_after_prefix_model_switch_budget_compacts_with_next_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+                model_info_with_context_window(next_model, /*context_window*/ 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_usage("r1", /*input_tokens*/ 100, /*output_tokens*/ 50),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "BODY_BUDGET_SUMMARY"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            let _ = config.features.enable(Feature::RemoteModels);
+            config.model_auto_compact_token_limit = Some(20);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit second user turn");
+    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, compact, and follow-up requests"
+    );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(previous_model)
+    );
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some(next_model));
+    assert_eq!(requests[2].body_json()["model"].as_str(), Some(next_model));
+    assert!(
+        body_contains_text(&requests[1].body_json().to_string(), SUMMARIZATION_PROMPT),
+        "body-budget compaction request should include summarization prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     skip_if_no_network!();
 
@@ -2250,6 +2380,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2264,6 +2395,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2278,6 +2410,7 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2366,6 +2499,7 @@ async fn manual_compact_retries_after_context_window_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2469,6 +2603,7 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -2563,6 +2698,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2580,6 +2716,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2597,6 +2734,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2760,6 +2898,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -2864,6 +3003,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -2983,6 +3123,237 @@ async fn auto_compact_clamps_config_limit_to_context_window() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_body_after_prefix_ignores_starting_window_prefix() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_usage("r1", /*input_tokens*/ 600, /*output_tokens*/ 50),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_usage("r2", /*input_tokens*/ 700, /*output_tokens*/ 50),
+    ]);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 20),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_usage("r4", /*input_tokens*/ 750, /*output_tokens*/ 20),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![first_turn, second_turn, auto_compact_turn, third_turn],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(1_000);
+            config.model_auto_compact_token_limit = Some(100);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    for user in ["PREFIX_FREE_ONE", "PREFIX_FREE_TWO"] {
+        test.submit_turn(user).await.expect("submit turn");
+    }
+
+    assert_eq!(
+        request_log.requests().len(),
+        2,
+        "the first two turns should not compact just because the prefix exceeds the body budget"
+    );
+
+    test.submit_turn("PREFIX_FREE_THREE")
+        .await
+        .expect("submit third turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "third turn should include pre-turn compaction plus the post-compaction request"
+    );
+    let compact_body = requests[2].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "body-after-prefix mode should compact once tokens after the first assistant sample exceed the configured budget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_body_after_prefix_counts_growth_after_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_usage("r1", /*input_tokens*/ 100, /*output_tokens*/ 50),
+    ]);
+    let first_auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 20),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m3", SECOND_LARGE_REPLY),
+        ev_completed_with_usage(
+            "r3", /*input_tokens*/ 100_000, /*output_tokens*/ 10,
+        ),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_usage(
+            "r4", /*input_tokens*/ 100_100, /*output_tokens*/ 5,
+        ),
+    ]);
+    let second_auto_compact_turn = sse(vec![
+        ev_assistant_message("m5", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r5", /*total_tokens*/ 20),
+    ]);
+    let fourth_turn = sse(vec![
+        ev_assistant_message("m6", FINAL_REPLY),
+        ev_completed_with_usage("r6", /*input_tokens*/ 80, /*output_tokens*/ 5),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            first_auto_compact_turn,
+            second_turn,
+            third_turn,
+            second_auto_compact_turn,
+            fourth_turn,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(200_000);
+            config.model_auto_compact_token_limit = Some(40);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    test.submit_turn("WINDOW_PREFIX")
+        .await
+        .expect("submit first turn");
+    test.submit_turn("GROWTH_AFTER_COMPACT")
+        .await
+        .expect("submit second turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "second turn should compact first and then sample the new growth"
+    );
+
+    test.submit_turn("AFTER_GROWTH")
+        .await
+        .expect("submit third turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "the first server-observed input in the new window should become the prefill baseline"
+    );
+
+    test.submit_turn("AFTER_GROWTH_TRIGGER")
+        .await
+        .expect("submit fourth turn");
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "fourth turn should compact because later post-compaction growth counted against the body budget"
+    );
+    let compact_body = requests[4].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "post-compaction growth should trigger a second body-after-prefix compaction"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_body_after_prefix_still_caps_at_context_window() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_usage("r1", /*input_tokens*/ 80, /*output_tokens*/ 5),
+    ]);
+    let second_turn = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_usage("r2", /*input_tokens*/ 98, /*output_tokens*/ 1),
+    ]);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 20),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_usage("r4", /*input_tokens*/ 80, /*output_tokens*/ 5),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![first_turn, second_turn, auto_compact_turn, third_turn],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(200);
+            config.model_auto_compact_token_limit_scope =
+                AutoCompactTokenLimitScope::BodyAfterPrefix;
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    for user in ["CONTEXT_CAP_ONE", "CONTEXT_CAP_TWO", "CONTEXT_CAP_THREE"] {
+        test.submit_turn(user).await.expect("submit turn");
+    }
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "third turn should compact before sampling because total context hit the usable window"
+    );
+    let compact_body = requests[2].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "body-after-prefix mode should still clamp the total threshold to the usable context window"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     skip_if_no_network!();
 
@@ -3063,6 +3434,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -3181,6 +3553,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -3242,28 +3615,21 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             })
             .await
             .expect("submit user input");
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
-    codex
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await
-        .expect("override turn context");
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("override thread settings");
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
     codex
@@ -3281,6 +3647,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user input");
@@ -3469,6 +3836,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit first user");
@@ -3483,6 +3851,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit second user");
@@ -3555,6 +3924,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit follow-up user input");

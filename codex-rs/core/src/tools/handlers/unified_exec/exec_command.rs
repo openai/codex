@@ -144,8 +144,8 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let resolved_command = get_command(
             &args,
             session.user_shell(),
-            &turn.tools_config.unified_exec_shell_mode,
-            turn.tools_config.allow_login_shell,
+            &turn.unified_exec_shell_mode,
+            turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
