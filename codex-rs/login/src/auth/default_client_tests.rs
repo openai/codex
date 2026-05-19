@@ -7,8 +7,18 @@ use pretty_assertions::assert_eq;
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/");
+    let prefix = format!("{originator}/{}", get_codex_advertised_version());
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn source_builds_use_remote_compatible_advertised_version() {
+    let expected = match env!("CARGO_PKG_VERSION") {
+        "0.0.0" => "0.129.0-alpha.6",
+        version => version,
+    };
+
+    assert_eq!(get_codex_advertised_version(), expected);
 }
 
 #[test]

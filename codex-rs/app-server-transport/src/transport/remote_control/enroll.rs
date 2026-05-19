@@ -4,6 +4,7 @@ use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::default_client::get_codex_advertised_version;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use std::io;
@@ -201,7 +202,7 @@ pub(super) async fn enroll_remote_control_server(
         name: server_name.to_string(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        app_server_version: env!("CARGO_PKG_VERSION"),
+        app_server_version: get_codex_advertised_version(),
         installation_id: installation_id.to_string(),
     };
     let client = build_reqwest_client();

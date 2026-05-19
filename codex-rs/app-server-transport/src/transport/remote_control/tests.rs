@@ -25,6 +25,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_core::test_support::auth_manager_from_auth_with_home;
+use codex_login::default_client::get_codex_advertised_version;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1002,7 +1003,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             "name": expected_server_name,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "app_server_version": env!("CARGO_PKG_VERSION"),
+            "app_server_version": get_codex_advertised_version(),
             "installation_id": TEST_INSTALLATION_ID,
         })
     );

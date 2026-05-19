@@ -30,6 +30,7 @@ pub(crate) use codex_app_server_transport::start_stdio_connection;
 pub(crate) use codex_app_server_transport::start_websocket_acceptor;
 
 pub(crate) struct ConnectionState {
+    pub(crate) origin: ConnectionOrigin,
     pub(crate) outbound_initialized: Arc<AtomicBool>,
     pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -38,12 +39,13 @@ pub(crate) struct ConnectionState {
 
 impl ConnectionState {
     pub(crate) fn new(
-        _origin: ConnectionOrigin,
+        origin: ConnectionOrigin,
         outbound_initialized: Arc<AtomicBool>,
         outbound_experimental_api_enabled: Arc<AtomicBool>,
         outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     ) -> Self {
         Self {
+            origin,
             outbound_initialized,
             outbound_experimental_api_enabled,
             outbound_opted_out_notification_methods,

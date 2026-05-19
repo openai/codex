@@ -1,5 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use crate::transport::ConnectionOrigin;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -205,7 +206,7 @@ impl ThreadEntry {
 
 #[derive(Default)]
 struct ThreadStateManagerInner {
-    live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
+    live_connections: HashMap<ConnectionId, LiveConnection>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -213,6 +214,12 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LiveConnection {
+    capabilities: ConnectionCapabilities,
+    origin: ConnectionOrigin,
 }
 
 #[derive(Clone, Default)]
@@ -229,12 +236,15 @@ impl ThreadStateManager {
         &self,
         connection_id: ConnectionId,
         capabilities: ConnectionCapabilities,
+        origin: ConnectionOrigin,
     ) {
-        self.state
-            .lock()
-            .await
-            .live_connections
-            .insert(connection_id, capabilities);
+        self.state.lock().await.live_connections.insert(
+            connection_id,
+            LiveConnection {
+                capabilities,
+                origin,
+            },
+        );
     }
 
     pub(crate) async fn first_attestation_capable_connection_for_thread(
@@ -251,10 +261,34 @@ impl ThreadStateManager {
                 state
                     .live_connections
                     .get(connection_id)?
+                    .capabilities
                     .request_attestation
                     .then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
+    }
+
+    pub(crate) async fn local_stdio_connection_ids_for_remote_control_thread_start(
+        &self,
+        request_connection_id: ConnectionId,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        let Some(request_connection) = state.live_connections.get(&request_connection_id) else {
+            return Vec::new();
+        };
+        if request_connection.origin != ConnectionOrigin::RemoteControl {
+            return Vec::new();
+        }
+
+        let mut connection_ids = state
+            .live_connections
+            .iter()
+            .filter_map(|(connection_id, live_connection)| {
+                (live_connection.origin == ConnectionOrigin::Stdio).then_some(*connection_id)
+            })
+            .collect::<Vec<_>>();
+        connection_ids.sort_by_key(|connection_id| connection_id.0);
+        connection_ids
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
