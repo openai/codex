@@ -2,7 +2,14 @@ CREATE TABLE thread_goals (
     thread_id TEXT PRIMARY KEY NOT NULL,
     goal_id TEXT NOT NULL,
     objective TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'budget_limited', 'complete')),
+    status TEXT NOT NULL CHECK(status IN (
+        'active',
+        'paused',
+        'blocked',
+        'usage_limited',
+        'budget_limited',
+        'complete'
+    )),
     token_budget INTEGER,
     tokens_used INTEGER NOT NULL DEFAULT 0,
     time_used_seconds INTEGER NOT NULL DEFAULT 0,
