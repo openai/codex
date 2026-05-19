@@ -2162,7 +2162,6 @@ fn mcp_tool_approval_config_path(config: &Config, server: &str) -> Option<Absolu
                 ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
                     dot_codex_folder.join(codex_config::CONFIG_OVERRIDE_TOML_FILE)
                 }
-                ConfigLayerSource::UserOverride { file } => file.clone(),
                 _ => return None,
             };
             layer_declares_mcp_server(layer, server).then_some(config_path)

@@ -2357,54 +2357,6 @@ async fn maybe_persist_mcp_tool_approval_writes_project_override_for_override_se
 }
 
 #[tokio::test]
-async fn maybe_persist_mcp_tool_approval_writes_user_override_for_override_server() {
-    let (session, mut turn_context) = make_session_and_context().await;
-    let codex_home = session.codex_home().await;
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
-    )
-    .expect("seed user config");
-    let override_path = codex_home.join(CONFIG_OVERRIDE_TOML_FILE);
-    std::fs::write(
-        &override_path,
-        "[mcp_servers.docs.tools.search]\napproval_mode = \"prompt\"\n",
-    )
-    .expect("seed user override config");
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.to_path_buf())
-        .build()
-        .await
-        .expect("load user override config");
-    turn_context.config = Arc::new(config);
-    let key = McpToolApprovalKey {
-        server: "docs".to_string(),
-        connector_id: None,
-        tool_name: "search".to_string(),
-    };
-
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
-
-    let contents = std::fs::read_to_string(&override_path).expect("read user override config");
-    let parsed: toml::Value = toml::from_str(&contents).expect("parse user override config");
-    let approval_mode = parsed
-        .get("mcp_servers")
-        .and_then(toml::Value::as_table)
-        .and_then(|servers| servers.get("docs"))
-        .and_then(toml::Value::as_table)
-        .and_then(|server| server.get("tools"))
-        .and_then(toml::Value::as_table)
-        .and_then(|tools| tools.get("search"))
-        .and_then(toml::Value::as_table)
-        .and_then(|tool| tool.get("approval_mode"))
-        .and_then(toml::Value::as_str);
-
-    assert_eq!(approval_mode, Some("approve"));
-    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
-}
-
-#[tokio::test]
 async fn maybe_persist_mcp_tool_approval_writes_partial_project_override_for_override_server() {
     let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
