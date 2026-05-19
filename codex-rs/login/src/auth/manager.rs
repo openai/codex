@@ -7,6 +7,10 @@ use serde::Serialize;
 use serial_test::serial;
 use std::env;
 use std::fmt::Debug;
+use std::fs::File;
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -85,6 +89,9 @@ struct ChatgptAuthState {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
+const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_LOCK_FILENAME: &str =
+    "chatgpt-access-token-startup-refresh.lock";
+const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_LOCK_POLL_INTERVAL_MS: u64 = 50;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -1740,7 +1747,53 @@ impl AuthManager {
             return Ok(());
         }
 
+        let _refresh_lock = self.acquire_chatgpt_startup_refresh_lock().await?;
+
         self.refresh_token().await
+    }
+
+    async fn acquire_chatgpt_startup_refresh_lock(&self) -> Result<File, RefreshTokenError> {
+        let mut logged_wait = false;
+        loop {
+            if let Some(lock_file) = self.try_acquire_chatgpt_startup_refresh_lock()? {
+                return Ok(lock_file);
+            }
+            if !logged_wait {
+                tracing::info!(
+                    "Waiting to proactively refresh ChatGPT access token because another process is already refreshing it."
+                );
+                logged_wait = true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(
+                CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_LOCK_POLL_INTERVAL_MS,
+            ))
+            .await;
+        }
+    }
+
+    fn try_acquire_chatgpt_startup_refresh_lock(&self) -> Result<Option<File>, RefreshTokenError> {
+        let lock_path = self
+            .codex_home
+            .join(CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_LOCK_FILENAME);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(RefreshTokenError::Transient)?;
+        }
+
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        let lock_file = options
+            .open(lock_path)
+            .map_err(RefreshTokenError::Transient)?;
+
+        match lock_file.try_lock() {
+            Ok(()) => Ok(Some(lock_file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(err) => Err(RefreshTokenError::Transient(err.into())),
+        }
     }
 
     /// Attempt to refresh the current auth token from the authority that issued

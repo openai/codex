@@ -37,8 +37,8 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_requirements::cloud_requirements_loader;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_cloud_requirements::cloud_requirements_loader_for_storage_with_startup_refresh;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
@@ -46,7 +46,6 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
-use codex_login::AuthManager;
 use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -283,9 +282,6 @@ pub use public_widgets::composer_input::ComposerInput;
 #[cfg(unix)]
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
-const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(15);
-
 #[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
@@ -989,32 +985,13 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_auth_manager = AuthManager::shared(
+    let cloud_requirements = cloud_requirements_loader_for_storage_with_startup_refresh(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
-        Some(chatgpt_base_url.clone()),
+        chatgpt_base_url,
     )
     .await;
-    match tokio::time::timeout(
-        CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT,
-        cloud_auth_manager.refresh_managed_chatgpt_token_if_near_expiry(),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
-        }
-        Err(_) => {
-            warn!("timed out proactively refreshing ChatGPT access token during CLI startup");
-        }
-    }
-    let cloud_requirements = cloud_requirements_loader(
-        cloud_auth_manager,
-        chatgpt_base_url,
-        codex_home.to_path_buf(),
-    );
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(

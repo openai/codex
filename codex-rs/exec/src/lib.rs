@@ -51,7 +51,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader;
+use codex_cloud_requirements::cloud_requirements_loader_for_storage_with_startup_refresh;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
@@ -71,7 +71,6 @@ use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
-use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
@@ -157,9 +156,6 @@ use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
-const CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(15);
-
 enum InitialOperation {
     UserTurn {
         items: Vec<UserInput>,
@@ -366,32 +362,13 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_auth_manager = AuthManager::shared(
+    let cloud_requirements = cloud_requirements_loader_for_storage_with_startup_refresh(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
-        Some(chatgpt_base_url.clone()),
+        chatgpt_base_url,
     )
     .await;
-    match tokio::time::timeout(
-        CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT,
-        cloud_auth_manager.refresh_managed_chatgpt_token_if_near_expiry(),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            warn!("failed to proactively refresh ChatGPT access token during CLI startup: {err}");
-        }
-        Err(_) => {
-            warn!("timed out proactively refreshing ChatGPT access token during CLI startup");
-        }
-    }
-    let cloud_requirements = cloud_requirements_loader(
-        cloud_auth_manager,
-        chatgpt_base_url,
-        codex_home.to_path_buf(),
-    );
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
     let run_cloud_requirements = cloud_requirements.clone();
