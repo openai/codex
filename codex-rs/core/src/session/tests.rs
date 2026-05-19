@@ -22,7 +22,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
 
 use codex_features::Feature;
-use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
@@ -55,6 +54,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::goals::CreateGoalRequest;
 use crate::goals::ExternalGoalPreviousStatus;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
@@ -536,8 +536,8 @@ async fn preview_session_start_hooks(
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
+    let router = Arc::new(ToolRouter::from_turn_context(
+        &turn_context,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
@@ -6746,40 +6746,6 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
 }
 
 #[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_use_effective_enabled_feature_state() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
-    let mut effective_features = Features::with_defaults();
-    effective_features.enable(Feature::MultiAgentV2);
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = effective_features.into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(
-        hint_texts,
-        vec![
-            "Root guidance.".to_string(),
-            "Subagent guidance.".to_string()
-        ]
-    );
-}
-
-#[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_omit_effectively_disabled_feature() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = Features::with_defaults().into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(hint_texts, Vec::<String>::new());
-}
-
-#[tokio::test]
 async fn build_initial_context_omits_default_image_save_location_with_image_history() {
     let (session, turn_context) = make_session_and_context().await;
     session
@@ -8392,6 +8358,66 @@ async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHand
 }
 
 #[tokio::test]
+async fn create_thread_goal_fills_empty_thread_preview() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    assert!(page.items.is_empty());
+
+    sess.create_thread_goal(
+        tc.as_ref(),
+        CreateGoalRequest {
+            objective: "Keep improving the benchmark".to_string(),
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    let ids = page
+        .items
+        .iter()
+        .map(|thread| thread.id)
+        .collect::<Vec<_>>();
+    assert_eq!(vec![sess.conversation_id], ids);
+    assert_eq!(
+        Some("Keep improving the benchmark"),
+        page.items[0].preview.as_deref()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
     let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -9180,8 +9206,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let deferred_mcp_tools = Some(tools.clone());
-    let router = ToolRouter::from_config(
-        &turn_context.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn_context,
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
@@ -9749,9 +9775,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
     let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
-    let command = session
-        .user_shell()
-        .derive_exec_args(command_script, turn_context.tools_config.allow_login_shell);
+    let command = session.user_shell().derive_exec_args(
+        command_script,
+        turn_context.config.permissions.allow_login_shell,
+    );
     let exec_approval_requirement = session
         .services
         .exec_policy

@@ -17,7 +17,6 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::ToolsConfig;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -46,8 +45,8 @@ pub(crate) struct ToolRouterParams<'a> {
 }
 
 impl ToolRouter {
-    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
-        build_tool_router(config, params)
+    pub fn from_turn_context(turn_context: &TurnContext, params: ToolRouterParams<'_>) -> Self {
+        build_tool_router(turn_context, params)
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
@@ -59,6 +58,19 @@ impl ToolRouter {
 
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_tool_names_for_test(&self) -> Vec<ToolName> {
+        self.registry.tool_names_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_exposure_for_test(
+        &self,
+        name: &ToolName,
+    ) -> Option<crate::tools::registry::ToolExposure> {
+        self.registry.tool_exposure(name)
     }
 
     pub(crate) fn create_diff_consumer(

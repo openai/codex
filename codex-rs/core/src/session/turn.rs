@@ -54,6 +54,8 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
+use crate::tools::spec_plan::search_tool_enabled;
+use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::backoff;
@@ -72,6 +74,7 @@ use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -142,26 +145,31 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let model_info = turn_context.model_info.clone();
-    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
-            && let Err(err) = sess
-                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                    turn_context: turn_context.as_ref(),
-                })
-                .await
-        {
-            warn!("failed to usage-limit active goal after usage-limit error: {err}");
-        }
-        error!("Failed to run pre-sampling compact");
-        return None;
+    let pre_sampling_compact =
+        match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+            Ok(pre_sampling_compact) => pre_sampling_compact,
+            Err(err) => {
+                if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
+                error!("Failed to run pre-sampling compact");
+                return None;
+            }
+        };
+    if pre_sampling_compact.reset_client_session {
+        client_session.reset_websocket_session();
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
@@ -316,17 +324,24 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = true;
                 let has_pending_input = sess.input_queue.has_pending_input(&sess.active_turn).await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
-                let total_usage_tokens = sess.get_total_token_usage().await;
-                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+                let token_status =
+                    auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+                let token_limit_reached = token_status.token_limit_reached;
 
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
 
                 trace!(
                     turn_id = %turn_context.sub_id,
-                    total_usage_tokens,
+                    total_usage_tokens = token_status.active_context_tokens,
+                    auto_compact_scope_tokens = token_status.auto_compact_scope_tokens,
                     estimated_token_count = ?estimated_token_count,
-                    auto_compact_limit,
+                    auto_compact_scope_limit = token_status.auto_compact_scope_limit,
+                    auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
+                    auto_compact_window_ordinal = ?token_status.auto_compact_window_ordinal,
+                    auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
+                    full_context_window_limit = ?token_status.full_context_window_limit,
+                    full_context_window_limit_reached = token_status.full_context_window_limit_reached,
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
@@ -336,7 +351,7 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    match run_auto_compact(
+                    let reset_client_session = match run_auto_compact(
                         &sess,
                         &turn_context,
                         &mut client_session,
@@ -346,7 +361,7 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        Ok(()) => {}
+                        Ok(reset_client_session) => reset_client_session,
                         Err(err) => {
                             if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
                                 && let Err(err) = sess
@@ -362,6 +377,9 @@ pub(crate) async fn run_turn(
                             return None;
                         }
                     };
+                    if reset_client_session {
+                        client_session.reset_websocket_session();
+                    }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
                 }
@@ -717,27 +735,88 @@ async fn track_turn_resolved_config_analytics(
         });
 }
 
+struct PreSamplingCompactResult {
+    reset_client_session: bool,
+}
+
+#[derive(Debug)]
+struct AutoCompactTokenStatus {
+    // Full active context usage, independent of the configured auto-compact scope.
+    active_context_tokens: i64,
+    // Usage counted against `model_auto_compact_token_limit` for the current scope.
+    auto_compact_scope_tokens: i64,
+    auto_compact_scope_limit: i64,
+    full_context_window_limit: Option<i64>,
+    auto_compact_window_ordinal: Option<u64>,
+    auto_compact_window_prefill_tokens: Option<i64>,
+    full_context_window_limit_reached: bool,
+    token_limit_reached: bool,
+}
+
+async fn auto_compact_token_status(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> AutoCompactTokenStatus {
+    let active_context_tokens = sess.get_total_token_usage().await;
+    let mut auto_compact_window_ordinal = None;
+    let mut auto_compact_window_prefill_tokens = None;
+    let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
+        match turn_context.config.model_auto_compact_token_limit_scope {
+            AutoCompactTokenLimitScope::Total => (
+                active_context_tokens,
+                turn_context
+                    .model_info
+                    .auto_compact_token_limit()
+                    .unwrap_or(i64::MAX),
+                None,
+            ),
+            AutoCompactTokenLimitScope::BodyAfterPrefix => {
+                let window = sess.auto_compact_window_snapshot().await;
+                auto_compact_window_ordinal = Some(window.ordinal);
+                auto_compact_window_prefill_tokens = window.prefill_input_tokens;
+                let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
+                (
+                    active_context_tokens.saturating_sub(baseline),
+                    turn_context
+                        .config
+                        .model_auto_compact_token_limit
+                        .or_else(|| turn_context.model_info.auto_compact_token_limit())
+                        .unwrap_or(i64::MAX),
+                    turn_context.model_context_window(),
+                )
+            }
+        };
+    let full_context_window_limit_reached =
+        full_context_window_limit.is_some_and(|full_context_window_limit| {
+            active_context_tokens >= full_context_window_limit
+        });
+    let token_limit_reached =
+        auto_compact_scope_tokens >= auto_compact_scope_limit || full_context_window_limit_reached;
+
+    AutoCompactTokenStatus {
+        active_context_tokens,
+        auto_compact_scope_tokens,
+        auto_compact_scope_limit,
+        full_context_window_limit,
+        auto_compact_window_ordinal,
+        auto_compact_window_prefill_tokens,
+        full_context_window_limit_reached,
+        token_limit_reached,
+    }
+}
+
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-) -> CodexResult<()> {
-    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
-        sess,
-        turn_context,
-        client_session,
-        total_usage_tokens_before_compaction,
-    )
-    .await?;
-    let total_usage_tokens = sess.get_total_token_usage().await;
-    let auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
-        .unwrap_or(i64::MAX);
-    // Compact if the total usage tokens are greater than the auto compact limit
-    if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(
+) -> CodexResult<PreSamplingCompactResult> {
+    let mut pre_sampling_compacted =
+        maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
+    let mut reset_client_session = pre_sampling_compacted;
+    let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+    // Compact if the configured auto-compaction budget or usable context window is exhausted.
+    if token_status.token_limit_reached {
+        reset_client_session |= run_auto_compact(
             sess,
             turn_context,
             client_session,
@@ -746,22 +825,26 @@ async fn run_pre_sampling_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
+        pre_sampling_compacted = true;
     }
-    Ok(())
+    Ok(PreSamplingCompactResult {
+        reset_client_session: pre_sampling_compacted && reset_client_session,
+    })
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
 ///
-/// Returns `Err(_)` only when compaction was attempted and failed.
+/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
+/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
+/// was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-    total_usage_tokens: i64,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(());
+        return Ok(false);
     };
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -770,20 +853,31 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
-    let new_auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
-        .unwrap_or(i64::MAX);
-    let should_run = total_usage_tokens > new_auto_compact_limit
+    let active_context_tokens = sess.get_total_token_usage().await;
+    let previous_model_limit_reached = match turn_context
+        .config
+        .model_auto_compact_token_limit_scope
+    {
+        AutoCompactTokenLimitScope::Total => {
+            let new_auto_compact_limit = turn_context
+                .model_info
+                .auto_compact_token_limit()
+                .unwrap_or(i64::MAX);
+            active_context_tokens > new_auto_compact_limit
+                || active_context_tokens >= new_context_window
+        }
+        AutoCompactTokenLimitScope::BodyAfterPrefix => active_context_tokens >= new_context_window,
+    };
+    let should_run = previous_model_limit_reached
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
-        run_auto_compact(
+        let _ = run_auto_compact(
             sess,
             &previous_model_turn_context,
             client_session,
@@ -792,8 +886,9 @@ async fn maybe_run_previous_model_inline_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 async fn run_auto_compact(
@@ -803,7 +898,7 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
             run_inline_remote_auto_compact_task_v2(
@@ -815,7 +910,7 @@ async fn run_auto_compact(
                 phase,
             )
             .await?;
-            return Ok(());
+            return Ok(false);
         }
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
@@ -835,7 +930,7 @@ async fn run_auto_compact(
         )
         .await?;
     }
-    Ok(())
+    Ok(true)
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(
@@ -1096,7 +1191,7 @@ pub(crate) async fn built_tools(
         None
     };
     let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
+    let discoverable_tools = if apps_enabled && tool_suggest_enabled(turn_context) {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
@@ -1128,12 +1223,12 @@ pub(crate) async fn built_tools(
         &all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
-        &turn_context.tools_config,
+        search_tool_enabled(turn_context),
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
+    Ok(Arc::new(ToolRouter::from_turn_context(
+        turn_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,

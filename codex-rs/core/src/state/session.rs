@@ -5,6 +5,8 @@ use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashSet;
 
+use super::auto_compact_window::AutoCompactWindow;
+use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -26,6 +28,8 @@ pub(crate) struct SessionState {
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Runtime accounting state for the active auto-compaction window.
+    auto_compact_window: AutoCompactWindow,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
@@ -45,6 +49,7 @@ impl SessionState {
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
+            auto_compact_window: AutoCompactWindow::new(),
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
@@ -94,6 +99,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+        self.auto_compact_window.clear_prefill();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -115,6 +121,26 @@ impl SessionState {
         model_context_window: Option<i64>,
     ) {
         self.history.update_token_info(usage, model_context_window);
+    }
+
+    pub(crate) fn ensure_auto_compact_window_server_prefill_from_usage(
+        &mut self,
+        usage: &TokenUsage,
+    ) {
+        self.auto_compact_window
+            .ensure_server_observed_prefill_from_usage(usage);
+    }
+
+    pub(crate) fn set_auto_compact_window_estimated_prefill(&mut self, tokens: i64) {
+        self.auto_compact_window.set_estimated_prefill(tokens);
+    }
+
+    pub(crate) fn start_next_auto_compact_window(&mut self) {
+        self.auto_compact_window.start_next();
+    }
+
+    pub(crate) fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
+        self.auto_compact_window.snapshot()
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

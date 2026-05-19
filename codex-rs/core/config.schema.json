@@ -309,6 +309,25 @@
         }
       ]
     },
+    "AutoCompactTokenLimitScope": {
+      "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
+      "oneOf": [
+        {
+          "description": "Count the full active context against the limit.",
+          "enum": [
+            "total"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Count sampled output and later growth after the carried window prefix.",
+          "enum": [
+            "body_after_prefix"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "AutoReviewToml": {
       "properties": {
         "policy": {
@@ -4543,6 +4562,14 @@
       "description": "Token usage threshold triggering auto-compaction of conversation history.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_auto_compact_token_limit_scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoCompactTokenLimitScope"
+        }
+      ],
+      "description": "Controls whether the auto-compaction limit applies to the full context or only to tokens after the carried prefix in the current compaction window."
     },
     "model_catalog_json": {
       "allOf": [
