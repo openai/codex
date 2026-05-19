@@ -6,7 +6,6 @@ pub(crate) struct CommandExecRequestProcessor {
     config: Arc<Config>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
-    environment_manager: Arc<EnvironmentManager>,
     command_exec_manager: CommandExecManager,
 }
 
@@ -16,14 +15,12 @@ impl CommandExecRequestProcessor {
         config: Arc<Config>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
-        environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
         Self {
             arg0_paths,
             config,
             outgoing,
             config_manager,
-            environment_manager,
             command_exec_manager: CommandExecManager::default(),
         }
     }
@@ -92,10 +89,6 @@ impl CommandExecRequestProcessor {
         params: CommandExecParams,
     ) -> Result<(), JSONRPCErrorError> {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
-
-        if self.environment_manager.try_local_environment().is_none() {
-            return Err(internal_error("local environment is not configured"));
-        }
 
         let request = request_id.clone();
 

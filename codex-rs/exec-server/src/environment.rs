@@ -238,6 +238,11 @@ impl EnvironmentManager {
         self.local_environment.as_ref().map(Arc::clone)
     }
 
+    /// Returns whether a local environment is configured.
+    pub fn has_local_environment(&self) -> bool {
+        self.local_environment.is_some()
+    }
+
     /// Returns the default environment or local environment when either exists.
     pub fn default_or_local_environment(&self) -> Option<Arc<Environment>> {
         self.default_environment()

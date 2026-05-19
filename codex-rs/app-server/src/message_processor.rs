@@ -166,6 +166,7 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
+    environment_manager: Arc<EnvironmentManager>,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
@@ -279,6 +280,13 @@ impl MessageProcessor {
             .ok_or_else(|| internal_error("local filesystem is not configured"))
     }
 
+    fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
+        self.environment_manager
+            .has_local_environment()
+            .then_some(())
+            .ok_or_else(|| internal_error("local environment is not configured"))
+    }
+
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
@@ -308,6 +316,7 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let environment_manager_for_requests = Arc::clone(&environment_manager);
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -362,12 +371,8 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
-            thread_manager.environment_manager(),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(
-            outgoing.clone(),
-            thread_manager.environment_manager(),
-        );
+        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -494,6 +499,7 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
+            environment_manager: environment_manager_for_requests,
             environment_processor,
             external_agent_config_processor,
             feedback_processor,
@@ -1294,6 +1300,7 @@ impl MessageProcessor {
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::OneOffCommandExec { params, .. } => {
+                self.require_local_environment()?;
                 self.command_exec_processor
                     .one_off_command_exec(&request_id, params)
                     .await
@@ -1313,11 +1320,13 @@ impl MessageProcessor {
                     .command_exec_terminate(request_id.clone(), params)
                     .await
             }
-            ClientRequest::ProcessSpawn { params, .. } => self
-                .process_exec_processor
-                .process_spawn(request_id.clone(), params)
-                .await
-                .map(|()| None),
+            ClientRequest::ProcessSpawn { params, .. } => {
+                self.require_local_environment()?;
+                self.process_exec_processor
+                    .process_spawn(request_id.clone(), params)
+                    .await
+                    .map(|()| None)
+            }
             ClientRequest::ProcessWriteStdin { params, .. } => {
                 self.process_exec_processor
                     .process_write_stdin(request_id.clone(), params)

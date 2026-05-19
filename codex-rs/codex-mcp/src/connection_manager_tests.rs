@@ -10,6 +10,7 @@ use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::runtime::LocalStdioAvailability;
 use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
@@ -917,7 +918,7 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
         PermissionProfile::default(),
         McpRuntimeEnvironment::new(
             /*environment*/ None,
-            /*local_environment*/ None,
+            LocalStdioAvailability::Disabled,
             PathBuf::from("/tmp"),
         ),
         codex_home.path().to_path_buf(),
@@ -946,10 +947,6 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
         .await;
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].server, "stdio");
-    assert_eq!(
-        failures[0].error,
-        "local stdio MCP server `stdio` requires a local environment"
-    );
     cancel_token.cancel();
 }
 

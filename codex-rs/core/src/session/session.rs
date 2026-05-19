@@ -1046,16 +1046,24 @@ impl Session {
             })?
             .primary()
             .cloned();
-            let local_environment = sess.services.environment_manager.try_local_environment();
+            let local_stdio_availability = if sess
+                .services
+                .environment_manager
+                .has_local_environment()
+            {
+                codex_mcp::LocalStdioAvailability::Enabled
+            } else {
+                codex_mcp::LocalStdioAvailability::Disabled
+            };
             let mcp_runtime_environment = match turn_environment {
                 Some(turn_environment) => McpRuntimeEnvironment::new(
                     Some(Arc::clone(&turn_environment.environment)),
-                    local_environment,
+                    local_stdio_availability,
                     turn_environment.cwd.to_path_buf(),
                 ),
                 None => McpRuntimeEnvironment::new(
                     sess.services.environment_manager.default_or_local_environment(),
-                    local_environment,
+                    local_stdio_availability,
                     session_configuration.cwd.to_path_buf(),
                 ),
             };

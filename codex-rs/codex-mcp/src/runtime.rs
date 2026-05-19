@@ -30,28 +30,35 @@ pub struct SandboxState {
 
 /// Runtime placement information used when starting MCP server transports.
 ///
-/// `McpConfig` describes what servers exist. This value describes where those
-/// servers should run for the current caller. Keep it explicit at manager
-/// construction time so status/snapshot paths and real sessions make the same
-/// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
-/// used when a stdio server omits `cwd` and the launcher needs a concrete
-/// process working directory.
+/// `McpConfig` describes what servers exist. This value describes which
+/// selected/default environment remote MCP servers should use plus whether
+/// local stdio MCP startup is allowed for the current caller. Keep it explicit
+/// at manager construction time so status/snapshot paths and real sessions
+/// make the same placement decision. `fallback_cwd` is not a per-server
+/// override; it is used when a stdio server omits `cwd` and the launcher needs
+/// a concrete process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Option<Arc<Environment>>,
-    local_environment: Option<Arc<Environment>>,
+    local_stdio_availability: LocalStdioAvailability,
     fallback_cwd: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+pub enum LocalStdioAvailability {
+    Enabled,
+    Disabled,
 }
 
 impl McpRuntimeEnvironment {
     pub fn new(
         environment: Option<Arc<Environment>>,
-        local_environment: Option<Arc<Environment>>,
+        local_stdio_availability: LocalStdioAvailability,
         fallback_cwd: PathBuf,
     ) -> Self {
         Self {
             environment,
-            local_environment,
+            local_stdio_availability,
             fallback_cwd,
         }
     }
@@ -71,12 +78,13 @@ impl McpRuntimeEnvironment {
     ) -> Option<String> {
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
-                if self.local_environment.is_none()
-                    && matches!(
-                        config.transport,
-                        codex_config::McpServerTransportConfig::Stdio { .. }
-                    )
-                {
+                if matches!(
+                    self.local_stdio_availability,
+                    LocalStdioAvailability::Disabled
+                ) && matches!(
+                    config.transport,
+                    codex_config::McpServerTransportConfig::Stdio { .. }
+                ) {
                     Some(format!(
                         "local stdio MCP server `{server_name}` requires a local environment"
                     ))
@@ -100,5 +108,119 @@ impl McpRuntimeEnvironment {
 pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
     if let Some(metrics) = codex_otel::global() {
         let _ = metrics.record_duration(metric, duration, tags);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use codex_config::McpServerConfig;
+    use codex_config::McpServerTransportConfig;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn stdio_server(experimental_environment: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            experimental_environment: experimental_environment.map(str::to_string),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        }
+    }
+
+    fn http_server(experimental_environment: Option<&str>) -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: "http://127.0.0.1:1".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            experimental_environment: experimental_environment.map(str::to_string),
+            ..stdio_server(None)
+        }
+    }
+
+    #[test]
+    fn local_stdio_requires_local_stdio_availability() {
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            LocalStdioAvailability::Disabled,
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(None)),
+            Some("local stdio MCP server `stdio` requires a local environment".to_string())
+        );
+    }
+
+    #[test]
+    fn local_http_does_not_require_local_stdio_availability() {
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            LocalStdioAvailability::Disabled,
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason("http", &http_server(None)),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_stdio_requires_remote_environment() {
+        let runtime_environment = McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            LocalStdioAvailability::Enabled,
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(Some("remote"))),
+            Some("remote MCP server `stdio` requires a remote environment".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_stdio_and_http_accept_remote_environment() {
+        let environment = Arc::new(
+            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                .expect("remote environment"),
+        );
+        let runtime_environment = McpRuntimeEnvironment::new(
+            Some(environment),
+            LocalStdioAvailability::Disabled,
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason("stdio", &stdio_server(Some("remote"))),
+            None
+        );
+        assert_eq!(
+            runtime_environment.startup_unavailable_reason("http", &http_server(Some("remote"))),
+            None
+        );
     }
 }

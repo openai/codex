@@ -209,7 +209,11 @@ impl McpRequestProcessor {
         // executor-backed stdio MCPs whose config omits `cwd`.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
-            environment_manager.try_local_environment(),
+            if environment_manager.has_local_environment() {
+                codex_mcp::LocalStdioAvailability::Enabled
+            } else {
+                codex_mcp::LocalStdioAvailability::Disabled
+            },
             config.cwd.to_path_buf(),
         );
 
@@ -370,7 +374,11 @@ impl McpRequestProcessor {
         // used only by executor-backed stdio MCPs whose config omits `cwd`.
         let runtime_environment = McpRuntimeEnvironment::new(
             environment_manager.default_or_local_environment(),
-            environment_manager.try_local_environment(),
+            if environment_manager.has_local_environment() {
+                codex_mcp::LocalStdioAvailability::Enabled
+            } else {
+                codex_mcp::LocalStdioAvailability::Disabled
+            },
             config.cwd.to_path_buf(),
         );
         let request_id = request_id.clone();
