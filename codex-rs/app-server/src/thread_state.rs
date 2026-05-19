@@ -80,7 +80,6 @@ pub(crate) struct ThreadState {
     pub(crate) turn_summary: TurnSummary,
     pub(crate) pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
     pub(crate) last_terminal_turn_id: Option<String>,
-    terminal_turn_ids: Vec<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
@@ -139,27 +138,14 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
-    pub(crate) fn prune_pending_terminal_plan_cleanups_after_rollback(&mut self) {
-        self.pending_terminal_plan_cleanups
-            .retain(|cleanup| self.terminal_turn_ids.contains(&cleanup.turn_id));
-    }
-
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
-        if let EventMsg::ThreadRolledBack(payload) = event {
-            let num_turns = usize::try_from(payload.num_turns).unwrap_or(usize::MAX);
-            self.terminal_turn_ids
-                .truncate(self.terminal_turn_ids.len().saturating_sub(num_turns));
-        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
-            if self.last_terminal_turn_id.as_deref() != Some(event_turn_id) {
-                self.terminal_turn_ids.push(event_turn_id.to_string());
-            }
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
         }
