@@ -193,6 +193,15 @@ impl ExecutorProcessTransport {
                     self.note_seq(seq);
                     self.closed = true;
                 }
+                Ok(ExecProcessEvent::ResyncRequired) => {
+                    if let Err(error) = self.recover_process_events().await {
+                        warn!(
+                            "Failed to resync remote MCP server output stream ({}): {error}",
+                            self.program_name
+                        );
+                        self.closed = true;
+                    }
+                }
                 Ok(ExecProcessEvent::Failed(message)) => {
                     warn!(
                         "Remote MCP server process failed ({}): {message}",
@@ -205,7 +214,7 @@ impl ExecutorProcessTransport {
                         "Remote MCP server output stream lagged ({}): skipped {skipped} events",
                         self.program_name
                     );
-                    if let Err(error) = self.recover_lagged_events().await {
+                    if let Err(error) = self.recover_process_events().await {
                         warn!(
                             "Failed to recover remote MCP server output stream ({}): {error}",
                             self.program_name
@@ -232,7 +241,7 @@ impl ExecutorProcessTransport {
         true
     }
 
-    async fn recover_lagged_events(&mut self) -> io::Result<()> {
+    async fn recover_process_events(&mut self) -> io::Result<()> {
         let response = self
             .process
             .read(

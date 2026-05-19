@@ -1,6 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine as _;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -34,6 +36,7 @@ use crate::RemoveOptions;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
 use crate::process::ExecBackend;
+use crate::process::ExecProcessEvent;
 use crate::protocol::ByteChunk;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
@@ -306,6 +309,23 @@ impl WebSocketJsonRpcPeer {
         self.write_message(JSONRPCMessage::Response(JSONRPCResponse {
             id,
             result: serde_json::to_value(result).expect("json-rpc response should serialize"),
+        }))
+        .await;
+    }
+
+    async fn write_error(
+        &mut self,
+        id: codex_app_server_protocol::RequestId,
+        code: i64,
+        message: impl Into<String>,
+    ) {
+        self.write_message(JSONRPCMessage::Error(JSONRPCError {
+            id,
+            error: JSONRPCErrorError {
+                code,
+                message: message.into(),
+                data: None,
+            },
         }))
         .await;
     }
@@ -690,6 +710,283 @@ async fn remote_client_reuses_one_reconnect_attempt_for_concurrent_callers() -> 
 
     server.await.expect("test websocket server should finish");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_process_disconnect_notifies_resync_before_cursor_recovery() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("test websocket listener should bind")?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut first = WebSocketJsonRpcPeer::accept(&listener).await;
+        first
+            .complete_initialize(/*expected_resume_session_id*/ None, "session-1")
+            .await;
+        let start_request = first.read_request(EXEC_METHOD).await;
+        first
+            .write_response(
+                start_request.id,
+                ExecResponse {
+                    process_id: ProcessId::from("proc"),
+                },
+            )
+            .await;
+        disconnect_rx
+            .await
+            .expect("test should trigger idle disconnect");
+        drop(first);
+
+        let mut second = WebSocketJsonRpcPeer::accept(&listener).await;
+        second
+            .complete_initialize(Some("session-1"), "session-1")
+            .await;
+        let read_request = second.read_request(EXEC_READ_METHOD).await;
+        assert_eq!(
+            decode_request_params::<ReadParams>(&read_request),
+            ReadParams {
+                process_id: ProcessId::from("proc"),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(0),
+            }
+        );
+        second
+            .write_response(read_request.id, successful_read_response())
+            .await;
+    });
+
+    let client = test_remote_client(websocket_url);
+    let process = RemoteProcess::new(client);
+    let started = process
+        .start(test_exec_params(&ProcessId::from("proc")))
+        .await?;
+    let mut wake = started.process.subscribe_wake();
+    let mut events = started.process.subscribe_events();
+    disconnect_tx
+        .send(())
+        .expect("idle disconnect should signal");
+
+    timeout(Duration::from_secs(1), wake.changed())
+        .await
+        .context("idle process wake should surface transport resync")??;
+    assert_eq!(
+        timeout(Duration::from_secs(1), events.recv())
+            .await
+            .context("idle process event should surface transport resync")??,
+        ExecProcessEvent::ResyncRequired
+    );
+    assert_eq!(
+        started
+            .process
+            .read(
+                /*after_seq*/ None,
+                /*max_bytes*/ None,
+                /*wait_ms*/ Some(0),
+            )
+            .await?,
+        successful_read_response()
+    );
+
+    server.await.expect("test websocket server should finish");
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_client_retries_transient_resume_conflict() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("test websocket listener should bind")?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let server_connections = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let mut first = WebSocketJsonRpcPeer::accept(&listener).await;
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        first
+            .complete_initialize(/*expected_resume_session_id*/ None, "session-1")
+            .await;
+        drop(first);
+
+        let mut second = WebSocketJsonRpcPeer::accept(&listener).await;
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        let request = second.read_request(INITIALIZE_METHOD).await;
+        assert_eq!(
+            decode_request_params::<InitializeParams>(&request),
+            InitializeParams {
+                client_name: crate::client_transport::ENVIRONMENT_CLIENT_NAME.to_string(),
+                resume_session_id: Some("session-1".to_string()),
+            }
+        );
+        second
+            .write_error(
+                request.id,
+                -32600,
+                "session session-1 is already attached to another connection",
+            )
+            .await;
+
+        let mut third = WebSocketJsonRpcPeer::accept(&listener).await;
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        third
+            .complete_initialize(Some("session-1"), "session-1")
+            .await;
+    });
+
+    let client = test_remote_client(websocket_url);
+    let first_connection = client.connection().await?;
+    wait_for_disconnect(&first_connection).await;
+    assert_eq!(
+        client.connection().await?.session_id(),
+        Some("session-1".to_string())
+    );
+
+    server.await.expect("test websocket server should finish");
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_client_caches_unknown_session_resume_failure() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("test websocket listener should bind")?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let server_connections = Arc::clone(&accepted_connections);
+    let server = tokio::spawn(async move {
+        let mut first = WebSocketJsonRpcPeer::accept(&listener).await;
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        first
+            .complete_initialize(/*expected_resume_session_id*/ None, "session-1")
+            .await;
+        drop(first);
+
+        let mut second = WebSocketJsonRpcPeer::accept(&listener).await;
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        let request = second.read_request(INITIALIZE_METHOD).await;
+        second
+            .write_error(request.id, -32600, "unknown session id session-1")
+            .await;
+
+        let extra_connection = timeout(Duration::from_millis(200), listener.accept()).await;
+        assert!(
+            extra_connection.is_err(),
+            "terminal resume failure should not open another websocket"
+        );
+    });
+
+    let client = test_remote_client(websocket_url);
+    let first_connection = client.connection().await?;
+    wait_for_disconnect(&first_connection).await;
+    let first_error = match client.connection().await {
+        Ok(_) => panic!("unknown session should fail reconnect"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        first_error.to_string(),
+        "exec-server rejected request (-32600): unknown session id session-1"
+    );
+    let second_error = match client.connection().await {
+        Ok(_) => panic!("unknown session should stay terminal"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        second_error.to_string(),
+        "exec-server rejected request (-32600): unknown session id session-1"
+    );
+
+    server.await.expect("test websocket server should finish");
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_process_start_releases_session_after_initial_connect_failure() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("test websocket listener should bind")?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let first = WebSocketJsonRpcPeer::accept(&listener).await;
+        drop(first);
+
+        let mut second = WebSocketJsonRpcPeer::accept(&listener).await;
+        second
+            .complete_initialize(/*expected_resume_session_id*/ None, "session-1")
+            .await;
+        let request = second.read_request(EXEC_METHOD).await;
+        second
+            .write_response(
+                request.id,
+                ExecResponse {
+                    process_id: ProcessId::from("proc"),
+                },
+            )
+            .await;
+    });
+
+    let client = test_remote_client(websocket_url);
+    let process = RemoteProcess::new(client);
+    let params = test_exec_params(&ProcessId::from("proc"));
+    assert!(
+        process.start(params.clone()).await.is_err(),
+        "initial connect should fail before dispatch"
+    );
+    let started = process.start(params).await?;
+    assert_eq!(started.process.process_id(), &ProcessId::from("proc"));
+
+    server.await.expect("test websocket server should finish");
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_process_drop_releases_session_for_process_id_reuse() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("test websocket listener should bind")?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let mut peer = WebSocketJsonRpcPeer::accept(&listener).await;
+        peer.complete_initialize(/*expected_resume_session_id*/ None, "session-1")
+            .await;
+        for _ in 0..2 {
+            let request = peer.read_request(EXEC_METHOD).await;
+            peer.write_response(
+                request.id,
+                ExecResponse {
+                    process_id: ProcessId::from("proc"),
+                },
+            )
+            .await;
+        }
+    });
+
+    let client = test_remote_client(websocket_url);
+    let process = RemoteProcess::new(client);
+    let params = test_exec_params(&ProcessId::from("proc"));
+    let started = process.start(params.clone()).await?;
+    drop(started);
+    let restarted = timeout(Duration::from_secs(1), async {
+        loop {
+            match process.start(params.clone()).await {
+                Ok(restarted) => return Ok(restarted),
+                Err(crate::ExecServerError::Protocol(message))
+                    if message == "session already registered for process proc" =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    })
+    .await
+    .context("dropped process session should unregister")??;
+    assert_eq!(restarted.process.process_id(), &ProcessId::from("proc"));
+
+    server.await.expect("test websocket server should finish");
     Ok(())
 }
 

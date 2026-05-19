@@ -23,13 +23,16 @@ pub struct StartedExecProcess {
 /// The stream is scoped to one [`ExecProcess`] handle. `Output` events carry
 /// stdout, stderr, or pty bytes. `Exited` reports the process exit status, while
 /// `Closed` means all output streams have ended and no more output events will
-/// arrive. `Failed` is used when the process session cannot continue, for
-/// example because the remote executor connection disconnected.
+/// arrive. `ResyncRequired` means a reconnecting remote process session should
+/// recover through [`ExecProcess::read`] using its last delivered sequence.
+/// `Failed` is used when the process session cannot continue, for example
+/// because a direct one-shot executor connection disconnected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecProcessEvent {
     Output(ProcessOutputChunk),
     Exited { seq: u64, exit_code: i32 },
     Closed { seq: u64 },
+    ResyncRequired,
     Failed(String),
 }
 
@@ -60,13 +63,14 @@ struct ExecProcessEventHistory {
 impl ExecProcessEvent {
     /// Sequence number used to order process-owned events.
     ///
-    /// `Failed` is intentionally unsequenced because it is synthesized by the
-    /// client when the session or transport fails, not emitted by the process.
+    /// `ResyncRequired` and `Failed` are intentionally unsequenced because they
+    /// are synthesized by the client when the session or transport changes,
+    /// not emitted by the process.
     pub(crate) fn seq(&self) -> Option<u64> {
         match self {
             ExecProcessEvent::Output(chunk) => Some(chunk.seq),
             ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq } => Some(*seq),
-            ExecProcessEvent::Failed(_) => None,
+            ExecProcessEvent::ResyncRequired | ExecProcessEvent::Failed(_) => None,
         }
     }
 
@@ -74,7 +78,9 @@ impl ExecProcessEvent {
         match self {
             ExecProcessEvent::Output(chunk) => chunk.chunk.0.len(),
             ExecProcessEvent::Failed(message) => message.len(),
-            ExecProcessEvent::Exited { .. } | ExecProcessEvent::Closed { .. } => 0,
+            ExecProcessEvent::Exited { .. }
+            | ExecProcessEvent::Closed { .. }
+            | ExecProcessEvent::ResyncRequired => 0,
         }
     }
 }

@@ -27,7 +27,7 @@ Environment
        |    |- current ExecServerConnection?
        |    |- one in-flight reconnect attempt
        |    |- terminal reconnect error?
-       |    `- durable process_sessions: HashMap<ProcessId, Arc<ProcessSession>>
+       |    `- tracked process_sessions: HashMap<ProcessId, Weak<ProcessSession>>
        |- RemoteProcess -> RemoteExecProcess -> ProcessSessionHandle
        |- RemoteFileSystem
        `- HttpClient for RemoteExecServerClient
@@ -65,15 +65,17 @@ The main roles are:
   HTTP capability so all remote APIs share one reconnecting session.
 - `RemoteExecServerSession`: durable logical-session state behind the client.
   It remembers the resumable session id, current live connection, one shared
-  reconnect attempt, tracked process sessions, and any terminal resume error.
+  reconnect attempt, weak references to process sessions that may need rebinding,
+  and any terminal resume error.
 - `ExecServerConnection`: one live JSON-RPC transport binding. It owns
   connection-local routing for notifications and streamed HTTP response bodies.
 - `Inner`: private per-connection machinery behind `ExecServerConnection`.
   It owns the `RpcClient`, reader task, disconnect latch, connection-local
   process notification routes, connection-local HTTP body stream routes, and
   initialized session id for that live binding.
-- `ProcessSession`: durable per-process client state. It keeps the local event
-  log, wake cursor, and failure state that must survive connection replacement.
+- `ProcessSession`: durable per-process client state owned by the live process
+  handle. It keeps the local event log, wake cursor, and failure state that must
+  survive connection replacement while that handle still exists.
 - `ProcessSessionHandle`: process-facing handle used by `RemoteExecProcess`.
   It routes reads, writes, terminate, and unregister through either a focused
   direct connection test path or the logical reconnecting client path.
@@ -89,6 +91,9 @@ Reconnect invariants:
   reconnect loop per API surface.
 - Reconnect resumes the same logical session id and rebinds tracked
   `ProcessSession` routes onto the replacement `ExecServerConnection`.
+- When a reconnecting process session loses its transport, it emits a local
+  `ResyncRequired` event and wake so callers blocked on pushed events or wake
+  notifications know to recover through `process/read(afterSeq)`.
 - `process/read` may retry once after a transport-close race because its
   `afterSeq` cursor makes the replay read-only and recoverable.
 - `process/start`, `process/write`, `process/terminate`, filesystem RPCs, and

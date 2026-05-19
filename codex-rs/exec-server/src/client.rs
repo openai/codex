@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
+use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing::debug;
 
@@ -88,6 +90,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
+const TRANSIENT_RESUME_CONFLICT_RETRY_DELAY: Duration = Duration::from_millis(10);
+const TRANSIENT_RESUME_CONFLICT_RETRY_LIMIT: usize = 3;
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
@@ -216,14 +220,15 @@ pub(crate) struct RemoteExecServerClient {
 }
 
 // Shared state for one logical remote exec-server client. The logical client
-// owns resumable session identity and durable process session state; individual
-// ExecServerConnection values only bind that state to one live transport.
+// owns resumable session identity and tracks live process sessions that may
+// need rebinding; individual ExecServerConnection values only bind that state
+// to one live transport.
 struct RemoteExecServerSession {
     connection: Option<ExecServerConnection>,
     connection_attempt: Option<Arc<Notify>>,
     logical_session_id: Option<String>,
     terminal_error: Option<TerminalReconnectError>,
-    process_sessions: HashMap<ProcessId, Arc<ProcessSession>>,
+    process_sessions: HashMap<ProcessId, Weak<ProcessSession>>,
 }
 
 enum RemoteExecServerConnectionAction {
@@ -257,6 +262,7 @@ impl RemoteExecServerClient {
     }
 
     pub(crate) async fn connection(&self) -> Result<ExecServerConnection, ExecServerError> {
+        let mut transient_resume_conflicts = 0;
         loop {
             match self.next_connection_action()? {
                 RemoteExecServerConnectionAction::Ready(connection) => return Ok(connection),
@@ -271,11 +277,22 @@ impl RemoteExecServerClient {
                     let connection = self
                         .connect_and_rebind(resume_session_id.clone(), process_sessions)
                         .await;
-                    return self.finish_connection_attempt(
+                    match self.finish_connection_attempt(
                         connection_attempt,
                         resume_session_id,
                         connection,
-                    );
+                    ) {
+                        Ok(connection) => return Ok(connection),
+                        Err(err)
+                            if transient_resume_conflicts
+                                < TRANSIENT_RESUME_CONFLICT_RETRY_LIMIT
+                                && is_transient_resume_conflict(&err) =>
+                        {
+                            transient_resume_conflicts += 1;
+                            sleep(TRANSIENT_RESUME_CONFLICT_RETRY_DELAY).await;
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
             }
         }
@@ -284,23 +301,34 @@ impl RemoteExecServerClient {
     pub(crate) async fn register_process_session(
         &self,
         process_id: &ProcessId,
-    ) -> Result<ProcessSessionHandle, ExecServerError> {
+    ) -> Result<(ProcessSessionHandle, ExecServerConnection), ExecServerError> {
         let process_session = Arc::new(ProcessSession::new(
             ProcessSessionDisconnectBehavior::Preserve,
         ));
         {
             let mut session = self.lock_session();
-            if session.process_sessions.contains_key(process_id) {
+            if session
+                .process_sessions
+                .get(process_id)
+                .and_then(Weak::upgrade)
+                .is_some()
+            {
                 return Err(ExecServerError::Protocol(format!(
                     "session already registered for process {process_id}"
                 )));
             }
             session
                 .process_sessions
-                .insert(process_id.clone(), Arc::clone(&process_session));
+                .insert(process_id.clone(), Arc::downgrade(&process_session));
         }
 
-        let connection = self.connection().await?;
+        let connection = match self.connection().await {
+            Ok(connection) => connection,
+            Err(err) => {
+                self.unregister_process_session(process_id).await;
+                return Err(err);
+            }
+        };
         if let Err(err) = connection
             .register_process_session_route(process_id, Arc::clone(&process_session))
             .await
@@ -309,11 +337,14 @@ impl RemoteExecServerClient {
             return Err(err);
         }
 
-        Ok(ProcessSessionHandle {
-            control: ProcessSessionControl::RemoteClient(self.clone()),
-            process_id: process_id.clone(),
-            session: process_session,
-        })
+        Ok((
+            ProcessSessionHandle {
+                control: ProcessSessionControl::RemoteClient(self.clone()),
+                process_id: process_id.clone(),
+                session: process_session,
+            },
+            connection,
+        ))
     }
 
     async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
@@ -378,11 +409,16 @@ impl RemoteExecServerClient {
 
         let connection_attempt = Arc::new(Notify::new());
         let resume_session_id = session.logical_session_id.clone();
-        let process_sessions = session
+        let mut process_sessions = Vec::new();
+        session
             .process_sessions
-            .iter()
-            .map(|(process_id, process_session)| (process_id.clone(), Arc::clone(process_session)))
-            .collect();
+            .retain(|process_id, process_session| {
+                let Some(process_session) = process_session.upgrade() else {
+                    return false;
+                };
+                process_sessions.push((process_id.clone(), process_session));
+                true
+            });
         session.connection_attempt = Some(Arc::clone(&connection_attempt));
         Ok(RemoteExecServerConnectionAction::Connect {
             connection_attempt,
@@ -824,6 +860,16 @@ impl ProcessSession {
         let _ = self.wake_tx.send(next);
     }
 
+    fn notify_wake(&self) {
+        let next = (*self.wake_tx.borrow()).saturating_add(1);
+        let _ = self.wake_tx.send(next);
+    }
+
+    fn note_resync_required(&self) {
+        self.notify_wake();
+        self.events.publish(ExecProcessEvent::ResyncRequired);
+    }
+
     /// Publishes a process event only when all earlier sequenced events have
     /// already been published.
     ///
@@ -875,8 +921,7 @@ impl ProcessSession {
             *failure = Some(message.clone());
         }
         drop(failure);
-        let next = (*self.wake_tx.borrow()).saturating_add(1);
-        let _ = self.wake_tx.send(next);
+        self.notify_wake();
         if should_publish {
             let _ = self.publish_ordered_event(ExecProcessEvent::Failed(message));
         }
@@ -1007,10 +1052,14 @@ impl ProcessSessionControl {
 impl TerminalReconnectError {
     fn from_error(error: &ExecServerError) -> Option<Self> {
         match error {
-            ExecServerError::Server { code, message } if *code == -32600 => Some(Self {
-                code: *code,
-                message: message.clone(),
-            }),
+            ExecServerError::Server { code, message }
+                if *code == -32600 && message.starts_with("unknown session id ") =>
+            {
+                Some(Self {
+                    code: *code,
+                    message: message.clone(),
+                })
+            }
             _ => None,
         }
     }
@@ -1123,6 +1172,14 @@ fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {
     }
 }
 
+fn is_transient_resume_conflict(error: &ExecServerError) -> bool {
+    matches!(
+        error,
+        ExecServerError::Server { code, message }
+            if *code == -32600 && message.ends_with("is already attached to another connection")
+    )
+}
+
 async fn fail_all_process_sessions(inner: &Arc<Inner>, message: String) {
     let routes = inner.take_all_process_session_routes().await;
 
@@ -1130,8 +1187,13 @@ async fn fail_all_process_sessions(inner: &Arc<Inner>, message: String) {
         // One-shot sessions synthesize a closed read response and emit a
         // pushed Failed event. Reconnecting remote sessions keep their local
         // event state so a reattached client can bind them again.
-        if session.disconnect_behavior == ProcessSessionDisconnectBehavior::Fail {
-            session.set_failure(message.clone()).await;
+        match session.disconnect_behavior {
+            ProcessSessionDisconnectBehavior::Fail => {
+                session.set_failure(message.clone()).await;
+            }
+            ProcessSessionDisconnectBehavior::Preserve => {
+                session.note_resync_required();
+            }
         }
     }
 }

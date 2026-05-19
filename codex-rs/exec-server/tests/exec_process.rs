@@ -166,6 +166,7 @@ async fn collect_process_output_from_events(
                 drop(session);
                 return Ok((stdout, stderr, exit_code, true));
             }
+            ExecProcessEvent::ResyncRequired => continue,
             ExecProcessEvent::Failed(message) => {
                 anyhow::bail!("process failed before closed state: {message}");
             }
@@ -189,6 +190,7 @@ async fn collect_process_event_snapshots(
                 ProcessEventSnapshot::Exited { seq, exit_code }
             }
             ExecProcessEvent::Closed { seq } => ProcessEventSnapshot::Closed { seq },
+            ExecProcessEvent::ResyncRequired => continue,
             ExecProcessEvent::Failed(message) => {
                 anyhow::bail!("process failed before closed state: {message}");
             }

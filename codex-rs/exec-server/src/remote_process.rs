@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 use tracing::trace;
+use tracing::warn;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
@@ -35,8 +37,7 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
-        let session = self.client.register_process_session(&process_id).await?;
-        let connection = self.client.connection().await?;
+        let (session, connection) = self.client.register_process_session(&process_id).await?;
         if let Err(err) = connection.exec(params).await {
             session.unregister().await;
             return Err(err);
@@ -85,8 +86,14 @@ impl ExecProcess for RemoteExecProcess {
 impl Drop for RemoteExecProcess {
     fn drop(&mut self) {
         let session = self.session.clone();
-        tokio::spawn(async move {
+        let Ok(handle) = Handle::try_current() else {
+            warn!(
+                "Could not schedule remote exec process unregister on drop: no Tokio runtime is available"
+            );
+            return;
+        };
+        std::mem::drop(handle.spawn(async move {
             session.unregister().await;
-        });
+        }));
     }
 }
