@@ -3,6 +3,72 @@ use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+fn startup_failure_test_request(turn: &TurnContext, process_id: u64) -> ExecCommandRequest {
+    ExecCommandRequest {
+        command: Vec::new(),
+        shell_type: crate::shell::ShellType::Sh,
+        hook_command: String::new(),
+        process_id,
+        yield_time_ms: 1000,
+        max_output_tokens: None,
+        #[allow(deprecated)]
+        cwd: turn.cwd.clone(),
+        #[allow(deprecated)]
+        sandbox_cwd: turn.cwd.clone(),
+        environment: turn
+            .environments
+            .primary_environment()
+            .expect("primary environment"),
+        network: None,
+        tty: true,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    }
+}
+
+async fn emit_startup_failure_end_event(
+    call_id: &str,
+    err: &UnifiedExecError,
+) -> codex_protocol::protocol::ExecCommandEndEvent {
+    let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
+    let context =
+        UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), call_id.to_string());
+    let process_id = session
+        .services
+        .unified_exec_manager
+        .allocate_process_id()
+        .await;
+    let request = startup_failure_test_request(turn.as_ref(), process_id);
+    let selected_cwd = turn
+        .environments
+        .primary()
+        .expect("primary turn environment")
+        .cwd
+        .clone();
+    emit_startup_failure_events(&context, &request, selected_cwd, err).await;
+
+    let begin_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("timed out waiting for begin event")
+        .expect("event channel closed");
+    let codex_protocol::protocol::EventMsg::ExecCommandBegin(begin_event) = begin_event.msg else {
+        panic!("expected ExecCommandBegin event");
+    };
+    assert_eq!(begin_event.call_id, call_id);
+
+    let end_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("timed out waiting for end event")
+        .expect("event channel closed");
+    let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = end_event.msg else {
+        panic!("expected ExecCommandEnd event");
+    };
+    end_event
+}
+
 #[test]
 fn unified_exec_env_injects_defaults() {
     let env = apply_unified_exec_env(HashMap::new());
@@ -234,73 +300,53 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
 
 #[tokio::test]
 async fn startup_create_process_failure_emits_begin_then_failed_end() {
-    let (session, turn, rx_event) = crate::session::tests::make_session_and_context_with_rx().await;
-    let context = UnifiedExecContext::new(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        "call-unified-empty".to_string(),
-    );
-    let process_id = session
-        .services
-        .unified_exec_manager
-        .allocate_process_id()
-        .await;
-    let request = ExecCommandRequest {
-        command: Vec::new(),
-        shell_type: crate::shell::ShellType::Sh,
-        hook_command: String::new(),
-        process_id,
-        yield_time_ms: 1000,
-        max_output_tokens: None,
-        #[allow(deprecated)]
-        cwd: turn.cwd.clone(),
-        #[allow(deprecated)]
-        sandbox_cwd: turn.cwd.clone(),
-        environment: turn
-            .environments
-            .primary_environment()
-            .expect("primary environment"),
-        network: None,
-        tty: true,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-        additional_permissions: None,
-        additional_permissions_preapproved: false,
-        justification: None,
-        prefix_rule: None,
-    };
-
     let err = crate::unified_exec::UnifiedExecError::create_process(
         "missing command line for PTY".to_string(),
     );
-    let selected_cwd = turn
-        .environments
-        .primary()
-        .expect("primary turn environment")
-        .cwd
-        .clone();
-    emit_startup_failure_events(&context, &request, selected_cwd, &err).await;
-
-    let begin_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("timed out waiting for begin event")
-        .expect("event channel closed");
-    let codex_protocol::protocol::EventMsg::ExecCommandBegin(begin_event) = begin_event.msg else {
-        panic!("expected ExecCommandBegin event");
-    };
-    assert_eq!(begin_event.call_id, "call-unified-empty");
-
-    let end_event = tokio::time::timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("timed out waiting for end event")
-        .expect("event channel closed");
-    let codex_protocol::protocol::EventMsg::ExecCommandEnd(end_event) = end_event.msg else {
-        panic!("expected ExecCommandEnd event");
-    };
+    let end_event = emit_startup_failure_end_event("call-unified-empty", &err).await;
     assert_eq!(end_event.call_id, "call-unified-empty");
     assert_eq!(
         end_event.status,
         codex_protocol::protocol::ExecCommandStatus::Failed
     );
+}
+
+#[tokio::test]
+async fn startup_rejected_failure_emits_declined_end() {
+    let err = crate::unified_exec::UnifiedExecError::rejected("guardian denied".to_string());
+
+    let end_event = emit_startup_failure_end_event("call-unified-rejected", &err).await;
+
+    assert_eq!(end_event.call_id, "call-unified-rejected");
+    assert_eq!(
+        end_event.status,
+        codex_protocol::protocol::ExecCommandStatus::Declined
+    );
+    assert_eq!(end_event.aggregated_output, "guardian denied");
+}
+
+#[tokio::test]
+async fn startup_sandbox_denied_failure_preserves_captured_output() {
+    let err = crate::unified_exec::UnifiedExecError::sandbox_denied(
+        "sandbox denied".to_string(),
+        ExecToolCallOutput {
+            exit_code: 13,
+            stderr: StreamOutput::new("stderr marker".to_string()),
+            aggregated_output: StreamOutput::new("captured denial output".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let end_event = emit_startup_failure_end_event("call-unified-sandbox-denied", &err).await;
+
+    assert_eq!(end_event.call_id, "call-unified-sandbox-denied");
+    assert_eq!(
+        end_event.status,
+        codex_protocol::protocol::ExecCommandStatus::Failed
+    );
+    assert_eq!(end_event.exit_code, 13);
+    assert_eq!(end_event.stderr, "stderr marker");
+    assert_eq!(end_event.aggregated_output, "captured denial output");
 }
 
 #[test]

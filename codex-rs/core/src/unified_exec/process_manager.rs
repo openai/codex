@@ -1088,10 +1088,7 @@ impl UnifiedExecProcessManager {
                     };
                     UnifiedExecError::sandbox_denied(message, output)
                 }
-                ToolError::Rejected(message) if message == "rejected by user" => {
-                    UnifiedExecError::rejected(message)
-                }
-                ToolError::Rejected(message) => UnifiedExecError::create_process(message),
+                ToolError::Rejected(message) => UnifiedExecError::rejected(message),
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
     }
@@ -1314,6 +1311,7 @@ async fn emit_startup_failure_events(
             message: message.clone(),
             applied_patch_delta: None,
         },
+        UnifiedExecError::SandboxDenied { output, .. } => ToolEventFailure::Output(output.clone()),
         _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
     };
     emitter
