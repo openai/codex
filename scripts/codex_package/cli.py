@@ -8,9 +8,9 @@ from .cargo import build_source_binaries
 from .layout import build_package_dir
 from .layout import prepare_package_dir
 from .layout import validate_package_dir
+from .ripgrep import resolve_rg_bin
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
-from .targets import resolve_rg_bin
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,7 +69,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rg-bin",
         type=Path,
-        help="Path to the ripgrep executable to place in codex-path/.",
+        help=(
+            "Optional local ripgrep executable override instead of fetching from "
+            "codex-cli/bin/rg."
+        ),
     )
     return parser.parse_args()
 
