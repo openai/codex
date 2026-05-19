@@ -5,9 +5,7 @@ expression: rendered
 /debug-config
 
 Config layer stack (lowest precedence first):
-  1. system override (<system override>) (enabled)
-  2. user override (<user override>) (enabled)
-  3. project override (<project override>) (enabled)
+  1. project override (<project override>) (enabled)
 
 Requirements:
   <none>

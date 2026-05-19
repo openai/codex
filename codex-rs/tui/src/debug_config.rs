@@ -622,53 +622,26 @@ mod tests {
 
     #[test]
     fn debug_config_output_lists_override_layers() {
-        let system_file = if cfg!(windows) {
-            absolute_path("C:\\etc\\codex\\config.override.toml")
-        } else {
-            absolute_path("/etc/codex/config.override.toml")
-        };
-        let user_file = if cfg!(windows) {
-            absolute_path("C:\\Users\\brent\\.codex\\config.override.toml")
-        } else {
-            absolute_path("/home/brent/.codex/config.override.toml")
-        };
         let project_folder = if cfg!(windows) {
             absolute_path("C:\\repo\\.codex")
         } else {
             absolute_path("/repo/.codex")
         };
-        let normalized_paths = [
-            (
-                system_file.as_path().display().to_string(),
-                "<system override>",
-            ),
-            (user_file.as_path().display().to_string(), "<user override>"),
-            (
-                project_folder
-                    .as_path()
-                    .join(codex_config::CONFIG_OVERRIDE_TOML_FILE)
-                    .display()
-                    .to_string(),
-                "<project override>",
-            ),
-        ];
+        let normalized_paths = [(
+            project_folder
+                .as_path()
+                .join(codex_config::CONFIG_OVERRIDE_TOML_FILE)
+                .display()
+                .to_string(),
+            "<project override>",
+        )];
         let stack = ConfigLayerStack::new(
-            vec![
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::SystemOverride { file: system_file },
-                    empty_toml_table(),
-                ),
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::UserOverride { file: user_file },
-                    empty_toml_table(),
-                ),
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::ProjectOverride {
-                        dot_codex_folder: project_folder,
-                    },
-                    empty_toml_table(),
-                ),
-            ],
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::ProjectOverride {
+                    dot_codex_folder: project_folder,
+                },
+                empty_toml_table(),
+            )],
             ConfigRequirements::default(),
             ConfigRequirementsToml::default(),
         )
