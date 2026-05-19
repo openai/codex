@@ -5,6 +5,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ProfileV2Name;
@@ -7023,6 +7024,183 @@ developer_instructions = "Write carefully"
             .and_then(|role| role.nickname_candidates.as_ref())
             .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
         Some(vec!["Sagan"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sibling_override_layers_scan_standalone_agent_roles_once() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+
+    let project_codex_dir = repo_root.path().join(".codex");
+    std::fs::create_dir_all(project_codex_dir.join("agents"))?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_TOML_FILE),
+        "model = \"base\"\n",
+    )?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE),
+        "approval_policy = \"never\"\n",
+    )?;
+    std::fs::write(
+        project_codex_dir.join("agents").join("broken.toml"),
+        r#"
+name = "broken"
+description = "Broken role"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(repo_root.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let warning_count = config
+        .startup_warnings
+        .iter()
+        .filter(|warning| warning.contains("must define `developer_instructions`"))
+        .count();
+    assert_eq!(warning_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sibling_override_declared_agent_role_files_are_not_scanned_as_standalone()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+
+    let project_codex_dir = repo_root.path().join(".codex");
+    let agents_dir = project_codex_dir.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_TOML_FILE),
+        "model = \"base\"\n",
+    )?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE),
+        r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+"#,
+    )?;
+    std::fs::write(
+        agents_dir.join("researcher.toml"),
+        r#"
+developer_instructions = "Research carefully"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(repo_root.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role")
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .all(|warning| !warning.contains("must define a non-empty `name`"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_override_agent_role_declaration_keeps_valid_standalone_discovery()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+
+    let project_codex_dir = repo_root.path().join(".codex");
+    let agents_dir = project_codex_dir.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_TOML_FILE),
+        "model = \"base\"\n",
+    )?;
+    std::fs::write(
+        project_codex_dir.join(CONFIG_OVERRIDE_TOML_FILE),
+        r#"[agents.researcher]
+description = ""
+config_file = "./agents/researcher.toml"
+"#,
+    )?;
+    std::fs::write(
+        agents_dir.join("researcher.toml"),
+        r#"
+name = "researcher"
+description = "Standalone research role"
+developer_instructions = "Research carefully"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(repo_root.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Standalone research role")
     );
 
     Ok(())

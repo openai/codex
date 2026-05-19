@@ -3,6 +3,7 @@ mod layer_io;
 mod macos;
 
 use self::layer_io::LoadedConfigLayers;
+use crate::CONFIG_OVERRIDE_TOML_FILE;
 use crate::CONFIG_TOML_FILE;
 use crate::ProfileV2Name;
 use crate::cloud_requirements::CloudRequirementsLoader;
@@ -207,6 +208,23 @@ pub async fn load_config_layers_state(
     )
     .await?;
     layers.push(system_layer);
+    if let Some(system_override_layer) = load_optional_override_layer(
+        fs,
+        &system_config_toml_file,
+        strict_config,
+        |override_file, config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::SystemOverride {
+                    file: override_file,
+                },
+                config_toml,
+            )
+        },
+    )
+    .await?
+    {
+        layers.push(system_override_layer);
+    }
 
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
@@ -222,6 +240,24 @@ pub async fn load_config_layers_state(
         )
         .await?,
     );
+    if !ignore_user_config
+        && let Some(user_override_layer) = load_optional_override_layer(
+            fs,
+            &base_user_file,
+            strict_config,
+            |override_file, config_toml| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::UserOverride {
+                        file: override_file,
+                    },
+                    config_toml,
+                )
+            },
+        )
+        .await?
+    {
+        layers.push(user_override_layer);
+    }
 
     let active_user_file = overrides.user_config_path(codex_home)?;
     if active_user_file != base_user_file {
@@ -459,6 +495,36 @@ async fn load_config_toml_for_required_layer(
     }?;
 
     Ok(create_entry(toml_value))
+}
+
+async fn load_optional_override_layer(
+    fs: &dyn ExecutorFileSystem,
+    config_toml_file: &AbsolutePathBuf,
+    strict_config: bool,
+    create_entry: impl FnOnce(AbsolutePathBuf, TomlValue) -> ConfigLayerEntry,
+) -> io::Result<Option<ConfigLayerEntry>> {
+    let parent = config_toml_file.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Config file {} has no parent directory",
+                config_toml_file.as_path().display()
+            ),
+        )
+    })?;
+    let override_file = parent.join(CONFIG_OVERRIDE_TOML_FILE);
+    let Some(config_toml) = layer_io::read_config_from_path(
+        fs,
+        &override_file,
+        /*log_missing_as_info*/ false,
+        strict_config,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let config_toml = resolve_relative_paths_in_config_toml(config_toml, parent.as_path())?;
+    Ok(Some(create_entry(override_file, config_toml)))
 }
 
 fn validate_config_toml_strictly(
@@ -843,10 +909,38 @@ fn project_layer_entry(
     disabled_reason: Option<String>,
     hooks_config_folder_override: Option<AbsolutePathBuf>,
 ) -> ConfigLayerEntry {
-    let source = ConfigLayerSource::Project {
-        dot_codex_folder: dot_codex_folder.clone(),
-    };
+    project_config_layer_entry(
+        ConfigLayerSource::Project {
+            dot_codex_folder: dot_codex_folder.clone(),
+        },
+        config,
+        disabled_reason,
+        hooks_config_folder_override,
+    )
+}
 
+fn project_override_layer_entry(
+    dot_codex_folder: &AbsolutePathBuf,
+    config: TomlValue,
+    disabled_reason: Option<String>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
+) -> ConfigLayerEntry {
+    project_config_layer_entry(
+        ConfigLayerSource::ProjectOverride {
+            dot_codex_folder: dot_codex_folder.clone(),
+        },
+        config,
+        disabled_reason,
+        hooks_config_folder_override,
+    )
+}
+
+fn project_config_layer_entry(
+    source: ConfigLayerSource,
+    config: TomlValue,
+    disabled_reason: Option<String>,
+    hooks_config_folder_override: Option<AbsolutePathBuf>,
+) -> ConfigLayerEntry {
     let entry = if let Some(reason) = disabled_reason {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
@@ -871,10 +965,9 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
 }
 
 fn project_ignored_config_keys_warning(
-    dot_codex_folder: &AbsolutePathBuf,
+    config_path: AbsolutePathBuf,
     ignored_keys: &[String],
 ) -> String {
-    let config_path = dot_codex_folder.join(CONFIG_TOML_FILE);
     let ignored_keys = ignored_keys.join(", ");
     format!(
         concat!(
@@ -1172,31 +1265,20 @@ async fn load_project_layers(
                         continue;
                     }
                 };
-                let mut config = config;
-                if disabled_reason.is_none() && strict_config {
-                    validate_config_toml_strictly(
-                        config_file.as_path(),
-                        &contents,
-                        &config,
-                        dot_codex_abs.as_path(),
-                    )?;
-                }
-                let ignored_project_config_keys = sanitize_project_config(&mut config);
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let config = merge_root_checkout_project_hooks(
+                let config = prepare_project_layer_config(
                     fs,
+                    &config_file,
+                    CONFIG_TOML_FILE,
+                    &contents,
                     config,
+                    &dot_codex_abs,
                     hooks_config_folder_override.as_ref(),
                     decision.is_trusted(),
+                    strict_config,
+                    disabled_reason.is_none(),
+                    &mut startup_warnings,
                 )
                 .await?;
-                if disabled_reason.is_none() && !ignored_project_config_keys.is_empty() {
-                    startup_warnings.push(project_ignored_config_keys_warning(
-                        &dot_codex_abs,
-                        &ignored_project_config_keys,
-                    ));
-                }
                 let entry = project_layer_entry(
                     &dot_codex_abs,
                     config,
@@ -1215,13 +1297,14 @@ async fn load_project_layers(
                         TomlValue::Table(toml::map::Map::new()),
                         hooks_config_folder_override.as_ref(),
                         decision.is_trusted(),
+                        CONFIG_TOML_FILE,
                     )
                     .await?;
                     layers.push(project_layer_entry(
                         &dot_codex_abs,
                         config,
-                        disabled_reason,
-                        hooks_config_folder_override,
+                        disabled_reason.clone(),
+                        hooks_config_folder_override.clone(),
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
@@ -1232,12 +1315,127 @@ async fn load_project_layers(
                 }
             }
         }
+
+        let override_file = dot_codex_abs.join(CONFIG_OVERRIDE_TOML_FILE);
+        match fs.read_file_text(&override_file, /*sandbox*/ None).await {
+            Ok(contents) => {
+                let config: TomlValue = match toml::from_str(&contents) {
+                    Ok(config) => config,
+                    Err(err) => {
+                        if decision.is_trusted() {
+                            let override_file_display = override_file.as_path().display();
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "Error parsing project override config file {override_file_display}: {err}"
+                                ),
+                            ));
+                        }
+                        layers.push(project_override_layer_entry(
+                            &dot_codex_abs,
+                            TomlValue::Table(toml::map::Map::new()),
+                            disabled_reason.clone(),
+                            hooks_config_folder_override.clone(),
+                        ));
+                        continue;
+                    }
+                };
+                let config = prepare_project_layer_config(
+                    fs,
+                    &override_file,
+                    CONFIG_OVERRIDE_TOML_FILE,
+                    &contents,
+                    config,
+                    &dot_codex_abs,
+                    hooks_config_folder_override.as_ref(),
+                    decision.is_trusted(),
+                    strict_config,
+                    disabled_reason.is_none(),
+                    &mut startup_warnings,
+                )
+                .await?;
+                layers.push(project_override_layer_entry(
+                    &dot_codex_abs,
+                    config,
+                    disabled_reason.clone(),
+                    hooks_config_folder_override.clone(),
+                ));
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if hooks_config_folder_override.is_some() {
+                    let config = merge_root_checkout_project_hooks(
+                        fs,
+                        TomlValue::Table(toml::map::Map::new()),
+                        hooks_config_folder_override.as_ref(),
+                        decision.is_trusted(),
+                        CONFIG_OVERRIDE_TOML_FILE,
+                    )
+                    .await?;
+                    layers.push(project_override_layer_entry(
+                        &dot_codex_abs,
+                        config,
+                        disabled_reason.clone(),
+                        hooks_config_folder_override.clone(),
+                    ));
+                }
+            }
+            Err(err) => {
+                let override_file_display = override_file.as_path().display();
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "Failed to read project override config file {override_file_display}: {err}"
+                    ),
+                ));
+            }
+        }
     }
 
     Ok(LoadedProjectLayers {
         layers,
         startup_warnings,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_project_layer_config(
+    fs: &dyn ExecutorFileSystem,
+    config_file: &AbsolutePathBuf,
+    config_file_name: &str,
+    contents: &str,
+    mut config: TomlValue,
+    dot_codex_abs: &AbsolutePathBuf,
+    hooks_config_folder_override: Option<&AbsolutePathBuf>,
+    is_trusted: bool,
+    strict_config: bool,
+    is_enabled: bool,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<TomlValue> {
+    if is_enabled && strict_config {
+        validate_config_toml_strictly(
+            config_file.as_path(),
+            contents,
+            &config,
+            dot_codex_abs.as_path(),
+        )?;
+    }
+    let ignored_project_config_keys = sanitize_project_config(&mut config);
+    let config = resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+    let config = merge_root_checkout_project_hooks(
+        fs,
+        config,
+        hooks_config_folder_override,
+        is_trusted,
+        config_file_name,
+    )
+    .await?;
+    if is_enabled && !ignored_project_config_keys.is_empty() {
+        startup_warnings.push(project_ignored_config_keys_warning(
+            config_file.clone(),
+            &ignored_project_config_keys,
+        ));
+    }
+    Ok(config)
 }
 
 /// For linked worktrees, preserve ordinary worktree-local project config while
@@ -1247,11 +1445,12 @@ async fn merge_root_checkout_project_hooks(
     mut config: TomlValue,
     hooks_config_folder_override: Option<&AbsolutePathBuf>,
     is_trusted: bool,
+    config_toml_file: &str,
 ) -> io::Result<TomlValue> {
     let Some(hooks_config_folder) = hooks_config_folder_override else {
         return Ok(config);
     };
-    let hooks_config_file = hooks_config_folder.join(CONFIG_TOML_FILE);
+    let hooks_config_file = hooks_config_folder.join(config_toml_file);
     let root_config = match fs
         .read_file_text(&hooks_config_file, /*sandbox*/ None)
         .await

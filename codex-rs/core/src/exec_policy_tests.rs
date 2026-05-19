@@ -368,6 +368,50 @@ async fn loads_policies_from_policy_subdirectory() {
 }
 
 #[tokio::test]
+async fn override_layers_do_not_duplicate_policy_directory_rules() -> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+    let config_stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: dot_codex_folder.clone(),
+                },
+                TomlValue::Table(Default::default()),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::ProjectOverride { dot_codex_folder },
+                TomlValue::Table(Default::default()),
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir)?;
+    fs::write(
+        policy_dir.join("deny.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+    let command = [vec!["rm".to_string()]];
+    assert_eq!(
+        policy.check_multiple(command.iter(), &|_| Decision::Allow),
+        Evaluation {
+            decision: Decision::Forbidden,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["rm".to_string()],
+                decision: Decision::Forbidden,
+                resolved_program: None,
+                justification: None,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
 

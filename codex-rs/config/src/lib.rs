@@ -27,6 +27,7 @@ mod tui_keymap;
 pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_OVERRIDE_TOML_FILE: &str = "config.override.toml";
 
 pub use cloud_requirements::CloudRequirementsLoadError;
 pub use cloud_requirements::CloudRequirementsLoadErrorCode;

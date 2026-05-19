@@ -27,7 +27,9 @@ pub fn hook_states_from_stack(
     ) {
         if !matches!(
             layer.name,
-            ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
+            ConfigLayerSource::User { .. }
+                | ConfigLayerSource::UserOverride { .. }
+                | ConfigLayerSource::SessionFlags
         ) {
             continue;
         }

@@ -1277,6 +1277,112 @@ async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
 }
 
 #[tokio::test]
+async fn reload_user_config_layer_refreshes_user_override_layers() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    let override_path = codex_home.join(codex_config::CONFIG_OVERRIDE_TOML_FILE);
+    std::fs::write(&config_toml_path, "model = \"base\"\n").expect("write base config");
+    std::fs::write(&override_path, "model = \"override-old\"\n").expect("write override");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load override config");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    std::fs::write(&override_path, "model = \"override-new\"\n").expect("update override");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(
+        config
+            .config_layer_stack
+            .effective_user_config()
+            .expect("merged user config")
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("override-new")
+    );
+}
+
+#[tokio::test]
+async fn reload_user_config_layer_discovers_new_user_override_layers() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+    let override_path = codex_home.join(codex_config::CONFIG_OVERRIDE_TOML_FILE);
+    std::fs::write(&config_toml_path, "model = \"base\"\n").expect("write base config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .expect("load base config");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    std::fs::write(&override_path, "model = \"override-new\"\n").expect("write override");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(
+        config
+            .config_layer_stack
+            .effective_user_config()
+            .expect("merged user config")
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("override-new")
+    );
+}
+
+#[tokio::test]
+async fn reload_user_config_layer_keeps_selected_non_profile_user_above_new_override() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let base_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let override_path = codex_home.join(codex_config::CONFIG_OVERRIDE_TOML_FILE);
+    let selected_config_path = codex_home.join("selected.toml");
+    std::fs::write(&base_config_path, "model = \"base\"\n").expect("write base config");
+    std::fs::write(&selected_config_path, "model = \"selected\"\n").expect("write selected config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(selected_config_path.abs()),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await
+        .expect("load selected config");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    std::fs::write(&override_path, "model = \"override\"\n").expect("write override");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(
+        config
+            .config_layer_stack
+            .effective_user_config()
+            .expect("merged user config")
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("selected")
+    );
+}
+
+#[tokio::test]
 async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     let session = make_session_with_config(|config| {
         config

@@ -41,6 +41,13 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
+    /// System override layer from a sibling `config.override.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    SystemOverride {
+        file: AbsolutePathBuf,
+    },
+
     /// User config layer from $CODEX_HOME/config.toml. This layer is special
     /// in that it is expected to be:
     /// - writable by the user
@@ -57,11 +64,25 @@ pub enum ConfigLayerSource {
         profile: Option<String>,
     },
 
+    /// User override layer from `$CODEX_HOME/config.override.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UserOverride {
+        file: AbsolutePathBuf,
+    },
+
     /// Path to a .codex/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Project {
+        dot_codex_folder: AbsolutePathBuf,
+    },
+
+    /// Project override layer from a sibling `.codex/config.override.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ProjectOverride {
         dot_codex_folder: AbsolutePathBuf,
     },
 
@@ -88,6 +109,7 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
+            ConfigLayerSource::SystemOverride { .. } => 11,
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21
@@ -95,7 +117,8 @@ impl ConfigLayerSource {
                     20
                 }
             }
-            ConfigLayerSource::Project { .. } => 25,
+            ConfigLayerSource::UserOverride { .. } => 20,
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,
@@ -371,6 +394,7 @@ pub struct ConfigReadResponse {
     #[experimental(nested)]
     pub config: Config,
     pub origins: HashMap<String, ConfigLayerMetadata>,
+    pub user_config_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<ConfigLayer>>,
 }

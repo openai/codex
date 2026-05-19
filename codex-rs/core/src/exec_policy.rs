@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -576,6 +577,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
+    let mut policy_folders = HashSet::new();
     for layer in config_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
@@ -583,12 +585,18 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         if config_stack.ignore_user_and_project_exec_policy_rules()
             && matches!(
                 layer.name,
-                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+                ConfigLayerSource::User { .. }
+                    | ConfigLayerSource::UserOverride { .. }
+                    | ConfigLayerSource::Project { .. }
+                    | ConfigLayerSource::ProjectOverride { .. }
             )
         {
             continue;
         }
         if let Some(config_folder) = layer.config_folder() {
+            if !policy_folders.insert(config_folder.clone()) {
+                continue;
+            }
             let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;
             policy_paths.extend(layer_policy_paths);
