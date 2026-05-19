@@ -117,24 +117,29 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
         turn_permission_fields(PermissionProfile::read_only(), first_turn_cwd.as_path());
 
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: first_turn_cwd,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: first_sandbox_policy,
-            permission_profile: first_permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(first_turn_cwd),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(first_sandbox_policy),
+                permission_profile: first_permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: test.config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -147,24 +152,30 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
         preturn_context_diff_cwd.as_path(),
     );
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "second turn with context updates".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: preturn_context_diff_cwd,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: None,
-            sandbox_policy: second_sandbox_policy,
-            permission_profile: second_permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(preturn_context_diff_cwd),
+                approval_policy: Some(AskForApproval::OnRequest),
+                sandbox_policy: Some(second_sandbox_policy),
+                permission_profile: second_permission_profile,
+                personality: Some(Personality::Friendly),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: test.config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -230,24 +241,29 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
         turn_permission_fields(PermissionProfile::read_only(), cwd_one.as_path());
 
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first turn in agents_one".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_one.clone(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: first_sandbox_policy,
-            permission_profile: first_permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_one.clone()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(first_sandbox_policy),
+                permission_profile: first_permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: test.config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -258,24 +274,29 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     let (second_sandbox_policy, second_permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd_two.as_path());
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "second turn in agents_two".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_two,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: second_sandbox_policy,
-            permission_profile: second_permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_two),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(second_sandbox_policy),
+                permission_profile: second_permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: test.config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -377,24 +398,30 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     );
     resumed
         .codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "resume and change personality".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: resume_override_cwd,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: resumed.session_configured.model.clone(),
-            effort: resumed.config.model_reasoning_effort,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(resume_override_cwd),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                personality: Some(Personality::Friendly),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: resumed.session_configured.model.clone(),
+                        reasoning_effort: resumed.config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

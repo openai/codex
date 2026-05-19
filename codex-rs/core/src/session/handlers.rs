@@ -49,9 +49,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -114,56 +111,6 @@ pub(super) async fn user_input_or_turn_inner(
     mirror_user_text_to_realtime: Option<()>,
 ) {
     let (items, updates, responsesapi_client_metadata) = match op {
-        Op::UserTurn {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = collaboration_mode.or_else(|| {
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: model.clone(),
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    },
-                })
-            });
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer,
-                    sandbox_policy: Some(sandbox_policy),
-                    workspace_roots: None,
-                    profile_workspace_roots: None,
-                    permission_profile,
-                    active_permission_profile: None,
-                    windows_sandbox_level: None,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                None,
-            )
-        }
         Op::UserInput {
             items,
             environments,
@@ -826,7 +773,7 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }

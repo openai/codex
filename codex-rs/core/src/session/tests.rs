@@ -5197,7 +5197,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
 }
 
 #[test]
-fn op_kind_distinguishes_turn_ops() {
+fn op_kind_for_input_and_context_ops() {
     assert_eq!(
         Op::OverrideTurnContext {
             cwd: None,
@@ -5237,24 +5237,31 @@ async fn user_turn_updates_approvals_reviewer() {
     handlers::user_input_or_turn(
         &session,
         "sub-1".to_string(),
-        Op::UserTurn {
-            environments: None,
+        Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: config.cwd.to_path_buf(),
-            approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
-            sandbox_policy: config.legacy_sandbox_policy(),
-            permission_profile: None,
-            model: turn_context.model_info.slug.clone(),
-            effort: config.model_reasoning_effort,
-            summary: config.model_reasoning_summary,
-            service_tier: None,
+            environments: None,
             final_output_json_schema: None,
-            collaboration_mode: None,
-            personality: config.personality,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(config.cwd.to_path_buf()),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                summary: config.model_reasoning_summary,
+                personality: config.personality,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: turn_context.model_info.slug.clone(),
+                        reasoning_effort: config.model_reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         },
     )
     .await;

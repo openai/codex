@@ -518,74 +518,6 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Similar to [`Op::UserInput`], but contains additional context required
-    /// for a turn of a [`crate::codex_thread::CodexThread`].
-    UserTurn {
-        /// User input items, see `InputItem`
-        items: Vec<UserInput>,
-
-        /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
-        /// such as `local_shell`.
-        cwd: PathBuf,
-
-        /// Policy to use for command approval.
-        approval_policy: AskForApproval,
-
-        /// Reviewer to use for approval requests raised during this turn.
-        ///
-        /// When omitted, the session keeps the current setting
-        approvals_reviewer: Option<ApprovalsReviewer>,
-
-        /// Policy to use for tool calls such as `local_shell`.
-        sandbox_policy: SandboxPolicy,
-
-        /// Full permissions profile to use for tool calls such as `local_shell`.
-        ///
-        /// When omitted, `sandbox_policy` is used as a legacy compatibility
-        /// projection.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        permission_profile: Option<PermissionProfile>,
-
-        /// Must be a valid model slug for the configured client session
-        /// associated with this conversation.
-        model: String,
-
-        /// Will only be honored if the model is configured to use reasoning.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<ReasoningEffortConfig>,
-
-        /// Will only be honored if the model is configured to use reasoning.
-        ///
-        /// When omitted, the session keeps the current setting (which allows core to
-        /// fall back to the selected model's default on new sessions).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        summary: Option<ReasoningSummaryConfig>,
-
-        /// Optional service tier override for this turn.
-        ///
-        /// Use `Some(Some(_))` to set a specific tier for this turn, `Some(None)` to
-        /// explicitly clear the tier for this turn, or `None` to keep the existing
-        /// session preference.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        service_tier: Option<Option<String>>,
-
-        // The JSON schema to use for the final assistant message
-        final_output_json_schema: Option<Value>,
-
-        /// EXPERIMENTAL - set a pre-set collaboration mode.
-        /// Takes precedence over model, effort, and developer instructions if set.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        collaboration_mode: Option<CollaborationMode>,
-
-        /// Optional personality override for this turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        personality: Option<Personality>,
-
-        /// Optional turn-scoped environments.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        environments: Option<Vec<TurnEnvironmentSelection>>,
-    },
-
     /// Inter-agent communication that should be recorded as assistant history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
@@ -843,7 +775,6 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
-            Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
