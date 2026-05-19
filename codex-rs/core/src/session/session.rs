@@ -2,6 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::state::ActiveTurn;
+use codex_login::default_client::Originator;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -670,7 +671,7 @@ impl Session {
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
             let account_email = auth.and_then(CodexAuth::get_account_email);
-            let originator = originator().value;
+            let originator = Originator::process_default().value().to_string();
             let terminal_type = user_agent();
             let session_model = session_configuration.collaboration_mode.model().to_string();
             let auth_env_telemetry = collect_auth_env_telemetry(

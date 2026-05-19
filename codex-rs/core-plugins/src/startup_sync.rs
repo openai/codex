@@ -13,6 +13,7 @@ use tempfile::TempDir;
 use tracing::warn;
 use zip::ZipArchive;
 
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 
 const GITHUB_API_BASE_URL: &str = "https://api.github.com";
@@ -30,6 +31,11 @@ const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+
+fn build_process_reqwest_client() -> Client {
+    let originator = Originator::process_default();
+    build_reqwest_client(&originator)
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRepositorySummary {
@@ -590,7 +596,7 @@ fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {
 async fn fetch_curated_repo_remote_sha(api_base_url: &str) -> Result<String, String> {
     let api_base_url = api_base_url.trim_end_matches('/');
     let repo_url = format!("{api_base_url}/repos/{OPENAI_PLUGINS_OWNER}/{OPENAI_PLUGINS_REPO}");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let repo_body = fetch_github_text(&client, &repo_url, "get curated plugins repository").await?;
     let repo_summary: GitHubRepositorySummary =
         serde_json::from_str(&repo_body).map_err(|err| {
@@ -624,14 +630,14 @@ async fn fetch_curated_repo_zipball(
     let api_base_url = api_base_url.trim_end_matches('/');
     let repo_url = format!("{api_base_url}/repos/{OPENAI_PLUGINS_OWNER}/{OPENAI_PLUGINS_REPO}");
     let zipball_url = format!("{repo_url}/zipball/{remote_sha}");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     fetch_github_bytes(&client, &zipball_url, "download curated plugins archive").await
 }
 
 async fn fetch_curated_repo_backup_archive_zip(
     backup_archive_api_url: &str,
 ) -> Result<Vec<u8>, String> {
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let export_body = fetch_public_text(
         &client,
         backup_archive_api_url,

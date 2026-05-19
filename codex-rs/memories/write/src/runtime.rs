@@ -12,7 +12,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::SessionId;
@@ -86,6 +86,7 @@ impl MemoryStartupContext {
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let model = config.model.as_deref().unwrap_or("unknown");
+        let originator = Originator::process_default();
         let auth_env_telemetry = collect_auth_env_telemetry(
             &config.model_provider,
             auth_manager.codex_api_key_env_enabled(),
@@ -97,7 +98,7 @@ impl MemoryStartupContext {
             account_id,
             account_email,
             auth_mode,
-            originator().value,
+            originator.value().to_string(),
             config.otel.log_user_prompt,
             user_agent(),
             source,

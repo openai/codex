@@ -17,6 +17,7 @@ use super::manager::REVOKE_TOKEN_URL;
 use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
+use crate::default_client::Originator;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
 
@@ -59,7 +60,8 @@ pub(crate) async fn revoke_auth_tokens(
         return Ok(());
     };
 
-    let client = create_client();
+    let originator = Originator::process_default();
+    let client = create_client(&originator);
     let endpoint = revoke_token_endpoint();
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
 }

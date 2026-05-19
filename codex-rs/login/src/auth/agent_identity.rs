@@ -3,6 +3,7 @@ use codex_agent_identity::register_agent_task;
 use codex_protocol::account::PlanType as AccountPlanType;
 use std::env;
 
+use crate::default_client::Originator;
 use crate::default_client::build_reqwest_client;
 
 use super::storage::AgentIdentityAuthRecord;
@@ -19,8 +20,9 @@ pub struct AgentIdentityAuth {
 impl AgentIdentityAuth {
     pub async fn load(record: AgentIdentityAuthRecord) -> std::io::Result<Self> {
         let agent_identity_authapi_base_url = agent_identity_authapi_base_url();
+        let originator = Originator::process_default();
         let process_task_id = register_agent_task(
-            &build_reqwest_client(),
+            &build_reqwest_client(&originator),
             &agent_identity_authapi_base_url,
             key(&record),
         )

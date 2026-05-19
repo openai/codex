@@ -29,7 +29,7 @@ use crate::auth::load_auth_dot_json;
 use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
-use crate::default_client::originator;
+use crate::default_client::Originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -505,7 +505,10 @@ fn build_authorize_url(
         ("id_token_add_organizations".to_string(), "true".to_string()),
         ("codex_cli_simplified_flow".to_string(), "true".to_string()),
         ("state".to_string(), state.to_string()),
-        ("originator".to_string(), originator().value),
+        (
+            "originator".to_string(),
+            Originator::process_default().value().to_string(),
+        ),
     ];
     if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
         query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));

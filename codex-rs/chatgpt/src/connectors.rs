@@ -20,7 +20,7 @@ pub use codex_core::connectors::with_app_enabled_state;
 use codex_core_plugins::PluginsManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_plugin::AppConnectorId;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -85,10 +85,8 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
             .into_iter()
             .map(|connector_id| connector_id.0),
     );
-    Some(filter_disallowed_connectors(
-        connectors,
-        originator().value.as_str(),
-    ))
+    let originator = Originator::process_default();
+    Some(filter_disallowed_connectors(connectors, originator.value()))
 }
 
 pub async fn list_all_connectors_with_options(
@@ -121,10 +119,8 @@ pub async fn list_all_connectors_with_options(
             .into_iter()
             .map(|connector_id| connector_id.0),
     );
-    Ok(filter_disallowed_connectors(
-        connectors,
-        originator().value.as_str(),
-    ))
+    let originator = Originator::process_default();
+    Ok(filter_disallowed_connectors(connectors, originator.value()))
 }
 
 fn connector_directory_cache_context(
@@ -165,7 +161,8 @@ pub fn connectors_for_plugin_apps(
             .iter()
             .map(|connector_id| connector_id.0.clone()),
     );
-    filter_disallowed_connectors(connectors, originator().value.as_str())
+    let originator = Originator::process_default();
+    filter_disallowed_connectors(connectors, originator.value())
         .into_iter()
         .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
         .collect()
@@ -189,7 +186,8 @@ pub fn merge_connectors_with_accessible(
         accessible_connectors
     };
     let merged = merge_connectors(connectors, accessible_connectors);
-    filter_disallowed_connectors(merged, originator().value.as_str())
+    let originator = Originator::process_default();
+    filter_disallowed_connectors(merged, originator.value())
 }
 
 #[cfg(test)]

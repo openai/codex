@@ -24,6 +24,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
@@ -73,6 +74,11 @@ const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
+
+fn process_default_headers() -> HeaderMap {
+    let originator = Originator::process_default();
+    default_headers(&originator)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
@@ -333,7 +339,7 @@ impl RealtimeConversationManager {
                 .connect(
                     session_config,
                     extra_headers.unwrap_or_default(),
-                    default_headers(),
+                    process_default_headers(),
                 )
                 .await
                 .map_err(map_api_error)?;
@@ -1054,7 +1060,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
                 session_config,
                 &call_id,
                 sideband_headers,
-                default_headers(),
+                process_default_headers(),
             )
             .await
         {

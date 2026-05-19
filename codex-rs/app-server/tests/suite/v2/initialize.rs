@@ -63,7 +63,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
 }
 
 #[tokio::test]
-async fn initialize_probe_does_not_override_originator() -> Result<()> {
+async fn initialize_probe_uses_connection_scoped_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
@@ -85,12 +85,12 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
     };
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_cli_rs/"));
+    assert!(user_agent.starts_with("codex_app_server_daemon/"));
     Ok(())
 }
 
 #[tokio::test]
-async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
+async fn initialize_codex_backend_uses_connection_scoped_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
@@ -112,12 +112,12 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
     };
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_cli_rs/"));
+    assert!(user_agent.starts_with("codex-backend/"));
     Ok(())
 }
 
 #[tokio::test]
-async fn initialize_respects_originator_override_env_var() -> Result<()> {
+async fn initialize_ignores_process_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
@@ -152,7 +152,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
         platform_os,
     } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert!(user_agent.starts_with("codex_vscode/"));
     assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);

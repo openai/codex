@@ -2,6 +2,7 @@ use crate::store::PluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::store::validate_plugin_version_segment;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
@@ -28,6 +29,11 @@ const REMOTE_PLUGIN_INSTALL_STAGING_DIR: &str = "plugins/.remote-plugin-install-
 #[cfg(debug_assertions)]
 const TEST_ALLOW_LOOPBACK_HTTP_REMOTE_PLUGIN_BUNDLES_ENV: &str =
     "CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS";
+
+fn build_process_reqwest_client() -> reqwest::Client {
+    let originator = Originator::process_default();
+    build_reqwest_client(&originator)
+}
 
 #[derive(Debug, Clone)]
 pub struct ValidatedRemotePluginBundle {
@@ -263,7 +269,7 @@ async fn download_remote_plugin_bundle_with_limit(
     bundle_download_url: &str,
     max_bytes: u64,
 ) -> Result<Vec<u8>, RemotePluginBundleInstallError> {
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let response = client
         .get(bundle_download_url)
         .timeout(REMOTE_PLUGIN_BUNDLE_DOWNLOAD_TIMEOUT)

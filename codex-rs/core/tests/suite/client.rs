@@ -11,7 +11,7 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -781,7 +781,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
 
     assert_eq!(request_session_id, expected_session_id.to_string());
     assert_eq!(request_thread_id, thread_id_string.as_str());
-    assert_eq!(request_originator, originator().value);
+    assert_eq!(request_originator, Originator::process_default().value());
     assert_eq!(request_authorization, "Bearer Test API Key");
     assert_eq!(
         request_body["prompt_cache_key"].as_str(),
@@ -1052,7 +1052,7 @@ async fn chatgpt_auth_sends_correct_request() {
     assert_eq!(request_session_id, expected_session_id.to_string());
     assert_eq!(request_thread_id, expected_thread_id.to_string());
 
-    assert_eq!(request_originator, originator().value);
+    assert_eq!(request_originator, Originator::process_default().value());
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
     assert_eq!(

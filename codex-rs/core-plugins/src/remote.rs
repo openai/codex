@@ -7,6 +7,7 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -22,6 +23,11 @@ use url::Url;
 
 mod remote_installed_plugin_sync;
 mod share;
+
+fn build_process_reqwest_client() -> reqwest::Client {
+    let originator = Originator::process_default();
+    build_reqwest_client(&originator)
+}
 
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncOutcome;
@@ -782,7 +788,7 @@ pub async fn fetch_remote_plugin_skill_detail(
     }
 
     let url = remote_plugin_skill_detail_url(config, plugin_id, skill_name)?;
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let request = authenticated_request(client.get(&url), auth)?;
     let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
     if response.plugin_id != plugin_id {
@@ -883,7 +889,7 @@ pub async fn install_remote_plugin(
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
@@ -919,7 +925,7 @@ pub async fn uninstall_remote_plugin(
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
@@ -1252,7 +1258,7 @@ async fn get_remote_plugin_list_page(
 ) -> Result<RemotePluginListResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/list");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("scope", scope.api_value())]);
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
@@ -1269,7 +1275,7 @@ async fn get_remote_shared_workspace_plugins_page(
 ) -> Result<RemotePluginListResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/shared");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
@@ -1287,7 +1293,7 @@ async fn get_remote_plugin_installed_page(
 ) -> Result<RemotePluginInstalledResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/installed");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("scope", scope.api_value())]);
     if include_download_urls {
@@ -1307,7 +1313,7 @@ async fn fetch_plugin_detail(
 ) -> Result<RemotePluginDirectoryItem, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);

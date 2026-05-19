@@ -44,7 +44,7 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
@@ -977,7 +977,7 @@ pub async fn run_main(
     )
     .await;
 
-    let otel_originator = originator().value;
+    let otel_originator = Originator::process_default().value().to_string();
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::legacy_core::otel_init::build_provider(
             &config,

@@ -6,7 +6,7 @@ use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_features::FeaturesToml;
-use codex_login::default_client::originator;
+use codex_login::default_client::Originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
@@ -283,7 +283,8 @@ pub struct WindowsSandboxSetupRequest {
 pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
     let start = Instant::now();
     let mode = request.mode;
-    let originator_tag = sanitize_metric_tag_value(originator().value.as_str());
+    let originator = Originator::process_default();
+    let originator_tag = sanitize_metric_tag_value(originator.value());
     let result = run_windows_sandbox_setup_and_persist(request).await;
 
     match result {

@@ -47,6 +47,7 @@ use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 use codex_login::default_client::default_headers;
 use codex_login::load_auth_dot_json;
@@ -2164,12 +2165,13 @@ async fn websocket_reachability_check(
         OPENAI_BETA_HEADER,
         HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
     );
+    let originator = Originator::process_default();
     let client = ResponsesWebsocketClient::new(api_provider, api_auth);
     match tokio::time::timeout(
         provider.websocket_connect_timeout(),
         client.probe_handshake(
             extra_headers,
-            default_headers(),
+            default_headers(&originator),
             WEBSOCKET_IMMEDIATE_CLOSE_GRACE,
         ),
     )
@@ -2657,7 +2659,8 @@ async fn mcp_http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result
 }
 
 async fn http_probe_url_with_timeout(url: &str, timeout: Duration) -> Result<String, String> {
-    let response = build_reqwest_client()
+    let originator = Originator::process_default();
+    let response = build_reqwest_client(&originator)
         .head(url)
         .timeout(timeout)
         .send()
@@ -2683,7 +2686,8 @@ async fn http_get_probe_url_with_timeout(url: &str, timeout: Duration) -> Result
 }
 
 async fn http_get_probe_status_with_timeout(url: &str, timeout: Duration) -> Result<u16, String> {
-    let response = build_reqwest_client()
+    let originator = Originator::process_default();
+    let response = build_reqwest_client(&originator)
         .get(url)
         .timeout(timeout)
         .send()

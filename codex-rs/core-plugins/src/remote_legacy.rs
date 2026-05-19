@@ -1,5 +1,6 @@
 use crate::remote::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
 use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
 use serde::Deserialize;
@@ -10,6 +11,11 @@ const DEFAULT_REMOTE_MARKETPLACE_NAME: &str = "openai-curated";
 const REMOTE_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_PLUGIN_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn build_process_reqwest_client() -> reqwest::Client {
+    let originator = Originator::process_default();
+    build_reqwest_client(&originator)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RemotePluginStatusSummary {
@@ -129,7 +135,7 @@ pub async fn fetch_remote_plugin_status(
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/list");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let request = client
         .get(&url)
         .timeout(REMOTE_PLUGIN_FETCH_TIMEOUT)
@@ -161,7 +167,7 @@ pub async fn fetch_remote_featured_plugin_ids(
 ) -> Result<Vec<String>, RemotePluginFetchError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/featured");
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let mut request = client
         .get(&url)
         .query(&[(
@@ -236,7 +242,7 @@ async fn post_remote_plugin_mutation(
 ) -> Result<RemotePluginMutationResponse, RemotePluginMutationError> {
     let auth = ensure_codex_backend_auth(auth)?;
     let url = remote_plugin_mutation_url(config, plugin_id, action)?;
-    let client = build_reqwest_client();
+    let client = build_process_reqwest_client();
     let request = client
         .post(url.clone())
         .timeout(REMOTE_PLUGIN_MUTATION_TIMEOUT)

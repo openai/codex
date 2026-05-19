@@ -1,5 +1,5 @@
+use codex_login::default_client::Originator;
 use codex_login::default_client::is_first_party_chat_originator;
-use codex_login::default_client::originator;
 
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
@@ -13,7 +13,8 @@ const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
     &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
 
 pub fn is_connector_id_allowed(connector_id: &str) -> bool {
-    is_connector_id_allowed_for_originator(connector_id, originator().value.as_str())
+    let originator = Originator::process_default();
+    is_connector_id_allowed_for_originator(connector_id, originator.value())
 }
 
 fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: &str) -> bool {

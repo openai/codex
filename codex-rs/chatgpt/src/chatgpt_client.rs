@@ -1,5 +1,6 @@
 use codex_core::config::Config;
 use codex_login::AuthManager;
+use codex_login::default_client::Originator;
 use codex_login::default_client::create_client;
 
 use anyhow::Context;
@@ -39,7 +40,8 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
 
     // Make direct HTTP request to ChatGPT backend API with the token
-    let client = create_client();
+    let originator = Originator::process_default();
+    let client = create_client(&originator);
     let url = format!(
         "{}/{}",
         chatgpt_base_url.trim_end_matches('/'),
