@@ -7,7 +7,7 @@ JSON-RPC server for spawning and controlling subprocesses through
 It provides:
 
 - a CLI entrypoint: `codex exec-server`
-- a Rust client: `ExecServerClient`
+- a Rust connection client: `ExecServerConnection`
 - a small protocol module with shared request/response types
 
 This crate owns the transport, protocol, and filesystem/process handlers. The
@@ -21,16 +21,41 @@ That client is not the same thing as one websocket connection.
 
 ```text
 Environment
-  `- RemoteExecServerClient
+  `- one RemoteExecServerClient
        |- RemoteExecServerSession
-       |    |- logical session id
-       |    |- current ExecServerConnection
+       |    |- logical_session_id
+       |    |- current ExecServerConnection?
        |    |- one in-flight reconnect attempt
-       |    |- durable ProcessSession map
-       |    `- terminal resume error, when reconnect can no longer succeed
-       |- RemoteProcess -> ProcessSessionHandle -> ProcessSession
+       |    |- terminal reconnect error?
+       |    `- durable process_sessions: HashMap<ProcessId, Arc<ProcessSession>>
+       |- RemoteProcess -> RemoteExecProcess -> ProcessSessionHandle
        |- RemoteFileSystem
-       `- HttpClient
+       `- HttpClient for RemoteExecServerClient
+
+ExecServerConnection
+  `- Inner
+       |- RpcClient
+       |- reader task
+       |- disconnect latch
+       |- connection-local process_session_routes
+       |- connection-local HTTP body stream routes
+       `- initialized session_id for this live binding
+
+ProcessSessionHandle
+  |- process_id
+  |- Arc<ProcessSession>
+  `- ProcessSessionControl
+
+ProcessSession
+  |- wake channel
+  |- event log
+  |- ordered event buffer
+  |- failure state
+  `- disconnect policy
+
+ProcessSessionControl
+  |- Connection(ExecServerConnection) for direct/test one-shot sessions
+  `- RemoteClient(RemoteExecServerClient) for reconnecting remote environments
 ```
 
 The main roles are:
@@ -43,11 +68,18 @@ The main roles are:
   reconnect attempt, tracked process sessions, and any terminal resume error.
 - `ExecServerConnection`: one live JSON-RPC transport binding. It owns
   connection-local routing for notifications and streamed HTTP response bodies.
+- `Inner`: private per-connection machinery behind `ExecServerConnection`.
+  It owns the `RpcClient`, reader task, disconnect latch, connection-local
+  process notification routes, connection-local HTTP body stream routes, and
+  initialized session id for that live binding.
 - `ProcessSession`: durable per-process client state. It keeps the local event
   log, wake cursor, and failure state that must survive connection replacement.
 - `ProcessSessionHandle`: process-facing handle used by `RemoteExecProcess`.
   It routes reads, writes, terminate, and unregister through either a focused
   direct connection test path or the logical reconnecting client path.
+- `ProcessSessionControl`: small command-path enum for a
+  `ProcessSessionHandle`. It is not an owner; it only chooses direct
+  `ExecServerConnection` versus reconnecting `RemoteExecServerClient`.
 - `RemoteProcess`, `RemoteFileSystem`, and `HttpClient`: thin capability
   adapters. They should not own reconnect state themselves.
 
@@ -67,6 +99,14 @@ Reconnect invariants:
 - Streamed HTTP bodies are connection-local. A reconnect can start a later
   HTTP request, but it cannot resume body-delta delivery for an already-open
   stream.
+- Rendezvous uses the same logical split. The relay websocket and relay
+  `stream_id` are transport beneath the exec-server logical session for the
+  first reconnect slice. If a rendezvous websocket dies, the harness/client
+  may establish a fresh relay stream, then re-run exec-server initialize with
+  the prior `session_id` as `resume_session_id`. Existing process state recovers
+  through `process/read(after_seq)`, not relay-frame replay. Full same-stream
+  relay resume/replay remains a later protocol slice that requires endpoint-held
+  seq/ack/replay state.
 
 ## Transport
 
