@@ -6,6 +6,9 @@
 
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
+use crate::app_event::ConnectorsSnapshot;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
@@ -89,6 +92,27 @@ impl App {
                 .await
                 .map_err(|err| format!("{err:#}"));
             app_event_tx.send(AppEvent::SkillsListLoaded { result });
+        });
+    }
+
+    pub(super) fn fetch_connectors_list(
+        &mut self,
+        app_server: &AppServerSession,
+        force_refetch: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let thread_id = self
+            .current_displayed_thread_id()
+            .map(|thread_id| thread_id.to_string());
+        tokio::spawn(async move {
+            let result = fetch_connectors_list(request_handle, force_refetch, thread_id)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result,
+                is_final: true,
+            });
         });
     }
 
@@ -632,6 +656,29 @@ pub(super) async fn fetch_skills_list(
         })
         .await
         .wrap_err("skills/list failed in TUI")
+}
+
+pub(super) async fn fetch_connectors_list(
+    request_handle: AppServerRequestHandle,
+    force_refetch: bool,
+    thread_id: Option<String>,
+) -> Result<ConnectorsSnapshot> {
+    let request_id = RequestId::String(format!("apps-list-{}", Uuid::new_v4()));
+    let response: AppsListResponse = request_handle
+        .request_typed(ClientRequest::AppsList {
+            request_id,
+            params: AppsListParams {
+                cursor: None,
+                limit: None,
+                thread_id,
+                force_refetch,
+            },
+        })
+        .await
+        .wrap_err("app/list failed in TUI")?;
+    Ok(ConnectorsSnapshot {
+        connectors: response.data,
+    })
 }
 
 pub(super) async fn fetch_plugins_list(

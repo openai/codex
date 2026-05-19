@@ -423,6 +423,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStart")]
+    #[ts(rename = "SubagentStart")]
+    pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,

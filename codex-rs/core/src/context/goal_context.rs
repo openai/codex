@@ -8,9 +8,17 @@ pub(crate) struct GoalContext {
 }
 
 impl ContextualUserFragment for GoalContext {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = "<goal_context>";
-    const END_MARKER: &'static str = "</goal_context>";
+    fn role() -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<goal_context>", "</goal_context>")
+    }
 
     fn body(&self) -> String {
         format!("\n{}\n", self.prompt)

@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: snapshot
+---
+status line: monthly 65% · weekly 50%
+terminal title: monthly 65% | weekly 50%

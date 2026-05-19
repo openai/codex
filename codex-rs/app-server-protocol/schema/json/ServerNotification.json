@@ -1180,7 +1180,7 @@
       "enum": [
         "read",
         "write",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -1835,6 +1835,7 @@
         "postCompact",
         "sessionStart",
         "userPromptSubmit",
+        "subagentStart",
         "stop"
       ],
       "type": "string"

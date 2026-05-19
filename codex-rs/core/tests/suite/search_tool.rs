@@ -745,13 +745,25 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     );
 
     let tools = tool_search_output_tools(&requests[1], call_id);
-    let spawn_agent = tools
-        .iter()
-        .find(|tool| {
+    assert!(
+        !tools.iter().any(|tool| {
             tool.get("type").and_then(Value::as_str) == Some("function")
                 && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
-        })
-        .unwrap_or_else(|| panic!("expected tool_search to return spawn_agent: {tools:?}"));
+        }),
+        "spawn_agent should be returned as a namespace child, not a flat function: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("namespace")
+                && tool.get("name").and_then(Value::as_str) == Some("multi_agent_v1")
+        }),
+        "expected tool_search to return multi_agent_v1 namespace: {tools:?}"
+    );
+    let output = tool_search_output_item(&requests[1], call_id);
+    let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
+        .unwrap_or_else(|| {
+            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
+        });
     assert_eq!(
         spawn_agent.get("defer_loading").and_then(Value::as_bool),
         Some(true)

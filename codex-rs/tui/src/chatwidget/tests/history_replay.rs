@@ -245,7 +245,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/.secret".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ],
             glob_scan_max_depth: None,

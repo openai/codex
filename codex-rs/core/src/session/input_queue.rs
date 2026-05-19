@@ -3,15 +3,22 @@ use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::user_input::UserInput;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TurnInput {
+    UserInput(Vec<UserInput>),
+    ResponseInputItem(ResponseInputItem),
+}
+
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
-    items: Vec<ResponseInputItem>,
+    items: Vec<TurnInput>,
 }
 
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
@@ -151,7 +158,7 @@ impl InputQueue {
     pub(super) async fn push_pending_input_and_accept_mailbox_delivery_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-        input: ResponseInputItem,
+        input: TurnInput,
     ) {
         let mut turn_state = turn_state.lock().await;
         turn_state.pending_input.items.push(input);
@@ -161,7 +168,7 @@ impl InputQueue {
     pub(crate) async fn extend_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-        input: Vec<ResponseInputItem>,
+        input: Vec<TurnInput>,
     ) {
         turn_state.lock().await.pending_input.items.extend(input);
     }
@@ -169,7 +176,7 @@ impl InputQueue {
     pub(crate) async fn take_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-    ) -> Vec<ResponseInputItem> {
+    ) -> Vec<TurnInput> {
         turn_state.lock().await.pending_input.items.split_off(0)
     }
 
@@ -185,13 +192,14 @@ impl InputQueue {
         let mut active = active_turn.lock().await;
         match active.as_mut() {
             Some(active_turn) => {
-                active_turn
-                    .turn_state
-                    .lock()
-                    .await
-                    .pending_input
-                    .items
-                    .extend(input);
+                self.extend_pending_input_for_turn_state(
+                    active_turn.turn_state.as_ref(),
+                    input
+                        .into_iter()
+                        .map(TurnInput::ResponseInputItem)
+                        .collect(),
+                )
+                .await;
                 Ok(())
             }
             None => Err(input),
@@ -202,34 +210,10 @@ impl InputQueue {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub(crate) async fn prepend_pending_input(
-        &self,
-        active_turn: &Mutex<Option<ActiveTurn>>,
-        mut input: Vec<ResponseInputItem>,
-    ) -> Result<(), ()> {
-        let mut active = active_turn.lock().await;
-        match active.as_mut() {
-            Some(active_turn) => {
-                let mut turn_state = active_turn.turn_state.lock().await;
-                if !input.is_empty() {
-                    let pending_input = &mut turn_state.pending_input;
-                    input.append(&mut pending_input.items);
-                    pending_input.items = input;
-                }
-                Ok(())
-            }
-            None => Err(()),
-        }
-    }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn get_pending_input(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> Vec<ResponseInputItem> {
+    ) -> Vec<TurnInput> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -246,11 +230,13 @@ impl InputQueue {
         if !accepts_mailbox_delivery {
             return pending_input;
         }
-        let mailbox_items = self.drain_mailbox_input_items().await;
+        let mailbox_items = self
+            .drain_mailbox_input_items()
+            .await
+            .into_iter()
+            .map(TurnInput::ResponseInputItem);
         if pending_input.is_empty() {
-            mailbox_items
-        } else if mailbox_items.is_empty() {
-            pending_input
+            mailbox_items.collect()
         } else {
             let mut pending_input = pending_input;
             pending_input.extend(mailbox_items);

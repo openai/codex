@@ -589,6 +589,7 @@ mod tests {
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
+    use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
