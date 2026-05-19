@@ -208,9 +208,9 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
-            let configured_server = server
-                .configured_config()
-                .expect("effective MCP servers are configured");
+            let Some(configured_server) = server.configured_config() else {
+                unreachable!("effective MCP servers are configured");
+            };
             let startup_unavailable_reason =
                 runtime_environment.startup_unavailable_reason(&server_name, configured_server);
             if let Some(reason) = startup_unavailable_reason.as_deref() {

@@ -597,9 +597,11 @@ async fn make_rmcp_client(
                     .collect::<HashMap<_, _>>()
             });
             let launcher = if remote_environment {
-                let environment = runtime_environment
-                    .environment()
-                    .expect("remote MCP server requires a runtime environment");
+                let Some(environment) = runtime_environment.environment() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote MCP server requires a runtime environment"
+                    )));
+                };
                 Arc::new(ExecutorStdioServerLauncher::new(
                     environment.get_exec_backend(),
                     runtime_environment.fallback_cwd(),
@@ -624,10 +626,12 @@ async fn make_rmcp_client(
             bearer_token_env_var,
         } => {
             let http_client: Arc<dyn HttpClient> = if remote_environment {
-                runtime_environment
-                    .environment()
-                    .expect("remote MCP server requires a runtime environment")
-                    .get_http_client()
+                let Some(environment) = runtime_environment.environment() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "remote MCP server requires a runtime environment"
+                    )));
+                };
+                environment.get_http_client()
             } else {
                 Arc::new(ReqwestHttpClient)
             };

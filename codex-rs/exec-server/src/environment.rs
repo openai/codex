@@ -227,8 +227,10 @@ impl EnvironmentManager {
 
     /// Returns the local environment instance used for internal runtime work.
     pub fn require_local_environment(&self) -> Arc<Environment> {
-        self.try_local_environment()
-            .expect("local environment is not configured")
+        match self.try_local_environment() {
+            Some(environment) => environment,
+            None => panic!("local environment is not configured"),
+        }
     }
 
     /// Returns the local environment instance when one is configured.
@@ -751,8 +753,8 @@ mod tests {
         };
         snapshot.include_local = false;
         snapshot.default = EnvironmentDefault::Disabled;
-        let manager =
-            EnvironmentManager::from_snapshot(snapshot, None).expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(snapshot, /*local_runtime_paths*/ None)
+            .expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);

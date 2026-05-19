@@ -915,17 +915,21 @@ async fn no_local_runtime_skips_local_stdio_but_keeps_local_http_server() {
         String::new(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(None, None, PathBuf::from("/tmp")),
+        McpRuntimeEnvironment::new(
+            /*environment*/ None,
+            /*local_environment*/ None,
+            PathBuf::from("/tmp"),
+        ),
         codex_home.path().to_path_buf(),
         CodexAppsToolsCacheKey {
             account_id: None,
             chatgpt_user_id: None,
             is_workspace_account: false,
         },
-        false,
+        /*host_owned_codex_apps_enabled*/ false,
         ElicitationCapability::default(),
         ToolPluginProvenance::default(),
-        None,
+        /*auth*/ None,
         /*elicitation_reviewer*/ None,
     )
     .await;
