@@ -1985,8 +1985,36 @@ async fn handle_unauthorized(
         debug.auth_error_code.as_deref(),
         debug.auth_error_type.as_deref(),
     );
-    if revocation_recovery_reason.is_none()
-        && let Some(recovery) = auth_recovery
+    if let Some(recovery_reason) = revocation_recovery_reason
+        && let Some(recovery) = auth_recovery.as_ref()
+    {
+        let mode = recovery.mode_name();
+        let phase = recovery.step_name();
+        let failed = recovery.clear_invalidated_access_token_auth().await;
+        session_telemetry.record_auth_recovery(
+            mode,
+            phase,
+            "recovery_not_run",
+            debug.request_id.as_deref(),
+            debug.cf_ray.as_deref(),
+            debug.auth_error.as_deref(),
+            debug.auth_error_code.as_deref(),
+            Some(recovery_reason),
+            /*auth_state_changed*/ None,
+        );
+        emit_feedback_auth_recovery_tags(
+            mode,
+            phase,
+            "recovery_not_run",
+            debug.request_id.as_deref(),
+            debug.cf_ray.as_deref(),
+            debug.auth_error.as_deref(),
+            debug.auth_error_code.as_deref(),
+        );
+        return Err(CodexErr::RefreshTokenFailed(failed));
+    }
+
+    if let Some(recovery) = auth_recovery
         && recovery.has_next()
     {
         let mode = recovery.mode_name();
@@ -2064,18 +2092,17 @@ async fn handle_unauthorized(
         };
     }
 
-    let (mode, phase, recovery_reason) = match (auth_recovery.as_ref(), revocation_recovery_reason)
-    {
-        (Some(recovery), Some(reason)) => {
-            (recovery.mode_name(), recovery.step_name(), Some(reason))
-        }
-        (None, Some(reason)) => ("none", "none", Some(reason)),
-        (Some(recovery), None) => (
+    let (mode, phase, recovery_reason) = match auth_recovery.as_ref() {
+        Some(recovery) => (
             recovery.mode_name(),
             recovery.step_name(),
             Some(recovery.unavailable_reason()),
         ),
-        (None, None) => ("none", "none", Some("auth_manager_missing")),
+        None => (
+            "none",
+            "none",
+            revocation_recovery_reason.or(Some("auth_manager_missing")),
+        ),
     };
     session_telemetry.record_auth_recovery(
         mode,

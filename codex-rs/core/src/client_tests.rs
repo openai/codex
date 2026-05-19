@@ -27,6 +27,7 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::RefreshTokenFailedReason;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -590,7 +591,7 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
 }
 
 #[tokio::test]
-async fn token_invalidated_401_skips_unauthorized_recovery() {
+async fn token_invalidated_401_clears_auth_and_requires_relogin() {
     let manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let mut recovery = Some(manager.unauthorized_recovery());
@@ -615,13 +616,15 @@ async fn token_invalidated_401_skips_unauthorized_recovery() {
     .await
     .expect_err("revoked access tokens should not enter refresh recovery");
 
-    let CodexErr::UnexpectedStatus(unexpected) = err else {
-        panic!("expected unauthorized response to bubble up, got {err:?}");
+    let CodexErr::RefreshTokenFailed(failed) = err else {
+        panic!("expected invalidated access token to force relogin, got {err:?}");
     };
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
     assert_eq!(
-        unexpected.identity_error_code.as_deref(),
-        Some("token_invalidated")
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
     );
+    assert!(manager.auth_cached().is_none());
     assert_eq!(
         recovery
             .as_ref()
@@ -632,7 +635,7 @@ async fn token_invalidated_401_skips_unauthorized_recovery() {
 }
 
 #[tokio::test]
-async fn token_invalidated_error_type_401_skips_unauthorized_recovery() {
+async fn token_invalidated_error_type_401_clears_auth_and_requires_relogin() {
     let manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let mut recovery = Some(manager.unauthorized_recovery());
@@ -650,9 +653,15 @@ async fn token_invalidated_error_type_401_skips_unauthorized_recovery() {
     .await
     .expect_err("invalidated access tokens should not enter refresh recovery");
 
-    let CodexErr::UnexpectedStatus(_) = err else {
-        panic!("expected unauthorized response to bubble up, got {err:?}");
+    let CodexErr::RefreshTokenFailed(failed) = err else {
+        panic!("expected invalidated access token to force relogin, got {err:?}");
     };
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
     assert_eq!(
         recovery
             .as_ref()

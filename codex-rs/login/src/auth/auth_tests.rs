@@ -325,6 +325,22 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
 }
 
 #[tokio::test]
+async fn invalidated_access_token_logout_clears_cached_auth() {
+    let manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let recovery = manager.unauthorized_recovery();
+
+    let failed = recovery.clear_invalidated_access_token_auth().await;
+
+    assert_eq!(failed.reason, RefreshTokenFailedReason::Revoked);
+    assert_eq!(
+        failed.message,
+        "Your ChatGPT session is no longer valid. Please sign in again."
+    );
+    assert!(manager.auth_cached().is_none());
+}
+
+#[tokio::test]
 #[serial(codex_auth_env)]
 async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let codex_home = tempdir().unwrap();

@@ -99,6 +99,8 @@ const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be 
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
+const ACCESS_TOKEN_INVALIDATED_MESSAGE: &str =
+    "Your ChatGPT session is no longer valid. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
@@ -1065,7 +1067,7 @@ enum UnauthorizedRecoveryMode {
 
 // UnauthorizedRecovery is a state machine that handles an attempt to refresh the authentication when requests
 // to API fail with a refreshable 401 status code. Callers must leave explicit access-token revocation signals
-// outside this flow.
+// outside this flow so those sessions can be cleared instead of refreshed.
 // The client calls next() every time it encounters a 401 error, one time per retry.
 // For API key based authentication, we don't do anything and let the error bubble to the user.
 //
@@ -1248,6 +1250,16 @@ impl UnauthorizedRecovery {
         Ok(UnauthorizedRecoveryStepResult {
             auth_state_changed: None,
         })
+    }
+
+    pub async fn clear_invalidated_access_token_auth(&self) -> RefreshTokenFailedError {
+        let message = match self.manager.logout().await {
+            Ok(_) => ACCESS_TOKEN_INVALIDATED_MESSAGE.to_string(),
+            Err(err) => format!(
+                "{ACCESS_TOKEN_INVALIDATED_MESSAGE} Codex could not clear saved auth: {err}"
+            ),
+        };
+        RefreshTokenFailedError::new(RefreshTokenFailedReason::Revoked, message)
     }
 }
 
