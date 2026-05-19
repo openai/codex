@@ -96,10 +96,10 @@ impl InputQueue {
         let Some(turn_state) = turn_state else {
             return;
         };
-        let mut turn_state = turn_state.lock().await;
         if !self.state.lock().await.turn_pending_input.is_empty() {
             return;
         }
+        let mut turn_state = turn_state.lock().await;
         turn_state.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
     }
 

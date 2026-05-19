@@ -7706,7 +7706,7 @@ async fn abort_gracefully_emits_turn_aborted_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input() {
+async fn task_finish_starts_new_turn_for_leftover_pending_user_input() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
@@ -7743,7 +7743,6 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
 
-    let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -7752,47 +7751,80 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         }],
         phase: None,
     };
-    assert!(
-        history.raw_items().iter().any(|item| item == &expected),
-        "expected pending input to be persisted into history on turn completion"
-    );
 
     let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
-        .expect("expected raw response item event")
+        .expect("expected turn complete event")
         .expect("channel open");
-    assert!(matches!(first.msg, EventMsg::RawResponseItem(_)));
+    assert!(matches!(
+        first.msg,
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id,
+            last_agent_message: None,
+            time_to_first_token_ms: None,
+            ..
+        }) if turn_id == tc.sub_id
+    ));
 
     let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected new turn started event")
+        .expect("channel open");
+    let new_turn_id = match second.msg {
+        EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) => {
+            assert_ne!(turn_id, tc.sub_id);
+            turn_id
+        }
+        other => panic!("expected new turn started event, got {other:?}"),
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("channel open");
+            assert_eq!(event.id, new_turn_id);
+            match event.msg {
+                EventMsg::RawResponseItem(raw) if raw.item == expected => break,
+                EventMsg::RawResponseItem(_) => continue,
+                other => panic!("expected raw response item event, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("expected raw response item event");
+
+    let fourth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
         .expect("expected item started event")
         .expect("channel open");
     assert!(matches!(
-        second.msg,
+        fourth.msg,
         EventMsg::ItemStarted(ItemStartedEvent {
+            turn_id,
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if content == pending_user_input
+        }) if turn_id == new_turn_id && content == pending_user_input
     ));
 
-    let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+    let fifth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
         .expect("expected item completed event")
         .expect("channel open");
     assert!(matches!(
-        third.msg,
+        fifth.msg,
         EventMsg::ItemCompleted(ItemCompletedEvent {
+            turn_id,
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if content == pending_user_input
+        }) if turn_id == new_turn_id && content == pending_user_input
     ));
 
-    let fourth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+    let sixth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
         .expect("expected legacy user message event")
         .expect("channel open");
+    assert_eq!(sixth.id, new_turn_id);
     assert!(matches!(
-        fourth.msg,
+        sixth.msg,
         EventMsg::UserMessage(UserMessageEvent {
             message,
             images,
@@ -7805,19 +7837,13 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             && local_images.is_empty()
     ));
 
-    let fifth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected turn complete event")
-        .expect("channel open");
-    assert!(matches!(
-        fifth.msg,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id,
-            last_agent_message: None,
-            time_to_first_token_ms: None,
-            ..
-        }) if turn_id == tc.sub_id
-    ));
+    let history = sess.clone_history().await;
+    assert!(
+        history.raw_items().iter().any(|item| item == &expected),
+        "expected pending input to be persisted into history once the follow-up turn starts"
+    );
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[tokio::test]
