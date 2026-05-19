@@ -19,6 +19,7 @@ use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
+use codex_app_server_protocol::CuaRequirements;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -429,6 +430,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
+        cua: requirements.cua.map(map_cua_requirements_to_api),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -437,6 +439,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+    }
+}
+
+fn map_cua_requirements_to_api(cua: codex_config::CuaRequirementsToml) -> CuaRequirements {
+    CuaRequirements {
+        allow_locked_computer_use: cua.allow_locked_computer_use,
     }
 }
 
@@ -616,6 +624,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 mod tests {
     use super::map_requirements_toml_to_api;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::CuaRequirementsToml;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -627,5 +636,22 @@ mod tests {
 
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_cua_requirements() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            cua: Some(CuaRequirementsToml {
+                allow_locked_computer_use: Some(false),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped
+                .cua
+                .and_then(|requirements| requirements.allow_locked_computer_use),
+            Some(false)
+        );
     }
 }

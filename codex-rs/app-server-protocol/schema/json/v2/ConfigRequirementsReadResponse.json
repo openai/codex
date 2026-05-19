@@ -95,6 +95,16 @@
             "null"
           ]
         },
+        "cua": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CuaRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "enforceResidency": {
           "anyOf": [
             {
@@ -215,6 +225,17 @@
       "required": [
         "hooks"
       ],
+      "type": "object"
+    },
+    "CuaRequirements": {
+      "properties": {
+        "allowLockedComputerUse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ManagedHooksRequirements": {

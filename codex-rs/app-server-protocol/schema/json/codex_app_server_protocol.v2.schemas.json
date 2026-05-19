@@ -4024,6 +4024,16 @@
             "null"
           ]
         },
+        "cua": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CuaRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "enforceResidency": {
           "anyOf": [
             {
@@ -4382,6 +4392,17 @@
         "hasCredits",
         "unlimited"
       ],
+      "type": "object"
+    },
+    "CuaRequirements": {
+      "properties": {
+        "allowLockedComputerUse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "DeprecationNoticeNotification": {

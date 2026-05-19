@@ -79,6 +79,7 @@ export type { ConfiguredHookHandler } from "./ConfiguredHookHandler";
 export type { ConfiguredHookMatcherGroup } from "./ConfiguredHookMatcherGroup";
 export type { ContextCompactedNotification } from "./ContextCompactedNotification";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
+export type { CuaRequirements } from "./CuaRequirements";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";
