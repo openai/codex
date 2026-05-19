@@ -1123,7 +1123,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
 
-            let preserve_terminal_plan_progress = false;
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
                 .await;
@@ -1131,7 +1130,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_aborted_event,
-                preserve_terminal_plan_progress,
                 &outgoing,
                 &thread_state,
             )
@@ -1327,14 +1325,6 @@ pub(crate) async fn flush_pending_terminal_plan_cleanup(
 ) {
     let pending_terminal_plan_cleanups =
         take_flushable_pending_terminal_plan_cleanup(thread_state).await;
-    emit_terminal_plan_cleanup(conversation_id, pending_terminal_plan_cleanups, outgoing).await;
-}
-
-async fn emit_terminal_plan_cleanup(
-    conversation_id: ThreadId,
-    pending_terminal_plan_cleanups: Vec<PendingTerminalPlanCleanup>,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-) {
     for (turn_id, latest_plan_update) in
         terminal_plan_cleanup_updates(pending_terminal_plan_cleanups)
     {
@@ -1626,14 +1616,11 @@ async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_aborted_event: TurnAbortedEvent,
-    preserve_terminal_plan_progress: bool,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(thread_state).await;
-    if !preserve_terminal_plan_progress {
-        flush_pending_terminal_plan_cleanup(conversation_id, thread_state, outgoing).await;
-    }
+    flush_pending_terminal_plan_cleanup(conversation_id, thread_state, outgoing).await;
 
     emit_turn_completed_with_status(
         conversation_id,
@@ -3501,7 +3488,6 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
-            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
@@ -3775,7 +3761,6 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
-            /*preserve_terminal_plan_progress*/ false,
             &outgoing,
             &thread_state,
         )
