@@ -1300,12 +1300,11 @@ impl MessageProcessor {
                     .command_exec_terminate(request_id.clone(), params)
                     .await
             }
-            ClientRequest::ProcessSpawn { params, .. } => {
-                self.process_exec_processor
-                    .process_spawn(request_id.clone(), params)
-                    .await
-                    .map(|()| None)
-            }
+            ClientRequest::ProcessSpawn { params, .. } => self
+                .process_exec_processor
+                .process_spawn(request_id.clone(), params)
+                .await
+                .map(|()| None),
             ClientRequest::ProcessWriteStdin { params, .. } => {
                 self.process_exec_processor
                     .process_write_stdin(request_id.clone(), params)
