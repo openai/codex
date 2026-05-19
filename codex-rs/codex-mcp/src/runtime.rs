@@ -99,19 +99,13 @@ impl McpRuntimeContext {
         })
     }
 
-    pub(crate) fn status_environment_id(
-        &self,
-        server_name: &str,
+    pub(crate) fn configured_or_default_environment_id(
         config: &codex_config::McpServerConfig,
     ) -> String {
-        self.resolve_server_environment(server_name, config)
-            .map(|resolved| resolved.environment_id)
-            .unwrap_or_else(|_| {
-                config
-                    .environment_id
-                    .clone()
-                    .unwrap_or_else(|| LOCAL_ENVIRONMENT_ID.to_string())
-            })
+        config
+            .environment_id
+            .clone()
+            .unwrap_or_else(|| LOCAL_ENVIRONMENT_ID.to_string())
     }
 }
 
@@ -193,7 +187,9 @@ mod tests {
         );
 
         assert_eq!(
-            runtime_context.status_environment_id("http", &http_server(/*environment_id*/ None)),
+            McpRuntimeContext::configured_or_default_environment_id(&http_server(
+                /*environment_id*/ None,
+            )),
             "local".to_string()
         );
     }
@@ -228,14 +224,16 @@ mod tests {
         );
 
         assert_eq!(
-                runtime_context
-                .status_environment_id("stdio", &stdio_server(/*environment_id*/ Some("remote"))),
-            Some("remote".to_string())
+            McpRuntimeContext::configured_or_default_environment_id(&stdio_server(
+                /*environment_id*/ Some("remote"),
+            )),
+            "remote".to_string()
         );
         assert_eq!(
-                runtime_context
-                .status_environment_id("http", &http_server(/*environment_id*/ Some("remote"))),
-            Some("remote".to_string())
+            McpRuntimeContext::configured_or_default_environment_id(&http_server(
+                /*environment_id*/ Some("remote"),
+            )),
+            "remote".to_string()
         );
     }
 
@@ -247,8 +245,10 @@ mod tests {
         );
 
         assert_eq!(
-                runtime_context.status_environment_id("stdio", &stdio_server(/*environment_id*/ None)),
-                "local".to_string()
+            McpRuntimeContext::configured_or_default_environment_id(&stdio_server(
+                /*environment_id*/ None,
+            )),
+            "local".to_string()
         );
     }
 }

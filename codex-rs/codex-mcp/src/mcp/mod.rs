@@ -349,7 +349,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         .map(|(server_name, server)| {
             let environment_id = server
                 .configured_config()
-                .map(|config| runtime_context.status_environment_id(server_name, config))
+                .map(McpRuntimeContext::configured_or_default_environment_id)
                 .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string());
             (server_name.clone(), environment_id)
         })
