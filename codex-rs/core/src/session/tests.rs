@@ -5209,7 +5209,7 @@ fn op_kind_for_input_and_context_ops() {
             thread_settings: ThreadSettingsOverrides::default(),
         }
         .kind(),
-        "turn_context"
+        "thread_settings"
     );
 }
 
