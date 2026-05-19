@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -16,6 +17,62 @@ pub(crate) struct TurnRequestProcessor {
     skills_watcher: Arc<SkillsWatcher>,
 }
 
+struct ThreadSettingsOverrideRequest {
+    cwd: Option<PathBuf>,
+    runtime_workspace_roots: Option<Vec<PathBuf>>,
+    approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
+    sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    permissions: Option<String>,
+    model: Option<String>,
+    service_tier: Option<Option<String>>,
+    effort: Option<Option<ReasoningEffort>>,
+    summary: Option<codex_protocol::config_types::ReasoningSummary>,
+    collaboration_mode: Option<CollaborationMode>,
+    personality: Option<Personality>,
+}
+
+impl ThreadSettingsOverrideRequest {
+    fn has_any_overrides(&self) -> bool {
+        self.cwd.is_some()
+            || self.runtime_workspace_roots.is_some()
+            || self.approval_policy.is_some()
+            || self.approvals_reviewer.is_some()
+            || self.sandbox_policy.is_some()
+            || self.permissions.is_some()
+            || self.model.is_some()
+            || self.service_tier.is_some()
+            || self.effort.is_some()
+            || self.summary.is_some()
+            || self.collaboration_mode.is_some()
+            || self.personality.is_some()
+    }
+}
+
+fn op_thread_settings_overrides(
+    overrides: CodexThreadSettingsOverrides,
+) -> ThreadSettingsOverrides {
+    ThreadSettingsOverrides {
+        cwd: overrides.cwd,
+        workspace_roots: overrides.workspace_roots,
+        profile_workspace_roots: overrides.profile_workspace_roots,
+        approval_policy: overrides.approval_policy,
+        approvals_reviewer: overrides.approvals_reviewer,
+        sandbox_policy: overrides.sandbox_policy,
+        permission_profile: overrides.permission_profile,
+        active_permission_profile: overrides.active_permission_profile,
+        windows_sandbox_level: overrides.windows_sandbox_level,
+        model: overrides.model,
+        effort: overrides.effort,
+        summary: overrides.summary,
+        service_tier: overrides.service_tier,
+        collaboration_mode: overrides.collaboration_mode,
+        personality: overrides.personality,
+    }
+}
+
+const THREAD_SETTINGS_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn resolve_runtime_workspace_roots(
     workspace_roots: Vec<PathBuf>,
     base_cwd: &AbsolutePathBuf,
@@ -28,6 +85,35 @@ fn resolve_runtime_workspace_roots(
         }
     }
     resolved_roots
+}
+
+fn effective_workspace_roots(
+    base_snapshot: &ThreadConfigSnapshot,
+    effective_cwd: &AbsolutePathBuf,
+    runtime_workspace_roots: Option<&[AbsolutePathBuf]>,
+) -> Vec<AbsolutePathBuf> {
+    if let Some(workspace_roots) = runtime_workspace_roots {
+        return workspace_roots.to_vec();
+    }
+
+    if effective_cwd != &base_snapshot.cwd
+        && base_snapshot.workspace_roots.contains(&base_snapshot.cwd)
+    {
+        let mut retargeted_roots = Vec::with_capacity(base_snapshot.workspace_roots.len());
+        for root in &base_snapshot.workspace_roots {
+            let root = if root == &base_snapshot.cwd {
+                effective_cwd.clone()
+            } else {
+                root.clone()
+            };
+            if !retargeted_roots.contains(&root) {
+                retargeted_roots.push(root);
+            }
+        }
+        retargeted_roots
+    } else {
+        base_snapshot.workspace_roots.clone()
+    }
 }
 
 impl TurnRequestProcessor {
@@ -84,6 +170,16 @@ impl TurnRequestProcessor {
         params: ThreadInjectItemsParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_inject_items_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_settings_update(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_settings_update_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -326,6 +422,175 @@ impl TurnRequestProcessor {
         Ok(())
     }
 
+    async fn resolve_thread_settings_overrides(
+        &self,
+        base_snapshot: &ThreadConfigSnapshot,
+        request: ThreadSettingsOverrideRequest,
+    ) -> Result<Option<CodexThreadSettingsOverrides>, JSONRPCErrorError> {
+        // Both turn/start and thread/settings/update accept the same
+        // persistent thread-settings fields. Resolve them once into the core
+        // override shape so validation and permission-profile expansion stay
+        // consistent between the two entry points.
+        if request.sandbox_policy.is_some() && request.permissions.is_some() {
+            return Err(invalid_request(
+                "`permissions` cannot be combined with `sandboxPolicy`",
+            ));
+        }
+
+        if !request.has_any_overrides() {
+            return Ok(None);
+        }
+
+        let requested_cwd = request.cwd;
+        let effective_cwd = requested_cwd
+            .as_ref()
+            .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, base_snapshot.cwd.as_path()))
+            .unwrap_or_else(|| base_snapshot.cwd.clone());
+        let cwd = requested_cwd.map(|_| effective_cwd.to_path_buf());
+        let runtime_workspace_roots = request.runtime_workspace_roots.map(|workspace_roots| {
+            resolve_runtime_workspace_roots(workspace_roots, &effective_cwd)
+        });
+        let effective_workspace_roots = effective_workspace_roots(
+            base_snapshot,
+            &effective_cwd,
+            runtime_workspace_roots.as_deref(),
+        );
+        let approval_policy = request.approval_policy.map(AskForApproval::to_core);
+        let approvals_reviewer = request
+            .approvals_reviewer
+            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = request.sandbox_policy.map(|p| p.to_core());
+        let (permission_profile, active_permission_profile, profile_workspace_roots) =
+            if let Some(permissions) = request.permissions {
+                let overrides = ConfigOverrides {
+                    cwd: cwd.clone(),
+                    workspace_roots: Some(
+                        effective_workspace_roots
+                            .iter()
+                            .map(AbsolutePathBuf::to_path_buf)
+                            .collect(),
+                    ),
+                    default_permissions: Some(permissions),
+                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                    ..Default::default()
+                };
+                let config = self
+                    .config_manager
+                    .load_for_cwd(
+                        /*request_overrides*/ None,
+                        overrides,
+                        Some(base_snapshot.cwd.to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                // Startup config is allowed to fall back when requirements
+                // disallow a configured profile. An explicit thread settings
+                // update is different: reject it before accepting the request.
+                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                    warning.contains("Configured value for `permission_profile` is disallowed")
+                }) {
+                    return Err(invalid_request(format!(
+                        "invalid thread settings override: {warning}"
+                    )));
+                }
+                (
+                    Some(config.permissions.permission_profile().clone()),
+                    config.permissions.active_permission_profile(),
+                    Some(config.permissions.profile_workspace_roots().to_vec()),
+                )
+            } else {
+                (None, None, None)
+            };
+
+        // None means the caller sent no settings fields at all. Some means at
+        // least one explicit override was present, even if the effective value
+        // matches the current thread settings.
+        Ok(Some(CodexThreadSettingsOverrides {
+            cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model: request.model,
+            effort: request.effort,
+            summary: request.summary,
+            service_tier: request.service_tier,
+            collaboration_mode: request
+                .collaboration_mode
+                .map(|mode| self.normalize_turn_start_collaboration_mode(mode)),
+            personality: request.personality,
+        }))
+    }
+
+    async fn maybe_emit_thread_settings_updated(
+        &self,
+        thread_id: ThreadId,
+        api_thread_id: &str,
+        before: &ThreadSettings,
+        after: ThreadSettings,
+    ) {
+        if before == &after {
+            return;
+        }
+
+        let connection_ids = self
+            .thread_state_manager
+            .subscribed_connection_ids(thread_id)
+            .await;
+        if connection_ids.is_empty() {
+            return;
+        }
+
+        self.outgoing
+            .send_server_notification_to_connections(
+                &connection_ids,
+                ServerNotification::ThreadSettingsUpdated(ThreadSettingsUpdatedNotification {
+                    thread_id: api_thread_id.to_string(),
+                    thread_settings: after,
+                }),
+            )
+            .await;
+    }
+
+    async fn wait_for_pending_thread_settings(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        let pending = {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let mut thread_state = thread_state.lock().await;
+            thread_state.track_current_pending_thread_settings()
+        };
+
+        for thread_settings_applied in pending {
+            match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied).await {
+                Ok(Ok(Ok(_))) => {}
+                Ok(Ok(Err(err))) => {
+                    return Err(internal_error(format!(
+                        "failed to apply pending thread settings override: {err}"
+                    )));
+                }
+                Ok(Err(_)) => {
+                    return Err(internal_error(
+                        "pending thread settings override waiter was cancelled".to_string(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(internal_error(
+                        "timed out waiting for pending thread settings overrides to apply"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn turn_start_inner(
         &self,
         request_id: ConnectionRequestId,
@@ -357,9 +622,26 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
-        let collaboration_mode = params
-            .collaboration_mode
-            .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
+        let thread_settings_request = ThreadSettingsOverrideRequest {
+            cwd: params.cwd,
+            runtime_workspace_roots: params.runtime_workspace_roots,
+            approval_policy: params.approval_policy,
+            approvals_reviewer: params.approvals_reviewer,
+            sandbox_policy: params.sandbox_policy,
+            permissions: params.permissions,
+            model: params.model,
+            service_tier: params.service_tier,
+            effort: params.effort.map(Some),
+            summary: params.summary,
+            collaboration_mode: params.collaboration_mode,
+            personality: params.personality,
+        };
+        if thread_settings_request.has_any_overrides() {
+            self.wait_for_pending_thread_settings(thread_id).await?;
+        }
+
+        let before_snapshot = thread.config_snapshot().await;
+        let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
         let environment_selections = self.parse_environment_selections(params.environments)?;
 
         // Map v2 input items to core input items.
@@ -369,156 +651,24 @@ impl TurnRequestProcessor {
             .map(V2UserInput::into_core)
             .collect();
         let turn_has_input = !mapped_items.is_empty();
-        let runtime_workspace_roots_request = params.runtime_workspace_roots.clone();
-        let snapshot = if params.permissions.is_some() || runtime_workspace_roots_request.is_some()
-        {
-            Some(thread.config_snapshot().await)
-        } else {
-            None
-        };
-
-        let has_any_overrides = params.cwd.is_some()
-            || runtime_workspace_roots_request.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.permissions.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
-
-        if params.sandbox_policy.is_some() && params.permissions.is_some() {
-            return Err(invalid_request(
-                "`permissions` cannot be combined with `sandboxPolicy`",
-            ));
-        }
-
-        let cwd = params.cwd;
-        let runtime_workspace_roots = if let Some(workspace_roots) =
-            runtime_workspace_roots_request.clone()
-        {
-            let Some(snapshot) = snapshot.as_ref() else {
-                return Err(internal_error(
-                    "turn/start runtime workspace roots missing thread snapshot",
-                ));
-            };
-            let base_cwd = cwd
-                .as_ref()
-                .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path()))
-                .unwrap_or_else(|| snapshot.cwd.clone());
-            Some(resolve_runtime_workspace_roots(workspace_roots, &base_cwd))
-        } else {
-            None
-        };
-        let approval_policy = params.approval_policy.map(AskForApproval::to_core);
-        let approvals_reviewer = params
-            .approvals_reviewer
-            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile, profile_workspace_roots) =
-            if let Some(permissions) = params.permissions {
-                let Some(snapshot) = snapshot.as_ref() else {
-                    return Err(internal_error(
-                        "turn/start permission selection missing thread snapshot",
-                    ));
-                };
-                let overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
-                    workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
-                        || {
-                            snapshot
-                                .workspace_roots
-                                .iter()
-                                .map(AbsolutePathBuf::to_path_buf)
-                                .collect()
-                        },
-                    )),
-                    default_permissions: Some(permissions),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
-                let config = self
-                    .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
-                        Some(snapshot.cwd.to_path_buf()),
-                    )
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
-                // Startup config is allowed to fall back when requirements
-                // disallow a configured profile. An explicit turn request
-                // is different: reject it before accepting user input.
-                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
-                    warning.contains("Configured value for `permission_profile` is disallowed")
-                }) {
-                    return Err(invalid_request(format!(
-                        "invalid thread settings override: {warning}"
-                    )));
-                }
-                (
-                    Some(config.permissions.permission_profile().clone()),
-                    config.permissions.active_permission_profile(),
-                    Some(config.permissions.profile_workspace_roots().to_vec()),
-                )
-            } else {
-                (None, None, None)
-            };
-        let model = params.model;
-        let effort = params.effort.map(Some);
-        let summary = params.summary;
-        let service_tier = params.service_tier;
-        let personality = params.personality;
-
-        // If any overrides are provided, validate them synchronously so the
-        // request can fail before accepting user input. The actual update is
-        // still queued together with the input below to preserve submission order.
-        if has_any_overrides {
+        let resolved_overrides = self
+            .resolve_thread_settings_overrides(&before_snapshot, thread_settings_request)
+            .await?;
+        let has_thread_settings_overrides = resolved_overrides.is_some();
+        if let Some(overrides) = resolved_overrides.as_ref() {
+            // Validate before accepting input so the request can fail without
+            // queuing a user turn.
             thread
-                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-                    cwd: cwd.clone(),
-                    workspace_roots: runtime_workspace_roots.clone(),
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy: sandbox_policy.clone(),
-                    permission_profile: permission_profile.clone(),
-                    active_permission_profile: active_permission_profile.clone(),
-                    profile_workspace_roots: profile_workspace_roots.clone(),
-                    windows_sandbox_level: None,
-                    model: model.clone(),
-                    effort,
-                    summary,
-                    service_tier: service_tier.clone(),
-                    collaboration_mode: collaboration_mode.clone(),
-                    personality,
-                })
+                .preview_thread_settings_overrides(overrides.clone())
                 .await
                 .map_err(|err| {
                     invalid_request(format!("invalid thread settings override: {err}"))
                 })?;
         }
 
-        let thread_settings = codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd,
-            workspace_roots: runtime_workspace_roots,
-            profile_workspace_roots,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level: None,
-            model,
-            effort,
-            summary,
-            service_tier,
-            collaboration_mode,
-            personality,
-        };
+        let thread_settings = resolved_overrides
+            .map(op_thread_settings_overrides)
+            .unwrap_or_default();
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_op = Op::UserInput {
@@ -528,14 +678,71 @@ impl TurnRequestProcessor {
             responsesapi_client_metadata: params.responsesapi_client_metadata,
             thread_settings,
         };
-        let turn_id = self
-            .submit_core_op(&request_id, thread.as_ref(), turn_op)
+        let turn_id = Uuid::now_v7().to_string();
+        let pending_thread_settings = if has_thread_settings_overrides {
+            let (thread_settings_applied, notification_lock) = {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let mut thread_state = thread_state.lock().await;
+                thread_state.track_pending_thread_settings(turn_id.clone())
+            };
+            Some((
+                thread_settings_applied,
+                notification_lock.lock_owned().await,
+            ))
+        } else {
+            None
+        };
+        if let Err(err) = thread
+            .submit_with_id(Submission {
+                id: turn_id.clone(),
+                op: turn_op,
+                trace: self.request_trace_context(&request_id).await,
+            })
             .await
-            .map_err(|err| {
-                let error = internal_error(format!("failed to start turn: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
+        {
+            if has_thread_settings_overrides {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let mut thread_state = thread_state.lock().await;
+                thread_state.cancel_pending_thread_settings(&turn_id);
+            }
+            let error = internal_error(format!("failed to start turn: {err}"));
+            self.track_error_response(&request_id, &error, /*error_type*/ None);
+            return Err(error);
+        }
+
+        if let Some((thread_settings_applied, thread_settings_notification_guard)) =
+            pending_thread_settings
+        {
+            let processor = self.clone();
+            let api_thread_id = params.thread_id.clone();
+            let tracked_turn_id = turn_id.clone();
+            tokio::spawn(async move {
+                let _thread_settings_notification_guard = thread_settings_notification_guard;
+                match thread_settings_applied.await {
+                    Ok(Ok(payload)) => {
+                        let after_thread_settings = thread_settings_from_applied_event(&payload);
+                        processor
+                            .maybe_emit_thread_settings_updated(
+                                thread_id,
+                                &api_thread_id,
+                                &before_thread_settings,
+                                after_thread_settings,
+                            )
+                            .await;
+                    }
+                    Ok(Err(err)) => {
+                        tracing::warn!(
+                            "failed to apply thread settings overrides for turn {tracked_turn_id}: {err}"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "thread settings override acknowledgement was cancelled for turn {tracked_turn_id}"
+                        );
+                    }
+                }
+            });
+        }
 
         if turn_has_input {
             let config_snapshot = thread.config_snapshot().await;
@@ -564,6 +771,104 @@ impl TurnRequestProcessor {
         };
 
         Ok(TurnStartResponse { turn })
+    }
+
+    async fn thread_settings_update_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
+        let (thread_id, thread) =
+            self.load_thread(&params.thread_id)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(request_id, error, /*error_type*/ None);
+                })?;
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        super::thread_lifecycle::ensure_listener_task_running(
+            self.listener_task_context(),
+            thread_id,
+            thread.clone(),
+            thread_state.clone(),
+        )
+        .await?;
+        self.wait_for_pending_thread_settings(thread_id).await?;
+        let before_snapshot = thread.config_snapshot().await;
+        let before_thread_settings = thread_settings_from_snapshot(&before_snapshot);
+        let resolved_overrides = self
+            .resolve_thread_settings_overrides(
+                &before_snapshot,
+                ThreadSettingsOverrideRequest {
+                    cwd: params.cwd,
+                    runtime_workspace_roots: None,
+                    approval_policy: params.approval_policy,
+                    approvals_reviewer: params.approvals_reviewer,
+                    sandbox_policy: params.sandbox_policy,
+                    permissions: params.permissions,
+                    model: params.model,
+                    service_tier: params.service_tier,
+                    effort: params.effort,
+                    summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
+                    personality: params.personality,
+                },
+            )
+            .await?;
+
+        let after_thread_settings = if let Some(overrides) = resolved_overrides {
+            thread
+                .preview_thread_settings_overrides(overrides.clone())
+                .await
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
+            let update_id = Uuid::now_v7().to_string();
+            let (thread_settings_applied, notification_lock) = {
+                let mut thread_state = thread_state.lock().await;
+                thread_state.track_pending_thread_settings(update_id.clone())
+            };
+            let thread_settings_notification_guard = notification_lock.lock_owned().await;
+            if let Err(err) = thread
+                .submit_with_id(Submission {
+                    id: update_id.clone(),
+                    op: Op::ThreadSettings {
+                        thread_settings: op_thread_settings_overrides(overrides),
+                    },
+                    trace: self.request_trace_context(request_id).await,
+                })
+                .await
+            {
+                let mut thread_state = thread_state.lock().await;
+                thread_state.cancel_pending_thread_settings(&update_id);
+                return Err(internal_error(format!(
+                    "failed to update thread settings: {err}"
+                )));
+            }
+            let after_thread_settings = match thread_settings_applied.await {
+                Ok(Ok(payload)) => thread_settings_from_applied_event(&payload),
+                Ok(Err(err)) => return Err(invalid_request(err)),
+                Err(_) => {
+                    return Err(internal_error(
+                        "thread settings override waiter was cancelled".to_string(),
+                    ));
+                }
+            };
+            self.maybe_emit_thread_settings_updated(
+                thread_id,
+                &params.thread_id,
+                &before_thread_settings,
+                after_thread_settings.clone(),
+            )
+            .await;
+            drop(thread_settings_notification_guard);
+            after_thread_settings
+        } else {
+            before_thread_settings.clone()
+        };
+
+        Ok(ThreadSettingsUpdateResponse {
+            thread_settings: after_thread_settings,
+        })
     }
 
     async fn thread_inject_items_response_inner(
@@ -1157,6 +1462,55 @@ impl TurnRequestProcessor {
             raw_events_enabled,
         )
         .await
+    }
+}
+
+fn thread_settings_from_snapshot(config_snapshot: &ThreadConfigSnapshot) -> ThreadSettings {
+    ThreadSettings {
+        model: config_snapshot.model.clone(),
+        model_provider: config_snapshot.model_provider_id.clone(),
+        service_tier: config_snapshot.service_tier.clone(),
+        cwd: config_snapshot.cwd.clone(),
+        approval_policy: config_snapshot.approval_policy.into(),
+        approvals_reviewer: config_snapshot.approvals_reviewer.into(),
+        sandbox_policy: thread_response_sandbox_policy(
+            &config_snapshot.permission_profile,
+            config_snapshot.cwd.as_path(),
+        ),
+        permission_profile: config_snapshot.permission_profile.clone().into(),
+        active_permission_profile: thread_response_active_permission_profile(
+            config_snapshot.active_permission_profile.clone(),
+        ),
+        effort: config_snapshot.reasoning_effort,
+        summary: config_snapshot.reasoning_summary,
+        personality: config_snapshot.personality,
+        collaboration_mode: config_snapshot.collaboration_mode.clone(),
+    }
+}
+
+fn thread_settings_from_applied_event(
+    event: &codex_protocol::protocol::ThreadSettingsAppliedEvent,
+) -> ThreadSettings {
+    let thread_settings = &event.thread_settings;
+    ThreadSettings {
+        model: thread_settings.model.clone(),
+        model_provider: thread_settings.model_provider_id.clone(),
+        service_tier: thread_settings.service_tier.clone(),
+        cwd: thread_settings.cwd.clone(),
+        approval_policy: thread_settings.approval_policy.into(),
+        approvals_reviewer: thread_settings.approvals_reviewer.into(),
+        sandbox_policy: thread_response_sandbox_policy(
+            &thread_settings.permission_profile,
+            thread_settings.cwd.as_path(),
+        ),
+        permission_profile: thread_settings.permission_profile.clone().into(),
+        active_permission_profile: thread_response_active_permission_profile(
+            thread_settings.active_permission_profile.clone(),
+        ),
+        effort: thread_settings.reasoning_effort,
+        summary: thread_settings.reasoning_summary,
+        personality: thread_settings.personality,
+        collaboration_mode: thread_settings.collaboration_mode.clone(),
     }
 }
 

@@ -1166,6 +1166,11 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadSettingsUpdate { params, .. } => {
+                self.turn_processor
+                    .thread_settings_update(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadInjectItems { params, .. } => {
                 self.turn_processor.thread_inject_items(params).await
             }

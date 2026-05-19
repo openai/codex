@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -14,8 +15,10 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use futures::SinkExt;
@@ -96,6 +99,62 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     assert_eq!(ws2_config.id, RequestId::Integer(77));
     assert!(ws1_config.result.get("config").is_some());
     assert!(ws2_config.result.get("config").is_some());
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_thread_settings_updates_stay_on_subscribed_connections() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let mut ws1 = connect_websocket(bind_addr).await?;
+    let mut ws2 = connect_websocket(bind_addr).await?;
+
+    send_initialize_experimental_request(&mut ws1, /*id*/ 1, "ws_context_owner").await?;
+    read_response_for_id(&mut ws1, /*id*/ 1).await?;
+    send_initialize_experimental_request(&mut ws2, /*id*/ 2, "ws_context_peer").await?;
+    read_response_for_id(&mut ws2, /*id*/ 2).await?;
+
+    let thread_id = start_thread(&mut ws1, /*id*/ 3).await?;
+    send_request(
+        &mut ws1,
+        "thread/settings/update",
+        /*id*/ 4,
+        Some(serde_json::to_value(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            model: Some("mock-model-updated".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+
+    let (_response, caller_notification) = read_response_and_notification_for_method(
+        &mut ws1,
+        /*id*/ 4,
+        "thread/settings/updated",
+    )
+    .await?;
+
+    let ServerNotification::ThreadSettingsUpdated(caller) =
+        ServerNotification::try_from(caller_notification)?
+    else {
+        bail!("expected caller thread/settings/updated notification");
+    };
+    assert_eq!(caller.thread_id, thread_id);
+    assert_no_notification_for_method(
+        &mut ws2,
+        "thread/settings/updated",
+        Duration::from_millis(250),
+    )
+    .await?;
 
     process
         .kill()
@@ -592,13 +651,39 @@ pub(super) async fn send_initialize_request(
     id: i64,
     client_name: &str,
 ) -> Result<()> {
+    send_initialize_request_with_capabilities(stream, id, client_name, /*capabilities*/ None).await
+}
+
+async fn send_initialize_experimental_request(
+    stream: &mut WsClient,
+    id: i64,
+    client_name: &str,
+) -> Result<()> {
+    send_initialize_request_with_capabilities(
+        stream,
+        id,
+        client_name,
+        Some(InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        }),
+    )
+    .await
+}
+
+async fn send_initialize_request_with_capabilities(
+    stream: &mut WsClient,
+    id: i64,
+    client_name: &str,
+    capabilities: Option<InitializeCapabilities>,
+) -> Result<()> {
     let params = InitializeParams {
         client_info: ClientInfo {
             name: client_name.to_string(),
             title: Some("WebSocket Test Client".to_string()),
             version: "0.1.0".to_string(),
         },
-        capabilities: None,
+        capabilities,
     };
     send_request(
         stream,
@@ -820,6 +905,44 @@ pub(super) async fn assert_no_message(stream: &mut WsClient, wait_for: Duration)
         Ok(Some(Err(err))) => bail!("unexpected websocket read error: {err}"),
         Ok(None) => bail!("websocket closed unexpectedly while waiting for silence"),
         Err(_) => Ok(()),
+    }
+}
+
+async fn assert_no_notification_for_method(
+    stream: &mut WsClient,
+    method: &str,
+    wait_for: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + wait_for;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+
+        let frame = match timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(frame))) => frame,
+            Ok(Some(Err(err))) => bail!("unexpected websocket read error: {err}"),
+            Ok(None) => bail!("websocket closed unexpectedly while waiting for notification"),
+            Err(_) => return Ok(()),
+        };
+
+        match frame {
+            WebSocketMessage::Text(text) => {
+                let message: JSONRPCMessage = serde_json::from_str(text.as_ref())?;
+                if let JSONRPCMessage::Notification(notification) = message
+                    && notification.method == method
+                {
+                    bail!("unexpected notification for method `{method}`");
+                }
+            }
+            WebSocketMessage::Ping(payload) => {
+                stream.send(WebSocketMessage::Pong(payload)).await?;
+            }
+            WebSocketMessage::Pong(_) | WebSocketMessage::Frame(_) => {}
+            WebSocketMessage::Close(frame) => bail!("websocket closed unexpectedly: {frame:?}"),
+            WebSocketMessage::Binary(_) => bail!("unexpected binary websocket frame"),
+        }
     }
 }
 

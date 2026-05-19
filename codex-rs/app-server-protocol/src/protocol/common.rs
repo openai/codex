@@ -738,6 +738,13 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnStartResponse,
     },
+    #[experimental("thread/settings/update")]
+    ThreadSettingsUpdate => "thread/settings/update" {
+        params: v2::ThreadSettingsUpdateParams,
+        inspect_params: true,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSettingsUpdateResponse,
+    },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
         inspect_params: true,
@@ -1456,6 +1463,8 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+    #[experimental("thread/settings/updated")]
+    ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
@@ -1555,6 +1564,9 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
@@ -1575,6 +1587,31 @@ mod tests {
     fn absolute_path(path: &str) -> AbsolutePathBuf {
         let path = format!("/{}", path.trim_start_matches('/'));
         test_path_buf(&path).abs()
+    }
+
+    fn sample_thread_settings(cwd: AbsolutePathBuf) -> v2::ThreadSettings {
+        v2::ThreadSettings {
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd,
+            approval_policy: v2::AskForApproval::OnFailure,
+            approvals_reviewer: v2::ApprovalsReviewer::User,
+            sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
+            permission_profile: v2::PermissionProfile::Disabled,
+            active_permission_profile: None,
+            effort: None,
+            summary: None,
+            personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        }
     }
 
     fn request_id() -> RequestId {
@@ -1609,6 +1646,20 @@ mod tests {
         };
         assert_eq!(
             thread_resume_with_path.serialization_scope(),
+            Some(ClientRequestSerializationScope::Thread {
+                thread_id: thread_id.clone()
+            })
+        );
+
+        let thread_settings_update = ClientRequest::ThreadSettingsUpdate {
+            request_id: request_id(),
+            params: v2::ThreadSettingsUpdateParams {
+                thread_id: thread_id.clone(),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            thread_settings_update.serialization_scope(),
             Some(ClientRequestSerializationScope::Thread {
                 thread_id: thread_id.clone()
             })
@@ -2288,6 +2339,40 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_settings_update_request() -> Result<()> {
+        let request = ClientRequest::ThreadSettingsUpdate {
+            request_id: RequestId::Integer(5),
+            params: v2::ThreadSettingsUpdateParams {
+                thread_id: "thread-1".to_string(),
+                model: Some("gpt-5.2".to_string()),
+                service_tier: Some(None),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/settings/update",
+                "id": 5,
+                "params": {
+                    "threadId": "thread-1",
+                    "cwd": null,
+                    "approvalPolicy": null,
+                    "approvalsReviewer": null,
+                    "sandboxPolicy": null,
+                    "permissions": null,
+                    "model": "gpt-5.2",
+                    "serviceTier": null,
+                    "summary": null,
+                    "personality": null,
+                    "collaborationMode": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_client_response() -> Result<()> {
         let cwd = absolute_path("/tmp");
         let response = ClientResponse::ThreadStart {
@@ -2374,6 +2459,46 @@ mod tests {
                 }
             }),
             serde_json::to_value(&response)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_settings_response_and_notification() -> Result<()> {
+        let cwd = absolute_path("/tmp");
+        let thread_settings = sample_thread_settings(cwd);
+        let thread_settings_json = serde_json::to_value(&thread_settings)?;
+        let response = ClientResponse::ThreadSettingsUpdate {
+            request_id: RequestId::Integer(11),
+            response: v2::ThreadSettingsUpdateResponse {
+                thread_settings: thread_settings.clone(),
+            },
+        };
+        let notification =
+            ServerNotification::ThreadSettingsUpdated(v2::ThreadSettingsUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                thread_settings,
+            });
+
+        assert_eq!(
+            json!({
+                "method": "thread/settings/update",
+                "id": 11,
+                "response": {
+                    "threadSettings": thread_settings_json
+                }
+            }),
+            serde_json::to_value(&response)?,
+        );
+        assert_eq!(
+            json!({
+                "method": "thread/settings/updated",
+                "params": {
+                    "threadId": "thread-1",
+                    "threadSettings": thread_settings_json
+                }
+            }),
+            serde_json::to_value(&notification)?,
         );
         Ok(())
     }

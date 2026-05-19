@@ -88,6 +88,7 @@ use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
@@ -486,6 +487,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/rollback", params).await
+    }
+
+    /// Send a `thread/settings/update` JSON-RPC request.
+    pub async fn send_thread_settings_update_request(
+        &mut self,
+        params: ThreadSettingsUpdateParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/settings/update", params).await
     }
 
     /// Send a `thread/list` JSON-RPC request.

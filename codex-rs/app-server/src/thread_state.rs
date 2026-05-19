@@ -11,6 +11,7 @@ use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_rollout::state_db::StateDbHandle;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -24,6 +25,7 @@ use tokio::sync::watch;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
+type ThreadSettingsAck = Result<ThreadSettingsAppliedEvent, String>;
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
@@ -78,6 +80,8 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    pending_thread_settings_waiters: HashMap<String, Vec<oneshot::Sender<ThreadSettingsAck>>>,
+    thread_settings_notification_lock: Arc<Mutex<()>>,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -112,6 +116,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
+        self.pending_thread_settings_waiters.clear();
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
@@ -131,16 +136,58 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn track_pending_thread_settings(
+        &mut self,
+        submission_id: String,
+    ) -> (oneshot::Receiver<ThreadSettingsAck>, Arc<Mutex<()>>) {
+        let (tx, rx) = oneshot::channel();
+        self.pending_thread_settings_waiters
+            .entry(submission_id)
+            .or_default()
+            .push(tx);
+        (rx, Arc::clone(&self.thread_settings_notification_lock))
+    }
+
+    pub(crate) fn track_current_pending_thread_settings(
+        &mut self,
+    ) -> Vec<oneshot::Receiver<ThreadSettingsAck>> {
+        let mut receivers = Vec::with_capacity(self.pending_thread_settings_waiters.len());
+        for waiters in self.pending_thread_settings_waiters.values_mut() {
+            let (tx, rx) = oneshot::channel();
+            waiters.push(tx);
+            receivers.push(rx);
+        }
+        receivers
+    }
+
+    pub(crate) fn cancel_pending_thread_settings(&mut self, submission_id: &str) {
+        self.pending_thread_settings_waiters.remove(submission_id);
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
+        if let EventMsg::ThreadSettingsApplied(payload) = event {
+            self.notify_thread_settings_applied(event_turn_id, Ok(payload.clone()));
+        }
+        if let EventMsg::Error(error) = event {
+            self.notify_thread_settings_applied(event_turn_id, Err(error.message.clone()));
+        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
+        }
+    }
+
+    fn notify_thread_settings_applied(&mut self, submission_id: &str, result: ThreadSettingsAck) {
+        if let Some(waiters) = self.pending_thread_settings_waiters.remove(submission_id) {
+            for waiter in waiters {
+                let _ = waiter.send(result.clone());
+            }
         }
     }
 }
