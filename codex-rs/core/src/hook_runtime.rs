@@ -388,6 +388,57 @@ pub(crate) async fn run_stop_hooks(
     outcome
 }
 
+pub(crate) async fn run_legacy_after_agent_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input_messages: Vec<ResponseItem>,
+    last_assistant_message: Option<String>,
+) -> bool {
+    let mut abort_message = None;
+    for hook_outcome in sess.hooks().dispatch(codex_hooks::HookPayload {
+            session_id: sess.session_id().into(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: codex_hooks::HookEvent::AfterAgent {
+                event: codex_hooks::HookEventAfterAgent {
+                    thread_id: sess.conversation_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    input_messages,
+                    last_assistant_message,
+                },
+            },
+        })
+        .await
+    {
+        let hook_name = hook_outcome.hook_name;
+        let (error, should_abort) = match hook_outcome.result {
+            codex_hooks::HookResult::Success => continue,
+            codex_hooks::HookResult::FailedContinue(error) => (error, false),
+            codex_hooks::HookResult::FailedAbort(error) => (error, true),
+        };
+        let action = if should_abort { "aborting operation" } else { "continuing" };
+        tracing::warn!(
+            turn_id = %turn_context.sub_id,
+            hook_name = %hook_name,
+            error = %error,
+            "after_agent hook failed; {action}"
+        );
+        if should_abort {
+            abort_message.get_or_insert_with(|| {
+                format!("after_agent hook '{hook_name}' failed and aborted turn completion: {error}")
+            });
+        }
+    }
+    let Some(message) = abort_message else { return false; };
+    sess.send_event(turn_context, EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+        message,
+        codex_error_info: None,
+    })).await;
+    true
+}
+
 pub(crate) async fn inspect_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,

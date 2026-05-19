@@ -25,6 +25,7 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_stop_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
@@ -73,10 +74,6 @@ use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
-use codex_hooks::HookEvent;
-use codex_hooks::HookEventAfterAgent;
-use codex_hooks::HookPayload;
-use codex_hooks::HookResult;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
@@ -584,63 +581,14 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
-                    let hook_outcomes = sess
-                        .hooks()
-                        .dispatch(HookPayload {
-                            session_id: sess.session_id().into(),
-                            #[allow(deprecated)]
-                            cwd: turn_context.cwd.clone(),
-                            client: turn_context.app_server_client_name.clone(),
-                            triggered_at: chrono::Utc::now(),
-                            hook_event: HookEvent::AfterAgent {
-                                event: HookEventAfterAgent {
-                                    thread_id: sess.conversation_id,
-                                    turn_id: turn_context.sub_id.clone(),
-                                    input_messages: sampling_request_input_messages,
-                                    last_assistant_message: last_agent_message.clone(),
-                                },
-                            },
-                        })
-                        .await;
-
-                    let mut abort_message = None;
-                    for hook_outcome in hook_outcomes {
-                        let hook_name = hook_outcome.hook_name;
-                        match hook_outcome.result {
-                            HookResult::Success => {}
-                            HookResult::FailedContinue(error) => {
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; continuing"
-                                );
-                            }
-                            HookResult::FailedAbort(error) => {
-                                let message = format!(
-                                    "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
-                                );
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; aborting operation"
-                                );
-                                if abort_message.is_none() {
-                                    abort_message = Some(message);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(message) = abort_message {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Error(ErrorEvent {
-                                message,
-                                codex_error_info: None,
-                            }),
-                        )
-                        .await;
+                    if run_legacy_after_agent_hook(
+                        &sess,
+                        &turn_context,
+                        sampling_request_input_messages,
+                        last_agent_message.clone(),
+                    )
+                    .await
+                    {
                         return None;
                     }
                     break;
