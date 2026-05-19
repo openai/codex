@@ -35,6 +35,7 @@ use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::cmp::Reverse;
 use std::fs;
 use std::fs::FileTimes;
@@ -171,6 +172,27 @@ fn set_rollout_cwd(path: &Path, cwd: &Path) -> Result<()> {
     rollout_line.item = RolloutItem::SessionMeta(session_meta_line);
     *first_line = serde_json::to_string(&rollout_line)?;
     fs::write(path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn append_user_message_to_rollout(path: &Path, timestamp: &str, message: &str) -> Result<()> {
+    let mut content = fs::read_to_string(path)?;
+    content.push_str(
+        format!(
+            "{}\n",
+            json!({
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": message,
+                    "kind": "plain"
+                }
+            })
+        )
+        .as_str(),
+    );
+    fs::write(path, content)?;
     Ok(())
 }
 
@@ -592,9 +614,19 @@ sqlite = true
         codex_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
-        "needle suffix",
+        "no body hit in preview",
         Some("mock_provider"),
         /*git_info*/ None,
+    )?;
+    append_user_message_to_rollout(
+        rollout_path(
+            codex_home.path(),
+            "2025-01-02T12-00-00",
+            newer_match.as_str(),
+        )
+        .as_path(),
+        "2025-01-02T12:05:00Z",
+        "later message with needle suffix",
     )?;
 
     // `thread/list` applies `search_term` on the sqlite fast path. This test creates

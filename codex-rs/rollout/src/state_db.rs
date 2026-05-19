@@ -125,6 +125,11 @@ async fn try_init_with_roots_inner(
             )
         })?;
         if backfill_state.status == codex_state::BackfillStatus::Complete {
+            start_thread_search_backfill(
+                runtime.clone(),
+                codex_home.clone(),
+                default_model_provider_id.clone(),
+            );
             return Ok(runtime);
         }
 
@@ -151,6 +156,11 @@ async fn try_init_with_roots_inner(
             )
         })?;
         if backfill_state.status == codex_state::BackfillStatus::Complete {
+            start_thread_search_backfill(
+                runtime.clone(),
+                codex_home.clone(),
+                default_model_provider_id.clone(),
+            );
             return Ok(runtime);
         }
         if wait_started.elapsed() >= STARTUP_BACKFILL_WAIT_TIMEOUT {
@@ -176,6 +186,21 @@ async fn try_init_with_roots_inner(
         }
         tokio::time::sleep(STARTUP_BACKFILL_POLL_INTERVAL).await;
     }
+}
+
+fn start_thread_search_backfill(
+    runtime: StateDbHandle,
+    codex_home: PathBuf,
+    default_model_provider_id: String,
+) {
+    tokio::spawn(async move {
+        metadata::backfill_thread_search(
+            runtime.as_ref(),
+            codex_home.as_path(),
+            default_model_provider_id.as_str(),
+        )
+        .await;
+    });
 }
 
 fn emit_startup_warning(message: &str) {
@@ -485,6 +510,7 @@ pub async fn reconcile_rollout(
             }
         };
     let mut metadata = outcome.metadata;
+    let search_text = outcome.search_text;
     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
@@ -502,6 +528,16 @@ pub async fn reconcile_rollout(
     if let Err(err) = ctx.upsert_thread(&metadata).await {
         warn!(
             "state db reconcile_rollout upsert failed {}: {err}",
+            rollout_path.display()
+        );
+        return;
+    }
+    if let Err(err) = ctx
+        .replace_thread_search_text(metadata.id, search_text.as_slice())
+        .await
+    {
+        warn!(
+            "state db reconcile_rollout search index failed {}: {err}",
             rollout_path.display()
         );
         return;

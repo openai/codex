@@ -50,6 +50,8 @@ pub struct ThreadsPage {
 pub struct ExtractionOutcome {
     /// The extracted thread metadata.
     pub metadata: ThreadMetadata,
+    /// Searchable conversation text extracted from rollout history.
+    pub search_text: Vec<String>,
     /// The explicit thread memory mode from rollout metadata, if present.
     pub memory_mode: Option<String>,
     /// The number of rollout lines that failed to parse.

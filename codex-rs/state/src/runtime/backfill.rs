@@ -117,6 +117,115 @@ ON CONFLICT(id) DO NOTHING
         .await?;
         Ok(())
     }
+
+    /// Read the persisted background thread-search backfill state.
+    pub async fn get_thread_search_backfill_state(&self) -> anyhow::Result<crate::BackfillState> {
+        self.ensure_thread_search_backfill_state_row().await?;
+        let row = sqlx::query(
+            r#"
+SELECT status, last_watermark, last_success_at
+FROM thread_search_backfill_state
+WHERE id = 1
+            "#,
+        )
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        crate::BackfillState::try_from_row(&row)
+    }
+
+    /// Attempt to claim ownership of the background thread-search backfill.
+    pub async fn try_claim_thread_search_backfill(
+        &self,
+        lease_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.ensure_thread_search_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        let lease_cutoff = now.saturating_sub(lease_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE thread_search_backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+  AND status != ?
+  AND (status != ? OR updated_at <= ?)
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(now)
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(lease_cutoff)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Persist background thread-search backfill progress.
+    pub async fn checkpoint_thread_search_backfill(&self, watermark: &str) -> anyhow::Result<()> {
+        self.ensure_thread_search_backfill_state_row().await?;
+        sqlx::query(
+            r#"
+UPDATE thread_search_backfill_state
+SET status = ?, last_watermark = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(watermark)
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    /// Mark the background thread-search backfill as complete.
+    pub async fn mark_thread_search_backfill_complete(
+        &self,
+        last_watermark: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.ensure_thread_search_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+UPDATE thread_search_backfill_state
+SET
+    status = ?,
+    last_watermark = COALESCE(?, last_watermark),
+    last_success_at = ?,
+    updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(last_watermark)
+        .bind(now)
+        .bind(now)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_thread_search_backfill_state_row(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO thread_search_backfill_state (
+    id,
+    status,
+    last_watermark,
+    last_success_at,
+    updated_at
+)
+VALUES (?, ?, NULL, NULL, ?)
+ON CONFLICT(id) DO NOTHING
+            "#,
+        )
+        .bind(1_i64)
+        .bind(crate::BackfillStatus::Pending.as_str())
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

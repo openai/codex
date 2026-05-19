@@ -584,6 +584,51 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
+    /// Replace all indexed conversation text for a thread.
+    pub async fn replace_thread_search_text(
+        &self,
+        thread_id: ThreadId,
+        chunks: &[String],
+    ) -> anyhow::Result<()> {
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM thread_search WHERE thread_id = ?")
+            .bind(thread_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        for chunk in chunks {
+            sqlx::query("INSERT INTO thread_search (thread_id, body) VALUES (?, ?)")
+                .bind(thread_id.as_str())
+                .bind(chunk.as_str())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Append newly persisted conversation text to the thread search index.
+    pub async fn append_thread_search_text(
+        &self,
+        thread_id: ThreadId,
+        chunks: &[String],
+    ) -> anyhow::Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        for chunk in chunks {
+            sqlx::query("INSERT INTO thread_search (thread_id, body) VALUES (?, ?)")
+                .bind(thread_id.as_str())
+                .bind(chunk.as_str())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn touch_thread_updated_at(
         &self,
         thread_id: ThreadId,
@@ -876,6 +921,9 @@ ON CONFLICT(thread_id, position) DO NOTHING
             self.upsert_thread(&metadata).await
         };
         upsert_result?;
+        let search_text = crate::thread_search_text_from_rollout_items(items);
+        self.append_thread_search_text(builder.id, search_text.as_slice())
+            .await?;
         if let Some(memory_mode) = extract_memory_mode(items)
             && let Err(err) = self
                 .set_thread_memory_mode(builder.id, memory_mode.as_str())
@@ -943,10 +991,17 @@ ON CONFLICT(thread_id, position) DO NOTHING
 
     /// Delete a thread metadata row by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM thread_search WHERE thread_id = ?")
+            .bind(thread_id.as_str())
+            .execute(&mut *tx)
             .await?;
+        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 }
@@ -1105,7 +1160,15 @@ pub(super) fn push_thread_filters<'a>(
         builder.push_bind(search_term);
         builder.push(") > 0 OR instr(threads.preview, ");
         builder.push_bind(search_term);
-        builder.push(") > 0)");
+        builder.push(") > 0");
+        if let Some(search_query) = thread_search_query(search_term) {
+            builder.push(
+                " OR threads.id IN (SELECT thread_id FROM thread_search WHERE thread_search MATCH ",
+            );
+            builder.push_bind(search_query);
+            builder.push(")");
+        }
+        builder.push(")");
     }
     if let Some(anchor) = anchor {
         let anchor_ts = datetime_to_epoch_millis(anchor.ts);
@@ -1155,6 +1218,20 @@ fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
         .as_deref()
         .or(metadata.first_user_message.as_deref())
         .unwrap_or_default()
+}
+
+fn thread_search_query(search_term: &str) -> Option<String> {
+    let terms = search_term
+        .split_whitespace()
+        .filter_map(|term| {
+            let term = term.trim();
+            if term.is_empty() {
+                return None;
+            }
+            Some(format!("\"{}\"*", term.replace('"', "\"\"")))
+        })
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" AND "))
 }
 
 #[cfg(test)]

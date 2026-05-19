@@ -7,6 +7,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -582,11 +583,9 @@ async fn metadata_irrelevant_events_coalesce_state_db_updated_at() -> std::io::R
     let initial_first_user_message = initial_thread.first_user_message.clone();
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "assistant text".to_string(),
-                phase: None,
-                memory_citation: None,
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentReasoning(
+            AgentReasoningEvent {
+                text: "metadata and search irrelevant reasoning".to_string(),
             },
         ))])
         .await?;
@@ -595,7 +594,7 @@ async fn metadata_irrelevant_events_coalesce_state_db_updated_at() -> std::io::R
     let updated_thread = state_db
         .get_thread(thread_id)
         .await
-        .expect("thread should load after agent message")
+        .expect("thread should load after reasoning")
         .expect("thread should still exist");
 
     assert_eq!(updated_thread.updated_at, initial_updated_at);
@@ -608,11 +607,9 @@ async fn metadata_irrelevant_events_coalesce_state_db_updated_at() -> std::io::R
     tokio::time::sleep(THREAD_UPDATED_AT_TOUCH_INTERVAL + Duration::from_millis(10)).await;
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "more assistant text".to_string(),
-                phase: None,
-                memory_citation: None,
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentReasoning(
+            AgentReasoningEvent {
+                text: "later metadata and search irrelevant reasoning".to_string(),
             },
         ))])
         .await?;

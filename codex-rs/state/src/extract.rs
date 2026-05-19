@@ -1,4 +1,5 @@
 use crate::model::ThreadMetadata;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -40,6 +41,58 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
             false
         }
     }
+}
+
+/// Return whether this rollout item contributes user-visible conversation text to search.
+pub fn rollout_item_affects_thread_search(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::EventMsg(EventMsg::AgentMessage(agent)) => !agent.message.trim().is_empty(),
+        RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
+            !strip_user_message_prefix(user.message.as_str()).is_empty()
+        }
+        RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) => {
+            matches!(role.as_str(), "assistant" | "user")
+                && content.iter().any(content_item_has_search_text)
+        }
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_) => false,
+    }
+}
+
+/// Extract searchable user and assistant text from rollout items.
+pub fn thread_search_text_from_rollout_items(items: &[RolloutItem]) -> Vec<String> {
+    let mut chunks = Vec::new();
+    for item in items {
+        match item {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(agent)) => {
+                push_search_text(&mut chunks, agent.message.as_str());
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
+                push_search_text(
+                    &mut chunks,
+                    strip_user_message_prefix(user.message.as_str()),
+                );
+            }
+            RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                if matches!(role.as_str(), "assistant" | "user") =>
+            {
+                for content_item in content {
+                    if let Some(text) = content_item_search_text(content_item) {
+                        push_search_text(&mut chunks, text);
+                    }
+                }
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_) => {}
+        }
+    }
+    chunks
 }
 
 fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &SessionMetaLine) {
@@ -122,6 +175,24 @@ fn strip_user_message_prefix(text: &str) -> &str {
     match text.find(USER_MESSAGE_BEGIN) {
         Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
         None => text.trim(),
+    }
+}
+
+fn content_item_has_search_text(item: &ContentItem) -> bool {
+    content_item_search_text(item).is_some_and(|text| !text.trim().is_empty())
+}
+
+fn content_item_search_text(item: &ContentItem) -> Option<&str> {
+    match item {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
+        ContentItem::InputImage { .. } => None,
+    }
+}
+
+fn push_search_text(chunks: &mut Vec<String>, text: &str) {
+    let text = text.trim();
+    if !text.is_empty() {
+        chunks.push(text.to_string());
     }
 }
 

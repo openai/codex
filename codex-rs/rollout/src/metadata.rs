@@ -23,6 +23,7 @@ use codex_state::DB_METRIC_BACKFILL_DURATION_MS;
 use codex_state::ExtractionOutcome;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::apply_rollout_item;
+use codex_state::thread_search_text_from_rollout_items;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::info;
@@ -121,6 +122,7 @@ pub async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
+        search_text: thread_search_text_from_rollout_items(items.as_slice()),
         memory_mode: items.iter().rev().find_map(|item| match item {
             RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
             RolloutItem::ResponseItem(_)
@@ -210,33 +212,8 @@ pub(crate) async fn backfill_sessions_with_lease(
         }
     }
 
-    let sessions_root = codex_home.join(SESSIONS_SUBDIR);
-    let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-    let mut rollout_paths: Vec<BackfillRolloutPath> = Vec::new();
-    for (root, archived) in [(sessions_root, false), (archived_root, true)] {
-        if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
-            continue;
-        }
-        match collect_rollout_paths(&root).await {
-            Ok(paths) => {
-                rollout_paths.extend(paths.into_iter().map(|path| BackfillRolloutPath {
-                    watermark: backfill_watermark_for_path(codex_home, &path),
-                    path,
-                    archived,
-                }));
-            }
-            Err(err) => {
-                warn!(
-                    "failed to collect rollout paths under {}: {err}",
-                    root.display()
-                );
-            }
-        }
-    }
-    rollout_paths.sort_by(|a, b| a.watermark.cmp(&b.watermark));
-    if let Some(last_watermark) = backfill_state.last_watermark.as_deref() {
-        rollout_paths.retain(|entry| entry.watermark.as_str() > last_watermark);
-    }
+    let rollout_paths =
+        rollout_paths_after_watermark(codex_home, backfill_state.last_watermark.as_deref()).await;
 
     let mut stats = BackfillStats {
         scanned: 0,
@@ -259,6 +236,7 @@ pub(crate) async fn backfill_sessions_with_lease(
                         );
                     }
                     let mut metadata = outcome.metadata;
+                    let search_text = outcome.search_text;
                     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
                     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
                     if let Ok(Some(existing_metadata)) = runtime.get_thread(metadata.id).await {
@@ -274,6 +252,17 @@ pub(crate) async fn backfill_sessions_with_lease(
                         stats.failed = stats.failed.saturating_add(1);
                         warn!("failed to upsert rollout {}: {err}", rollout.path.display());
                     } else {
+                        if let Err(err) = runtime
+                            .replace_thread_search_text(metadata.id, search_text.as_slice())
+                            .await
+                        {
+                            stats.failed = stats.failed.saturating_add(1);
+                            warn!(
+                                "failed to index rollout search text {}: {err}",
+                                rollout.path.display()
+                            );
+                            continue;
+                        }
                         if let Err(err) = runtime
                             .set_thread_memory_mode(metadata.id, memory_mode.as_str())
                             .await
@@ -369,11 +358,147 @@ pub(crate) async fn backfill_sessions_with_lease(
     }
 }
 
+pub(crate) async fn backfill_thread_search(
+    runtime: &codex_state::StateRuntime,
+    codex_home: &Path,
+    default_provider: &str,
+) {
+    let backfill_state = match runtime.get_thread_search_backfill_state().await {
+        Ok(state) => state,
+        Err(err) => {
+            warn!(
+                "failed to read thread search backfill state at {}: {err}",
+                codex_home.display()
+            );
+            return;
+        }
+    };
+    if backfill_state.status == BackfillStatus::Complete {
+        return;
+    }
+    let claimed = match runtime
+        .try_claim_thread_search_backfill(BACKFILL_LEASE_SECONDS)
+        .await
+    {
+        Ok(claimed) => claimed,
+        Err(err) => {
+            warn!(
+                "failed to claim thread search backfill at {}: {err}",
+                codex_home.display()
+            );
+            return;
+        }
+    };
+    if !claimed {
+        return;
+    }
+
+    let rollout_paths =
+        rollout_paths_after_watermark(codex_home, backfill_state.last_watermark.as_deref()).await;
+    let mut stats = BackfillStats {
+        scanned: 0,
+        upserted: 0,
+        failed: 0,
+    };
+    let mut last_watermark = backfill_state.last_watermark.clone();
+    for batch in rollout_paths.chunks(BACKFILL_BATCH_SIZE) {
+        for rollout in batch {
+            stats.scanned = stats.scanned.saturating_add(1);
+            match extract_metadata_from_rollout(&rollout.path, default_provider).await {
+                Ok(outcome) => {
+                    if let Err(err) = runtime
+                        .replace_thread_search_text(
+                            outcome.metadata.id,
+                            outcome.search_text.as_slice(),
+                        )
+                        .await
+                    {
+                        stats.failed = stats.failed.saturating_add(1);
+                        warn!(
+                            "failed to backfill thread search text {}: {err}",
+                            rollout.path.display()
+                        );
+                    } else {
+                        stats.upserted = stats.upserted.saturating_add(1);
+                    }
+                }
+                Err(err) => {
+                    stats.failed = stats.failed.saturating_add(1);
+                    warn!(
+                        "failed to extract thread search rollout {}: {err}",
+                        rollout.path.display()
+                    );
+                }
+            }
+        }
+        if let Some(last_entry) = batch.last() {
+            if let Err(err) = runtime
+                .checkpoint_thread_search_backfill(last_entry.watermark.as_str())
+                .await
+            {
+                warn!(
+                    "failed to checkpoint thread search backfill at {}: {err}",
+                    codex_home.display()
+                );
+            } else {
+                last_watermark = Some(last_entry.watermark.clone());
+            }
+        }
+    }
+    if let Err(err) = runtime
+        .mark_thread_search_backfill_complete(last_watermark.as_deref())
+        .await
+    {
+        warn!(
+            "failed to mark thread search backfill complete at {}: {err}",
+            codex_home.display()
+        );
+    }
+    info!(
+        "thread search backfill scanned={}, indexed={}, failed={}",
+        stats.scanned, stats.upserted, stats.failed
+    );
+}
+
 #[derive(Debug, Clone)]
 struct BackfillRolloutPath {
     watermark: String,
     path: PathBuf,
     archived: bool,
+}
+
+async fn rollout_paths_after_watermark(
+    codex_home: &Path,
+    last_watermark: Option<&str>,
+) -> Vec<BackfillRolloutPath> {
+    let sessions_root = codex_home.join(SESSIONS_SUBDIR);
+    let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    let mut rollout_paths: Vec<BackfillRolloutPath> = Vec::new();
+    for (root, archived) in [(sessions_root, false), (archived_root, true)] {
+        if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
+            continue;
+        }
+        match collect_rollout_paths(&root).await {
+            Ok(paths) => {
+                rollout_paths.extend(paths.into_iter().map(|path| BackfillRolloutPath {
+                    watermark: backfill_watermark_for_path(codex_home, &path),
+                    path,
+                    archived,
+                }));
+            }
+            Err(err) => {
+                warn!(
+                    "failed to collect rollout paths under {}: {err}",
+                    root.display()
+                );
+            }
+        }
+    }
+    rollout_paths.sort_by(|a, b| a.watermark.cmp(&b.watermark));
+    if let Some(last_watermark) = last_watermark {
+        rollout_paths.retain(|entry| entry.watermark.as_str() > last_watermark);
+    }
+    rollout_paths
 }
 
 fn backfill_watermark_for_path(codex_home: &Path, path: &Path) -> String {

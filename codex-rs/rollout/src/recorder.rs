@@ -1771,6 +1771,9 @@ async fn sync_thread_state_after_write(
         || items
             .iter()
             .any(codex_state::rollout_item_affects_thread_metadata)
+        || items
+            .iter()
+            .any(codex_state::rollout_item_affects_thread_search)
     {
         state_db::apply_rollout_items(
             state_db_ctx,
