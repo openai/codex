@@ -30,6 +30,31 @@ pub(crate) async fn load_agent_roles(
     }
 
     let mut roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
+    let mut declared_agent_role_files_by_folder =
+        BTreeMap::<AbsolutePathBuf, BTreeSet<PathBuf>>::new();
+    for layer in &layers {
+        let Some(config_folder) = layer.config_folder() else {
+            continue;
+        };
+        let Ok(Some(agents_toml)) =
+            agents_toml_from_layer(&layer.config, Some(config_folder.as_path()))
+        else {
+            continue;
+        };
+        let declared_files = declared_agent_role_files_by_folder
+            .entry(config_folder)
+            .or_default();
+        for (role_name, role_toml) in &agents_toml.roles {
+            let Ok(role) = agent_role_config_from_toml(fs, role_name, role_toml).await else {
+                continue;
+            };
+            if let Some(config_file) = role.config_file {
+                declared_files.insert(config_file);
+            }
+        }
+    }
+
+    let mut discovered_agent_role_folders = BTreeSet::new();
     for layer in layers {
         let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
         let mut declared_role_files = BTreeSet::new();
@@ -70,11 +95,16 @@ pub(crate) async fn load_agent_roles(
             }
         }
 
-        if let Some(config_folder) = layer.config_folder() {
+        if let Some(config_folder) = config_folder
+            && discovered_agent_role_folders.insert(config_folder.clone())
+        {
+            let declared_role_files = declared_agent_role_files_by_folder
+                .get(&config_folder)
+                .unwrap_or(&declared_role_files);
             for (role_name, role) in discover_agent_roles_in_dir(
                 fs,
                 &config_folder.join("agents"),
-                &declared_role_files,
+                declared_role_files,
                 startup_warnings,
             )
             .await?

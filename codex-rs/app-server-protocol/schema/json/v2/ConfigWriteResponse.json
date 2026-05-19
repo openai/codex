@@ -74,6 +74,27 @@
           "type": "object"
         },
         {
+          "description": "System override layer from a sibling `config.override.toml`.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "systemOverride"
+              ],
+              "title": "SystemOverrideConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "SystemOverrideConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
           "properties": {
             "file": {
@@ -107,6 +128,27 @@
           "type": "object"
         },
         {
+          "description": "User override layer from `$CODEX_HOME/config.override.toml`.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "userOverride"
+              ],
+              "title": "UserOverrideConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "UserOverrideConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Path to a .codex/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
           "properties": {
             "dotCodexFolder": {
@@ -125,6 +167,27 @@
             "type"
           ],
           "title": "ProjectConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Project override layer from a sibling `.codex/config.override.toml`.",
+          "properties": {
+            "dotCodexFolder": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "projectOverride"
+              ],
+              "title": "ProjectOverrideConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "dotCodexFolder",
+            "type"
+          ],
+          "title": "ProjectOverrideConfigLayerSource",
           "type": "object"
         },
         {

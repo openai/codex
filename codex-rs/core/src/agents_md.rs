@@ -228,7 +228,10 @@ impl<'a> AgentsMdManager<'a> {
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
         ) {
-            if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            if matches!(
+                layer.name,
+                ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. }
+            ) {
                 continue;
             }
             merge_toml_values(&mut merged, &layer.config);

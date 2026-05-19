@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -92,6 +93,7 @@ pub(crate) fn discover_handlers(
             policy,
         );
 
+        let mut loaded_hooks_json_folders = HashSet::new();
         for layer in config_layer_stack.get_layers(
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
@@ -111,7 +113,14 @@ pub(crate) fn discover_handlers(
             if !policy.allows(&policy_source) {
                 continue;
             }
-            let json_hooks = load_hooks_json(layer.hooks_config_folder().as_deref(), &mut warnings);
+            let hooks_config_folder = layer.hooks_config_folder();
+            let json_hooks = if hooks_config_folder.as_ref().is_some_and(|folder| {
+                loaded_hooks_json_folders.insert(folder.as_path().to_path_buf())
+            }) {
+                load_hooks_json(hooks_config_folder.as_deref(), &mut warnings)
+            } else {
+                None
+            };
             let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
 
             if let (Some((json_source_path, json_events)), Some((toml_source_path, toml_events))) =
@@ -352,12 +361,18 @@ fn load_toml_hooks_from_layer(
 fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
     match &layer.name {
         ConfigLayerSource::System { file }
+        | ConfigLayerSource::SystemOverride { file }
         | ConfigLayerSource::User { file, .. }
+        | ConfigLayerSource::UserOverride { file }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
         ConfigLayerSource::Project { dot_codex_folder } => layer
             .hooks_config_folder()
             .unwrap_or_else(|| dot_codex_folder.clone())
             .join(CONFIG_TOML_FILE),
+        ConfigLayerSource::ProjectOverride { dot_codex_folder } => layer
+            .hooks_config_folder()
+            .unwrap_or_else(|| dot_codex_folder.clone())
+            .join(codex_config::CONFIG_OVERRIDE_TOML_FILE),
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
@@ -582,9 +597,15 @@ fn hook_trusted_hash(is_managed: bool, state: Option<&HookStateToml>) -> Option<
 
 fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSource, bool) {
     match source {
-        ConfigLayerSource::System { .. } => (HookSource::System, true),
-        ConfigLayerSource::User { .. } => (HookSource::User, false),
-        ConfigLayerSource::Project { .. } => (HookSource::Project, false),
+        ConfigLayerSource::System { .. } | ConfigLayerSource::SystemOverride { .. } => {
+            (HookSource::System, true)
+        }
+        ConfigLayerSource::User { .. } | ConfigLayerSource::UserOverride { .. } => {
+            (HookSource::User, false)
+        }
+        ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => {
+            (HookSource::Project, false)
+        }
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
