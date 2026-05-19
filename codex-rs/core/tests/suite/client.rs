@@ -58,6 +58,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -1851,6 +1852,85 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             .and_then(|value| value.as_str()),
         Some("concise")
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_reasoning_summary_is_retried_without_summary() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "unsupported_parameter",
+                    "message": "Unsupported parameter: 'reasoning.summary' is not supported with the 'gpt-5.4' model.",
+                    "param": "reasoning.summary"
+                }
+            })),
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+                    "text/event-stream",
+                ),
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+                    "text/event-stream",
+                ),
+        ],
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+        })
+        .build(&server)
+        .await?;
+
+    for text in ["hello", "again"] {
+        codex
+            .submit(Op::UserInput {
+                environments: None,
+                items: vec![UserInput::Text {
+                    text: text.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
+            })
+            .await
+            .unwrap();
+
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    pretty_assertions::assert_eq!(
+        requests[0]
+            .body_json()
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("concise")
+    );
+    for request in &requests[1..] {
+        pretty_assertions::assert_eq!(
+            request
+                .body_json()
+                .get("reasoning")
+                .and_then(|reasoning| reasoning.get("summary")),
+            None
+        );
+    }
 
     Ok(())
 }

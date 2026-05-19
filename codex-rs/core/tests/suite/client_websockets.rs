@@ -1319,6 +1319,83 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_retries_without_unsupported_reasoning_summary() {
+    skip_if_no_network!();
+
+    let unsupported_reasoning_summary_error = json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "unsupported_parameter",
+            "message": "Unsupported parameter: 'reasoning.summary' is not supported with the 'gpt-5.3-codex-spark' model.",
+            "param": "reasoning.summary"
+        }
+    });
+
+    let server = start_websocket_server(vec![
+        vec![
+            vec![
+                ev_response_created("resp-prewarm"),
+                ev_completed("resp-prewarm"),
+            ],
+            vec![unsupported_reasoning_summary_error],
+        ],
+        vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+    ])
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+        config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submission should succeed");
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    let first_connection = connections.first().expect("missing first connection");
+    let second_connection = connections.get(1).expect("missing second connection");
+    assert_eq!(first_connection.len(), 2);
+    assert_eq!(second_connection.len(), 1);
+    assert_eq!(
+        first_connection
+            .get(1)
+            .expect("missing rejected request")
+            .body_json()["reasoning"]["summary"]
+            .as_str(),
+        Some("concise")
+    );
+    assert_eq!(
+        second_connection
+            .first()
+            .expect("missing retried request")
+            .body_json()["reasoning"]
+            .get("summary"),
+        None
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
     skip_if_no_network!();
 
