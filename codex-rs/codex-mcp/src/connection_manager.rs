@@ -233,13 +233,14 @@ impl McpConnectionManager {
                 let auth_entry = auth_entries.get(&server_name).cloned();
                 join_set.spawn(async move {
                     let outcome = Err(StartupOutcomeError::Failed { error: reason });
-                    let error = mcp_init_error_display(
-                        server_name.as_str(),
-                        auth_entry.as_ref(),
-                        outcome
-                            .as_ref()
-                            .expect_err("preflight failure cannot start an MCP client"),
-                    );
+                    let error = match &outcome {
+                        Err(error) => mcp_init_error_display(
+                            server_name.as_str(),
+                            auth_entry.as_ref(),
+                            error,
+                        ),
+                        Ok(_) => unreachable!("preflight failure cannot start an MCP client"),
+                    };
                     let _ = emit_update(
                         submit_id.as_str(),
                         &tx_event,
