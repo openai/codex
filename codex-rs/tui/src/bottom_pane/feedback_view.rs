@@ -1,3 +1,4 @@
+use codex_feedback::DOCTOR_REPORT_ATTACHMENT_FILENAME;
 use codex_feedback::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
@@ -502,6 +503,11 @@ pub(crate) fn feedback_upload_consent_params(
         Line::from("").into(),
         Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+        Line::from(vec![
+            "  • ".into(),
+            DOCTOR_REPORT_ATTACHMENT_FILENAME.into(),
+        ])
+        .into(),
     ];
     if let Some(path) = rollout_path.as_deref()
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
@@ -538,7 +544,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
+                    "Share the current Codex session logs and diagnostics with the team for troubleshooting."
                         .to_string(),
                 ),
                 actions: vec![yes_action],
@@ -572,7 +578,18 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
+        render_buffer(area, &buf)
+    }
 
+    fn render_renderable(renderable: &dyn Renderable, width: u16) -> String {
+        let height = renderable.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        renderable.render(area, &mut buf);
+        render_buffer(area, &buf)
+    }
+
+    fn render_buffer(area: Rect, buf: &Buffer) -> String {
         let mut lines: Vec<String> = (0..area.height)
             .map(|row| {
                 let mut line = String::new();
@@ -668,6 +685,23 @@ mod tests {
         let rendered = render(&view, /*width*/ 60);
 
         insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
+    }
+
+    #[test]
+    fn feedback_upload_consent_lists_doctor_report() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let params = feedback_upload_consent_params(
+            tx,
+            FeedbackCategory::Bug,
+            Some(std::path::PathBuf::from("rollout.jsonl")),
+            Some("auto-review-rollout.jsonl".to_string()),
+            &FeedbackDiagnostics::default(),
+        );
+
+        let rendered = render_renderable(params.header.as_ref(), /*width*/ 60);
+
+        insta::assert_snapshot!("feedback_upload_consent_lists_doctor_report", rendered);
     }
 
     #[test]

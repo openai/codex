@@ -154,6 +154,9 @@ impl Session {
             id,
             request,
         });
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -288,14 +291,16 @@ impl Session {
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
         let mcp_runtime_environment = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
+                Some(Arc::clone(&turn_environment.environment)),
+                self.services.environment_manager.try_local_environment(),
                 turn_environment.cwd.to_path_buf(),
             ),
             None => McpRuntimeEnvironment::new(
                 self.services
                     .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+                    .default_or_local_environment(),
+                self.services.environment_manager.try_local_environment(),
+                #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),
         };

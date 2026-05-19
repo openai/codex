@@ -19,6 +19,9 @@ use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
+use gethostname::gethostname;
+use std::error::Error;
+use std::fmt;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -47,22 +50,95 @@ pub struct RemoteControlHandle {
     state_db_available: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteControlUnavailable;
+
+impl fmt::Display for RemoteControlUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "remote control cannot be enabled because sqlite state db is unavailable"
+        )
+    }
+}
+
+impl Error for RemoteControlUnavailable {}
+
 impl RemoteControlHandle {
-    pub fn set_enabled(&self, enabled: bool) {
-        let requested_enabled = enabled;
-        let enabled = enabled && self.state_db_available;
-        if requested_enabled && !self.state_db_available {
+    pub fn enable(
+        &self,
+    ) -> Result<RemoteControlStatusChangedNotification, RemoteControlUnavailable> {
+        if !self.state_db_available {
             warn!("remote control cannot be enabled because sqlite state db is unavailable");
+            return Err(RemoteControlUnavailable);
         }
+
         self.enabled_tx.send_if_modified(|state| {
-            let changed = *state != enabled;
-            *state = enabled;
+            let changed = !*state;
+            *state = true;
             changed
         });
+
+        let status = self.status();
+        if matches!(
+            status.status,
+            RemoteControlConnectionStatus::Connected | RemoteControlConnectionStatus::Connecting
+        ) {
+            return Ok(status);
+        }
+
+        Ok(self.publish_status(RemoteControlConnectionStatus::Connecting))
+    }
+
+    pub fn disable(&self) -> RemoteControlStatusChangedNotification {
+        self.enabled_tx.send_if_modified(|state| {
+            let changed = *state;
+            *state = false;
+            changed
+        });
+
+        self.publish_status(RemoteControlConnectionStatus::Disabled)
+    }
+
+    pub fn status(&self) -> RemoteControlStatusChangedNotification {
+        self.status_tx.borrow().clone()
     }
 
     pub fn status_receiver(&self) -> watch::Receiver<RemoteControlStatusChangedNotification> {
         self.status_tx.subscribe()
+    }
+
+    fn publish_status(
+        &self,
+        connection_status: RemoteControlConnectionStatus,
+    ) -> RemoteControlStatusChangedNotification {
+        self.status_tx.send_if_modified(|status| {
+            let next_status =
+                remote_control_status_with_connection_status(status, connection_status);
+            if *status == next_status {
+                return false;
+            }
+
+            *status = next_status;
+            true
+        });
+        self.status()
+    }
+}
+
+fn remote_control_status_with_connection_status(
+    status: &RemoteControlStatusChangedNotification,
+    connection_status: RemoteControlConnectionStatus,
+) -> RemoteControlStatusChangedNotification {
+    RemoteControlStatusChangedNotification {
+        status: connection_status,
+        server_name: status.server_name.clone(),
+        installation_id: status.installation_id.clone(),
+        environment_id: if connection_status == RemoteControlConnectionStatus::Disabled {
+            None
+        } else {
+            status.environment_id.clone()
+        },
     }
 }
 
@@ -88,12 +164,14 @@ pub async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let server_name = gethostname().to_string_lossy().trim().to_string();
     let initial_status = RemoteControlStatusChangedNotification {
         status: if initial_enabled {
             RemoteControlConnectionStatus::Connecting
         } else {
             RemoteControlConnectionStatus::Disabled
         },
+        server_name: server_name.clone(),
         installation_id: config.installation_id.clone(),
         environment_id: None,
     };
@@ -105,6 +183,7 @@ pub async fn start_remote_control(
                 remote_control_url: config.remote_control_url,
                 installation_id: config.installation_id,
                 remote_control_target,
+                server_name,
             },
             state_db,
             auth_manager,

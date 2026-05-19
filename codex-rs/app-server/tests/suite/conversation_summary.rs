@@ -149,6 +149,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
         config: Arc::new(config),
         cli_overrides: Vec::new(),
         loader_overrides,
+        strict_config: false,
         cloud_requirements: CloudRequirementsLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),

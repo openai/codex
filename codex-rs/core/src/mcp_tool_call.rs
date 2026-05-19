@@ -15,7 +15,6 @@ use crate::arc_monitor::monitor_action;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::load_global_mcp_servers;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
@@ -193,12 +192,6 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
-    let request_meta = build_mcp_tool_call_request_meta(
-        turn_context.as_ref(),
-        &server,
-        &call_id,
-        metadata.as_ref(),
-    );
     let connector_id = metadata
         .as_ref()
         .and_then(|metadata| metadata.connector_id.clone());
@@ -236,7 +229,6 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     metadata.as_ref(),
-                    request_meta,
                     mcp_app_resource_uri,
                 )
                 .await;
@@ -304,7 +296,6 @@ pub(crate) async fn handle_mcp_tool_call(
         &call_id,
         invocation,
         metadata.as_ref(),
-        request_meta,
         mcp_app_resource_uri,
     )
     .await
@@ -321,7 +312,6 @@ async fn handle_approved_mcp_tool_call(
     call_id: &str,
     invocation: McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-    request_meta: Option<JsonValue>,
     mcp_app_resource_uri: Option<String>,
 ) -> HandledMcpToolCall {
     let server = invocation.server.clone();
@@ -354,6 +344,8 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
+        let request_meta =
+            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
@@ -576,6 +568,11 @@ async fn execute_mcp_tool_call(
     )
     .await
     .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
+    let mcp_call_trace = sess
+        .services
+        .rollout_thread_trace
+        .start_mcp_call_trace(call_id);
+    let request_meta = mcp_call_trace.add_request_meta(request_meta);
     let result = sess
         .call_tool(
             &invocation.server,
@@ -727,6 +724,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         permission_profile: Some(turn_context.permission_profile()),
         sandbox_policy: turn_context.sandbox_policy(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        #[allow(deprecated)]
         sandbox_cwd: turn_context.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
     })?;
@@ -976,6 +974,7 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
+    plugin_id: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
@@ -985,6 +984,7 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
 async fn custom_mcp_tool_approval_mode(
@@ -1068,6 +1068,12 @@ fn build_mcp_tool_call_request_meta(
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
+        );
+    }
+    if let Some(plugin_id) = metadata.and_then(|metadata| metadata.plugin_id.as_ref()) {
+        request_meta.insert(
+            MCP_TOOL_PLUGIN_ID_META_KEY.to_string(),
+            serde_json::Value::String(plugin_id.clone()),
         );
     }
 
@@ -1482,13 +1488,11 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
-    let tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
+    let manager = sess.services.mcp_connection_manager.read().await;
+    let plugin_id = manager
+        .plugin_id_for_mcp_server_name(server)
+        .map(str::to_string);
+    let tools = manager.list_all_tools().await;
     let tool_info = tools
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
@@ -1521,6 +1525,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_id: tool_info.connector_id,
         connector_name: tool_info.connector_name,
         connector_description,
+        plugin_id,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
@@ -1998,8 +2003,7 @@ async fn maybe_persist_mcp_tool_approval(
             remember_mcp_tool_approval(sess, key).await;
             return;
         };
-        persist_codex_app_tool_approval(&turn_context.config.codex_home, &connector_id, &tool_name)
-            .await
+        persist_codex_app_tool_approval(&turn_context.config, &connector_id, &tool_name).await
     } else {
         persist_non_app_mcp_tool_approval(sess, &turn_context.config, &key.server, &tool_name).await
     };
@@ -2020,11 +2024,11 @@ async fn maybe_persist_mcp_tool_approval(
 }
 
 async fn persist_codex_app_tool_approval(
-    codex_home: &AbsolutePathBuf,
+    config: &Config,
     connector_id: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    ConfigEditsBuilder::new(codex_home)
+    ConfigEditsBuilder::for_config(config)
         .with_edits([ConfigEdit::SetPath {
             segments: vec![
                 "apps".to_string(),
@@ -2045,11 +2049,12 @@ async fn persist_custom_mcp_tool_approval(
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    let Some(config_folder) = custom_mcp_tool_approval_config_folder(config, server).await? else {
+    let Some(config_edits_builder) = custom_mcp_tool_approval_config_builder(config, server)?
+    else {
         anyhow::bail!("MCP server `{server}` is not configured in config.toml");
     };
 
-    persist_custom_mcp_tool_approval_at(&config_folder, server, tool_name).await
+    persist_custom_mcp_tool_approval_with(config_edits_builder, server, tool_name).await
 }
 
 async fn persist_non_app_mcp_tool_approval(
@@ -2058,8 +2063,9 @@ async fn persist_non_app_mcp_tool_approval(
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    if let Some(config_folder) = custom_mcp_tool_approval_config_folder(config, server).await? {
-        return persist_custom_mcp_tool_approval_at(&config_folder, server, tool_name).await;
+    if let Some(config_edits_builder) = custom_mcp_tool_approval_config_builder(config, server)? {
+        return persist_custom_mcp_tool_approval_with(config_edits_builder, server, tool_name)
+            .await;
     }
 
     let plugin_config_name = sess
@@ -2074,7 +2080,7 @@ async fn persist_non_app_mcp_tool_approval(
         .map(|plugin| plugin.config_name.clone());
 
     if let Some(plugin_config_name) = plugin_config_name {
-        return ConfigEditsBuilder::new(&config.codex_home)
+        return ConfigEditsBuilder::for_config(config)
             .with_edits([ConfigEdit::SetPath {
                 segments: vec![
                     "plugins".to_string(),
@@ -2094,26 +2100,24 @@ async fn persist_non_app_mcp_tool_approval(
     anyhow::bail!("MCP server `{server}` is not configured in config.toml or an enabled plugin")
 }
 
-async fn custom_mcp_tool_approval_config_folder(
+fn custom_mcp_tool_approval_config_builder(
     config: &Config,
     server: &str,
-) -> anyhow::Result<Option<AbsolutePathBuf>> {
+) -> anyhow::Result<Option<ConfigEditsBuilder>> {
     if let Some(project_config_folder) = project_mcp_tool_approval_config_folder(config, server) {
-        return Ok(Some(project_config_folder));
+        return Ok(Some(ConfigEditsBuilder::new(&project_config_folder)));
     }
 
-    let servers = load_global_mcp_servers(&config.codex_home).await?;
-    Ok(servers
-        .contains_key(server)
-        .then(|| config.codex_home.clone()))
+    Ok(user_mcp_server_is_configured(config, server)?
+        .then(|| ConfigEditsBuilder::for_config(config)))
 }
 
-async fn persist_custom_mcp_tool_approval_at(
-    config_folder: &AbsolutePathBuf,
+async fn persist_custom_mcp_tool_approval_with(
+    config_edits_builder: ConfigEditsBuilder,
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    ConfigEditsBuilder::new(config_folder)
+    config_edits_builder
         .with_edits([ConfigEdit::SetPath {
             segments: vec![
                 "mcp_servers".to_string(),
@@ -2126,6 +2130,21 @@ async fn persist_custom_mcp_tool_approval_at(
         }])
         .apply()
         .await
+}
+
+fn user_mcp_server_is_configured(config: &Config, server: &str) -> anyhow::Result<bool> {
+    let Some(mcp_servers_toml) = config
+        .config_layer_stack
+        .effective_user_config()
+        .as_ref()
+        .and_then(|user_config| user_config.get("mcp_servers"))
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let servers =
+        HashMap::<String, codex_config::types::McpServerConfig>::deserialize(mcp_servers_toml)?;
+    Ok(servers.contains_key(server))
 }
 
 fn project_mcp_tool_approval_config_folder(

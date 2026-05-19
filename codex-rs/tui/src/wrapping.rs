@@ -49,8 +49,16 @@ where
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
+                let range = borrowed_slice_range(text, slice).unwrap_or_else(|| {
+                    let synthetic_prefix = if line_index == 0 {
+                        opts.initial_indent
+                    } else {
+                        opts.subsequent_indent
+                    };
+                    map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix)
+                });
+                let start = range.start;
+                let end = range.end;
                 let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
                 lines.push(start..end + trailing_spaces + 1);
                 cursor = end + trailing_spaces;
@@ -84,10 +92,16 @@ where
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
-                lines.push(start..end);
-                cursor = end;
+                let range = borrowed_slice_range(text, slice).unwrap_or_else(|| {
+                    let synthetic_prefix = if line_index == 0 {
+                        opts.initial_indent
+                    } else {
+                        opts.subsequent_indent
+                    };
+                    map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix)
+                });
+                cursor = range.end;
+                lines.push(range);
             }
             std::borrow::Cow::Owned(slice) => {
                 let synthetic_prefix = if line_index == 0 {
@@ -102,6 +116,19 @@ where
         }
     }
     lines
+}
+
+fn borrowed_slice_range(text: &str, slice: &str) -> Option<Range<usize>> {
+    let text_start = text.as_ptr() as usize;
+    let text_end = text_start.checked_add(text.len())?;
+    let slice_start = slice.as_ptr() as usize;
+    let slice_end = slice_start.checked_add(slice.len())?;
+
+    if slice_start < text_start || slice_end > text_end {
+        return None;
+    }
+
+    Some((slice_start - text_start)..(slice_end - text_start))
 }
 
 /// Maps an owned (materialized) wrapped line back to a byte range in `text`.
@@ -1483,6 +1510,17 @@ them."#
         // The function should recover and return the mapped prefix range.
         let range = map_owned_wrapped_line_to_range("hello world", /*cursor*/ 0, "helloX", "");
         assert_eq!(range, 0..5);
+    }
+
+    #[test]
+    fn borrowed_slice_range_rejects_slices_outside_source_text() {
+        let text = "test message";
+        let external = String::from("test");
+
+        assert_eq!(borrowed_slice_range(text, &external), None);
+
+        let fallback = map_owned_wrapped_line_to_range(text, /*cursor*/ 0, &external, "");
+        assert_eq!(fallback, 0..4);
     }
 
     #[test]

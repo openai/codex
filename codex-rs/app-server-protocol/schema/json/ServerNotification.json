@@ -1085,7 +1085,7 @@
       "enum": [
         "read",
         "write",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -1740,6 +1740,7 @@
         "postCompact",
         "sessionStart",
         "userPromptSubmit",
+        "subagentStart",
         "stop"
       ],
       "type": "string"
@@ -1944,6 +1945,13 @@
       "enum": [
         "default",
         "hidden"
+      ],
+      "type": "string"
+    },
+    "ImageDetail": {
+      "enum": [
+        "high",
+        "original"
       ],
       "type": "string"
     },
@@ -2763,12 +2771,16 @@
         "installationId": {
           "type": "string"
         },
+        "serverName": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/definitions/RemoteControlConnectionStatus"
         }
       },
       "required": [
         "installationId",
+        "serverName",
         "status"
       ],
       "type": "object"
@@ -3261,6 +3273,8 @@
       "enum": [
         "active",
         "paused",
+        "blocked",
+        "usageLimited",
         "budgetLimited",
         "complete"
       ],
@@ -4604,6 +4618,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "type": {
               "enum": [
                 "image"
@@ -4624,6 +4649,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "path": {
               "type": "string"
             },

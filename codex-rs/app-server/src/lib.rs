@@ -41,7 +41,6 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -127,7 +126,7 @@ fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoade
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
-/// `run_main_with_transport` now uses two loops/tasks:
+/// `run_main_with_transport_options` uses two loops/tasks:
 /// - processor loop: handles incoming JSON-RPC and request dispatch
 /// - outbound loop: performs potentially slow writes to per-connection writers
 ///
@@ -374,16 +373,19 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     default_analytics_enabled: bool,
 ) -> IoResult<()> {
-    run_main_with_transport(
+    run_main_with_transport_options(
         arg0_paths,
         cli_config_overrides,
         loader_overrides,
+        strict_config,
         default_analytics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
         AppServerWebsocketAuthSettings::default(),
+        AppServerRuntimeOptions::default(),
     )
     .await
 }
@@ -398,6 +400,7 @@ pub enum PluginStartupTasks {
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
+    pub install_shutdown_signal_handler: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -405,30 +408,9 @@ impl Default for AppServerRuntimeOptions {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
+            install_shutdown_signal_handler: true,
         }
     }
-}
-
-pub async fn run_main_with_transport(
-    arg0_paths: Arg0DispatchPaths,
-    cli_config_overrides: CliConfigOverrides,
-    loader_overrides: LoaderOverrides,
-    default_analytics_enabled: bool,
-    transport: AppServerTransport,
-    session_source: SessionSource,
-    auth: AppServerWebsocketAuthSettings,
-) -> IoResult<()> {
-    run_main_with_transport_options(
-        arg0_paths,
-        cli_config_overrides,
-        loader_overrides,
-        default_analytics_enabled,
-        transport,
-        session_source,
-        auth,
-        AppServerRuntimeOptions::default(),
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -436,6 +418,7 @@ pub async fn run_main_with_transport_options(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
@@ -462,9 +445,9 @@ pub async fn run_main_with_transport_options(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager = if loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(local_runtime_paths).await
+        EnvironmentManager::from_env(Some(local_runtime_paths)).await
     } else {
-        EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
     }
     .map(Arc::new)
     .map_err(std::io::Error::other)?;
@@ -472,6 +455,7 @@ pub async fn run_main_with_transport_options(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
         loader_overrides,
+        strict_config,
         Default::default(),
         arg0_paths.clone(),
         Arc::new(NoopThreadConfigLoader),
@@ -500,6 +484,10 @@ pub async fn run_main_with_transport_options(
     {
         Ok(config) => (config, true),
         Err(err) => {
+            if strict_config {
+                return Err(err);
+            }
+
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
             (
@@ -528,9 +516,15 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
-    let state_db_result = rollout_state_db::try_init(&config).await;
-    let state_db_init_error = state_db_result.as_ref().err().map(ToString::to_string);
-    let state_db = state_db_result.ok();
+    let state_db = match rollout_state_db::try_init(&config).await {
+        Ok(state_db) => Some(state_db),
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to initialize sqlite state runtime under {}: {err}",
+                config.sqlite_home.display()
+            )));
+        }
+    };
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -595,7 +589,7 @@ pub async fn run_main_with_transport_options(
         });
     }
     if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+        codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
@@ -647,16 +641,13 @@ pub async fn run_main_with_transport_options(
         }
     }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    if let Some(err) = &state_db_init_error {
-        error!("failed to initialize sqlite state db: {err}");
-    }
-
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
+    let graceful_signal_restart_enabled =
+        runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
 
     match &transport {
@@ -807,6 +798,7 @@ pub async fn run_main_with_transport_options(
             auth_manager,
             installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
+            remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -1012,14 +1004,9 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         remote_control_status = status.clone();
+                        let notification = ServerNotification::RemoteControlStatusChanged(status);
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
-                                RemoteControlStatusChangedNotification {
-                                    status: status.status,
-                                    installation_id: status.installation_id,
-                                    environment_id: status.environment_id,
-                                },
-                            ))
+                            .send_server_notification(notification)
                             .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {

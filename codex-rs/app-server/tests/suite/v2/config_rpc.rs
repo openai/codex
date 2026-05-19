@@ -14,6 +14,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
@@ -82,6 +83,7 @@ sandbox_mode = "workspace-write"
         origins.get("model").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     let layers = layers.expect("layers present");
@@ -101,9 +103,6 @@ model = "gpt-user"
 [tools.web_search]
 context_size = "low"
 allowed_domains = ["example.com"]
-
-[tools]
-view_image = false
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -138,7 +137,6 @@ view_image = false
                 allowed_domains: Some(vec!["example.com".to_string()]),
                 location: None,
             }),
-            view_image: Some(false),
         }
     );
     assert_eq!(
@@ -148,6 +146,7 @@ view_image = false
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -157,17 +156,91 @@ view_image = false
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
-    assert_eq!(
-        origins.get("tools.view_image").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        }
-    );
-
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_legacy_forced_chatgpt_workspace_id() -> Result<()> {
+    const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+forced_chatgpt_workspace_id = "{WORKSPACE_ID}"
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Single(WORKSPACE_ID.to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_forced_chatgpt_workspace_id_list() -> Result<()> {
+    const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            WORKSPACE_ID_A.to_string(),
+            WORKSPACE_ID_B.to_string(),
+        ]))
+    );
 
     Ok(())
 }
@@ -308,6 +381,7 @@ default_tools_approval_mode = "prompt"
         origins.get("apps.app1.enabled").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -317,6 +391,7 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -326,11 +401,58 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_desktop_settings() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[desktop]
+appearanceTheme = "dark"
+selected-avatar-id = "codex"
+
+[desktop.workspace]
+collapsed = true
+width = 320
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    let desktop = config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
+    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
+    assert_eq!(
+        desktop.get("workspace"),
+        Some(&json!({
+            "collapsed": true,
+            "width": 320,
+        }))
+    );
 
     Ok(())
 }
@@ -470,6 +592,7 @@ writable_roots = [{}]
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -496,6 +619,7 @@ writable_roots = [{}]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -567,6 +691,50 @@ model = "gpt-old"
     .await??;
     let verify: ConfigReadResponse = to_response(verify_resp)?;
     assert_eq!(verify.config.model.as_deref(), Some("gpt-new"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_value_write_updates_desktop_settings() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().canonicalize()?;
+    write_config(&temp_dir, "")?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let write_id = mcp
+        .send_config_value_write_request(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "desktop.appearanceTheme".to_string(),
+            value: json!("dark"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+    let write_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_id)),
+    )
+    .await??;
+    let write: ConfigWriteResponse = to_response(write_resp)?;
+    assert_eq!(write.status, WriteStatus::Ok);
+
+    let read_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read: ConfigReadResponse = to_response(read_resp)?;
+    let desktop = read.config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
 
     Ok(())
 }
@@ -725,6 +893,135 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_preserves_dotted_profile_names() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(
+        &tmp_dir,
+        r#"
+profile = "team.prod"
+
+[profiles."team.prod"]
+model = "gpt-5.3-spark"
+
+[profiles.team.prod]
+model = "should-stay-put"
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: Some(codex_home.join("config.toml").display().to_string()),
+            edits: vec![
+                ConfigEdit {
+                    key_path: "profiles.\"team.prod\".model".to_string(),
+                    value: json!("gpt-5.5"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "items.sample@catalog.enabled".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let batch_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
+    assert_eq!(batch_write.status, WriteStatus::Ok);
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
+    assert_eq!(
+        config["profiles"]["team.prod"]["model"].as_str(),
+        Some("gpt-5.5")
+    );
+    assert_eq!(
+        config["profiles"]["team"]["prod"]["model"].as_str(),
+        Some("should-stay-put")
+    );
+    assert_eq!(
+        config["items"]["sample@catalog"]["enabled"].as_bool(),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_updates_multiple_desktop_settings() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(&tmp_dir, "")?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: Some(codex_home.join("config.toml").display().to_string()),
+            edits: vec![
+                ConfigEdit {
+                    key_path: "desktop.selected-avatar-id".to_string(),
+                    value: json!("codex"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "desktop.workspace".to_string(),
+                    value: json!({
+                        "collapsed": true,
+                        "width": 320,
+                    }),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let batch_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
+    assert_eq!(batch_write.status, WriteStatus::Ok);
+
+    let read_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read: ConfigReadResponse = to_response(read_resp)?;
+    let desktop = read.config.desktop.expect("desktop settings present");
+    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
+    assert_eq!(
+        desktop.get("workspace"),
+        Some(&json!({
+            "collapsed": true,
+            "width": 320,
+        }))
+    );
+
+    Ok(())
+}
+
 fn assert_layers_user_then_optional_system(
     layers: &[codex_app_server_protocol::ConfigLayer],
     user_file: AbsolutePathBuf,
@@ -739,7 +1036,10 @@ fn assert_layers_user_then_optional_system(
     assert_eq!(layers.len(), first_index + 2);
     assert_eq!(
         layers[first_index].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 1].name,
@@ -767,7 +1067,10 @@ fn assert_layers_managed_user_then_optional_system(
     );
     assert_eq!(
         layers[first_index + 1].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 2].name,

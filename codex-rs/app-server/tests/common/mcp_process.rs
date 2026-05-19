@@ -57,6 +57,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadParams;
 use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstalledParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginSkillReadParams;
@@ -570,6 +571,24 @@ impl McpProcess {
             .await
     }
 
+    /// Send a `remoteControl/enable` JSON-RPC request.
+    pub async fn send_remote_control_enable_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("remoteControl/enable", /*params*/ None)
+            .await
+    }
+
+    /// Send a `remoteControl/disable` JSON-RPC request.
+    pub async fn send_remote_control_disable_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("remoteControl/disable", /*params*/ None)
+            .await
+    }
+
+    /// Send a `remoteControl/status/read` JSON-RPC request.
+    pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("remoteControl/status/read", /*params*/ None)
+            .await
+    }
+
     /// Send an `app/list` JSON-RPC request.
     pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
@@ -664,6 +683,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("plugin/list", params).await
+    }
+
+    /// Send a `plugin/installed` JSON-RPC request.
+    pub async fn send_plugin_installed_request(
+        &mut self,
+        params: PluginInstalledParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/installed", params).await
     }
 
     /// Send a `plugin/read` JSON-RPC request.

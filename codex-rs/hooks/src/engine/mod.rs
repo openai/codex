@@ -4,8 +4,6 @@ pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
 
-use std::collections::HashMap;
-
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
@@ -33,6 +31,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_protocol::protocol::HookVisibilityHint;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -73,6 +72,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
+            codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
     }
@@ -182,7 +182,13 @@ impl ClaudeHooksEngine {
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
+        let session_id = request.session_id;
+        let mut outcome =
+            crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await;
+        outcome.additional_contexts = self
+            .maybe_spill_texts(session_id, outcome.additional_contexts)
+            .await;
+        outcome
     }
 
     pub(crate) async fn run_permission_request(

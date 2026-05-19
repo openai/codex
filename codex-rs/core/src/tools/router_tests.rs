@@ -7,17 +7,18 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolOutput;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::default_namespace_description;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -35,47 +36,53 @@ impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn ExtensionToolExecutor>> {
+    ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
         vec![Arc::new(ExtensionEchoExecutor)]
     }
 }
 
 struct ExtensionEchoExecutor;
 
-impl ExtensionToolExecutor for ExtensionEchoExecutor {
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("extension_echo")
+        ToolName::namespaced("extension/", "echo")
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        Some(ToolSpec::Function(ResponsesApiTool {
-            name: "extension_echo".to_string(),
-            description: "Echoes arguments through an extension tool.".to_string(),
-            strict: true,
-            parameters: codex_extension_api::parse_tool_input_schema(&json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" },
-                },
-                "required": ["message"],
-                "additionalProperties": false,
-            }))
-            .expect("extension schema should parse"),
-            output_schema: None,
-            defer_loading: None,
+        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "extension/".to_string(),
+            description: default_namespace_description("extension/"),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "echo".to_string(),
+                description: "Echoes arguments through an extension tool.".to_string(),
+                strict: true,
+                parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }))
+                .expect("extension schema should parse"),
+                output_schema: None,
+                defer_loading: None,
+            })],
         }))
     }
 
-    fn handle(&self, call: ExtensionToolCall) -> codex_extension_api::ExtensionToolFuture<'_> {
-        Box::pin(async move {
-            let arguments: serde_json::Value = serde_json::from_str(call.function_arguments()?)
-                .expect("test arguments should parse");
-            Ok(ExtensionToolOutput::new(json!({
-                "arguments": arguments,
-                "callId": call.call_id.clone(),
-                "ok": true,
-            })))
-        })
+    async fn handle(
+        &self,
+        call: ExtensionToolCall,
+    ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+        let arguments: serde_json::Value =
+            serde_json::from_str(call.function_arguments()?).expect("test arguments should parse");
+        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
+            "arguments": arguments,
+            "callId": call.call_id,
+            "ok": true,
+        }))))
     }
 }
 
@@ -99,8 +106,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         .await
         .list_all_tools()
         .await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
@@ -110,7 +117,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         },
     );
 
-    let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
+    let parallel_tool_name = ["exec_command", "shell_command"]
         .into_iter()
         .find(|name| {
             router.tool_supports_parallel(&ToolCall {
@@ -165,8 +172,8 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(vec![
@@ -213,8 +220,8 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
@@ -265,8 +272,8 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         },
     ];
 
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
@@ -321,8 +328,8 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
 
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
@@ -333,17 +340,21 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     );
 
     assert!(
-        router
-            .model_visible_specs()
-            .iter()
-            .any(|spec| spec.name() == "extension_echo"),
+        router.model_visible_specs().iter().any(
+            |spec| matches!(spec, ToolSpec::Namespace(namespace)
+            if namespace.name == "extension/"
+                && namespace.tools.iter().any(|tool| matches!(
+                    tool,
+                    ResponsesApiNamespaceTool::Function(tool) if tool.name == "echo"
+                )))
+        ),
         "expected extension-provided tool to be visible to the model"
     );
 
     let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
         id: None,
-        name: "extension_echo".to_string(),
-        namespace: None,
+        name: "echo".to_string(),
+        namespace: Some("extension/".to_string()),
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: "call-extension".to_string(),
     })?
@@ -399,7 +410,6 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             ToolSpec::Function(_)
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
-            | ToolSpec::LocalShell {}
             | ToolSpec::ImageGeneration { .. }
             | ToolSpec::WebSearch { .. }
             | ToolSpec::Namespace(_) => None,

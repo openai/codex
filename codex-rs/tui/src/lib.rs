@@ -7,13 +7,14 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::find_codex_home;
-use crate::legacy_core::config::load_config_as_toml_with_cli_and_loader_overrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
+pub use crate::startup_error::LocalStateDbStartupError;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -55,6 +56,7 @@ use codex_rollout::state_db;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_home_dir::find_codex_home;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
@@ -110,6 +112,7 @@ mod clipboard_copy;
 mod clipboard_paste;
 mod collaboration_modes;
 mod color;
+mod config_update;
 pub(crate) mod custom_terminal;
 mod pets;
 pub use custom_terminal::Terminal;
@@ -166,6 +169,7 @@ mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_error;
 mod startup_hooks_review;
 mod status;
 mod status_indicator_widget;
@@ -282,6 +286,7 @@ async fn start_embedded_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -293,6 +298,7 @@ async fn start_embedded_app_server(
         config,
         cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -307,6 +313,21 @@ async fn start_embedded_app_server(
 pub(crate) enum AppServerTarget {
     Embedded,
     Remote { endpoint: RemoteAppServerEndpoint },
+}
+
+async fn init_state_db_for_app_server_target(
+    config: &Config,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<Option<StateDbHandle>> {
+    match app_server_target {
+        AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
+            std::io::Error::other(LocalStateDbStartupError::new(
+                codex_state::state_db_path(config.sqlite_home.as_path()),
+                err.to_string(),
+            ))
+        }),
+        AppServerTarget::Remote { .. } => Ok(state_db::get_state_db(config).await),
+    }
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -453,6 +474,7 @@ async fn start_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -465,6 +487,7 @@ async fn start_app_server(
             config,
             cli_kv_overrides,
             loader_overrides,
+            strict_config,
             cloud_requirements,
             feedback,
             log_db,
@@ -489,6 +512,7 @@ pub(crate) async fn start_app_server_for_picker(
         config.clone(),
         Vec::new(),
         LoaderOverrides::default(),
+        /*strict_config*/ false,
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
@@ -503,7 +527,7 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    let state_db = state_db::init(config).await;
+    let state_db = init_state_db_for_app_server_target(config, &AppServerTarget::Embedded).await?;
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
@@ -519,6 +543,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
@@ -545,6 +570,7 @@ where
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
+        strict_config,
         cloud_requirements,
         feedback,
         log_db,
@@ -759,6 +785,7 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
             Some(SandboxMode::DangerFullAccess),
@@ -825,22 +852,31 @@ pub async fn run_main(
     )?;
     let environment_manager =
         if should_load_configured_environments(&loader_overrides, &app_server_target) {
-            EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+            EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
         } else {
-            EnvironmentManager::from_env(local_runtime_paths).await
+            EnvironmentManager::from_env(Some(local_runtime_paths)).await
         }
         .map(Arc::new)
         .map_err(std::io::Error::other)?;
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
+    let mut loader_overrides = loader_overrides;
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        let user_config_path = resolve_profile_v2_config_path(&codex_home, profile_v2);
+        loader_overrides.user_config_path = Some(user_config_path);
+        loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
+    let config_toml = match load_config_as_toml_with_cli_and_load_options(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
-        loader_overrides.clone(),
+        codex_config::ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
     )
     .await
     {
@@ -935,7 +971,9 @@ pub async fn run_main(
     let mut config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         cloud_requirements.clone(),
+        strict_config,
     )
     .await;
 
@@ -969,10 +1007,7 @@ pub async fn run_main(
         otel.as_ref(),
         otel_originator.as_str(),
     );
-    let state_db = match &app_server_target {
-        AppServerTarget::Embedded => state_db::init(&config).await,
-        AppServerTarget::Remote { .. } => state_db::get_state_db(&config).await,
-    };
+    let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
 
     let effective_toml = config.config_layer_stack.effective_config();
     match effective_toml.try_into() {
@@ -990,7 +1025,9 @@ pub async fn run_main(
                     config = load_config_or_exit(
                         cli_kv_overrides.clone(),
                         overrides.clone(),
+                        loader_overrides.clone(),
                         cloud_requirements.clone(),
+                        strict_config,
                     )
                     .await;
                 }
@@ -1025,7 +1062,7 @@ pub async fn run_main(
 
     if let Some(warning) = add_dir_warning_message(
         &cli.add_dir,
-        &config.permissions.permission_profile(),
+        &config.permissions.effective_permission_profile(),
         config.cwd.as_path(),
     ) {
         #[allow(clippy::print_stderr)]
@@ -1051,7 +1088,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = crate::legacy_core::config::log_dir(&config)?;
+    let log_dir = config.log_dir.clone();
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -1133,6 +1170,7 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        strict_config,
         app_server_target,
         remote_cwd_override,
         config,
@@ -1154,6 +1192,7 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    strict_config: bool,
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
@@ -1180,10 +1219,13 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut terminal = tui::init()?;
-    terminal.clear()?;
+    let mut initialized_terminal = tui::init()?;
+    initialized_terminal.terminal.clear()?;
 
-    let mut tui = Tui::new(terminal);
+    let mut tui = Tui::new(
+        initialized_terminal.terminal,
+        initialized_terminal.enhanced_keys_supported,
+    );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]
@@ -1217,6 +1259,7 @@ async fn run_ratatui_app(
         initial_config.clone(),
         cli_kv_overrides.clone(),
         loader_overrides.clone(),
+        strict_config,
         cloud_requirements.clone(),
         feedback.clone(),
         log_db.clone(),
@@ -1303,7 +1346,9 @@ async fn run_ratatui_app(
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
             )
             .await
         } else {
@@ -1505,7 +1550,9 @@ async fn run_ratatui_app(
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
                 fallback_cwd,
             )
             .await
@@ -1514,7 +1561,9 @@ async fn run_ratatui_app(
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
+                strict_config,
             )
             .await
         }
@@ -1555,7 +1604,8 @@ async fn run_ratatui_app(
             arg0_paths,
             config.clone(),
             cli_kv_overrides.clone(),
-            loader_overrides,
+            loader_overrides.clone(),
+            strict_config,
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
@@ -1586,6 +1636,7 @@ async fn run_ratatui_app(
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         active_profile,
         prompt,
         images,
@@ -1696,12 +1747,16 @@ async fn get_login_status(
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    strict_config: bool,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
+        loader_overrides,
         cloud_requirements,
+        strict_config,
         /*fallback_cwd*/ None,
     )
     .await
@@ -1710,13 +1765,17 @@ async fn load_config_or_exit(
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .strict_config(strict_config)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()
@@ -1782,12 +1841,14 @@ mod tests {
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
-        let state_db = state_db::init(&config).await;
+        let state_db =
+            init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await?;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -2230,10 +2291,10 @@ mod tests {
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::create_for_tests(
             Some("ws://127.0.0.1:8765".to_string()),
-            ExecServerRuntimePaths::new(
+            Some(ExecServerRuntimePaths::new(
                 std::env::current_exe().expect("current exe"),
                 /*codex_linux_sandbox_exe*/ None,
-            )?,
+            )?),
         )
         .await;
 
@@ -2353,6 +2414,7 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -2370,6 +2432,37 @@ mod tests {
             err.to_string()
                 .contains("failed to start embedded app server"),
             "error should preserve the embedded app server startup context"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embedded_state_db_failure_is_typed_for_cli_recovery() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let occupied_sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::write(&occupied_sqlite_home, "occupied")?;
+        config.sqlite_home = occupied_sqlite_home.clone();
+
+        let err =
+            match init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await {
+                Ok(_) => panic!("embedded startup should surface state db init failures"),
+                Err(err) => err,
+            };
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(
+            startup_error.state_db_path(),
+            codex_state::state_db_path(occupied_sqlite_home.as_path()).as_path()
+        );
+        assert!(
+            startup_error
+                .detail()
+                .contains("failed to initialize state runtime"),
+            "startup error should preserve the underlying state db failure"
         );
         Ok(())
     }
