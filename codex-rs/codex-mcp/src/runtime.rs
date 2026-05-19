@@ -68,7 +68,10 @@ impl McpRuntimeEnvironment {
         // the ambient HTTP client with no local environment configured.
         match config.experimental_environment.as_deref() {
             None | Some("local") => {
-                if self.environment.as_ref().is_none_or(Environment::is_remote)
+                if self
+                    .environment
+                    .as_ref()
+                    .is_none_or(|environment| environment.is_remote())
                     && matches!(
                         config.transport,
                         codex_config::McpServerTransportConfig::Stdio { .. }
