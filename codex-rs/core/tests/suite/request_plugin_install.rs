@@ -148,6 +148,9 @@ async fn request_plugin_install_is_available_without_search_tool_after_discovery
     assert!(list_description.contains(
         "`tool_search` is not available, or it has already been called and did not find or make the requested tool callable."
     ));
+    assert!(list_description.contains(
+        "When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed."
+    ));
 
     let description =
         function_tool_description(&body, REQUEST_PLUGIN_INSTALL_TOOL_NAME).expect("description");

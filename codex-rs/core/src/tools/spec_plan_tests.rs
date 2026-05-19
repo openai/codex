@@ -2135,6 +2135,9 @@ fn request_plugin_install_description_defers_discoverable_tools_to_list_tool() {
     assert!(list_description.contains(
         "Returns known plugins and connectors that can be passed to `request_plugin_install`."
     ));
+    assert!(list_description.contains(
+        "When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed."
+    ));
     assert!(description.contains(
         "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
     ));

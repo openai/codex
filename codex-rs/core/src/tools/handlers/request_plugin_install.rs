@@ -143,15 +143,10 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
             suggest_reason,
             &tool,
         );
-        let tool_type = match args.tool_type {
-            DiscoverableToolType::Connector => "connector",
-            DiscoverableToolType::Plugin => "plugin",
-        };
-        turn.session_telemetry
-            .record_plugin_install_elicitation_sent(tool_type, tool.id(), tool.name());
-        let response = session
+        let elicitation = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
+        let response = elicitation.response;
         if let Some(response) = response.as_ref() {
             maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
@@ -171,20 +166,26 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
                 .await;
         }
 
-        let response_action = match response.as_ref().map(|response| &response.action) {
-            Some(ElicitationAction::Accept) => "accept",
-            Some(ElicitationAction::Decline) => "decline",
-            Some(ElicitationAction::Cancel) => "cancel",
-            None => "unavailable",
-        };
-        turn.session_telemetry.record_plugin_install_suggestion(
-            tool_type,
-            tool.id(),
-            tool.name(),
-            response_action,
-            user_confirmed,
-            completed,
-        );
+        if elicitation.sent {
+            let tool_type = match args.tool_type {
+                DiscoverableToolType::Connector => "connector",
+                DiscoverableToolType::Plugin => "plugin",
+            };
+            let response_action = match response.as_ref().map(|response| &response.action) {
+                Some(ElicitationAction::Accept) => "accept",
+                Some(ElicitationAction::Decline) => "decline",
+                Some(ElicitationAction::Cancel) => "cancel",
+                None => "unavailable",
+            };
+            turn.session_telemetry.record_plugin_install_suggestion(
+                tool_type,
+                tool.id(),
+                tool.name(),
+                response_action,
+                user_confirmed,
+                completed,
+            );
+        }
 
         let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,
