@@ -3,6 +3,8 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+#[cfg(not(debug_assertions))]
+use codex_core::RolloutRecorder;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
@@ -25,7 +27,11 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+#[cfg(not(debug_assertions))]
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+#[cfg(not(debug_assertions))]
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
@@ -1450,7 +1456,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
 
 #[cfg(not(debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
+async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1466,14 +1472,27 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             .set_body_string(INVALID_IMAGE_ERROR),
     )
     .await;
+    let unexpected_retry_mock = responses::mount_sse_once_match(
+        &server,
+        body_string_contains("Invalid image"),
+        sse(vec![
+            ev_response_created("resp-unexpected"),
+            ev_assistant_message("msg-unexpected", "unexpected retry"),
+            ev_completed("resp-unexpected"),
+        ]),
+    )
+    .await;
 
-    let success_response = sse(vec![
-        ev_response_created("resp-2"),
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-
-    let completion_mock = responses::mount_sse_once(&server, success_response).await;
+    let resumed_completion_mock = responses::mount_sse_once_match(
+        &server,
+        body_string_contains("after resume"),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "still done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
 
     let mut builder = test_codex();
     let test = builder.build_with_remote_env(&server).await?;
@@ -1487,6 +1506,11 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let abs_path = write_workspace_png(&test, rel_path, 1024, 512, [10u8, 20, 30, 255]).await?;
 
     let session_model = session_configured.model.clone();
+    let rollout_path = session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let home = test.home.clone();
 
     codex
         .submit(disabled_user_turn(
@@ -1498,6 +1522,31 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             session_model,
         ))
         .await?;
+
+    let rollback_event = wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::ThreadRolledBack(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+    let EventMsg::ThreadRolledBack(rollback) = rollback_event else {
+        unreachable!()
+    };
+    assert_eq!(rollback.num_turns, 1);
+
+    let error_event = wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::Error(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+    let EventMsg::Error(error) = error_event else {
+        unreachable!()
+    };
+    assert_eq!(
+        error.message,
+        "This turn contained invalid image data and was rolled back. Please retry."
+    );
 
     wait_for_event_with_timeout(
         &codex,
@@ -1512,14 +1561,60 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         "initial request should include the uploaded image"
     );
 
-    let second_request = completion_mock.single_request();
-    let second_body = second_request.body_json();
     assert!(
-        find_image_message(&second_body).is_none(),
-        "second request should replace the invalid image"
+        unexpected_retry_mock.requests().is_empty(),
+        "invalid-image recovery should rollback instead of retrying with sanitized text"
     );
-    let user_texts = second_request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "Invalid image"));
+
+    let InitialHistory::Resumed(resumed_history) =
+        RolloutRecorder::get_rollout_history(&rollout_path).await?
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(resumed_history.history.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback))
+                if rollback.num_turns == 1
+        )
+    }));
+
+    let mut resume_builder = test_codex();
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(disabled_user_turn(
+            &resumed,
+            vec![UserInput::Text {
+                text: "after resume".to_string(),
+                text_elements: Vec::new(),
+            }],
+            resumed.session_configured.model.clone(),
+        ))
+        .await?;
+    wait_for_event_with_timeout(
+        &resumed.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+
+    let resumed_request = resumed_completion_mock.single_request();
+    assert!(
+        find_image_message(&resumed_request.body_json()).is_none(),
+        "resumed request should not replay the rolled-back image turn"
+    );
+    let resumed_user_texts = resumed_request.message_input_texts("user");
+    assert!(
+        resumed_user_texts.iter().any(|text| text == "after resume"),
+        "resumed request should contain only the new follow-up text"
+    );
+    assert!(
+        resumed_user_texts
+            .iter()
+            .all(|text| text != "Invalid image"),
+        "rolled-back turns should not replay placeholder text"
+    );
 
     Ok(())
 }

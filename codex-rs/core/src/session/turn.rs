@@ -37,6 +37,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::handlers::apply_thread_rollback;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -87,6 +88,7 @@ use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
@@ -410,19 +412,42 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
+                error_or_panic(
+                    "Invalid image detected; rolling back the current turn to prevent poisoning",
+                );
+                let rollback_succeeded = match apply_thread_rollback(
+                    &sess,
+                    &turn_context,
+                    /*num_turns*/ 1,
+                )
+                .await
                 {
-                    let mut state = sess.state.lock().await;
-                    error_or_panic(
-                        "Invalid image detected; sanitizing tool output to prevent poisoning",
-                    );
-                    if state.history.replace_last_turn_images("Invalid image") {
-                        continue;
+                    Ok((rollback_msg, flush_error)) => {
+                        if let Some(err) = flush_error {
+                            warn!(
+                                "rolled back invalid-image turn in memory, but failed to flush rollback marker: {err}"
+                            );
+                        }
+                        sess.deliver_event_raw(Event {
+                            id: turn_context.sub_id.clone(),
+                            msg: rollback_msg,
+                        })
+                        .await;
+                        true
                     }
-                }
-
+                    Err(err) => {
+                        warn!("failed to rollback invalid-image turn: {err}");
+                        false
+                    }
+                };
                 let event = EventMsg::Error(ErrorEvent {
-                    message: "Invalid image in your last message. Please remove it and try again."
-                        .to_string(),
+                    message: if rollback_succeeded {
+                        "This turn contained invalid image data and was rolled back. Please retry."
+                            .to_string()
+                    } else {
+                        "This turn contained invalid image data and could not be repaired automatically. Please retry."
+                            .to_string()
+                    },
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 });
                 sess.send_event(&turn_context, event).await;

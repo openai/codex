@@ -12,6 +12,7 @@ use tracing::info_span;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
+use crate::session::turn_context::TurnContext;
 
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
@@ -499,61 +500,23 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    let live_thread = match sess.live_thread_for_persistence("rollback thread") {
-        Ok(live_thread) => live_thread,
-        Err(_) => {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "thread rollback requires persisted thread history".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                }),
-            })
-            .await;
-            return;
-        }
-    };
-    if let Err(err) = live_thread.flush().await {
-        sess.send_event_raw(Event {
-            id: turn_context.sub_id.clone(),
-            msg: EventMsg::Error(ErrorEvent {
-                message: format!("failed to flush thread persistence for rollback replay: {err}"),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
+    let (rollback_msg, flush_error) =
+        match apply_thread_rollback(sess, &turn_context, num_turns).await {
+            Ok(outcome) => outcome,
+            Err(message) => {
+                sess.send_event_raw(Event {
+                    id: turn_context.sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message,
+                        codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                    }),
+                })
+                .await;
+                return;
+            }
+        };
 
-    let stored_history = match live_thread.load_history(/*include_archived*/ false).await {
-        Ok(history) => history,
-        Err(err) => {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("failed to load thread history for rollback replay: {err}"),
-                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                }),
-            })
-            .await;
-            return;
-        }
-    };
-
-    let rollback_event = ThreadRolledBackEvent { num_turns };
-    let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
-    let replay_items = stored_history
-        .items
-        .into_iter()
-        .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
-        .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
-        .await;
-    sess.recompute_token_usage(turn_context.as_ref()).await;
-
-    sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
-        .await;
-    if let Err(err) = sess.flush_rollout().await {
+    if let Some(err) = flush_error {
         sess.send_event(
             turn_context.as_ref(),
             EventMsg::Warning(WarningEvent {
@@ -570,6 +533,40 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         msg: rollback_msg,
     })
     .await;
+}
+
+pub(super) async fn apply_thread_rollback(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    num_turns: u32,
+) -> Result<(EventMsg, Option<String>), String> {
+    let live_thread = sess
+        .live_thread_for_persistence("rollback thread")
+        .map_err(|_| "thread rollback requires persisted thread history".to_string())?;
+    live_thread
+        .flush()
+        .await
+        .map_err(|err| format!("failed to flush thread persistence for rollback replay: {err}"))?;
+    let stored_history = live_thread
+        .load_history(/*include_archived*/ false)
+        .await
+        .map_err(|err| format!("failed to load thread history for rollback replay: {err}"))?;
+
+    let rollback_event = ThreadRolledBackEvent { num_turns };
+    let rollback_msg = EventMsg::ThreadRolledBack(rollback_event);
+    let replay_items = stored_history
+        .items
+        .into_iter()
+        .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
+        .collect::<Vec<_>>();
+    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        .await;
+    sess.recompute_token_usage(turn_context.as_ref()).await;
+
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
+        .await;
+    let flush_error = sess.flush_rollout().await.err().map(|err| err.to_string());
+    Ok((rollback_msg, flush_error))
 }
 
 pub(super) async fn persist_thread_memory_mode_update(

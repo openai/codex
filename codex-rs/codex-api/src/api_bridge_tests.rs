@@ -103,6 +103,50 @@ fn map_api_error_uses_cyber_policy_fallback_for_missing_message() {
 }
 
 #[test]
+fn map_api_error_maps_invalid_image_param_from_400_body() {
+    let body = serde_json::json!({
+        "error": {
+            "message": "Invalid inline image.",
+            "type": "invalid_request_error",
+            "param": "input[13].content[2].image_url",
+            "code": "invalid_value"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    assert!(matches!(err, CodexErr::InvalidImageRequest()));
+}
+
+#[test]
+fn map_api_error_maps_empty_base64_image_message_from_400_body() {
+    let body = serde_json::json!({
+        "error": {
+            "message": format!(
+                "Invalid 'input[0].content[2].image_url': {EMPTY_BASE64_IMAGE_ERROR_MESSAGE}"
+            ),
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_value"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    assert!(matches!(err, CodexErr::InvalidImageRequest()));
+}
+
+#[test]
 fn map_api_error_keeps_unknown_400_errors_generic() {
     let body = serde_json::json!({
         "error": {

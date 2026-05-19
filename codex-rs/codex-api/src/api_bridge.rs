@@ -56,8 +56,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
-                        && let Some(error) = parsed.get("error")
+                    let parsed = serde_json::from_str::<Value>(&body_text).ok();
+                    if let Some(error) = parsed.as_ref().and_then(|parsed| parsed.get("error"))
                         && error.get("code").and_then(Value::as_str)
                             == Some(CYBER_POLICY_ERROR_CODE)
                     {
@@ -68,8 +68,19 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                             .map(str::to_string)
                             .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
                         CodexErr::CyberPolicy { message }
-                    } else if body_text
-                        .contains("The image data you provided does not represent a valid image")
+                    } else if body_text.contains(INVALID_IMAGE_ERROR_MESSAGE)
+                        || body_text.contains(EMPTY_BASE64_IMAGE_ERROR_MESSAGE)
+                        || parsed
+                            .as_ref()
+                            .and_then(|parsed| parsed.get("error"))
+                            .is_some_and(|error| {
+                                error.get("code").and_then(Value::as_str)
+                                    == Some(INVALID_VALUE_ERROR_CODE)
+                                    && error
+                                        .get("param")
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|param| param.ends_with(".image_url"))
+                            })
                     {
                         CodexErr::InvalidImageRequest()
                     } else {
@@ -141,6 +152,10 @@ const X_ERROR_JSON_HEADER: &str = "x-error-json";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";
+const INVALID_VALUE_ERROR_CODE: &str = "invalid_value";
+const INVALID_IMAGE_ERROR_MESSAGE: &str =
+    "The image data you provided does not represent a valid image";
+const EMPTY_BASE64_IMAGE_ERROR_MESSAGE: &str = "Expected a base64-encoded data URL with an image MIME type (e.g. 'data:image/png;base64,aW1nIGJ5dGVzIGhlcmU='), but got empty base64-encoded bytes.";
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
