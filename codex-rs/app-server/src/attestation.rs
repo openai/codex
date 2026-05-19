@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
 use axum::http::HeaderValue;
 use codex_app_server_protocol::AttestationGenerateParams;
@@ -22,13 +23,13 @@ pub(crate) fn app_server_attestation_provider(
     thread_state_manager: ThreadStateManager,
 ) -> Arc<dyn AttestationProvider> {
     Arc::new(AppServerAttestationProvider {
-        outgoing,
+        outgoing: Arc::downgrade(&outgoing),
         thread_state_manager,
     })
 }
 
 struct AppServerAttestationProvider {
-    outgoing: Arc<OutgoingMessageSender>,
+    outgoing: Weak<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
 }
 
@@ -42,9 +43,12 @@ impl std::fmt::Debug for AppServerAttestationProvider {
 
 impl AttestationProvider for AppServerAttestationProvider {
     fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
-        let outgoing = self.outgoing.clone();
+        let outgoing = self.outgoing.upgrade();
         let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
+            let Some(outgoing) = outgoing else {
+                return None;
+            };
             request_attestation_header_value_with_timeout(
                 outgoing,
                 thread_state_manager,
