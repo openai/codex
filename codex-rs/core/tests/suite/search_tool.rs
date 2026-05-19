@@ -335,7 +335,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> {
+async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -350,7 +350,13 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     )
     .await;
 
-    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -363,17 +369,21 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "explicit app mentions should leave app tools deferred when always-defer is active: {tools:?}"
+    );
+    assert!(
         namespace_child_tool(
             &body,
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_some(),
-        "expected explicit app mention to expose create tool, got tools: {tools:?}"
+        .is_none(),
+        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
-        "expected explicit app mention to expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
+        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())

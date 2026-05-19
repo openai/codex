@@ -442,22 +442,18 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let sandbox_policy = permission_profile
         .to_legacy_sandbox_policy(config.cwd.as_path())
         .expect("workspace profile should have legacy projection");
-    codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
             sandbox_policy: Some(sandbox_policy),
             permission_profile: Some(permission_profile),
-            windows_sandbox_level: None,
-            model: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     // Second turn after overrides
     codex
@@ -493,7 +489,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
-    // After overriding thread settings, emit one updated permissions message.
+    // After overriding the thread settings, emit one updated permissions message.
     let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
     assert_ne!(
         expected_permissions_msg_2, expected_permissions_msg,
@@ -529,22 +525,17 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         },
     };
 
-    codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
-            summary: None,
-            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     codex
         .submit(Op::UserInput {

@@ -4,14 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
-use crate::SkillLoadOutcome;
 use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
-use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -216,7 +214,6 @@ pub(crate) async fn run_turn(
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
@@ -307,8 +304,6 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &explicitly_enabled_connectors,
-            skills_outcome,
             cancellation_token.child_token(),
         )
         .await
@@ -894,82 +889,6 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     connector_ids
 }
 
-pub(super) fn filter_connectors_for_input(
-    connectors: &[connectors::AppInfo],
-    input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> Vec<connectors::AppInfo> {
-    let connectors: Vec<connectors::AppInfo> = connectors
-        .iter()
-        .filter(|connector| connector.is_enabled)
-        .cloned()
-        .collect::<Vec<_>>();
-    if connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let mentions = collect_tool_mentions_from_messages(&user_messages);
-    let mention_names_lower = mentions
-        .plain_names
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<HashSet<String>>();
-
-    let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
-    for path in mentions
-        .paths
-        .iter()
-        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        if let Some(connector_id) = app_id_from_path(path) {
-            allowed_connector_ids.insert(connector_id.to_string());
-        }
-    }
-
-    connectors
-        .into_iter()
-        .filter(|connector| {
-            connector_inserted_in_messages(
-                connector,
-                &mention_names_lower,
-                &allowed_connector_ids,
-                &connector_slug_counts,
-                skill_name_counts_lower,
-            )
-        })
-        .collect()
-}
-
-fn connector_inserted_in_messages(
-    connector: &connectors::AppInfo,
-    mention_names_lower: &HashSet<String>,
-    allowed_connector_ids: &HashSet<String>,
-    connector_slug_counts: &HashMap<String, usize>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> bool {
-    if allowed_connector_ids.contains(&connector.id) {
-        return true;
-    }
-
-    let mention_slug = codex_connectors::metadata::connector_mention_slug(connector);
-    let connector_count = connector_slug_counts
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    let skill_count = skill_name_counts_lower
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
-}
-
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
@@ -1007,19 +926,9 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    explicitly_enabled_connectors: &HashSet<String>,
-    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let router = built_tools(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &input,
-        explicitly_enabled_connectors,
-        skills_outcome,
-        &cancellation_token,
-    )
-    .await?;
+    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1149,9 +1058,6 @@ async fn run_sampling_request(
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
-    input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
-    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
@@ -1166,9 +1072,6 @@ pub(crate) async fn built_tools(
         .plugins_manager
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .await;
-
-    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
-    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
@@ -1221,24 +1124,9 @@ pub(crate) async fn built_tools(
         None
     };
 
-    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
-        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
-
-        filter_connectors_for_input(
-            connectors,
-            input,
-            &effective_explicitly_enabled_connectors,
-            &skill_name_counts_lower,
-        )
-    } else {
-        Vec::new()
-    };
     let mcp_tool_exposure = build_mcp_tool_exposure(
         &all_mcp_tools,
         connectors.as_deref(),
-        explicitly_enabled.as_slice(),
         &turn_context.config,
         &turn_context.tools_config,
     );
@@ -1452,6 +1340,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)

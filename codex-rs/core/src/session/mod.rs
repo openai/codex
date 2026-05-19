@@ -216,8 +216,6 @@ pub(crate) use self::session::SessionSettingsUpdate;
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
-#[cfg(test)]
-use self::turn::filter_connectors_for_input;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
@@ -1385,12 +1383,15 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn validate_settings(
+    pub(crate) async fn preview_settings(
         &self,
         updates: &SessionSettingsUpdate,
-    ) -> ConstraintResult<()> {
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
         let state = self.state.lock().await;
-        state.session_configuration.apply(updates).map(|_| ())
+        state
+            .session_configuration
+            .apply(updates)
+            .map(|configuration| configuration.thread_config_snapshot())
     }
 
     pub(crate) async fn set_session_startup_prewarm(

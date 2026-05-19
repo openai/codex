@@ -70,7 +70,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
-  - `Op::UserTurn` and `Op::OverrideTurnContext` accept an optional `personality` override that updates the model’s communication style
+  - `Op::UserInput` accepts an optional `personality` turn-context override that updates the model’s communication style
 
 Valid `personality` values are `friendly`, `pragmatic`, and `none`. When `none` is selected, the personality placeholder is replaced with an empty string.
 

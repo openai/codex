@@ -3279,23 +3279,15 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             .expect("submit user input");
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
-    codex
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await
-        .expect("override turn context");
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("override thread settings");
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
     codex

@@ -479,7 +479,7 @@ impl TurnRequestProcessor {
         // still queued together with the input below to preserve submission order.
         if has_any_overrides {
             thread
-                .validate_thread_settings_overrides(CodexThreadSettingsOverrides {
+                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     cwd: cwd.clone(),
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
