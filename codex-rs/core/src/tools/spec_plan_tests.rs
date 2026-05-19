@@ -470,6 +470,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
 
     let missing_deferred_tools = probe(|turn| {
+        set_feature(turn, Feature::Collab, /*enabled*/ false);
         turn.model_info.supports_search_tool = true;
     })
     .await;
