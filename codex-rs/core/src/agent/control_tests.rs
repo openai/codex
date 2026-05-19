@@ -10,6 +10,9 @@ use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
 use assert_matches::assert_matches;
+use codex_config::Constrained;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
@@ -32,6 +35,7 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
@@ -71,6 +75,46 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
             text: text.to_string(),
         }],
         phase,
+    }
+}
+
+/// Returns a required stdio MCP server that never completes initialization
+/// before its startup timeout, forcing the async startup path to surface a
+/// delayed failure from the child thread.
+fn blocking_required_stdio_mcp_server() -> McpServerConfig {
+    let (command, args) = if cfg!(windows) {
+        (
+            "cmd".to_string(),
+            vec!["/C".to_string(), "ping -n 5 127.0.0.1 > NUL".to_string()],
+        )
+    } else {
+        (
+            "sh".to_string(),
+            vec!["-c".to_string(), "sleep 5".to_string()],
+        )
+    };
+    McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        experimental_environment: None,
+        enabled: true,
+        required: true,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: Some(Duration::from_millis(150)),
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
     }
 }
 
@@ -121,6 +165,45 @@ impl AgentControlHarness {
             .expect("start thread");
         (new_thread.thread_id, new_thread.thread)
     }
+}
+
+async fn spawn_async_child_with_blocking_required_mcp(
+    harness: &AgentControlHarness,
+    parent_thread_id: ThreadId,
+    worker_path: AgentPath,
+) -> LiveAgent {
+    let mut config = harness.config.clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.async_subagent_startup = true;
+    config.mcp_servers = Constrained::allow_any(HashMap::from([(
+        "slow_required".to_string(),
+        blocking_required_stdio_mcp_server(),
+    )]));
+
+    harness
+        .control
+        .spawn_agent_with_metadata(
+            config,
+            Op::InterAgentCommunication {
+                communication: InterAgentCommunication::new(
+                    AgentPath::root(),
+                    worker_path.clone(),
+                    Vec::new(),
+                    "hello worker".to_string(),
+                    /*trigger_turn*/ true,
+                ),
+            },
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("child spawn should succeed")
 }
 
 fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
@@ -196,6 +279,81 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
     };
     // CI can take several seconds to schedule the detached completion watcher,
     // especially on slower Windows runners.
+    timeout(Duration::from_secs(10), wait).await.is_ok()
+}
+
+async fn wait_for_subagent_notification_with_timeout(
+    parent_thread: &Arc<CodexThread>,
+    timeout_duration: Duration,
+) -> bool {
+    let wait = async {
+        loop {
+            let history_items = parent_thread
+                .codex
+                .session
+                .clone_history()
+                .await
+                .raw_items()
+                .to_vec();
+            if has_subagent_notification(&history_items) {
+                return true;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    };
+    timeout(timeout_duration, wait).await.is_ok()
+}
+
+async fn wait_for_pending_parent_inbox(parent_thread: &Arc<CodexThread>) -> bool {
+    let wait = async {
+        loop {
+            if parent_thread
+                .codex
+                .session
+                .input_queue
+                .has_pending_input(&parent_thread.codex.session.active_turn)
+                .await
+            {
+                return true;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    };
+    timeout(Duration::from_secs(10), wait).await.is_ok()
+}
+
+async fn wait_for_parent_startup_failure_notification(
+    harness: &AgentControlHarness,
+    parent_thread_id: ThreadId,
+    worker_path: &AgentPath,
+) -> bool {
+    let wait = async {
+        loop {
+            let found = harness
+                .manager
+                .captured_ops()
+                .into_iter()
+                .any(|(thread_id, op)| {
+                    if thread_id != parent_thread_id {
+                        return false;
+                    }
+                    let Op::InterAgentCommunication { communication } = op else {
+                        return false;
+                    };
+                    communication.author == *worker_path
+                        && communication.recipient == AgentPath::root()
+                        && !communication.trigger_turn
+                        && SubagentNotification::matches_text(&communication.content)
+                        && communication
+                            .content
+                            .contains("required MCP servers failed to initialize")
+                });
+            if found {
+                return true;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    };
     timeout(Duration::from_secs(10), wait).await.is_ok()
 }
 
@@ -1573,6 +1731,81 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
         )
     ));
     assert!(!has_subagent_notification(&root_history_items));
+}
+
+#[tokio::test]
+async fn async_subagent_startup_registers_child_before_required_mcp_failure() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    let spawned = spawn_async_child_with_blocking_required_mcp(
+        &harness,
+        parent_thread_id,
+        worker_path.clone(),
+    )
+    .await;
+
+    assert_eq!(spawned.status, AgentStatus::PendingInit);
+
+    let child_thread = harness
+        .manager
+        .get_thread(spawned.thread_id)
+        .await
+        .expect("child thread should exist");
+    assert!(
+        child_thread
+            .codex
+            .session
+            .active_turn
+            .lock()
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        harness.control.get_status(spawned.thread_id).await,
+        AgentStatus::PendingInit,
+        "the child should stay in PendingInit until deferred startup either succeeds or fails"
+    );
+
+    assert!(
+        wait_for_parent_startup_failure_notification(&harness, parent_thread_id, &worker_path)
+            .await,
+        "startup failure should enqueue a mailbox notification for the parent"
+    );
+
+    // MultiAgentV2 children report back through the parent's mailbox, so the
+    // notification should land as pending input rather than as an immediate
+    // history item.
+    assert!(
+        wait_for_pending_parent_inbox(&parent_thread).await,
+        "parent should receive a startup failure notification from the child"
+    );
+    assert_matches!(
+        harness.control.get_status(spawned.thread_id).await,
+        AgentStatus::Errored(message)
+            if message.contains("required MCP servers failed to initialize")
+    );
+}
+
+#[tokio::test]
+async fn async_subagent_startup_does_not_report_failure_after_child_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    let spawned =
+        spawn_async_child_with_blocking_required_mcp(&harness, parent_thread_id, worker_path).await;
+
+    harness
+        .control
+        .shutdown_live_agent(spawned.thread_id)
+        .await
+        .expect("shutdown should succeed");
+
+    assert!(
+        !wait_for_subagent_notification_with_timeout(&parent_thread, Duration::from_millis(750))
+            .await,
+        "shutdown should suppress late async-startup failure notifications"
+    );
 }
 
 #[tokio::test]

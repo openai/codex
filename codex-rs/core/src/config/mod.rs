@@ -958,6 +958,9 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
+    /// Register spawned MultiAgentV2 children before slow MCP startup
+    /// finishes so the parent is not blocked on tool initialization.
+    pub async_subagent_startup: bool,
     pub max_concurrent_threads_per_session: usize,
     pub min_wait_timeout_ms: i64,
     pub max_wait_timeout_ms: i64,
@@ -974,6 +977,7 @@ pub struct MultiAgentV2Config {
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
+            async_subagent_startup: false,
             max_concurrent_threads_per_session:
                 DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
             min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
@@ -2165,6 +2169,10 @@ fn resolve_multi_agent_v2_config(
     let profile = multi_agent_v2_toml_config(config_profile.features.as_ref());
     let default = MultiAgentV2Config::default();
 
+    let async_subagent_startup = profile
+        .and_then(|config| config.async_subagent_startup)
+        .or_else(|| base.and_then(|config| config.async_subagent_startup))
+        .unwrap_or(default.async_subagent_startup);
     let max_concurrent_threads_per_session = profile
         .and_then(|config| config.max_concurrent_threads_per_session)
         .or_else(|| base.and_then(|config| config.max_concurrent_threads_per_session))
@@ -2215,6 +2223,7 @@ fn resolve_multi_agent_v2_config(
         .unwrap_or(default.non_code_mode_only);
 
     MultiAgentV2Config {
+        async_subagent_startup,
         max_concurrent_threads_per_session,
         min_wait_timeout_ms,
         max_wait_timeout_ms,

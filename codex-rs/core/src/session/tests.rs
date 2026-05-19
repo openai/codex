@@ -10,6 +10,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use assert_matches::assert_matches;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
@@ -4327,6 +4328,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
+        startup_state: watch::channel(SessionStartupState::Ready).0,
+        deferred_startup: Mutex::new(None),
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -6154,6 +6157,8 @@ where
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
+        startup_state: watch::channel(SessionStartupState::Ready).0,
+        deferred_startup: Mutex::new(None),
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -6282,6 +6287,130 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn inter_agent_mail_stays_queued_while_startup_is_initializing() {
+    let (session, _rx_event) = make_session_with_config_and_rx(|config| {
+        let _ = config.features.enable(Feature::MultiAgentV2);
+    })
+    .await
+    .expect("session should initialize");
+    session.set_startup_state_for_tests(SessionStartupState::Initializing);
+
+    handlers::inter_agent_communication(
+        &session,
+        "startup-mail".to_string(),
+        InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("worker path"),
+            Vec::new(),
+            "hello".to_string(),
+            /*trigger_turn*/ true,
+        ),
+    )
+    .await;
+
+    assert!(
+        session.active_turn.lock().await.is_none(),
+        "startup should not claim an active turn before deferred initialization finishes"
+    );
+    assert!(
+        session.input_queue.has_pending_mailbox_items().await,
+        "trigger-turn mailbox input should stay queued while startup is still in progress"
+    );
+}
+
+#[tokio::test]
+async fn user_input_returns_error_while_startup_is_initializing() {
+    let (session, rx_event) = make_session_with_config_and_rx(|config| {
+        let _ = config.features.enable(Feature::MultiAgentV2);
+    })
+    .await
+    .expect("session should initialize");
+    session.set_startup_state_for_tests(SessionStartupState::Initializing);
+
+    handlers::user_input_or_turn(
+        &session,
+        "startup-user-input".to_string(),
+        Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        },
+    )
+    .await;
+
+    let event = loop {
+        let event = rx_event.recv().await.expect("startup error event");
+        if matches!(event.msg, EventMsg::Error(_)) {
+            break event;
+        }
+    };
+    assert_eq!(event.id, "startup-user-input");
+    assert_matches!(
+        event.msg,
+        EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: Some(CodexErrorInfo::Other),
+        }) if message == "thread startup is still in progress"
+    );
+    assert!(
+        session.active_turn.lock().await.is_none(),
+        "rejected input should not create a turn while startup is blocked"
+    );
+}
+
+#[tokio::test]
+async fn user_input_returns_error_after_startup_failure() {
+    let (session, rx_event) = make_session_with_config_and_rx(|config| {
+        let _ = config.features.enable(Feature::MultiAgentV2);
+    })
+    .await
+    .expect("session should initialize");
+    session.set_startup_state_for_tests(SessionStartupState::Failed(
+        "required MCP servers failed to initialize".to_string(),
+    ));
+
+    handlers::user_input_or_turn(
+        &session,
+        "startup-user-input".to_string(),
+        Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        },
+    )
+    .await;
+
+    let event = loop {
+        let event = rx_event.recv().await.expect("startup error event");
+        if matches!(event.msg, EventMsg::Error(_)) {
+            break event;
+        }
+    };
+    assert_eq!(event.id, "startup-user-input");
+    assert_matches!(
+        event.msg,
+        EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: Some(CodexErrorInfo::Other),
+        }) if message == "thread failed to initialize: required MCP servers failed to initialize"
+    );
+    assert!(
+        session.active_turn.lock().await.is_none(),
+        "failed startup should keep rejecting direct turn creation"
+    );
 }
 
 #[tokio::test]

@@ -1253,24 +1253,49 @@ impl ThreadManagerState {
             }
         };
 
-        {
+        let mut codex = Some(codex);
+        let thread = {
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
+                let Some(codex) = codex.take() else {
+                    unreachable!();
+                };
                 let thread = Arc::new(CodexThread::new(
                     codex,
                     session_configured.clone(),
                     session_configured.rollout_path.clone(),
                     session_source,
                 ));
+                // Make the thread visible to parent-facing queries before any
+                // deferred startup work can emit status changes or mailbox
+                // notifications.
                 e.insert(thread.clone());
-                return Ok(NewThread {
-                    thread_id,
-                    thread,
-                    session_configured,
-                });
+                Some(thread)
+            } else {
+                None
             }
+        };
+
+        if let Some(thread) = thread {
+            // The registration above is the semantic handoff point: after this
+            // call the child exists from the parent's perspective, so delayed
+            // MCP failures can be reported asynchronously without losing the
+            // child identity.
+            thread
+                .codex
+                .session
+                .start_deferred_startup_if_needed()
+                .await;
+            return Ok(NewThread {
+                thread_id,
+                thread,
+                session_configured,
+            });
         }
 
+        let Some(codex) = codex else {
+            unreachable!();
+        };
         if let Err(err) = codex.shutdown_and_wait().await {
             warn!("failed to shut down duplicate thread {thread_id}: {err}");
         }

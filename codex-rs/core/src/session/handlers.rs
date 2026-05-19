@@ -9,6 +9,7 @@ use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
 
+use crate::session::SessionStartupState;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
@@ -183,6 +184,38 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     })
 }
 
+async fn reject_turn_start_until_session_ready(sess: &Arc<Session>, sub_id: &str) -> bool {
+    // Async subagent startup only defers mailbox-triggered work today. Any
+    // direct turn-starting request that arrives before startup completes is
+    // rejected explicitly so it cannot race the child into running with an
+    // incomplete tool set or partially reconstructed history.
+    match sess.startup_state() {
+        SessionStartupState::Ready => false,
+        SessionStartupState::Initializing => {
+            sess.send_event_raw(Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "thread startup is still in progress".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            true
+        }
+        SessionStartupState::Failed(message) => {
+            sess.send_event_raw(Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("thread failed to initialize: {message}"),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            true
+        }
+    }
+}
+
 pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
@@ -207,6 +240,10 @@ pub(super) async fn user_input_or_turn_inner(
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
     updates.environments = environments;
+
+    if reject_turn_start_until_session_ready(sess, &sub_id).await {
+        return;
+    }
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
@@ -322,6 +359,10 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
             )
             .await;
         });
+        return;
+    }
+
+    if reject_turn_start_until_session_ready(sess, &sub_id).await {
         return;
     }
 
@@ -458,6 +499,10 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    if reject_turn_start_until_session_ready(sess, &sub_id).await {
+        return;
+    }
+
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
     sess.spawn_task(
@@ -606,6 +651,7 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 
 async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    sess.cancel_mcp_startup().await;
     let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager
@@ -683,6 +729,10 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
+    if reject_turn_start_until_session_ready(sess, &sub_id).await {
+        return;
+    }
+
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
     sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
         .await;

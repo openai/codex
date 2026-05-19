@@ -200,6 +200,7 @@ mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod startup;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 use self::config_lock::export_config_lock_if_configured;
@@ -214,6 +215,7 @@ use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
+pub(crate) use self::startup::SessionStartupState;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -652,7 +654,7 @@ impl Codex {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
-            session_source_clone,
+            session_source_clone.clone(),
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
@@ -670,6 +672,15 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.conversation_id;
+        if !matches!(
+            session_source_clone,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            // Thread-spawn children must wait until ThreadManager registration
+            // finishes. Other session sources have no external registration
+            // boundary, so they can kick off any deferred startup immediately.
+            session.start_deferred_startup_if_needed().await;
+        }
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -1661,8 +1672,8 @@ impl Session {
             return;
         }
 
-        self.forward_child_completion_to_parent(
-            turn_context,
+        self.forward_child_status_to_parent(
+            Some(turn_context),
             *parent_thread_id,
             child_agent_path,
             status,
@@ -1670,10 +1681,14 @@ impl Session {
         .await;
     }
 
-    /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
-    async fn forward_child_completion_to_parent(
+    /// Sends a status envelope from a spawned MultiAgentV2 child to its parent.
+    ///
+    /// Turn completions carry a turn context so rollout trace interactions can
+    /// be recorded. Startup failures happen before any child turn exists, so
+    /// they reuse the same parent notification path without trace recording.
+    async fn forward_child_status_to_parent(
         &self,
-        turn_context: &TurnContext,
+        turn_context: Option<&TurnContext>,
         parent_thread_id: ThreadId,
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
@@ -1710,7 +1725,7 @@ impl Session {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
             return;
         }
-        if let Some(message) = trace_message {
+        if let (Some(message), Some(turn_context)) = (trace_message, turn_context) {
             self.services
                 .rollout_thread_trace
                 .record_agent_result_interaction(
@@ -1723,6 +1738,32 @@ impl Session {
                     },
                 );
         }
+    }
+
+    async fn maybe_notify_parent_of_startup_failure(&self, status: AgentStatus) {
+        if !self.enabled(Feature::MultiAgentV2) {
+            return;
+        }
+
+        let session_source = {
+            let state = self.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            agent_path: Some(child_agent_path),
+            ..
+        }) = session_source
+        else {
+            return;
+        };
+
+        if !is_final(&status) {
+            return;
+        }
+
+        self.forward_child_status_to_parent(None, parent_thread_id, &child_agent_path, status)
+            .await;
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {

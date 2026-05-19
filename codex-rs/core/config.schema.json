@@ -1514,6 +1514,10 @@
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "async_subagent_startup": {
+          "description": "When `true`, spawned MultiAgentV2 children register their thread before waiting for slow startup work such as required MCP initialization.",
+          "type": "boolean"
+        },
         "default_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,

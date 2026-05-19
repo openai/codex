@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// When `true`, spawned MultiAgentV2 children register their thread before
+    /// waiting for slow startup work such as required MCP initialization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub async_subagent_startup: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub max_concurrent_threads_per_session: Option<usize>,

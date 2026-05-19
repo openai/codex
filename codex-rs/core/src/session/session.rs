@@ -1,4 +1,6 @@
 use super::input_queue::InputQueue;
+use super::startup::PendingSessionStartup;
+use super::startup::async_subagent_startup_enabled;
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::state::ActiveTurn;
@@ -18,6 +20,13 @@ pub(crate) struct Session {
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
+    /// Gates model-driven turn creation until startup has either finished or
+    /// failed decisively. Spawned subagents can therefore exist early without
+    /// racing the model against incomplete MCP setup.
+    pub(super) startup_state: watch::Sender<SessionStartupState>,
+    /// Holds deferred startup work until ThreadManager has registered the
+    /// thread and made the child visible to parent-facing APIs.
+    pub(super) deferred_startup: Mutex<Option<PendingSessionStartup>>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
     pub(super) state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
@@ -418,10 +427,6 @@ impl Session {
 
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "session initialization must serialize access through session-owned manager guards"
-    )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -450,6 +455,8 @@ impl Session {
             session_configuration.provider
         );
         let forked_from_id = initial_history.forked_from_id();
+        let async_subagent_startup =
+            async_subagent_startup_enabled(config.as_ref(), &session_configuration.session_source);
 
         let event_persistence_mode = if session_configuration.persist_extended_history {
             ThreadEventPersistenceMode::Extended
@@ -951,12 +958,19 @@ impl Session {
                 .set_window_generation(window_generation);
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
+            let (startup_state, _startup_state_rx) = watch::channel(if async_subagent_startup {
+                SessionStartupState::Initializing
+            } else {
+                SessionStartupState::Ready
+            });
 
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,
+                startup_state,
+                deferred_startup: Mutex::new(None),
                 out_of_band_elicitation_paused,
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1009,116 +1023,6 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
-
-            let mut required_mcp_servers: Vec<String> = mcp_servers
-                .iter()
-                .filter(|(_, server)| server.enabled() && server.required())
-                .map(|(name, _)| name.clone())
-                .collect();
-            required_mcp_servers.sort();
-            let enabled_mcp_server_count =
-                mcp_servers.values().filter(|server| server.enabled()).count();
-            let required_mcp_server_count = required_mcp_servers.len();
-            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
-            let host_owned_codex_apps_enabled = config
-                .features
-                .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
-            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
-            } else {
-                ElicitationCapability::default()
-            };
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                cancel_guard.cancel();
-                *cancel_guard = CancellationToken::new();
-            }
-            let turn_environment = crate::environment_selection::resolve_environment_selections(
-                sess.services.environment_manager.as_ref(),
-                &session_configuration.environments,
-            )
-            .map_err(|err| {
-                CodexErr::InvalidRequest(err.to_string().replace(
-                    "unknown turn environment id",
-                    "unknown stored MCP environment id",
-                ))
-            })?
-            .primary()
-            .cloned();
-            let mcp_runtime_environment = match turn_environment {
-                Some(turn_environment) => McpRuntimeEnvironment::new(
-                    Some(Arc::clone(&turn_environment.environment)),
-                    sess.services.environment_manager.try_local_environment(),
-                    turn_environment.cwd.to_path_buf(),
-                ),
-                None => McpRuntimeEnvironment::new(
-                    sess.services.environment_manager.default_or_local_environment(),
-                    sess.services.environment_manager.try_local_environment(),
-                    session_configuration.cwd.to_path_buf(),
-                ),
-            };
-            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                session_configuration.permission_profile(),
-                mcp_runtime_environment,
-                config.codex_home.to_path_buf(),
-                codex_apps_tools_cache_key(auth),
-                host_owned_codex_apps_enabled,
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth,
-                Some(sess.mcp_elicitation_reviewer()),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-                session_init.required_mcp_server_count = required_mcp_server_count,
-            ))
-            .await;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
-            {
-                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-                if cancel_guard.is_cancelled() {
-                    cancel_token.cancel();
-                }
-                *cancel_guard = cancel_token;
-            }
-            if !required_mcp_servers.is_empty() {
-                let failures = sess
-                    .services
-                    .mcp_connection_manager
-                    .read()
-                    .await
-                    .required_startup_failures(&required_mcp_servers)
-                    .instrument(info_span!(
-                        "session_init.required_mcp_wait",
-                        otel.name = "session_init.required_mcp_wait",
-                        session_init.required_mcp_server_count = required_mcp_server_count,
-                    ))
-                    .await;
-                if !failures.is_empty() {
-                    let details = failures
-                        .iter()
-                        .map(|failure| format!("{}: {}", failure.server, failure.error))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("required MCP servers failed to initialize: {details}");
-                }
-            }
-            sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
-                .await;
             let session_start_source = match &initial_history {
                 InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
                 InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1126,15 +1030,27 @@ impl Session {
                 }
                 InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
             };
-
-            // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
-            {
-                let mut state = sess.state.lock().await;
-                state.set_pending_session_start_source(Some(session_start_source));
+            let pending_startup = PendingSessionStartup {
+                initial_history,
+                session_start_source,
+                auth: auth.cloned(),
+                mcp_servers,
+                auth_statuses,
+                base_instructions: session_configuration.base_instructions.clone(),
+            };
+            if async_subagent_startup {
+                {
+                    let mut deferred_startup = sess.deferred_startup.lock().await;
+                    // Stash the slow startup work so ThreadManager can release
+                    // `spawn_agent` as soon as the child is registered, then
+                    // resume initialization in the background.
+                    *deferred_startup = Some(pending_startup);
+                }
+                Ok(sess)
+            } else {
+                Box::pin(sess.finish_initial_startup(pending_startup)).await?;
+                Ok(sess)
             }
-
-            Ok(sess)
         }
         .await;
         match session_result {

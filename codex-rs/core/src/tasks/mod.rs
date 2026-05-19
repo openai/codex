@@ -469,6 +469,13 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        // Async subagent startup registers the child thread before slow MCP
+        // initialization finishes. Keep mailbox-triggered work queued until
+        // startup reaches a stable terminal state.
+        if !self.startup_ready() {
+            return;
+        }
+
         if !self
             .input_queue
             .has_queued_response_items_for_next_turn()

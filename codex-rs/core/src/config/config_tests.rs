@@ -10186,6 +10186,7 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features.multi_agent_v2]
 enabled = true
+async_subagent_startup = true
 max_concurrent_threads_per_session = 5
 min_wait_timeout_ms = 2500
 max_wait_timeout_ms = 120000
@@ -10207,6 +10208,7 @@ non_code_mode_only = true
         .await?;
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert!(config.multi_agent_v2.async_subagent_startup);
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 2500);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 120000);
@@ -10243,6 +10245,7 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
         r#"profile = "no_hint"
 
 [features.multi_agent_v2]
+async_subagent_startup = false
 max_concurrent_threads_per_session = 4
 min_wait_timeout_ms = 3000
 max_wait_timeout_ms = 120000
@@ -10256,6 +10259,7 @@ hide_spawn_agent_metadata = true
 non_code_mode_only = false
 
 [profiles.no_hint.features.multi_agent_v2]
+async_subagent_startup = true
 max_concurrent_threads_per_session = 6
 min_wait_timeout_ms = 1500
 max_wait_timeout_ms = 90000
@@ -10276,6 +10280,7 @@ non_code_mode_only = true
         .build()
         .await?;
 
+    assert!(config.multi_agent_v2.async_subagent_startup);
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 6);
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 1500);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 90000);
@@ -10320,6 +10325,7 @@ enabled = true
         .await?;
 
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 4);
+    assert!(!config.multi_agent_v2.async_subagent_startup);
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
