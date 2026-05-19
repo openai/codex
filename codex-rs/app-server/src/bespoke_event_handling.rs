@@ -1283,6 +1283,7 @@ async fn handle_turn_plan_update(
                 });
         }
     }
+    flush_pending_terminal_plan_cleanup(conversation_id, thread_state, outgoing).await;
     emit_turn_plan_updated(conversation_id, event_turn_id, plan_update_event, outgoing).await;
 }
 
@@ -3635,6 +3636,88 @@ mod tests {
                 .pending_terminal_plan_cleanups
                 .is_empty(),
             "plans without in-progress steps do not need terminal cleanup"
+        );
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_live_plan_flushes_older_deferred_cleanup() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let active_turn_id = "active-plan-turn".to_string();
+        let thread_state = new_thread_state();
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(
+                &active_turn_id,
+                &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: active_turn_id.clone(),
+                    started_at: Some(42),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                }),
+            );
+            state.pending_terminal_plan_cleanups = vec![PendingTerminalPlanCleanup {
+                turn_id: "older-terminal-turn".to_string(),
+                plan_update: UpdatePlanArgs {
+                    explanation: Some("still working".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "older".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
+            }];
+        }
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+
+        handle_turn_plan_update(
+            conversation_id,
+            &active_turn_id,
+            UpdatePlanArgs {
+                explanation: Some("next turn".to_string()),
+                plan: vec![PlanItemArg {
+                    step: "new".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+            },
+            &outgoing,
+            &thread_state,
+        )
+        .await;
+
+        let first = recv_broadcast_message(&mut rx).await?;
+        match first {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.turn_id, "older-terminal-turn");
+                assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        let second = recv_broadcast_message(&mut rx).await?;
+        match second {
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.turn_id, active_turn_id);
+                assert_eq!(n.plan[0].status, TurnPlanStepStatus::InProgress);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        let pending_terminal_plan_cleanups =
+            &thread_state.lock().await.pending_terminal_plan_cleanups;
+        assert_eq!(pending_terminal_plan_cleanups.len(), 1);
+        assert_eq!(
+            pending_terminal_plan_cleanups[0].turn_id,
+            "active-plan-turn"
         );
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())

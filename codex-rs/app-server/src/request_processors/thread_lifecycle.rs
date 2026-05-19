@@ -794,3 +794,98 @@ pub(super) fn set_thread_status_and_interrupt_stale_turns(
     }
     thread.status = status;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outgoing_message::ConnectionId;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
+    use crate::thread_state::ConnectionCapabilities;
+    use crate::thread_state::PendingTerminalPlanCleanup;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::plan_tool::UpdatePlanArgs;
+    use core_test_support::load_default_config_for_test;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+
+    async fn recv_message(rx: &mut mpsc::Receiver<OutgoingEnvelope>) -> OutgoingMessage {
+        match rx.recv().await.expect("expected outgoing message") {
+            OutgoingEnvelope::Broadcast { message }
+            | OutgoingEnvelope::ToConnection { message, .. } => message,
+        }
+    }
+
+    #[tokio::test]
+    async fn listener_goal_clear_flushes_pending_terminal_plan_cleanup() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id,
+            thread: conversation,
+            ..
+        } = thread_manager.start_thread(config).await?;
+        let thread_state_manager = ThreadStateManager::new();
+        let connection_id = ConnectionId(1);
+        thread_state_manager
+            .connection_initialized(connection_id, ConnectionCapabilities::default())
+            .await;
+        thread_state_manager
+            .try_ensure_connection_subscribed(
+                thread_id,
+                connection_id,
+                /*experimental_raw_events*/ false,
+            )
+            .await
+            .expect("connection should subscribe");
+        let thread_state = thread_state_manager.thread_state(thread_id).await;
+        thread_state.lock().await.pending_terminal_plan_cleanups =
+            vec![PendingTerminalPlanCleanup {
+                turn_id: "terminal-turn".to_string(),
+                plan_update: UpdatePlanArgs {
+                    explanation: Some("still working".to_string()),
+                    plan: vec![PlanItemArg {
+                        step: "first".to_string(),
+                        status: StepStatus::InProgress,
+                    }],
+                },
+            }];
+        let (tx, mut rx) = mpsc::channel(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+
+        handle_thread_listener_command(
+            thread_id,
+            &conversation,
+            codex_home.path(),
+            &thread_state_manager,
+            &thread_state,
+            &ThreadWatchManager::new(),
+            &outgoing,
+            &Arc::new(Mutex::new(HashSet::new())),
+            ThreadListenerCommand::EmitThreadGoalCleared,
+        )
+        .await;
+
+        assert!(matches!(
+            recv_message(&mut rx).await,
+            OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalCleared(_))
+        ));
+        assert!(matches!(
+            recv_message(&mut rx).await,
+            OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(_))
+        ));
+        Ok(())
+    }
+}
