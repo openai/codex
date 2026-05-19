@@ -34,6 +34,8 @@ one grouped `cargo build` command per package:
 The default cargo profile is `dev-small` because local iteration should favor
 fast, small builds. Release jobs should pass `--cargo-profile release`.
 
-`rg` is not built from this repository, so it remains an input. If `--rg-bin` is
-omitted, the builder looks in the existing `codex-cli/vendor/<target>/path/`
-location.
+`rg` is not built from this repository, so the builder fetches it from the
+DotSlash manifest at `codex-cli/bin/rg`. Downloaded archives are cached under
+`$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded size
+and SHA-256 digest have been verified. Pass `--rg-bin` to use a local ripgrep
+executable instead.
