@@ -848,7 +848,7 @@ fn spawn_tool_spec_marks_role_locked_service_tier() {
     let spec = spawn_tool_spec::build(&user_defined_roles);
 
     assert!(spec.contains(
-        "Stay fast.\n- This role's service tier is set to `priority` and overrides any spawn request service tier."
+        "Stay fast.\n- This role's service tier is set to `priority`. If it is supported by the resolved model, it takes precedence over a valid spawn request service tier."
     ));
 }
 

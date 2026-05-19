@@ -358,7 +358,7 @@ pub(crate) mod spawn_tool_spec {
                     let service_tier_note = service_tier
                         .map(|service_tier| {
                             format!(
-                                "\n- This role's service tier is set to `{service_tier}` and overrides any spawn request service tier."
+                                "\n- This role's service tier is set to `{service_tier}`. If it is supported by the resolved model, it takes precedence over a valid spawn request service tier."
                             )
                         })
                         .unwrap_or_default();
