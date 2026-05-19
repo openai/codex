@@ -72,6 +72,7 @@ pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    startup_failures: HashMap<String, String>,
     host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -93,6 +94,7 @@ impl McpConnectionManager {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            startup_failures: HashMap::new(),
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
@@ -113,6 +115,7 @@ impl McpConnectionManager {
         self.startup_cancellation_token.cancel();
         let clients = std::mem::take(&mut self.clients);
         self.server_metadata.clear();
+        self.startup_failures.clear();
         async move {
             for client in clients.into_values() {
                 client.shutdown().await;
@@ -188,6 +191,7 @@ impl McpConnectionManager {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_metadata = HashMap::new();
+        let mut startup_failures = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
@@ -207,13 +211,11 @@ impl McpConnectionManager {
             let configured_server = server
                 .configured_config()
                 .expect("effective MCP servers are configured");
-            if let Some(reason) =
-                runtime_environment.startup_unavailable_reason(&server_name, configured_server)
-            {
+            let startup_unavailable_reason =
+                runtime_environment.startup_unavailable_reason(&server_name, configured_server);
+            if let Some(reason) = startup_unavailable_reason.as_deref() {
                 warn!(server = %server_name, "{reason}; skipping MCP server");
-                continue;
             }
-            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
@@ -224,6 +226,34 @@ impl McpConnectionManager {
                 },
             )
             .await;
+            if let Some(reason) = startup_unavailable_reason {
+                startup_failures.insert(server_name.clone(), reason.clone());
+                let tx_event = tx_event.clone();
+                let submit_id = startup_submit_id.clone();
+                let auth_entry = auth_entries.get(&server_name).cloned();
+                join_set.spawn(async move {
+                    let outcome = Err(StartupOutcomeError::Failed { error: reason });
+                    let error = mcp_init_error_display(
+                        server_name.as_str(),
+                        auth_entry.as_ref(),
+                        outcome
+                            .as_ref()
+                            .expect_err("preflight failure cannot start an MCP client"),
+                    );
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status: McpStartupStatus::Failed { error },
+                        },
+                    )
+                    .await;
+                    (server_name, outcome)
+                });
+                continue;
+            }
+            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
@@ -300,6 +330,7 @@ impl McpConnectionManager {
             clients,
             server_metadata,
             tool_plugin_provenance,
+            startup_failures,
             host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
@@ -358,6 +389,13 @@ impl McpConnectionManager {
         let mut failures = Vec::new();
         for server_name in required_servers {
             let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
+                if let Some(error) = self.startup_failures.get(server_name) {
+                    failures.push(McpStartupFailure {
+                        server: server_name.clone(),
+                        error: error.clone(),
+                    });
+                    continue;
+                }
                 failures.push(McpStartupFailure {
                     server: server_name.clone(),
                     error: format!("required MCP server `{server_name}` was not initialized"),
