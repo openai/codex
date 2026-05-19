@@ -148,7 +148,7 @@ mod tests {
                 env_http_headers: None,
             },
             experimental_environment: experimental_environment.map(str::to_string),
-            ..stdio_server(None)
+            ..stdio_server(/*experimental_environment*/ None)
         }
     }
 
