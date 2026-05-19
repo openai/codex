@@ -247,9 +247,7 @@ impl TurnContext {
                 .enabled(Feature::MultiAgentV2)
                 .then_some(config.multi_agent_v2.default_wait_timeout_ms),
         )
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &config.agent_roles,
-        ));
+        .with_agent_type_description(self.tools_config.agent_type_description.clone());
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -474,7 +472,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn make_turn_context(
+    pub(crate) async fn make_turn_context(
         thread_id: ThreadId,
         session_id: SessionId,
         auth_manager: Option<Arc<AuthManager>>,
@@ -493,6 +491,7 @@ impl Session {
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
         goal_tools_supported: bool,
+        runtime_capabilities: &RuntimeCapabilities,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -566,9 +565,13 @@ impl Session {
                 .enabled(Feature::MultiAgentV2)
                 .then_some(per_turn_config.multi_agent_v2.default_wait_timeout_ms),
         )
-        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-            &per_turn_config.agent_roles,
-        ));
+        .with_agent_type_description(
+            crate::agent::role::spawn_tool_spec::build(
+                &per_turn_config.agent_roles,
+                runtime_capabilities,
+            )
+            .await,
+        );
 
         let mut per_turn_config = per_turn_config;
         per_turn_config.service_tier = per_turn_config
@@ -812,7 +815,9 @@ impl Session {
             sub_id,
             skills_outcome,
             goal_tools_supported,
-        );
+            self.services.runtime_capabilities.as_ref(),
+        )
+        .await;
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

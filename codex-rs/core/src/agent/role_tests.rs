@@ -1,4 +1,5 @@
 use super::*;
+use crate::RuntimeCapabilities;
 use crate::SkillsManager;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
@@ -38,6 +39,16 @@ async fn write_role_config(home: &TempDir, name: &str, contents: &str) -> PathBu
     role_path
 }
 
+fn local_runtime_capabilities() -> RuntimeCapabilities {
+    let environment_manager = codex_exec_server::EnvironmentManager::default_for_tests();
+    RuntimeCapabilities::local(&environment_manager)
+}
+
+async fn apply_role_to_config(config: &mut Config, role_name: Option<&str>) -> Result<(), String> {
+    let runtime_capabilities = local_runtime_capabilities();
+    super::apply_role_to_config(config, role_name, &runtime_capabilities).await
+}
+
 fn session_flags_layer_count(config: &Config) -> usize {
     config
         .config_layer_stack
@@ -71,6 +82,46 @@ async fn apply_role_returns_error_for_unknown_role() {
         .expect_err("unknown role should fail");
 
     assert_eq!(err, "unknown agent_type 'missing-role'");
+}
+
+#[tokio::test]
+async fn apply_embedded_empty_role_without_local_filesystem() {
+    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let before = config.clone();
+
+    super::apply_role_to_config(
+        &mut config,
+        Some("explorer"),
+        &RuntimeCapabilities::isolated(),
+    )
+    .await
+    .expect("embedded empty role should apply");
+
+    assert_eq!(before, config);
+}
+
+#[tokio::test]
+async fn apply_external_empty_role_requires_local_filesystem() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(&home, "empty-role.toml", "").await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    let err = super::apply_role_to_config(
+        &mut config,
+        Some("custom"),
+        &RuntimeCapabilities::isolated(),
+    )
+    .await
+    .expect_err("external role should require local filesystem");
+
+    assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
 }
 
 #[tokio::test]
@@ -674,8 +725,8 @@ enabled = false
     assert_eq!(outcome.is_skill_enabled(skill), false);
 }
 
-#[test]
-fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
+#[tokio::test]
+async fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
     let user_defined_roles = BTreeMap::from([
         (
             "explorer".to_string(),
@@ -688,7 +739,7 @@ fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
         ("researcher".to_string(), AgentRoleConfig::default()),
     ]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, &RuntimeCapabilities::isolated()).await;
 
     assert!(spec.contains("researcher: no description"));
     assert!(spec.contains("explorer: {\nuser override\n}"));
@@ -696,8 +747,8 @@ fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
     assert!(!spec.contains("Explorers are fast and authoritative."));
 }
 
-#[test]
-fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
+#[tokio::test]
+async fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
     let user_defined_roles = BTreeMap::from([(
         "aaa".to_string(),
         AgentRoleConfig {
@@ -707,7 +758,7 @@ fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, &RuntimeCapabilities::isolated()).await;
     let user_index = spec.find("aaa: {\nfirst\n}").expect("find user role");
     let built_in_index = spec
         .find("default: {\nDefault agent.\n}")
@@ -716,8 +767,8 @@ fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
     assert!(user_index < built_in_index);
 }
 
-#[test]
-fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
+#[tokio::test]
+async fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
     let tempdir = TempDir::new().expect("create temp dir");
     let role_path = tempdir.path().join("researcher.toml");
     fs::write(
@@ -734,15 +785,15 @@ fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, &local_runtime_capabilities()).await;
 
     assert!(spec.contains(
             "Research carefully.\n- This role's model is set to `gpt-5` and its reasoning effort is set to `high`. These settings cannot be changed."
         ));
 }
 
-#[test]
-fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
+#[tokio::test]
+async fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
     let tempdir = TempDir::new().expect("create temp dir");
     let role_path = tempdir.path().join("reviewer.toml");
     fs::write(
@@ -759,11 +810,35 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
         },
     )]);
 
-    let spec = spawn_tool_spec::build(&user_defined_roles);
+    let spec = spawn_tool_spec::build(&user_defined_roles, &local_runtime_capabilities()).await;
 
     assert!(spec.contains(
             "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
         ));
+}
+
+#[tokio::test]
+async fn spawn_tool_spec_lists_external_role_without_locked_note_when_filesystem_is_unavailable() {
+    let tempdir = TempDir::new().expect("create temp dir");
+    let role_path = tempdir.path().join("researcher.toml");
+    fs::write(
+        &role_path,
+        "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"\n",
+    )
+    .expect("write role config");
+    let user_defined_roles = BTreeMap::from([(
+        "researcher".to_string(),
+        AgentRoleConfig {
+            description: Some("Research carefully.".to_string()),
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    )]);
+
+    let spec = spawn_tool_spec::build(&user_defined_roles, &RuntimeCapabilities::isolated()).await;
+
+    assert!(spec.contains("researcher: {\nResearch carefully.\n}"));
+    assert!(!spec.contains("This role's model is set"));
 }
 
 #[test]

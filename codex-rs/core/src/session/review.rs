@@ -75,9 +75,13 @@ pub(super) async fn spawn_review_thread(
             .enabled(Feature::MultiAgentV2)
             .then_some(config.multi_agent_v2.default_wait_timeout_ms),
     )
-    .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-        &config.agent_roles,
-    ));
+    .with_agent_type_description(
+        crate::agent::role::spawn_tool_spec::build(
+            &config.agent_roles,
+            sess.services.runtime_capabilities.as_ref(),
+        )
+        .await,
+    );
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();

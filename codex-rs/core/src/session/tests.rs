@@ -3829,9 +3829,13 @@ enabled = false
             nickname_candidates: None,
         },
     );
-    crate::agent::role::apply_role_to_config(&mut child_config, Some("custom"))
-        .await
-        .expect("custom role should apply");
+    crate::agent::role::apply_role_to_config(
+        &mut child_config,
+        Some("custom"),
+        session.services.runtime_capabilities.as_ref(),
+    )
+    .await
+    .expect("custom role should apply");
 
     {
         let mut state = session.state.lock().await;
@@ -4388,7 +4392,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
-    );
+        services.runtime_capabilities.as_ref(),
+    )
+    .await;
 
     let session = Session {
         conversation_id: thread_id,
@@ -6221,26 +6227,30 @@ where
             .await,
     );
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
-    let turn_context = Arc::new(Session::make_turn_context(
-        thread_id,
-        SessionId::from(thread_id),
-        Some(Arc::clone(&auth_manager)),
-        &session_telemetry,
-        session_configuration.provider.clone(),
-        &session_configuration,
-        services.user_shell.as_ref(),
-        services.shell_zsh_path.as_ref(),
-        services.main_execve_wrapper_exe.as_ref(),
-        per_turn_config,
-        model_info,
-        &models_manager,
-        /*network*/ None,
-        turn_environments,
-        session_configuration.cwd.clone(),
-        "turn_id".to_string(),
-        skills_outcome,
-        /*goal_tools_supported*/ true,
-    ));
+    let turn_context = Arc::new(
+        Session::make_turn_context(
+            thread_id,
+            SessionId::from(thread_id),
+            Some(Arc::clone(&auth_manager)),
+            &session_telemetry,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            services.user_shell.as_ref(),
+            services.shell_zsh_path.as_ref(),
+            services.main_execve_wrapper_exe.as_ref(),
+            per_turn_config,
+            model_info,
+            &models_manager,
+            /*network*/ None,
+            turn_environments,
+            session_configuration.cwd.clone(),
+            "turn_id".to_string(),
+            skills_outcome,
+            /*goal_tools_supported*/ true,
+            services.runtime_capabilities.as_ref(),
+        )
+        .await,
+    );
 
     let session = Arc::new(Session {
         conversation_id: thread_id,

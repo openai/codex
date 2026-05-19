@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
+use crate::runtime_capabilities::RuntimeCapabilities;
 use anyhow::anyhow;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerEntry;
@@ -18,7 +19,8 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::config_toml::ConfigToml;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
-use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -40,6 +42,7 @@ const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not availabl
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
+    runtime_capabilities: &RuntimeCapabilities,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
@@ -47,7 +50,7 @@ pub(crate) async fn apply_role_to_config(
         .cloned()
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
 
-    apply_role_to_config_inner(config, role_name, &role)
+    apply_role_to_config_inner(config, role_name, &role, runtime_capabilities)
         .await
         .map_err(|err| {
             tracing::warn!("failed to apply role to config: {err}");
@@ -59,12 +62,20 @@ async fn apply_role_to_config_inner(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
+    runtime_capabilities: &RuntimeCapabilities,
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let role_layer_toml = load_role_layer_toml(
+        config,
+        config_file,
+        is_built_in,
+        role_name,
+        runtime_capabilities,
+    )
+    .await?;
     if role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
@@ -73,12 +84,15 @@ async fn apply_role_to_config_inner(
     }
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
+    let file_system =
+        runtime_capabilities.require_local_filesystem("applying agent role config")?;
 
     *config = reload::build_next_config(
         config,
         role_layer_toml,
         preserve_current_profile,
         preserve_current_provider,
+        file_system.as_ref(),
     )
     .await?;
     Ok(())
@@ -89,32 +103,37 @@ async fn load_role_layer_toml(
     config_file: &Path,
     is_built_in: bool,
     role_name: &str,
+    runtime_capabilities: &RuntimeCapabilities,
 ) -> anyhow::Result<TomlValue> {
     let (role_config_toml, role_config_base) = if is_built_in {
         let role_config_contents = built_in::config_file_contents(config_file)
             .map(str::to_owned)
             .ok_or(anyhow!("No corresponding config content"))?;
         let role_config_toml: TomlValue = toml::from_str(&role_config_contents)?;
-        (role_config_toml, config.codex_home.as_path())
+        (role_config_toml, config.codex_home.as_path().to_path_buf())
     } else {
-        let role_config_contents = tokio::fs::read_to_string(config_file).await?;
+        let file_system =
+            runtime_capabilities.require_local_filesystem("loading external agent role config")?;
+        let config_file = AbsolutePathBuf::from_absolute_path(config_file)?;
+        let role_config_contents = file_system.read_file_text(&config_file, None).await?;
         let role_config_base = config_file
             .parent()
-            .ok_or(anyhow!("No corresponding config content"))?;
+            .ok_or(anyhow!("No corresponding config content"))?
+            .to_path_buf();
         let role_config_toml = parse_agent_role_file_contents(
             &role_config_contents,
-            config_file,
-            role_config_base,
+            config_file.as_path(),
+            &role_config_base,
             Some(role_name),
         )?
         .config;
         (role_config_toml, role_config_base)
     };
 
-    deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)?;
+    deserialize_config_toml_with_base(role_config_toml.clone(), &role_config_base)?;
     Ok(resolve_relative_paths_in_config_toml(
         role_config_toml,
-        role_config_base,
+        &role_config_base,
     )?)
 }
 
@@ -157,6 +176,7 @@ mod reload {
         role_layer_toml: TomlValue,
         preserve_current_profile: bool,
         preserve_current_provider: bool,
+        file_system: &dyn ExecutorFileSystem,
     ) -> anyhow::Result<Config> {
         let active_profile_name = preserve_current_profile
             .then_some(config.active_profile.as_deref())
@@ -169,7 +189,7 @@ mod reload {
         }
 
         let mut next_config = Config::load_config_with_layer_stack(
-            LOCAL_FS.as_ref(),
+            file_system,
             merged_config,
             reload_overrides(config, preserve_current_provider),
             config.codex_home.clone(),
@@ -276,46 +296,89 @@ pub(crate) mod spawn_tool_spec {
     use super::*;
 
     /// Builds the spawn-agent tool description text from built-in and configured roles.
-    pub(crate) fn build(user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>) -> String {
+    pub(crate) async fn build(
+        user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>,
+        runtime_capabilities: &RuntimeCapabilities,
+    ) -> String {
         let built_in_roles = built_in::configs();
-        build_from_configs(built_in_roles, user_defined_agent_roles)
+        build_from_configs(
+            built_in_roles,
+            user_defined_agent_roles,
+            runtime_capabilities,
+        )
+        .await
+    }
+
+    /// Builds the built-in spawn-agent tool description without external role files.
+    pub(crate) fn build_default() -> String {
+        let formatted_roles = built_in::configs()
+            .iter()
+            .map(|(name, declaration)| {
+                let role_config_contents = declaration
+                    .config_file
+                    .as_ref()
+                    .and_then(|config_file| built_in::config_file_contents(config_file));
+                format_role(name, declaration, role_config_contents)
+            })
+            .collect();
+        format_spec(formatted_roles)
     }
 
     // This function is not inlined for testing purpose.
-    fn build_from_configs(
+    async fn build_from_configs(
         built_in_roles: &BTreeMap<String, AgentRoleConfig>,
         user_defined_roles: &BTreeMap<String, AgentRoleConfig>,
+        runtime_capabilities: &RuntimeCapabilities,
     ) -> String {
         let mut seen = BTreeSet::new();
         let mut formatted_roles = Vec::new();
         for (name, declaration) in user_defined_roles {
             if seen.insert(name.as_str()) {
-                formatted_roles.push(format_role(name, declaration));
+                formatted_roles.push(
+                    format_role_with_runtime_capabilities(name, declaration, runtime_capabilities)
+                        .await,
+                );
             }
         }
         for (name, declaration) in built_in_roles {
             if seen.insert(name.as_str()) {
-                formatted_roles.push(format_role(name, declaration));
+                formatted_roles.push(
+                    format_role_with_runtime_capabilities(name, declaration, runtime_capabilities)
+                        .await,
+                );
             }
         }
 
+        format_spec(formatted_roles)
+    }
+
+    fn format_spec(formatted_roles: Vec<String>) -> String {
         format!(
             "Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.\nAvailable roles:\n{}",
             formatted_roles.join("\n"),
         )
     }
 
-    fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
+    async fn format_role_with_runtime_capabilities(
+        name: &str,
+        declaration: &AgentRoleConfig,
+        runtime_capabilities: &RuntimeCapabilities,
+    ) -> String {
+        let role_config_contents = match declaration.config_file.as_ref() {
+            Some(config_file) => role_config_contents(config_file, runtime_capabilities).await,
+            None => None,
+        };
+        format_role(name, declaration, role_config_contents.as_deref())
+    }
+
+    fn format_role(
+        name: &str,
+        declaration: &AgentRoleConfig,
+        role_config_contents: Option<&str>,
+    ) -> String {
         if let Some(description) = &declaration.description {
-            let locked_settings_note = declaration
-                .config_file
-                .as_ref()
-                .and_then(|config_file| {
-                    built_in::config_file_contents(config_file)
-                        .map(str::to_owned)
-                        .or_else(|| std::fs::read_to_string(config_file).ok())
-                })
-                .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
+            let locked_settings_note = role_config_contents
+                .and_then(|contents| toml::from_str::<TomlValue>(contents).ok())
                 .map(|role_toml| {
                     let model = role_toml
                         .get("model")
@@ -346,6 +409,19 @@ pub(crate) mod spawn_tool_spec {
         } else {
             format!("{name}: no description")
         }
+    }
+
+    async fn role_config_contents(
+        config_file: &Path,
+        runtime_capabilities: &RuntimeCapabilities,
+    ) -> Option<String> {
+        if let Some(contents) = built_in::config_file_contents(config_file) {
+            return Some(contents.to_owned());
+        }
+
+        let file_system = runtime_capabilities.local_filesystem()?;
+        let config_file = AbsolutePathBuf::from_absolute_path(config_file).ok()?;
+        file_system.read_file_text(&config_file, None).await.ok()
     }
 }
 

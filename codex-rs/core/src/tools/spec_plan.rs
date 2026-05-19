@@ -105,8 +105,7 @@ fn build_tool_specs_and_registry(
         extension_tool_executors,
         dynamic_tools,
     } = params;
-    let default_agent_type_description =
-        crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
+    let default_agent_type_description = crate::agent::role::spawn_tool_spec::build_default();
     let mut executors = collect_tool_executors(
         config,
         ToolRegistryBuildParams {

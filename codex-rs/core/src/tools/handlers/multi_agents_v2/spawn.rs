@@ -93,9 +93,13 @@ async fn handle_spawn_agent(
             args.reasoning_effort,
         )
         .await?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        apply_role_to_config(
+            &mut config,
+            role_name,
+            session.services.runtime_capabilities.as_ref(),
+        )
+        .await
+        .map_err(FunctionCallError::RespondToModel)?;
     }
     apply_spawn_agent_service_tier(
         &session,
