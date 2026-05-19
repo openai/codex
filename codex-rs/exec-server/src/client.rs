@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -269,6 +270,24 @@ impl RemoteExecServerClient {
         Ok(client)
     }
 
+    pub(crate) async fn request<T, F, Fut>(&self, mut request: F) -> Result<T, ExecServerError>
+    where
+        F: FnMut(ExecServerClient) -> Fut,
+        Fut: Future<Output = Result<T, ExecServerError>>,
+    {
+        let client = self.get().await?;
+        match request(client.clone()).await {
+            Ok(response) => Ok(response),
+            Err(err) if is_transport_closed_error(&err) => {
+                client.mark_disconnected(&err);
+                debug!("retrying exec-server request after websocket disconnect");
+                let client = self.get().await?;
+                request(client).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     async fn reconnect_websocket(
         &self,
         session_id: String,
@@ -305,7 +324,14 @@ impl HttpClient for RemoteExecServerClient {
         &self,
         params: crate::HttpRequestParams,
     ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
-        async move { self.get().await?.http_request(params).await }.boxed()
+        async move {
+            self.request(|client| {
+                let params = params.clone();
+                async move { client.http_request(params).await }
+            })
+            .await
+        }
+        .boxed()
     }
 
     fn http_request_stream(
@@ -315,7 +341,14 @@ impl HttpClient for RemoteExecServerClient {
         '_,
         Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
     > {
-        async move { self.get().await?.http_request_stream(params).await }.boxed()
+        async move {
+            self.request(|client| {
+                let params = params.clone();
+                async move { client.http_request_stream(params).await }
+            })
+            .await
+        }
+        .boxed()
     }
 }
 
@@ -510,6 +543,10 @@ impl ExecServerClient {
 
     fn is_disconnected(&self) -> bool {
         self.inner.disconnected.get().is_some()
+    }
+
+    fn mark_disconnected(&self, error: &ExecServerError) {
+        let _ = self.inner.set_disconnected(error.to_string());
     }
 
     pub(crate) async fn connect(
@@ -872,14 +909,24 @@ fn is_retryable_reconnect_error(error: &ExecServerError) -> bool {
         ExecServerError::WebSocketConnectTimeout { .. }
             | ExecServerError::WebSocketConnect { .. }
             | ExecServerError::InitializeTimedOut { .. }
+    ) || matches!(
+        error,
+        ExecServerError::Server {
+            code: -32600,
+            message,
+        } if message.contains("is already attached to another connection")
     )
 }
 
 fn terminal_resume_error(error: &ExecServerError) -> Option<(i64, String)> {
-    let ExecServerError::Server { code, message } = error else {
-        return None;
-    };
-    (!is_transport_closed_error(error)).then(|| (*code, message.clone()))
+    match error {
+        ExecServerError::Server { code, message }
+            if *code == -32600 && message.starts_with("unknown session id ") =>
+        {
+            Some((*code, message.clone()))
+        }
+        _ => None,
+    }
 }
 
 fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {

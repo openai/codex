@@ -43,10 +43,10 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
@@ -172,6 +172,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn remote_test_env_reconnects_after_exec_server_websocket_disconnect() -> Result<()> {
     let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
@@ -186,7 +187,6 @@ async fn remote_test_env_reconnects_after_exec_server_websocket_disconnect() -> 
         .write_file(&file_path_abs, payload.clone(), /*sandbox*/ None)
         .await?;
     remote_exec("ss -K state established '( sport = :31987 )'")?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let actual = file_system
         .read_file(&file_path_abs, /*sandbox*/ None)
