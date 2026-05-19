@@ -34,7 +34,6 @@ use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
@@ -1182,10 +1181,8 @@ fn sandbox_mode_from_permission_profile(
     }
 }
 
-fn permissions_selection_from_active_profile(
-    active: ActivePermissionProfile,
-) -> PermissionProfileSelectionParams {
-    PermissionProfileSelectionParams::new(active.id)
+fn permission_profile_id_from_active_profile(active: ActivePermissionProfile) -> String {
+    active.id
 }
 
 fn turn_permissions_overrides(
@@ -1193,13 +1190,13 @@ fn turn_permissions_overrides(
     cwd: &std::path::Path,
 ) -> (
     Option<codex_app_server_protocol::SandboxPolicy>,
-    Option<PermissionProfileSelectionParams>,
+    Option<String>,
 ) {
     match permissions_override {
         TurnPermissionsOverride::Preserve => (None, None),
         TurnPermissionsOverride::ActiveProfile(active_permission_profile) => (
             None,
-            Some(permissions_selection_from_active_profile(
+            Some(permission_profile_id_from_active_profile(
                 active_permission_profile,
             )),
         ),
@@ -1220,7 +1217,7 @@ fn turn_permissions_overrides(
 fn permissions_selection_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
-) -> Option<PermissionProfileSelectionParams> {
+) -> Option<String> {
     if matches!(thread_params_mode, ThreadParamsMode::Remote) {
         return None;
     }
@@ -1228,7 +1225,7 @@ fn permissions_selection_from_config(
     config
         .permissions
         .active_permission_profile()
-        .map(permissions_selection_from_active_profile)
+        .map(permission_profile_id_from_active_profile)
 }
 
 fn thread_start_params_from_config(
@@ -1671,7 +1668,7 @@ mod tests {
             config
                 .permissions
                 .active_permission_profile()
-                .map(permissions_selection_from_active_profile)
+                .map(permission_profile_id_from_active_profile)
         );
         assert_eq!(params.model_provider, Some(config.model_provider_id));
         assert_eq!(params.thread_source, Some(ThreadSource::User));
@@ -1698,7 +1695,7 @@ mod tests {
         let active_permission_profile =
             ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
         let expected_permissions =
-            permissions_selection_from_active_profile(active_permission_profile.clone());
+            permission_profile_id_from_active_profile(active_permission_profile.clone());
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),
@@ -1723,9 +1720,7 @@ mod tests {
         assert_eq!(sandbox_policy, None);
         assert_eq!(
             permissions,
-            Some(PermissionProfileSelectionParams::new(
-                BUILT_IN_PERMISSION_PROFILE_WORKSPACE
-            ))
+            Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
         );
     }
 
@@ -1763,7 +1758,7 @@ mod tests {
         let cwd = test_path_buf("/workspace/project").abs();
         let active_permission_profile = ActivePermissionProfile::new("strict");
         let expected_permissions =
-            permissions_selection_from_active_profile(active_permission_profile.clone());
+            permission_profile_id_from_active_profile(active_permission_profile.clone());
 
         let (sandbox_policy, permissions) = turn_permissions_overrides(
             TurnPermissionsOverride::ActiveProfile(active_permission_profile),

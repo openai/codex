@@ -3,7 +3,6 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::auto_compact_window::AutoCompactWindow;
@@ -24,7 +23,6 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
-    pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     /// Settings used by the latest regular user turn, used for turn-to-turn
     /// model/realtime handling on subsequent regular turns (including full-context
@@ -49,7 +47,6 @@ impl SessionState {
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
-            dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
             auto_compact_window: AutoCompactWindow::new(),
@@ -189,16 +186,6 @@ impl SessionState {
 
     pub(crate) fn mcp_dependency_prompted(&self) -> HashSet<String> {
         self.mcp_dependency_prompted.clone()
-    }
-
-    pub(crate) fn set_dependency_env(&mut self, values: HashMap<String, String>) {
-        for (key, value) in values {
-            self.dependency_env.insert(key, value);
-        }
-    }
-
-    pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
-        self.dependency_env.clone()
     }
 
     pub(crate) fn set_session_startup_prewarm(

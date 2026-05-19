@@ -18,7 +18,6 @@ pub(crate) struct McpToolExposure {
 pub(crate) fn build_mcp_tool_exposure(
     all_mcp_tools: &[McpToolInfo],
     connectors: Option<&[connectors::AppInfo]>,
-    explicitly_enabled_connectors: &[connectors::AppInfo],
     config: &Config,
     tools_config: &ToolsConfig,
 ) -> McpToolExposure {
@@ -44,16 +43,8 @@ pub(crate) fn build_mcp_tool_exposure(
         };
     }
 
-    let direct_tools =
-        filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
-    let direct_tool_names = direct_tools
-        .iter()
-        .map(McpToolInfo::canonical_tool_name)
-        .collect::<HashSet<_>>();
-    deferred_tools.retain(|tool| !direct_tool_names.contains(&tool.canonical_tool_name()));
-
     McpToolExposure {
-        direct_tools,
+        direct_tools: Vec::new(),
         deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }

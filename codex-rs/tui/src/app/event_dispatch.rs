@@ -152,7 +152,7 @@ impl App {
                                         if let Some(usage_line) = summary.usage_line {
                                             lines.push(usage_line.into());
                                         }
-                                        if let Some(command) = summary.resume_command {
+                                        if let Some(command) = summary.resume_hint {
                                             let spans = vec![
                                                 "To continue this session, run ".into(),
                                                 command.cyan(),
@@ -296,10 +296,14 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
+                if mode == ExitMode::ShutdownFirst {
+                    self.show_shutdown_feedback(tui)?;
+                }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
+                    self.show_shutdown_feedback(tui)?;
                     return Ok(self
                         .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
                         .await);
@@ -1303,8 +1307,10 @@ impl App {
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
-                let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
+                let profile = self.active_profile.as_deref();
                 let edits = crate::config_update::build_service_tier_selection_edits(
                     profile,
                     service_tier.as_deref(),

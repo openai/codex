@@ -108,6 +108,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -543,6 +544,13 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
+    /// Whether config explicitly selected named permissions profiles instead
+    /// of the legacy `sandbox_mode` syntax.
+    pub explicit_permission_profile_mode: bool,
+
+    /// User-defined permission profile IDs available from effective config.
+    pub custom_permission_profile_ids: Vec<String>,
+
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
@@ -958,6 +966,7 @@ pub struct MultiAgentV2Config {
     pub usage_hint_text: Option<String>,
     pub root_agent_usage_hint_text: Option<String>,
     pub subagent_usage_hint_text: Option<String>,
+    pub tool_namespace: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub non_code_mode_only: bool,
 }
@@ -974,6 +983,7 @@ impl Default for MultiAgentV2Config {
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
+            tool_namespace: None,
             hide_spawn_agent_metadata: false,
             non_code_mode_only: false,
         }
@@ -1246,6 +1256,7 @@ impl Config {
         let plugins_input = self.plugins_config_input();
         let loaded_plugins = plugins_manager.plugins_for_config(&plugins_input).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
+        let mut plugin_ids_by_mcp_server_name = HashMap::new();
         for plugin in loaded_plugins
             .plugins()
             .iter()
@@ -1258,7 +1269,10 @@ impl Config {
                 self.config_layer_stack.requirements().plugins.as_ref(),
             );
             for (name, plugin_server) in plugin_mcp_servers {
-                configured_mcp_servers.entry(name).or_insert(plugin_server);
+                if let Entry::Vacant(entry) = configured_mcp_servers.entry(name.clone()) {
+                    entry.insert(plugin_server);
+                    plugin_ids_by_mcp_server_name.insert(name, plugin.config_name.clone());
+                }
             }
         }
         if let Some(mcp_requirements) = self.config_layer_stack.requirements().mcp_servers.as_ref()
@@ -1268,6 +1282,8 @@ impl Config {
             // above.
             filter_mcp_servers_by_requirements(&mut configured_mcp_servers, Some(mcp_requirements));
         }
+        plugin_ids_by_mcp_server_name
+            .retain(|server_name, _| configured_mcp_servers.contains_key(server_name));
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
@@ -1295,6 +1311,7 @@ impl Config {
                 ElicitationCapability::default()
             },
             configured_mcp_servers,
+            plugin_ids_by_mcp_server_name,
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }
@@ -2183,6 +2200,11 @@ fn resolve_multi_agent_v2_config(
         .or_else(|| base.and_then(|config| config.subagent_usage_hint_text.as_ref()))
         .cloned()
         .or(default.subagent_usage_hint_text);
+    let tool_namespace = profile
+        .and_then(|config| config.tool_namespace.as_ref())
+        .or_else(|| base.and_then(|config| config.tool_namespace.as_ref()))
+        .cloned()
+        .or(default.tool_namespace);
     let hide_spawn_agent_metadata = profile
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
@@ -2201,6 +2223,7 @@ fn resolve_multi_agent_v2_config(
         usage_hint_text,
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
+        tool_namespace,
         hide_spawn_agent_metadata,
         non_code_mode_only,
     }
@@ -2295,6 +2318,69 @@ fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Res
     Ok(())
 }
 
+fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::Result<()> {
+    const LABEL: &str = "features.multi_agent_v2.tool_namespace";
+    const MAX_LEN: usize = 64;
+    const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
+        "api_tool",
+        "browser",
+        "computer",
+        "container",
+        "file_search",
+        "functions",
+        "image_gen",
+        "multi_tool_use",
+        "python",
+        "python_user_visible",
+        "submodel_delegator",
+        "terminal",
+        "tool_search",
+        "web",
+    ];
+
+    let Some(namespace) = namespace else {
+        return Ok(());
+    };
+    if namespace.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} must not be empty"),
+        ));
+    }
+    if namespace.trim() != namespace {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} must not have leading or trailing whitespace"),
+        ));
+    }
+    if !namespace
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} must match ^[a-zA-Z0-9_-]+$"),
+        ));
+    }
+    if namespace.chars().count() > MAX_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} must be at most {MAX_LEN} characters"),
+        ));
+    }
+    if namespace == "mcp"
+        || namespace.starts_with("mcp__")
+        || RESERVED_RESPONSES_NAMESPACES.contains(&namespace)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{LABEL} uses a reserved namespace: {namespace}"),
+        ));
+    }
+
+    Ok(())
+}
+
 impl Config {
     #[cfg(test)]
     async fn load_from_base_config_with_overrides(
@@ -2351,8 +2437,10 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
-            .map(|loaded| loaded.contents);
+        let user_instructions =
+            AgentsMdManager::load_global_instructions(LOCAL_FS.as_ref(), Some(&codex_home))
+                .await
+                .map(|loaded| loaded.contents);
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()
@@ -2528,6 +2616,17 @@ impl Config {
                 Some(PermissionConfigSyntax::Profiles)
             )
             || permission_config_syntax.is_none();
+        let explicit_permission_profile_mode = default_permissions_override.is_some()
+            || matches!(
+                permission_config_syntax,
+                Some(PermissionConfigSyntax::Profiles)
+            );
+        let custom_permission_profile_ids = cfg
+            .permissions
+            .as_ref()
+            .map_or_else(Vec::new, |permissions| {
+                permissions.entries.keys().cloned().collect()
+            });
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
         let should_seed_legacy_workspace_roots = default_permissions.is_none()
@@ -2916,6 +3015,7 @@ impl Config {
                 "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms",
             ));
         }
+        validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
         let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
         let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
             if agent_max_threads_from_config.is_some() {
@@ -3297,6 +3397,8 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            explicit_permission_profile_mode,
+            custom_permission_profile_ids,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,

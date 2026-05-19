@@ -220,6 +220,7 @@ impl TurnContext {
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_multi_agent_v2_tool_namespace(config.multi_agent_v2.tool_namespace.clone())
         .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(self.tools_config.goal_tools)
         .with_max_concurrent_threads_per_session(
@@ -367,7 +368,6 @@ impl TurnContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
-            trace_id: self.trace_id.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
@@ -382,11 +382,7 @@ impl TurnContext {
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
-            summary: self.reasoning_summary,
-            user_instructions: self.user_instructions.clone(),
-            developer_instructions: self.developer_instructions.clone(),
-            final_output_json_schema: self.final_output_json_schema.clone(),
-            truncation_policy: Some(self.truncation_policy),
+            summary: ReasoningSummaryConfig::Auto,
         }
     }
 
@@ -539,6 +535,7 @@ impl Session {
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_multi_agent_v2_tool_namespace(per_turn_config.multi_agent_v2.tool_namespace.clone())
         .with_multi_agent_v2_non_code_mode_only(per_turn_config.multi_agent_v2.non_code_mode_only)
         .with_goal_tools_allowed(goal_tools_supported)
         .with_max_concurrent_threads_per_session(

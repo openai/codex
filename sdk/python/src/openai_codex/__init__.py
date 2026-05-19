@@ -14,11 +14,12 @@ from .api import (
     InputItem,
     LocalImageInput,
     MentionInput,
-    RunResult,
+    RunInput,
     SkillInput,
     TextInput,
     Thread,
     TurnHandle,
+    TurnResult,
 )
 from .client import AppServerConfig
 from .errors import (
@@ -51,9 +52,10 @@ __all__ = [
     "AsyncThread",
     "TurnHandle",
     "AsyncTurnHandle",
-    "RunResult",
+    "TurnResult",
     "Input",
     "InputItem",
+    "RunInput",
     "TextInput",
     "ImageInput",
     "LocalImageInput",
