@@ -29,7 +29,7 @@ impl RuntimeCapabilities {
     pub fn local(environment_manager: &EnvironmentManager) -> Self {
         Self {
             mode: RuntimeMode::LocalCodex,
-            local_environment: Some(environment_manager.local_environment()),
+            local_environment: Some(environment_manager.require_local_environment()),
         }
     }
 
@@ -110,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn local_capabilities_derive_worker_local_views_from_environment() {
         let environment_manager = EnvironmentManager::default_for_tests();
-        let expected_environment = environment_manager.local_environment();
+        let expected_environment = environment_manager.require_local_environment();
         let expected_filesystem = expected_environment.get_filesystem();
         let capabilities = RuntimeCapabilities::local(&environment_manager);
 
