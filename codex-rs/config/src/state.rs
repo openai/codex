@@ -433,10 +433,9 @@ impl ConfigLayerStack {
     ) -> Self {
         let mut layers = self.layers.clone();
         if let Some(index) = layers.iter().position(matches_existing) {
-            layers[index] = user_layer;
-        } else {
-            insert_user_layer(&mut layers, user_layer);
+            layers.remove(index);
         }
+        insert_user_layer(&mut layers, user_layer);
         self.with_layers(layers)
     }
 
