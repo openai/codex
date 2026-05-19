@@ -839,17 +839,12 @@ impl TurnRequestProcessor {
                     "failed to update thread settings: {err}"
                 )));
             }
-            match tokio::time::timeout(THREAD_SETTINGS_ACK_TIMEOUT, thread_settings_applied).await {
-                Ok(Ok(Ok(payload))) => thread_settings_from_applied_event(&payload),
-                Ok(Ok(Err(err))) => return Err(invalid_request(err)),
-                Ok(Err(_)) => {
-                    return Err(internal_error(
-                        "thread settings override waiter was cancelled".to_string(),
-                    ));
-                }
+            match thread_settings_applied.await {
+                Ok(Ok(payload)) => thread_settings_from_applied_event(&payload),
+                Ok(Err(err)) => return Err(invalid_request(err)),
                 Err(_) => {
                     return Err(internal_error(
-                        "timed out waiting for thread settings overrides to apply".to_string(),
+                        "thread settings override waiter was cancelled".to_string(),
                     ));
                 }
             }
