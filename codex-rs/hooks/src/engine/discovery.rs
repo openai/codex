@@ -114,9 +114,10 @@ pub(crate) fn discover_handlers(
                 continue;
             }
             let hooks_config_folder = layer.hooks_config_folder();
-            let json_hooks = if hooks_config_folder.as_ref().is_some_and(|folder| {
-                loaded_hooks_json_folders.insert(folder.as_path().to_path_buf())
-            }) {
+            let json_hooks = if hooks_config_folder
+                .as_ref()
+                .is_some_and(|folder| loaded_hooks_json_folders.insert(folder.clone()))
+            {
                 load_hooks_json(hooks_config_folder.as_deref(), &mut warnings)
             } else {
                 None
