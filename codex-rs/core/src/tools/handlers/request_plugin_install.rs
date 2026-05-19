@@ -165,6 +165,25 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
                 .await;
         }
 
+        let tool_type = match args.tool_type {
+            DiscoverableToolType::Connector => "connector",
+            DiscoverableToolType::Plugin => "plugin",
+        };
+        let response_action = match response.as_ref().map(|response| &response.action) {
+            Some(ElicitationAction::Accept) => "accept",
+            Some(ElicitationAction::Decline) => "decline",
+            Some(ElicitationAction::Cancel) => "cancel",
+            None => "unavailable",
+        };
+        turn.session_telemetry.record_plugin_install_suggestion(
+            tool_type,
+            tool.id(),
+            tool.name(),
+            response_action,
+            user_confirmed,
+            completed,
+        );
+
         let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,
             user_confirmed,
