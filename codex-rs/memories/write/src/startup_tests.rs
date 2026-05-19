@@ -242,22 +242,14 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     let test = build_test_codex(&server, home).await?;
     assert_eq!(test.config.service_tier, None);
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let config_snapshot =
         wait_for_service_tier(&test, Some(ServiceTier::Fast.request_value().to_string())).await?;

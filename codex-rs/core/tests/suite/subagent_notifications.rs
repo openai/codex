@@ -9,8 +9,10 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
@@ -18,6 +20,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -64,28 +67,22 @@ fn has_subagent_notification(req: &ResponsesRequest) -> bool {
         .any(|text| text.contains("<subagent_notification>"))
 }
 
-fn tool_parameter_description(
-    req: &ResponsesRequest,
-    tool_name: &str,
-    parameter_name: &str,
-) -> Option<String> {
-    req.body_json()
+fn tool_parameter_description(tool: &Value, parameter_name: &str) -> Option<String> {
+    tool.get("parameters")
+        .and_then(|parameters| parameters.get("properties"))
+        .and_then(|properties| properties.get(parameter_name))
+        .and_then(|parameter| parameter.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn tool_search_output_tools(request: &ResponsesRequest, call_id: &str) -> Vec<Value> {
+    request
+        .tool_search_output(call_id)
         .get("tools")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
-                    tool.get("parameters")
-                        .and_then(|parameters| parameters.get("properties"))
-                        .and_then(|properties| properties.get(parameter_name))
-                        .and_then(|parameter| parameter.get("description"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                } else {
-                    None
-                }
-            })
-        })
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn role_block(description: &str, role_name: &str) -> Option<String> {
@@ -646,14 +643,27 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once_match(
+    let call_id = "tool-search-spawn-agent";
+    let resp_mock = mount_sse_sequence(
         &server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_assistant_message("msg-turn1-1", "done"),
-            ev_completed("resp-turn1-1"),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("resp-turn1-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "spawn agent custom role",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-turn1-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-turn1-2"),
+                ev_assistant_message("msg-turn1-2", "done"),
+                ev_completed("resp-turn1-2"),
+            ]),
+        ],
     )
     .await;
 
@@ -683,8 +693,17 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let request = resp_mock.single_request();
-    let agent_type_description = tool_parameter_description(&request, "spawn_agent", "agent_type")
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let tools = tool_search_output_tools(&requests[1], call_id);
+    let spawn_agent = tools
+        .iter()
+        .find(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("function")
+                && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
+        })
+        .unwrap_or_else(|| panic!("expected tool_search to return spawn_agent: {tools:?}"));
+    let agent_type_description = tool_parameter_description(spawn_agent, "agent_type")
         .expect("spawn_agent agent_type description");
     let custom_role_description =
         role_block(&agent_type_description, "custom").expect("custom role description");

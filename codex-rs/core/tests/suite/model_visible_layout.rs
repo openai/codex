@@ -501,23 +501,15 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
-    resumed
-        .codex
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &resumed.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(resume_override_cwd),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("gpt-5.2".to_string()),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
     resumed
         .codex
         .submit(Op::UserInput {
