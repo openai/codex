@@ -229,9 +229,11 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         .mount(&server)
         .await;
 
+    let originator = Originator::process_default();
     let result = save_remote_plugin_share(
         &config,
         Some(&auth),
+        &originator,
         codex_home.path(),
         &plugin_path,
         /*remote_plugin_id*/ None,
@@ -374,9 +376,11 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
         .mount(&server)
         .await;
 
+    let originator = Originator::process_default();
     let result = save_remote_plugin_share(
         &config,
         Some(&auth),
+        &originator,
         codex_home.path(),
         &plugin_path,
         Some("plugins_123"),
@@ -445,9 +449,11 @@ async fn update_remote_plugin_share_targets_updates_targets() {
         .mount(&server)
         .await;
 
+    let originator = Originator::process_default();
     let result = update_remote_plugin_share_targets(
         &config,
         Some(&auth),
+        &originator,
         "plugins_123",
         vec![
             RemotePluginShareTarget {
@@ -577,7 +583,8 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         .mount(&server)
         .await;
 
-    let result = list_remote_plugin_shares(&config, Some(&auth), codex_home.path())
+    let originator = Originator::process_default();
+    let result = list_remote_plugin_shares(&config, Some(&auth), &originator, codex_home.path())
         .await
         .unwrap();
 
@@ -683,9 +690,16 @@ async fn delete_remote_plugin_share_deletes_workspace_plugin() {
         .mount(&server)
         .await;
 
-    delete_remote_plugin_share(&config, Some(&auth), codex_home.path(), "plugins_123")
-        .await
-        .unwrap();
+    let originator = Originator::process_default();
+    delete_remote_plugin_share(
+        &config,
+        Some(&auth),
+        &originator,
+        codex_home.path(),
+        "plugins_123",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         local_paths::load_plugin_share_local_paths(codex_home.path()).unwrap(),
         BTreeMap::new()

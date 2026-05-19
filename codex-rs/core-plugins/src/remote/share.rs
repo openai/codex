@@ -1,5 +1,7 @@
 use super::*;
 use codex_login::CodexAuth;
+use codex_login::default_client::Originator;
+use codex_login::default_client::build_reqwest_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -140,6 +142,7 @@ struct RemotePluginShareUpdateTargetsResponse {
 pub async fn save_remote_plugin_share(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    originator: &Originator,
     codex_home: &Path,
     plugin_path: &AbsolutePathBuf,
     remote_plugin_id: Option<&str>,
@@ -157,6 +160,7 @@ pub async fn save_remote_plugin_share(
     let upload = create_workspace_plugin_upload(
         config,
         auth,
+        originator,
         &filename,
         archive_bytes.len(),
         remote_plugin_id,
@@ -165,13 +169,14 @@ pub async fn save_remote_plugin_share(
     let etag = upload
         .etag
         .ok_or(RemotePluginCatalogError::MissingUploadEtag)?;
-    put_workspace_plugin_upload(&upload.upload_url, archive_bytes).await?;
+    put_workspace_plugin_upload(originator, &upload.upload_url, archive_bytes).await?;
     let share_targets = access_policy.share_targets;
     let share_targets =
         ensure_unlisted_workspace_target(auth, access_policy.discoverability, share_targets)?;
     let response = finalize_workspace_plugin_upload(
         config,
         auth,
+        originator,
         remote_plugin_id,
         RemoteWorkspacePluginCreateRequest {
             file_id: upload.file_id,
@@ -207,16 +212,17 @@ pub async fn save_remote_plugin_share(
 pub async fn list_remote_plugin_shares(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    originator: &Originator,
     codex_home: &Path,
 ) -> Result<Vec<RemotePluginShareSummary>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let created_plugins = fetch_created_workspace_plugins(config, auth).await?;
+    let created_plugins = fetch_created_workspace_plugins(config, auth, originator).await?;
     if created_plugins.is_empty() {
         return Ok(Vec::new());
     }
 
     let installed_by_id =
-        fetch_installed_plugins_for_scope(config, auth, RemotePluginScope::Workspace)
+        fetch_installed_plugins_for_scope(config, auth, originator, RemotePluginScope::Workspace)
             .await?
             .into_iter()
             .map(|plugin| (plugin.plugin.id.clone(), plugin))
@@ -275,13 +281,14 @@ pub fn load_plugin_share_remote_ids_by_local_path(
 pub async fn delete_remote_plugin_share(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    originator: &Originator,
     codex_home: &Path,
     remote_plugin_id: &str,
 ) -> Result<(), RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/{remote_plugin_id}");
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let request = authenticated_request(client.delete(&url), auth)?;
     send_and_expect_status(request, &url, &[StatusCode::NO_CONTENT]).await?;
     if let Err(err) = local_paths::remove_plugin_share_local_path(codex_home, remote_plugin_id) {
@@ -296,6 +303,7 @@ pub async fn delete_remote_plugin_share(
 pub async fn update_remote_plugin_share_targets(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    originator: &Originator,
     remote_plugin_id: &str,
     targets: Vec<RemotePluginShareTarget>,
     discoverability: RemotePluginShareUpdateDiscoverability,
@@ -314,7 +322,7 @@ pub async fn update_remote_plugin_share_targets(
             .unwrap_or_default();
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{remote_plugin_id}/shares");
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let request = authenticated_request(client.put(&url), auth)?.json(
         &RemotePluginShareUpdateTargetsRequest {
             discoverability,
@@ -358,12 +366,14 @@ fn ensure_unlisted_workspace_target(
 async fn fetch_created_workspace_plugins(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
+    originator: &Originator,
 ) -> Result<Vec<RemotePluginDirectoryItem>, RemotePluginCatalogError> {
     let mut plugins = Vec::new();
     let mut page_token = None;
     loop {
         let response =
-            get_created_workspace_plugins_page(config, auth, page_token.as_deref()).await?;
+            get_created_workspace_plugins_page(config, auth, originator, page_token.as_deref())
+                .await?;
         plugins.extend(response.plugins);
         let Some(next_page_token) = response.pagination.next_page_token else {
             break;
@@ -376,11 +386,12 @@ async fn fetch_created_workspace_plugins(
 async fn get_created_workspace_plugins_page(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
+    originator: &Originator,
     page_token: Option<&str>,
 ) -> Result<RemotePluginListResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/created");
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
@@ -392,13 +403,14 @@ async fn get_created_workspace_plugins_page(
 async fn create_workspace_plugin_upload(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
+    originator: &Originator,
     filename: &str,
     size_bytes: usize,
     remote_plugin_id: Option<&str>,
 ) -> Result<RemoteWorkspacePluginUploadUrlResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/upload-url");
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let request = authenticated_request(client.post(&url), auth)?.json(
         &RemoteWorkspacePluginUploadUrlRequest {
             filename,
@@ -411,10 +423,11 @@ async fn create_workspace_plugin_upload(
 }
 
 async fn put_workspace_plugin_upload(
+    originator: &Originator,
     upload_url: &str,
     archive_bytes: Vec<u8>,
 ) -> Result<(), RemotePluginCatalogError> {
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let request = client
         .put(upload_url)
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
@@ -443,6 +456,7 @@ async fn put_workspace_plugin_upload(
 async fn finalize_workspace_plugin_upload(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
+    originator: &Originator,
     remote_plugin_id: Option<&str>,
     body: RemoteWorkspacePluginCreateRequest,
 ) -> Result<RemoteWorkspacePluginCreateResponse, RemotePluginCatalogError> {
@@ -452,7 +466,7 @@ async fn finalize_workspace_plugin_upload(
     } else {
         format!("{base_url}/public/plugins/workspace")
     };
-    let client = build_process_reqwest_client();
+    let client = build_reqwest_client(originator);
     let request = authenticated_request(client.post(&url), auth)?.json(&body);
     send_and_decode(request, &url).await
 }

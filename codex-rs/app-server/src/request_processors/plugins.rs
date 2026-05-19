@@ -9,7 +9,6 @@ use codex_config::types::McpServerConfig;
 use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
-use codex_login::default_client::Originator;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
@@ -297,8 +296,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_list(
         &self,
         params: PluginListParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_list_response(params)
+        self.plugin_list_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -306,8 +306,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_installed(
         &self,
         params: PluginInstalledParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_installed_response(params)
+        self.plugin_installed_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -315,8 +316,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_read(
         &self,
         params: PluginReadParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_read_response(params)
+        self.plugin_read_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -324,8 +326,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_skill_read(
         &self,
         params: PluginSkillReadParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_skill_read_response(params)
+        self.plugin_skill_read_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -333,8 +336,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_save(
         &self,
         params: PluginShareSaveParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_save_response(params)
+        self.plugin_share_save_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -342,8 +346,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_update_targets(
         &self,
         params: PluginShareUpdateTargetsParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_update_targets_response(params)
+        self.plugin_share_update_targets_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -351,8 +356,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_list(
         &self,
         params: PluginShareListParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_list_response(params)
+        self.plugin_share_list_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -360,8 +366,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_checkout(
         &self,
         params: PluginShareCheckoutParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_checkout_response(params)
+        self.plugin_share_checkout_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -369,8 +376,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_share_delete(
         &self,
         params: PluginShareDeleteParams,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_share_delete_response(params)
+        self.plugin_share_delete_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -378,9 +386,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_install(
         &self,
         params: PluginInstallParams,
-        originator: &Originator,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_install_response(params, originator)
+        self.plugin_install_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -388,9 +396,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_uninstall(
         &self,
         params: PluginUninstallParams,
-        originator: &Originator,
+        request_context: &RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_uninstall_response(params, originator)
+        self.plugin_uninstall_response(params, request_context.originator())
             .await
             .map(|response| Some(response.into()))
     }
@@ -467,6 +475,7 @@ impl PluginRequestProcessor {
     async fn plugin_list_response(
         &self,
         params: PluginListParams,
+        originator: &Originator,
     ) -> Result<PluginListResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
@@ -586,6 +595,7 @@ impl PluginRequestProcessor {
             match codex_core_plugins::remote::fetch_remote_marketplaces(
                 &remote_plugin_service_config,
                 auth.as_ref(),
+                originator,
                 &remote_sources,
             )
             .await
@@ -664,6 +674,7 @@ impl PluginRequestProcessor {
     async fn plugin_installed_response(
         &self,
         params: PluginInstalledParams,
+        originator: &Originator,
     ) -> Result<PluginInstalledResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginInstalledParams {
@@ -717,6 +728,7 @@ impl PluginRequestProcessor {
                 &plugins_input,
                 &remote_installed_plugin_visible_scopes,
                 auth.as_ref(),
+                originator,
             )
             .await,
         );
@@ -813,6 +825,7 @@ impl PluginRequestProcessor {
         plugins_input: &codex_core_plugins::PluginsConfigInput,
         visible_scopes: &[RemotePluginScope],
         auth: Option<&CodexAuth>,
+        originator: &Originator,
     ) -> Vec<PluginMarketplaceEntry> {
         let remote_marketplaces = if let Some(remote_marketplaces) =
             plugins_manager.build_remote_installed_plugin_marketplaces_from_cache(visible_scopes)
@@ -823,6 +836,7 @@ impl PluginRequestProcessor {
                 .build_and_cache_remote_installed_plugin_marketplaces(
                     plugins_input,
                     auth,
+                    originator,
                     visible_scopes,
                     Some(self.effective_plugins_changed_callback()),
                 )
@@ -851,6 +865,7 @@ impl PluginRequestProcessor {
     async fn plugin_read_response(
         &self,
         params: PluginReadParams,
+        originator: &Originator,
     ) -> Result<PluginReadResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
@@ -899,6 +914,7 @@ impl PluginRequestProcessor {
                         match codex_core_plugins::remote::fetch_remote_plugin_share_context(
                             &remote_plugin_service_config,
                             auth.as_ref(),
+                            originator,
                             &context.remote_plugin_id,
                         )
                         .await
@@ -939,9 +955,13 @@ impl PluginRequestProcessor {
                     None => None,
                 };
                 let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &outcome.plugin.apps, &environment_manager)
-                        .await;
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &outcome.plugin.apps,
+                    &environment_manager,
+                    originator,
+                )
+                .await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1003,6 +1023,7 @@ impl PluginRequestProcessor {
                 let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
                     auth.as_ref(),
+                    originator,
                     &remote_marketplace_name,
                     &plugin_name,
                 )
@@ -1017,8 +1038,13 @@ impl PluginRequestProcessor {
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
                 let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries =
-                    load_plugin_app_summaries(&config, &plugin_apps, &environment_manager).await;
+                let app_summaries = load_plugin_app_summaries(
+                    &config,
+                    &plugin_apps,
+                    &environment_manager,
+                    originator,
+                )
+                .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1029,6 +1055,7 @@ impl PluginRequestProcessor {
     async fn plugin_skill_read_response(
         &self,
         params: PluginSkillReadParams,
+        originator: &Originator,
     ) -> Result<PluginSkillReadResponse, JSONRPCErrorError> {
         let PluginSkillReadParams {
             remote_marketplace_name,
@@ -1056,6 +1083,7 @@ impl PluginRequestProcessor {
         let remote_skill_detail = codex_core_plugins::remote::fetch_remote_plugin_skill_detail(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             &remote_marketplace_name,
             &remote_plugin_id,
             &skill_name,
@@ -1073,6 +1101,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_save_response(
         &self,
         params: PluginShareSaveParams,
+        originator: &Originator,
     ) -> Result<PluginShareSaveResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1113,6 +1142,7 @@ impl PluginRequestProcessor {
         let result = codex_core_plugins::remote::save_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &plugin_path,
             remote_plugin_id.as_deref(),
@@ -1131,6 +1161,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_update_targets_response(
         &self,
         params: PluginShareUpdateTargetsParams,
+        originator: &Originator,
     ) -> Result<PluginShareUpdateTargetsResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1152,6 +1183,7 @@ impl PluginRequestProcessor {
         let result = codex_core_plugins::remote::update_remote_plugin_share_targets(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             &remote_plugin_id,
             remote_plugin_share_targets(share_targets),
             remote_plugin_share_update_discoverability(discoverability),
@@ -1174,6 +1206,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_list_response(
         &self,
         _params: PluginShareListParams,
+        originator: &Originator,
     ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let remote_plugin_service_config = RemotePluginServiceConfig {
@@ -1182,6 +1215,7 @@ impl PluginRequestProcessor {
         let data = codex_core_plugins::remote::list_remote_plugin_shares(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             config.codex_home.as_path(),
         )
         .await
@@ -1205,6 +1239,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_checkout_response(
         &self,
         params: PluginShareCheckoutParams,
+        originator: &Originator,
     ) -> Result<PluginShareCheckoutResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         if !config.features.enabled(Feature::PluginSharing) {
@@ -1221,6 +1256,7 @@ impl PluginRequestProcessor {
         let result = codex_core_plugins::remote::checkout_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &remote_plugin_id,
         )
@@ -1241,6 +1277,7 @@ impl PluginRequestProcessor {
     async fn plugin_share_delete_response(
         &self,
         params: PluginShareDeleteParams,
+        originator: &Originator,
     ) -> Result<PluginShareDeleteResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
         let PluginShareDeleteParams { remote_plugin_id } = params;
@@ -1254,6 +1291,7 @@ impl PluginRequestProcessor {
         codex_core_plugins::remote::delete_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             config.codex_home.as_path(),
             &remote_plugin_id,
         )
@@ -1350,6 +1388,7 @@ impl PluginRequestProcessor {
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
+                originator,
             )
             .await;
 
@@ -1381,6 +1420,7 @@ impl PluginRequestProcessor {
             codex_core_plugins::remote::fetch_remote_plugin_detail_with_download_urls(
                 &remote_plugin_service_config,
                 auth.as_ref(),
+                originator,
                 &remote_marketplace_name,
                 &remote_plugin_id,
             )
@@ -1432,6 +1472,7 @@ impl PluginRequestProcessor {
         codex_core_plugins::remote::install_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             &actual_remote_marketplace_name,
             &remote_plugin_id,
         )
@@ -1465,6 +1506,7 @@ impl PluginRequestProcessor {
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
+                originator,
             )
             .await;
 
@@ -1480,25 +1522,23 @@ impl PluginRequestProcessor {
         is_chatgpt_auth: bool,
         plugin_id: &str,
         plugin_apps: &[codex_plugin::AppConnectorId],
+        originator: &Originator,
     ) -> Vec<AppSummary> {
         if plugin_apps.is_empty() || !config.features.apps_enabled_for_auth(is_chatgpt_auth) {
             return Vec::new();
         }
 
         let environment_manager = self.thread_manager.environment_manager();
-        let originator = Originator::process_default();
         let originator_value = originator.value().to_string();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options_and_originator(
-                config,
-                /*force_refetch*/ true,
-                &originator,
+                config, /*force_refetch*/ true, originator,
             ),
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,
                 &environment_manager,
-                &originator_value,
+                &originator_value
             ),
         );
 
@@ -1509,7 +1549,7 @@ impl PluginRequestProcessor {
                     plugin = plugin_id,
                     "failed to load app metadata after plugin install: {err:#}"
                 );
-                connectors::list_cached_all_connectors_with_originator(config, &originator)
+                connectors::list_cached_all_connectors_with_originator(config, originator)
                     .await
                     .unwrap_or_default()
             }
@@ -1645,7 +1685,9 @@ impl PluginRequestProcessor {
             return Err(invalid_request("invalid remote plugin id"));
         }
         if is_valid_remote_plugin_id(&plugin_id) {
-            return self.remote_plugin_uninstall_response(plugin_id).await;
+            return self
+                .remote_plugin_uninstall_response(plugin_id, originator)
+                .await;
         }
         let plugins_manager = self.thread_manager.plugins_manager();
 
@@ -1728,6 +1770,7 @@ impl PluginRequestProcessor {
     async fn remote_plugin_uninstall_response(
         &self,
         plugin_id: String,
+        originator: &Originator,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1742,6 +1785,7 @@ impl PluginRequestProcessor {
         let uninstall_result = codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config,
             auth.as_ref(),
+            originator,
             config.codex_home.to_path_buf(),
             &plugin_id,
         )
@@ -1773,24 +1817,22 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: &EnvironmentManager,
+    originator: &Originator,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
     }
 
-    let originator = Originator::process_default();
     let originator_value = originator.value().to_string();
     let connectors = match connectors::list_all_connectors_with_options_and_originator(
-        config,
-        /*force_refetch*/ false,
-        &originator,
+        config, /*force_refetch*/ false, originator,
     )
     .await
     {
         Ok(connectors) => connectors,
         Err(err) => {
             warn!("failed to load app metadata for plugin/read: {err:#}");
-            connectors::list_cached_all_connectors_with_originator(config, &originator)
+            connectors::list_cached_all_connectors_with_originator(config, originator)
                 .await
                 .unwrap_or_default()
         }
@@ -1801,7 +1843,6 @@ async fn load_plugin_app_summaries(
         plugin_apps,
         &originator_value,
     );
-
     let accessible_connectors =
         match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
             config,

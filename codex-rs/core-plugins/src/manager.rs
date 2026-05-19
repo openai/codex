@@ -615,12 +615,14 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
+        originator: &Originator,
         visible_scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
         let plugins = crate::remote::fetch_remote_installed_plugins(
             &remote_plugin_service_config(config),
             auth,
+            originator,
         )
         .await?;
         let marketplaces =
@@ -1814,9 +1816,11 @@ impl PluginsManager {
                 }
             };
 
+            let originator = Originator::process_default();
             let installed_plugins = crate::remote::fetch_remote_installed_plugins(
                 &request.service_config,
                 request.auth.as_ref(),
+                &originator,
             )
             .await;
             match installed_plugins {
