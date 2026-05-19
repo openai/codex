@@ -841,9 +841,13 @@ fn can_reuse_implicit_local_daemon(
     cli_kv_overrides: &[(String, toml::Value)],
     loader_overrides: &LoaderOverrides,
     strict_config: bool,
+    has_non_replayable_launch_overrides: bool,
 ) -> bool {
     // A reused daemon cannot adopt this invocation's full launch config state.
-    cli_kv_overrides.is_empty() && loader_overrides_are_default(loader_overrides) && !strict_config
+    cli_kv_overrides.is_empty()
+        && loader_overrides_are_default(loader_overrides)
+        && !strict_config
+        && !has_non_replayable_launch_overrides
 }
 
 pub async fn run_main(
@@ -903,8 +907,12 @@ pub async fn run_main(
         launch_loader_overrides.user_config_path = Some(user_config_path);
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
-    let reuse_implicit_local_daemon =
-        can_reuse_implicit_local_daemon(&cli_kv_overrides, &launch_loader_overrides, strict_config);
+    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon(
+        &cli_kv_overrides,
+        &launch_loader_overrides,
+        strict_config,
+        cli.bypass_hook_trust,
+    );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         maybe_probe_default_daemon_socket(&codex_home).await
     } else {
@@ -2130,22 +2138,32 @@ mod tests {
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
+            /*has_non_replayable_launch_overrides*/ false,
         ));
         assert!(!can_reuse_implicit_local_daemon(
             &cli_kv_overrides,
             &LoaderOverrides::default(),
             /*strict_config*/ false,
+            /*has_non_replayable_launch_overrides*/ false,
         ));
         loader_overrides.ignore_user_config = true;
         assert!(!can_reuse_implicit_local_daemon(
             &[],
             &loader_overrides,
             /*strict_config*/ false,
+            /*has_non_replayable_launch_overrides*/ false,
         ));
         assert!(!can_reuse_implicit_local_daemon(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ true,
+            /*has_non_replayable_launch_overrides*/ false,
+        ));
+        assert!(!can_reuse_implicit_local_daemon(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+            /*has_non_replayable_launch_overrides*/ true,
         ));
         Ok(())
     }
