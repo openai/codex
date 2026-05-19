@@ -280,7 +280,7 @@ fn skill_roots_from_layer_stack_inner(
         };
 
         match &layer.name {
-            ConfigLayerSource::Project { .. } => {
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => {
                 if let Some(repo_fs) = &repo_fs {
                     roots.push(SkillRoot {
                         path: config_folder.join(SKILLS_DIR_NAME),
@@ -290,7 +290,7 @@ fn skill_roots_from_layer_stack_inner(
                     });
                 }
             }
-            ConfigLayerSource::User { .. } => {
+            ConfigLayerSource::User { .. } | ConfigLayerSource::UserOverride { .. } => {
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
                 // compatibility.
                 roots.push(SkillRoot {
@@ -319,7 +319,7 @@ fn skill_roots_from_layer_stack_inner(
                     plugin_id: None,
                 });
             }
-            ConfigLayerSource::System { .. } => {
+            ConfigLayerSource::System { .. } | ConfigLayerSource::SystemOverride { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
@@ -379,7 +379,10 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+        if matches!(
+            layer.name,
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. }
+        ) {
             continue;
         }
         merge_toml_values(&mut merged, &layer.config);
