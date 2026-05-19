@@ -1,4 +1,5 @@
 mod cloud_requirements;
+mod cloud_requirements_composition;
 mod config_requirements;
 pub mod config_toml;
 mod constraint;
@@ -31,6 +32,10 @@ pub const CONFIG_TOML_FILE: &str = "config.toml";
 pub use cloud_requirements::CloudRequirementsLoadError;
 pub use cloud_requirements::CloudRequirementsLoadErrorCode;
 pub use cloud_requirements::CloudRequirementsLoader;
+pub use cloud_requirements_composition::CloudRequirementsCompositionError;
+pub use cloud_requirements_composition::CloudRequirementsFragment;
+pub use cloud_requirements_composition::CloudRequirementsFragmentSource;
+pub use cloud_requirements_composition::compose_cloud_requirements;
 pub use codex_app_server_protocol::ConfigLayerSource;
 pub use codex_protocol::config_types::ProfileV2Name;
 pub use codex_protocol::config_types::ProfileV2NameParseError;

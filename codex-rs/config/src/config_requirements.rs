@@ -26,6 +26,7 @@ pub enum RequirementSource {
     Unknown,
     MdmManagedPreferences { domain: String, key: String },
     CloudRequirements,
+    EnterpriseManaged { id: String, name: String },
     SystemRequirementsToml { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
     LegacyManagedConfigTomlFromMdm,
@@ -40,6 +41,9 @@ impl fmt::Display for RequirementSource {
             }
             RequirementSource::CloudRequirements => {
                 write!(f, "cloud requirements")
+            }
+            RequirementSource::EnterpriseManaged { id, name } => {
+                write!(f, "enterprise-managed requirements {name} ({id})")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -168,7 +172,7 @@ pub struct PluginRequirementsToml {
 
 impl PluginRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
+        self.mcp_servers.is_none()
     }
 }
 

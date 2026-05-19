@@ -277,6 +277,9 @@ fn fallback_managed_hooks_source_path(
         Some(RequirementSource::CloudRequirements) => {
             synthetic_layer_path("<cloud-requirements>/requirements.toml")
         }
+        Some(RequirementSource::EnterpriseManaged { id, name }) => synthetic_layer_path(&format!(
+            "<enterprise-managed:{name}:{id}>/requirements.toml"
+        )),
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -606,7 +609,8 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             HookSource::LegacyManagedConfigMdm
         }
-        Some(RequirementSource::CloudRequirements) => HookSource::CloudRequirements,
+        Some(RequirementSource::CloudRequirements)
+        | Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
 }
