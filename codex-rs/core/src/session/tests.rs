@@ -55,6 +55,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::goals::CreateGoalRequest;
 use crate::goals::ExternalGoalPreviousStatus;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
@@ -8522,6 +8523,66 @@ async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHand
     let config = sess.get_config().await;
     codex_state::StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
         .await
+}
+
+#[tokio::test]
+async fn create_thread_goal_fills_empty_thread_preview() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    assert!(page.items.is_empty());
+
+    sess.create_thread_goal(
+        tc.as_ref(),
+        CreateGoalRequest {
+            objective: "Keep improving the benchmark".to_string(),
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    let ids = page
+        .items
+        .iter()
+        .map(|thread| thread.id)
+        .collect::<Vec<_>>();
+    assert_eq!(vec![sess.conversation_id], ids);
+    assert_eq!(
+        Some("Keep improving the benchmark"),
+        page.items[0].preview.as_deref()
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
