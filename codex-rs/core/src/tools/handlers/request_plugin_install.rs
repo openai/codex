@@ -143,6 +143,12 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
             suggest_reason,
             &tool,
         );
+        let tool_type = match args.tool_type {
+            DiscoverableToolType::Connector => "connector",
+            DiscoverableToolType::Plugin => "plugin",
+        };
+        turn.session_telemetry
+            .record_plugin_install_elicitation_sent(tool_type, tool.id(), tool.name());
         let response = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
@@ -165,10 +171,6 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
                 .await;
         }
 
-        let tool_type = match args.tool_type {
-            DiscoverableToolType::Connector => "connector",
-            DiscoverableToolType::Plugin => "plugin",
-        };
         let response_action = match response.as_ref().map(|response| &response.action) {
             Some(ElicitationAction::Accept) => "accept",
             Some(ElicitationAction::Decline) => "decline",
