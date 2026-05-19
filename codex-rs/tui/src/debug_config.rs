@@ -637,6 +637,21 @@ mod tests {
         } else {
             absolute_path("/repo/.codex")
         };
+        let normalized_paths = [
+            (
+                system_file.as_path().display().to_string(),
+                "<system override>",
+            ),
+            (user_file.as_path().display().to_string(), "<user override>"),
+            (
+                project_folder
+                    .as_path()
+                    .join(codex_config::CONFIG_OVERRIDE_TOML_FILE)
+                    .display()
+                    .to_string(),
+                "<project override>",
+            ),
+        ];
         let stack = ConfigLayerStack::new(
             vec![
                 ConfigLayerEntry::new(
@@ -659,7 +674,11 @@ mod tests {
         )
         .expect("config layer stack");
 
-        assert_snapshot!(render_to_text(&render_debug_config_lines(&stack)));
+        let rendered = normalized_paths.into_iter().fold(
+            render_to_text(&render_debug_config_lines(&stack)),
+            |rendered, (path, normalized)| rendered.replace(&path, normalized),
+        );
+        assert_snapshot!(rendered);
     }
 
     #[test]

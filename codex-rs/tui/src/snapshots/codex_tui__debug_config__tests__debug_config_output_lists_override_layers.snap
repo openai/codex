@@ -1,13 +1,13 @@
 ---
 source: tui/src/debug_config.rs
-expression: render_to_text(&render_debug_config_lines(&stack))
+expression: rendered
 ---
 /debug-config
 
 Config layer stack (lowest precedence first):
-  1. system override (/etc/codex/config.override.toml) (enabled)
-  2. user override (/home/brent/.codex/config.override.toml) (enabled)
-  3. project override (/repo/.codex/config.override.toml) (enabled)
+  1. system override (<system override>) (enabled)
+  2. user override (<user override>) (enabled)
+  3. project override (<project override>) (enabled)
 
 Requirements:
   <none>
