@@ -4,17 +4,9 @@ use codex_tools::REQUEST_PLUGIN_INSTALL_TOOL_NAME;
 use codex_tools::ResponsesApiTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSpec;
-use std::collections::BTreeMap;
-
 pub(crate) fn create_list_available_plugins_to_install_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
-        "query".to_string(),
-        JsonSchema::string(Some(
-            "Plugin or connector name or id from the user's explicit request.".to_string(),
-        )),
-    )]);
     let description = format!(
-        "# List plugin/connector install candidates\n\nUse this tool only when both are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `{TOOL_SEARCH_TOOL_NAME}` is not available, or it has already been called and did not find or make the requested tool callable.\n\nPass a concise `query` for the requested plugin or connector name or id. Returns a bounded set of matching known plugins and connectors that can be passed to `{REQUEST_PLUGIN_INSTALL_TOOL_NAME}`. If `truncated` is true, refine the query before requesting an install. When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed.\n"
+        "# List plugin/connector install candidates\n\nUse this tool only when both are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `{TOOL_SEARCH_TOOL_NAME}` is not available, or it has already been called and did not find or make the requested tool callable.\n\nReturns known plugins and connectors that can be passed to `{REQUEST_PLUGIN_INSTALL_TOOL_NAME}`. When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed.\n"
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -22,11 +14,7 @@ pub(crate) fn create_list_available_plugins_to_install_tool() -> ToolSpec {
         description,
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["query".to_string()]),
-            Some(false.into()),
-        ),
+        parameters: JsonSchema::object(Default::default(), Some(Vec::new()), Some(false.into())),
         output_schema: None,
     })
 }
@@ -42,18 +30,12 @@ mod tests {
             create_list_available_plugins_to_install_tool(),
             ToolSpec::Function(ResponsesApiTool {
                 name: "list_available_plugins_to_install".to_string(),
-                description: "# List plugin/connector install candidates\n\nUse this tool only when both are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.\n\nPass a concise `query` for the requested plugin or connector name or id. Returns a bounded set of matching known plugins and connectors that can be passed to `request_plugin_install`. If `truncated` is true, refine the query before requesting an install. When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed.\n".to_string(),
+                description: "# List plugin/connector install candidates\n\nUse this tool only when both are true:\n- The user explicitly asks to use a specific plugin or connector that is not already available in the current context or active `tools` list.\n- `tool_search` is not available, or it has already been called and did not find or make the requested tool callable.\n\nReturns known plugins and connectors that can be passed to `request_plugin_install`. When both a plugin and a connector match, prefer the plugin; use the connector only when its corresponding plugin is already installed.\n".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
-                    BTreeMap::from([(
-                        "query".to_string(),
-                        JsonSchema::string(Some(
-                            "Plugin or connector name or id from the user's explicit request."
-                                .to_string(),
-                        )),
-                    )]),
-                    Some(vec!["query".to_string()]),
+                    Default::default(),
+                    Some(Vec::new()),
                     Some(false.into()),
                 ),
                 output_schema: None,

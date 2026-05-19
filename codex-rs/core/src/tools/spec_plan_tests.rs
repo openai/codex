@@ -609,7 +609,7 @@ async fn request_plugin_install_description_defers_inventory_to_list_tool() {
         panic!("expected list_available_plugins_to_install function spec");
     };
     assert!(list_description.contains(
-        "Returns a bounded set of matching known plugins and connectors that can be passed to `request_plugin_install`."
+        "Returns known plugins and connectors that can be passed to `request_plugin_install`."
     ));
 
     let ToolSpec::Function(ResponsesApiTool {

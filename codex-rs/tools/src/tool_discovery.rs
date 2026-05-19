@@ -114,8 +114,6 @@ pub struct RequestPluginInstallEntry {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ListAvailablePluginsToInstallResult {
     pub tools: Vec<RequestPluginInstallEntry>,
-    pub total_matches: usize,
-    pub truncated: bool,
 }
 
 pub fn collect_request_plugin_install_entries(
