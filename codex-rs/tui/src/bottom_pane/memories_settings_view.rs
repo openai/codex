@@ -14,6 +14,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::key_hint;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -62,6 +64,7 @@ pub(crate) struct MemoriesSettingsView {
     complete: bool,
     app_event_tx: AppEventSender,
     docs_link: Line<'static>,
+    keymap: ListKeymap,
 }
 
 impl MemoriesSettingsView {
@@ -69,6 +72,7 @@ impl MemoriesSettingsView {
         use_memories: bool,
         generate_memories: bool,
         app_event_tx: AppEventSender,
+        keymap: ListKeymap,
     ) -> Self {
         let mut view = Self {
             items: vec![
@@ -98,6 +102,7 @@ impl MemoriesSettingsView {
                 "Learn more: ".dim(),
                 MEMORIES_DOC_URL.cyan().underlined(),
             ]),
+            keymap,
         };
         view.initialize_selection();
         view
@@ -216,6 +221,30 @@ impl MemoriesSettingsView {
         state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
+    fn page_up(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.active_state_mut().page_up_clamped(len, visible);
+    }
+
+    fn page_down(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.active_state_mut().page_down_clamped(len, visible);
+    }
+
+    fn jump_top(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.active_state_mut().jump_top(len, visible);
+    }
+
+    fn jump_bottom(&mut self) {
+        let len = self.visible_len();
+        let visible = MAX_POPUP_ROWS.min(len);
+        self.active_state_mut().jump_bottom(len, visible);
+    }
+
     fn toggle_selected(&mut self) {
         if self.reset_confirmation.is_some() {
             return;
@@ -271,56 +300,19 @@ impl MemoriesSettingsView {
 impl BottomPaneView for MemoriesSettingsView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_down(),
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_down(),
+            _ if self.keymap.move_up.is_pressed(key_event) => self.move_up(),
+            _ if self.keymap.move_down.is_pressed(key_event) => self.move_down(),
+            _ if self.keymap.page_up.is_pressed(key_event) => self.page_up(),
+            _ if self.keymap.page_down.is_pressed(key_event) => self.page_down(),
+            _ if self.keymap.jump_top.is_pressed(key_event) => self.jump_top(),
+            _ if self.keymap.jump_bottom.is_pressed(key_event) => self.jump_bottom(),
             KeyEvent {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.toggle_selected(),
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.save(),
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => self.cancel(),
+            _ if self.keymap.accept.is_pressed(key_event) => self.save(),
+            _ if self.keymap.cancel.is_pressed(key_event) => self.cancel(),
             _ => {}
         }
     }

@@ -1036,6 +1036,7 @@ mod tests {
             images: None,
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            ..Default::default()
         }))
     }
 

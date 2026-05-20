@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 clap = { workspace = true, features = ["derive", "wrap_help"] }
 codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

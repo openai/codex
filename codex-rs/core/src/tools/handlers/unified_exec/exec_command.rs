@@ -5,6 +5,7 @@ use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
@@ -15,9 +16,10 @@ use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -34,7 +36,6 @@ use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
 use super::ExecCommandArgs;
 use super::ExecCommandEnvironmentArgs;
-use super::effective_max_output_tokens;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
 
@@ -67,9 +68,8 @@ impl ExecCommandHandler {
     }
 }
 
-impl ToolHandler for ExecCommandHandler {
-    type Output = ExecCommandToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("exec_command")
     }
@@ -84,57 +84,14 @@ impl ToolHandler for ExecCommandHandler {
         ))
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return None;
-        };
-
-        parse_arguments::<ExecCommandArgs>(arguments)
-            .ok()
-            .map(|args| PreToolUsePayload {
-                tool_name: HookToolName::bash(),
-                tool_input: serde_json::json!({ "command": args.cmd }),
-            })
-    }
-
-    fn with_updated_hook_input(
+    async fn handle(
         &self,
-        mut invocation: ToolInvocation,
-        updated_input: serde_json::Value,
-    ) -> Result<ToolInvocation, FunctionCallError> {
-        let ToolPayload::Function { arguments } = invocation.payload else {
-            return Err(FunctionCallError::RespondToModel(
-                "hook input rewrite received unsupported exec_command payload".to_string(),
-            ));
-        };
-        invocation.payload = ToolPayload::Function {
-            arguments: rewrite_function_string_argument(
-                &arguments,
-                "exec_command",
-                "cmd",
-                updated_hook_command(&updated_input)?,
-            )?,
-        };
-        Ok(invocation)
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &Self::Output,
-    ) -> Option<PostToolUsePayload> {
-        post_unified_exec_tool_use_payload(invocation, result)
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -183,13 +140,15 @@ impl ToolHandler for ExecCommandHandler {
         )
         .await;
         let process_id = manager.allocate_process_id().await;
-        let command = get_command(
+        let resolved_command = get_command(
             &args,
             session.user_shell(),
-            &turn.tools_config.unified_exec_shell_mode,
-            turn.tools_config.allow_login_shell,
+            &turn.unified_exec_shell_mode,
+            turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
+        let command = resolved_command.command;
+        let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
         let ExecCommandArgs {
@@ -202,8 +161,6 @@ impl ToolHandler for ExecCommandHandler {
             prefix_rule,
             ..
         } = args;
-        let max_output_tokens =
-            effective_max_output_tokens(max_output_tokens, turn.truncation_policy);
 
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
@@ -276,17 +233,18 @@ impl ToolHandler for ExecCommandHandler {
         .await?
         {
             manager.release_process_id(process_id).await;
-            return Ok(ExecCommandToolOutput {
+            return Ok(boxed_tool_output(ExecCommandToolOutput {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
                 raw_output: output.into_text().into_bytes(),
-                max_output_tokens: Some(max_output_tokens),
+                truncation_policy: turn.truncation_policy,
+                max_output_tokens,
                 process_id: None,
                 exit_code: None,
                 original_token_count: None,
                 hook_command: None,
-            });
+            }));
         }
 
         emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
@@ -294,10 +252,11 @@ impl ToolHandler for ExecCommandHandler {
             .exec_command(
                 ExecCommandRequest {
                     command,
+                    shell_type,
                     hook_command: hook_command.clone(),
                     process_id,
                     yield_time_ms,
-                    max_output_tokens: Some(max_output_tokens),
+                    max_output_tokens,
                     cwd,
                     sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
@@ -314,28 +273,77 @@ impl ToolHandler for ExecCommandHandler {
             )
             .await
         {
-            Ok(response) => Ok(response),
+            Ok(response) => Ok(boxed_tool_output(response)),
             Err(UnifiedExecError::SandboxDenied { output, .. }) => {
                 let output_text = output.aggregated_output.text;
                 let original_token_count = approx_token_count(&output_text);
-                Ok(ExecCommandToolOutput {
+                Ok(boxed_tool_output(ExecCommandToolOutput {
                     event_call_id: context.call_id.clone(),
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
                     raw_output: output_text.into_bytes(),
-                    max_output_tokens: Some(max_output_tokens),
+                    truncation_policy: turn.truncation_policy,
+                    max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
                     // process for write_stdin to resume.
                     process_id: None,
                     exit_code: Some(output.exit_code),
                     original_token_count: Some(original_token_count),
                     hook_command: Some(hook_command),
-                })
+                }))
             }
             Err(err) => Err(FunctionCallError::RespondToModel(format!(
                 "exec_command failed for `{command_for_display}`: {err:?}"
             ))),
         }
+    }
+}
+
+impl CoreToolRuntime for ExecCommandHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        parse_arguments::<ExecCommandArgs>(arguments)
+            .ok()
+            .map(|args| PreToolUsePayload {
+                tool_name: HookToolName::bash(),
+                tool_input: serde_json::json!({ "command": args.cmd }),
+            })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        mut invocation: ToolInvocation,
+        updated_input: serde_json::Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        let ToolPayload::Function { arguments } = invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported exec_command payload".to_string(),
+            ));
+        };
+        invocation.payload = ToolPayload::Function {
+            arguments: rewrite_function_string_argument(
+                &arguments,
+                "exec_command",
+                "cmd",
+                updated_hook_command(&updated_input)?,
+            )?,
+        };
+        Ok(invocation)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &dyn crate::tools::context::ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        post_unified_exec_tool_use_payload(invocation, result)
     }
 }
 

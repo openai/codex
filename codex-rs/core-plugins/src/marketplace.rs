@@ -7,7 +7,6 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dirs::home_dir;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -223,6 +222,16 @@ pub fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
+}
+
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_absolute())
+        .or_else(dirs::home_dir)
 }
 
 pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError> {

@@ -41,6 +41,7 @@ struct HookHandlerSource<'a> {
     key_source: String,
     source: HookSource,
     is_managed: bool,
+    bypass_hook_trust: bool,
     hook_states: &'a HashMap<String, HookStateToml>,
     env: HashMap<String, String>,
     plugin_id: Option<String>,
@@ -49,6 +50,7 @@ struct HookHandlerSource<'a> {
 #[derive(Clone, Copy)]
 struct HookDiscoveryPolicy {
     allow_managed_hooks_only: bool,
+    bypass_hook_trust: bool,
 }
 
 impl HookDiscoveryPolicy {
@@ -61,6 +63,7 @@ pub(crate) fn discover_handlers(
     config_layer_stack: Option<&ConfigLayerStack>,
     plugin_hook_sources: Vec<PluginHookSource>,
     plugin_hook_load_warnings: Vec<String>,
+    bypass_hook_trust: bool,
 ) -> DiscoveryResult {
     let mut handlers = Vec::new();
     let mut hook_entries = Vec::new();
@@ -75,6 +78,7 @@ pub(crate) fn discover_handlers(
                 .as_ref()
                 .is_some_and(|requirement| requirement.value)
         }),
+        bypass_hook_trust,
     };
 
     if let Some(config_layer_stack) = config_layer_stack {
@@ -99,6 +103,7 @@ pub(crate) fn discover_handlers(
                 key_source: policy_path.display().to_string(),
                 source: hook_source,
                 is_managed,
+                bypass_hook_trust: false,
                 hook_states: &hook_states,
                 env: HashMap::new(),
                 plugin_id: None,
@@ -132,6 +137,7 @@ pub(crate) fn discover_handlers(
                         key_source: source_path.display().to_string(),
                         source: hook_source,
                         is_managed,
+                        bypass_hook_trust: policy.bypass_hook_trust,
                         hook_states: &hook_states,
                         env: HashMap::new(),
                         plugin_id: None,
@@ -183,6 +189,7 @@ fn append_managed_requirement_handlers(
             key_source: source_path.display().to_string(),
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
             is_managed: true,
+            bypass_hook_trust: false,
             hook_states,
             env: HashMap::new(),
             plugin_id: None,
@@ -233,6 +240,7 @@ fn append_plugin_hook_sources(
                 ),
                 source: HookSource::Plugin,
                 is_managed: false,
+                bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
                 env,
                 plugin_id: Some(plugin_id),
@@ -344,7 +352,7 @@ fn load_toml_hooks_from_layer(
 fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
     match &layer.name {
         ConfigLayerSource::System { file }
-        | ConfigLayerSource::User { file }
+        | ConfigLayerSource::User { file, .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
         ConfigLayerSource::Project { dot_codex_folder } => layer
             .hooks_config_folder()
@@ -485,10 +493,11 @@ fn append_matcher_groups(
                         trust_status,
                     });
                     if enabled
-                        && matches!(
-                            trust_status,
-                            HookTrustStatus::Managed | HookTrustStatus::Trusted
-                        )
+                        && (source.bypass_hook_trust
+                            || matches!(
+                                trust_status,
+                                HookTrustStatus::Managed | HookTrustStatus::Trusted
+                            ))
                     {
                         handlers.push(ConfiguredHandler {
                             event_name,
@@ -620,6 +629,7 @@ mod tests {
     use codex_config::HookStateToml;
     use codex_config::MatcherGroup;
     use codex_config::TomlValue;
+    use codex_protocol::protocol::HookTrustStatus;
 
     fn source_path() -> AbsolutePathBuf {
         test_path_buf("/tmp/hooks.json").abs()
@@ -638,6 +648,24 @@ mod tests {
             key_source: path.display().to_string(),
             source: hook_source(),
             is_managed: true,
+            bypass_hook_trust: false,
+            hook_states,
+            env: std::collections::HashMap::new(),
+            plugin_id: None,
+        }
+    }
+
+    fn unmanaged_hook_handler_source<'a>(
+        path: &'a AbsolutePathBuf,
+        hook_states: &'a std::collections::HashMap<String, HookStateToml>,
+        bypass_hook_trust: bool,
+    ) -> super::HookHandlerSource<'a> {
+        super::HookHandlerSource {
+            path,
+            key_source: path.display().to_string(),
+            source: HookSource::User,
+            is_managed: false,
+            bypass_hook_trust,
             hook_states,
             env: std::collections::HashMap::new(),
             plugin_id: None,
@@ -728,6 +756,72 @@ mod tests {
     }
 
     #[test]
+    fn bypass_hook_trust_allows_enabled_untrusted_handlers() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &unmanaged_hook_handler_source(
+                &source_path,
+                &hook_states,
+                /*bypass_hook_trust*/ true,
+            ),
+            HookEventName::PreToolUse,
+            vec![command_group(Some("Bash"))],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(hook_entries.len(), 1);
+        assert_eq!(hook_entries[0].trust_status, HookTrustStatus::Untrusted);
+        assert_eq!(hook_entries[0].enabled, true);
+    }
+
+    #[test]
+    fn bypass_hook_trust_respects_disabled_handlers() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::from([(
+            format!("{}:pre_tool_use:0:0", source_path.display()),
+            HookStateToml {
+                enabled: Some(false),
+                trusted_hash: None,
+            },
+        )]);
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &unmanaged_hook_handler_source(
+                &source_path,
+                &hook_states,
+                /*bypass_hook_trust*/ true,
+            ),
+            HookEventName::PreToolUse,
+            vec![command_group(Some("Bash"))],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers, Vec::<ConfiguredHandler>::new());
+        assert_eq!(hook_entries.len(), 1);
+        assert_eq!(hook_entries[0].trust_status, HookTrustStatus::Untrusted);
+        assert_eq!(hook_entries[0].enabled, false);
+    }
+
+    #[test]
     fn pre_tool_use_treats_star_matcher_as_match_all() {
         let mut handlers = Vec::new();
         let mut warnings = Vec::new();
@@ -779,6 +873,7 @@ mod tests {
         let layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: test_path_buf("/tmp/config.toml").abs(),
+                profile: None,
             },
             config_with_malformed_state_and_session_start_hook(),
         );
@@ -878,6 +973,7 @@ mod tests {
         assert_eq!(
             super::hook_metadata_for_config_layer_source(&ConfigLayerSource::User {
                 file: config_file.clone(),
+                profile: None,
             }),
             (HookSource::User, false),
         );

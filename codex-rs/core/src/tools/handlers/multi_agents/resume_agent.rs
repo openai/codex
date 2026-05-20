@@ -7,26 +7,21 @@ use std::sync::Arc;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
-    type Output = ResumeAgentResult;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("resume_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "resume_agent")
     }
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_resume_agent_tool())
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    fn handle(
+    async fn handle(
         &self,
         invocation: ToolInvocation,
-    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send {
-        Box::pin(handle_resume_agent(invocation))
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        handle_resume_agent(invocation).await.map(boxed_tool_output)
     }
 }
 
@@ -137,6 +132,19 @@ async fn handle_resume_agent(
         .counter("codex.multi_agent.resume", /*inc*/ 1, &[]);
 
     Ok(ResumeAgentResult { status })
+}
+
+impl CoreToolRuntime for Handler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "resume_agent resume reopen closed agent subagent thread id target",
+            self.spec()?,
+        )
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
 }
 
 #[derive(Debug, Deserialize)]

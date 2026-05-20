@@ -6,6 +6,8 @@ use std::process::Command;
 
 use crate::GitToolingError;
 
+const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
         path,
@@ -98,7 +100,12 @@ where
 {
     let iterator = args.into_iter();
     let (lower, upper) = iterator.size_hint();
-    let mut args_vec = Vec::with_capacity(upper.unwrap_or(lower));
+    let mut args_vec = Vec::with_capacity(upper.unwrap_or(lower) + 2);
+    // Keep internal Git helper commands independent of configured hook directories.
+    args_vec.push(OsString::from("-c"));
+    args_vec.push(OsString::from(format!(
+        "core.hooksPath={DISABLED_HOOKS_PATH}"
+    )));
     for arg in iterator {
         args_vec.push(OsString::from(arg.as_ref()));
     }

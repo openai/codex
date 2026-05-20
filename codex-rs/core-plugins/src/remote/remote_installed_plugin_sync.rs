@@ -1,5 +1,6 @@
 use super::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
+use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use super::RemotePluginCatalogError;
@@ -77,7 +78,7 @@ pub struct RemotePluginCacheMutationGuard {
     key: RemotePluginCacheMutationKey,
 }
 
-pub fn maybe_start_remote_installed_plugin_bundle_sync(
+pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
@@ -154,6 +155,10 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 BTreeSet::new(),
             ),
             (
+                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                BTreeSet::new(),
+            ),
+            (
                 REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
                 BTreeSet::new(),
             ),
@@ -203,6 +208,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 &plugin.name,
                 release_version,
                 plugin.release.bundle_download_url.as_deref(),
+                plugin.release.app_manifest.clone(),
             ) {
                 Ok(bundle) => bundle,
                 Err(err) => {
@@ -303,6 +309,7 @@ fn remove_stale_remote_plugin_caches(
     for marketplace_name in [
         REMOTE_GLOBAL_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_MARKETPLACE_NAME,
+        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
         REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
     ] {
@@ -505,12 +512,12 @@ mod tests {
             &installed_plugin_names_by_marketplace,
         )
         .expect("cleanup after install guard is dropped");
-        assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert_eq!(removed, vec!["linear@openai-curated-remote".to_string()]);
         assert!(!cached_manifest.exists());
     }
 
     #[test]
-    fn stale_remote_plugin_cleanup_removes_private_shared_with_me_cache() {
+    fn stale_remote_plugin_cleanup_removes_old_shared_with_me_cache_and_keeps_canonical_cache() {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cached_manifest = codex_home
             .path()
@@ -524,12 +531,28 @@ mod tests {
             .expect("create cached plugin manifest parent");
         std::fs::write(&cached_manifest, r#"{"name":"private-plugin"}"#)
             .expect("write cached plugin manifest");
+        let canonical_cached_manifest = codex_home
+            .path()
+            .join(PLUGINS_CACHE_DIR)
+            .join(REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME)
+            .join("shared-plugin")
+            .join("1.2.3")
+            .join(".codex-plugin")
+            .join("plugin.json");
+        std::fs::create_dir_all(canonical_cached_manifest.parent().expect("manifest parent"))
+            .expect("create canonical cached plugin manifest parent");
+        std::fs::write(&canonical_cached_manifest, r#"{"name":"shared-plugin"}"#)
+            .expect("write canonical cached plugin manifest");
         let installed_plugin_names_by_marketplace =
             BTreeMap::<String, BTreeSet<String>>::from_iter([
                 (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
                 (
                     REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
                     BTreeSet::new(),
+                ),
+                (
+                    REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
+                    BTreeSet::from(["shared-plugin".to_string()]),
                 ),
                 (
                     REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
@@ -552,5 +575,6 @@ mod tests {
             vec!["private-plugin@workspace-shared-with-me-private".to_string()]
         );
         assert!(!cached_manifest.exists());
+        assert!(canonical_cached_manifest.is_file());
     }
 }

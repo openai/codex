@@ -2,6 +2,8 @@ use super::*;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+// The override is intentionally available only in debug builds, matching the login path below.
+#[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
 enum ActiveLogin {
@@ -568,11 +570,11 @@ impl AccountRequestProcessor {
             }
         }
 
-        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_account_id != expected_workspace
+        if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
+            && !expected_workspaces.contains(&chatgpt_account_id)
         {
             return Err(invalid_request(format!(
-                "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
+                "External auth must use one of workspace(s) {expected_workspaces:?}, but received {chatgpt_account_id:?}.",
             )));
         }
 

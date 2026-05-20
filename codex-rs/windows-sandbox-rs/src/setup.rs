@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -39,9 +40,11 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+const BIN_DIRNAME: &str = "bin";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const RESOURCES_DIRNAME: &str = "codex-resources";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -395,14 +398,9 @@ pub(crate) fn gather_write_roots(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // Always include the command CWD for workspace-write.
-    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        roots.push(command_cwd.to_path_buf());
-    }
     let AllowDenyPaths { allow, .. } =
         compute_allow_paths(policy, policy_cwd, command_cwd, env_map);
-    roots.extend(allow);
+    let roots: Vec<PathBuf> = allow.into_iter().collect();
     let mut dedup: HashSet<PathBuf> = HashSet::new();
     let mut out: Vec<PathBuf> = Vec::new();
     for r in canonical_existing(&roots) {
@@ -411,6 +409,26 @@ pub(crate) fn gather_write_roots(
         }
     }
     out
+}
+
+pub(crate) fn effective_write_roots_for_setup(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    write_roots_override: Option<&[PathBuf]>,
+) -> Vec<PathBuf> {
+    let write_roots = if let Some(roots) = write_roots_override {
+        canonical_existing(roots)
+    } else {
+        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+    };
+    let write_roots = expand_user_profile_root(write_roots);
+    let write_roots = filter_user_profile_root(write_roots);
+    let write_roots = filter_user_profile_root_exclusions(write_roots);
+    let write_roots = filter_ssh_config_dependency_roots(write_roots);
+    filter_sensitive_write_roots(write_roots, codex_home)
 }
 
 #[derive(Serialize)]
@@ -564,24 +582,38 @@ fn quote_arg(arg: &str) -> String {
 
 fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
+        return setup_exe;
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
+}
+
+fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let candidate = dir.join("codex-windows-sandbox-setup.exe");
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+
+    if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
+        && let Some(package_dir) = dir.parent()
+    {
+        let package_resource_candidate = package_dir
+            .join(RESOURCES_DIRNAME)
+            .join("codex-windows-sandbox-setup.exe");
+        if package_resource_candidate.is_file() {
+            return Some(package_resource_candidate);
+        }
+    }
+
+    // Older standalone installs keep Windows helper binaries under
+    // `codex-resources/` next to `codex.exe`, so elevation still probes that
+    // sibling folder before falling back to PATH.
+    let resource_candidate = dir
+        .join(RESOURCES_DIRNAME)
+        .join("codex-windows-sandbox-setup.exe");
+    resource_candidate.is_file().then_some(resource_candidate)
 }
 
 fn report_helper_failure(
@@ -761,21 +793,14 @@ fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
-        canonical_existing(roots)
-    } else {
-        gather_write_roots(
-            request.policy,
-            request.policy_cwd,
-            request.command_cwd,
-            request.env_map,
-        )
-    };
-    let write_roots = expand_user_profile_root(write_roots);
-    let write_roots = filter_user_profile_root(write_roots);
-    let write_roots = filter_user_profile_root_exclusions(write_roots);
-    let write_roots = filter_ssh_config_dependency_roots(write_roots);
-    let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let write_roots = effective_write_roots_for_setup(
+        request.policy,
+        request.policy_cwd,
+        request.command_cwd,
+        request.env_map,
+        request.codex_home,
+        overrides.write_roots.as_deref(),
+    );
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
         // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
@@ -951,8 +976,11 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::BIN_DIRNAME;
+    use super::RESOURCES_DIRNAME;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::find_setup_exe_for_current_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -990,6 +1018,24 @@ mod tests {
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
         );
+    }
+
+    #[test]
+    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&setup_exe, b"setup").expect("write setup");
+
+        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
+
+        assert_eq!(resolved, setup_exe);
     }
 
     #[test]
@@ -1403,6 +1449,66 @@ mod tests {
                 .into_iter()
                 .all(|path| !read_roots.contains(&path))
         );
+    }
+
+    #[test]
+    fn effective_write_roots_match_payload_filtering_for_overrides() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let extra_root = tmp.path().join("extra-root");
+        let sandbox_root = super::sandbox_dir(&codex_home);
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&extra_root).expect("create extra root");
+        fs::create_dir_all(&sandbox_root).expect("create sandbox root");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let override_roots = vec![
+            command_cwd.clone(),
+            extra_root.clone(),
+            codex_home.clone(),
+            sandbox_root.clone(),
+        ];
+        let request = super::SandboxSetupRequest {
+            policy: &policy,
+            policy_cwd: &command_cwd,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+        let overrides = super::SetupRootOverrides {
+            read_roots: None,
+            read_roots_include_platform_defaults: false,
+            write_roots: Some(override_roots.clone()),
+            deny_read_paths: None,
+            deny_write_paths: None,
+        };
+
+        let effective_write_roots = super::effective_write_roots_for_setup(
+            &policy,
+            &command_cwd,
+            &command_cwd,
+            &HashMap::new(),
+            &codex_home,
+            Some(&override_roots),
+        );
+        let (_read_roots, payload_write_roots) = build_payload_roots(&request, &overrides);
+
+        let expected_workspace = dunce::canonicalize(&command_cwd).expect("canonical workspace");
+        let expected_extra = dunce::canonicalize(&extra_root).expect("canonical extra root");
+        let forbidden_codex_home = dunce::canonicalize(&codex_home).expect("canonical codex home");
+        let forbidden_sandbox = dunce::canonicalize(&sandbox_root).expect("canonical sandbox root");
+        assert_eq!(effective_write_roots, payload_write_roots);
+        assert!(effective_write_roots.contains(&expected_workspace));
+        assert!(effective_write_roots.contains(&expected_extra));
+        assert!(!effective_write_roots.contains(&forbidden_codex_home));
+        assert!(!effective_write_roots.contains(&forbidden_sandbox));
     }
 
     #[test]

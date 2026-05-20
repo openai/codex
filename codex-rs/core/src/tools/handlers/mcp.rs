@@ -6,13 +6,15 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
-use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolTelemetryTags;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use codex_mcp::ToolInfo;
@@ -27,17 +29,24 @@ use serde_json::Value;
 
 pub struct McpHandler {
     tool_info: ToolInfo,
+    exposure: ToolExposure,
 }
 
 impl McpHandler {
     pub fn new(tool_info: ToolInfo) -> Self {
-        Self { tool_info }
+        Self::with_exposure(tool_info, ToolExposure::Direct)
+    }
+
+    pub fn with_exposure(tool_info: ToolInfo, exposure: ToolExposure) -> Self {
+        Self {
+            tool_info,
+            exposure,
+        }
     }
 }
 
-impl ToolHandler for McpHandler {
-    type Output = McpToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for McpHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_info.canonical_tool_name()
     }
@@ -70,6 +79,58 @@ impl ToolHandler for McpHandler {
         }))
     }
 
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.tool_info.supports_parallel_tool_calls
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
+
+        let payload = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "mcp handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let started = Instant::now();
+        let result = handle_mcp_tool_call(
+            Arc::clone(&session),
+            &turn,
+            call_id.clone(),
+            self.tool_info.server_name.clone(),
+            self.tool_info.tool.name.to_string(),
+            self.tool_name().to_string(),
+            payload,
+        )
+        .await;
+
+        Ok(boxed_tool_output(McpToolOutput {
+            result: result.result,
+            tool_input: result.tool_input,
+            wall_time: started.elapsed(),
+            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
+            truncation_policy: turn.truncation_policy,
+        }))
+    }
+}
+
+impl CoreToolRuntime for McpHandler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         let source_name = self
             .tool_info
@@ -96,16 +157,17 @@ impl ToolHandler for McpHandler {
         )
     }
 
-    fn supports_parallel_tool_calls(&self) -> bool {
-        self.tool_info.supports_parallel_tool_calls
-    }
-
-    async fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
-        let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
-        if let Some(origin) = &self.tool_info.server_origin {
-            tags.push(("mcp_server_origin", origin.clone()));
-        }
-        tags
+    fn telemetry_tags<'a>(
+        &'a self,
+        _invocation: &'a ToolInvocation,
+    ) -> futures::future::BoxFuture<'a, ToolTelemetryTags> {
+        Box::pin(async {
+            let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
+            if let Some(origin) = &self.tool_info.server_origin {
+                tags.push(("mcp_server_origin", origin.clone()));
+            }
+            tags
+        })
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -144,7 +206,7 @@ impl ToolHandler for McpHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let ToolPayload::Function { .. } = &invocation.payload else {
             return None;
@@ -155,47 +217,8 @@ impl ToolHandler for McpHandler {
         Some(PostToolUsePayload {
             tool_name: HookToolName::new(self.tool_name().to_string()),
             tool_use_id: invocation.call_id.clone(),
-            tool_input: result.tool_input.clone(),
+            tool_input: result.post_tool_use_input(&invocation.payload)?,
             tool_response,
-        })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
-
-        let payload = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "mcp handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        let started = Instant::now();
-        let result = handle_mcp_tool_call(
-            Arc::clone(&session),
-            &turn,
-            call_id.clone(),
-            self.tool_info.server_name.clone(),
-            self.tool_info.tool.name.to_string(),
-            self.tool_name().to_string(),
-            payload,
-        )
-        .await;
-
-        Ok(McpToolOutput {
-            result: result.result,
-            tool_input: result.tool_input,
-            wall_time: started.elapsed(),
-            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
-            truncation_policy: turn.truncation_policy,
         })
     }
 }

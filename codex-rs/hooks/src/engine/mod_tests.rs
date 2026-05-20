@@ -196,6 +196,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -211,6 +212,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
+        bypass_hook_trust: false,
         config_layer_stack: Some(config_layer_stack.clone()),
         plugin_hook_sources: Vec::new(),
         plugin_hook_load_warnings: Vec::new(),
@@ -295,6 +297,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -372,6 +375,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -383,8 +387,12 @@ fn unknown_requirement_source_hooks_stay_managed() {
 
     assert_eq!(engine.handlers.len(), 1);
     assert_eq!(engine.handlers[0].source, HookSource::Unknown);
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].source, HookSource::Unknown);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -427,7 +435,10 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             user_config,
         )],
         ConfigRequirements {
@@ -446,6 +457,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -457,8 +469,12 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
 
     assert_eq!(engine.handlers.len(), 1);
     assert_eq!(engine.handlers[0].source, HookSource::CloudRequirements);
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert_eq!(discovered.hook_entries.len(), 2);
     assert_eq!(discovered.hook_entries[0].key, managed_disabled_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -486,6 +502,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
                     file: user_config_path,
+                    profile: None,
                 },
                 config_with_hook_state(&managed_key, /*enabled*/ false),
             ),
@@ -503,6 +520,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -517,8 +535,12 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         engine.handlers[0].source,
         HookSource::LegacyManagedConfigFile
     );
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert_eq!(discovered.hook_entries[0].key, managed_key);
     assert_eq!(discovered.hook_entries[0].enabled, true);
@@ -586,6 +608,7 @@ fn trusted_plugin_hook_stack(
         /*config_layer_stack*/ None,
         plugin_hook_sources.to_vec(),
         Vec::new(),
+        /*bypass_hook_trust*/ false,
     );
     let state = discovered
         .hook_entries
@@ -608,7 +631,10 @@ fn trusted_plugin_hook_stack(
 
     ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config,
         )],
         ConfigRequirements::default(),
@@ -655,6 +681,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -696,7 +723,10 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/user-hook.py"),
         )],
         requirements,
@@ -706,6 +736,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -717,8 +748,12 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
 
     assert!(engine.warnings().is_empty());
     assert!(engine.handlers.is_empty());
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert!(!discovered.hook_entries[0].is_managed);
     assert_eq!(
@@ -742,7 +777,10 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml,
         )],
         ConfigRequirements::default(),
@@ -752,6 +790,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -763,8 +802,12 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
 
     assert!(engine.warnings().is_empty());
     assert!(engine.handlers.is_empty());
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert_eq!(discovered.hook_entries.len(), 1);
     assert!(!discovered.hook_entries[0].is_managed);
     assert_eq!(
@@ -804,7 +847,10 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/toml-hook.py"),
         )],
         requirements,
@@ -814,6 +860,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -852,6 +899,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
@@ -923,6 +971,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -947,8 +996,12 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             "python3 /tmp/legacy-mdm-hook.py",
         ]
     );
-    let discovered =
-        super::discovery::discover_handlers(Some(&config_layer_stack), Vec::new(), Vec::new());
+    let discovered = super::discovery::discover_handlers(
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        /*bypass_hook_trust*/ false,
+    );
     assert!(discovered.hook_entries.iter().all(|entry| entry.is_managed));
 }
 
@@ -1028,6 +1081,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
 
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
@@ -1119,6 +1173,7 @@ print(json.dumps({
     );
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         plugin_hook_sources.clone(),
         Vec::new(),
@@ -1146,6 +1201,7 @@ print(json.dumps({
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
+        bypass_hook_trust: false,
         config_layer_stack: None,
         plugin_hook_sources,
         plugin_hook_load_warnings: Vec::new(),
@@ -1229,6 +1285,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
     );
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
@@ -1272,6 +1329,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
 fn plugin_hook_load_warnings_are_startup_warnings() {
     let engine = ClaudeHooksEngine::new(
         /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
         /*config_layer_stack*/ None,
         Vec::new(),
         vec!["failed plugin hook".to_string()],

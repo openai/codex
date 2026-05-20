@@ -45,8 +45,9 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "ext/extension-api",
+    "ext/goal",
     "ext/guardian",
-    "ext/git-attribution",
+    "ext/memories",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -108,7 +109,6 @@ members = [
     "test-binary-support",
     "thread-manager-sample",
     "thread-store",
-    "tool-api",
     "uds",
     "codex-experimental-api-macros",
     "plugin",
@@ -163,8 +163,8 @@ codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
+codex-goal-extension = { path = "ext/goal" }
 codex-guardian = { path = "ext/guardian" }
-codex-git-attribution = { path = "ext/git-attribution" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -180,6 +180,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
+codex-memories-extension = { path = "ext/memories" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -209,7 +210,6 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
-codex-tool-api = { path = "tool-api" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
@@ -352,6 +352,7 @@ seccompiler = "0.5.0"
 semver = "1.0"
 sentry = "0.46.0"
 serde = "1"
+serde_ignored = "0.1.14"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
 serde_with = "3.17"
@@ -412,7 +413,7 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=146.4.0"
+v8 = "=147.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -471,6 +472,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

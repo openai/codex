@@ -11,6 +11,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionToml;
 use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -66,6 +67,8 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
+                        workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
                             entries: BTreeMap::new(),
@@ -276,6 +279,40 @@ fn profile_network_proxy_config_keeps_proxy_disabled_for_proxy_policy() {
 }
 
 #[test]
+fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std::io::Result<()> {
+    let cwd = TempDir::new()?;
+    let workspace_roots = compile_permission_profile_workspace_roots(
+        Some(&PermissionsToml {
+            entries: BTreeMap::from([(
+                "workspace".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    workspace_roots: Some(WorkspaceRootsToml {
+                        entries: BTreeMap::from([
+                            ("backend".to_string(), true),
+                            ("disabled".to_string(), false),
+                        ]),
+                    }),
+                    filesystem: None,
+                    network: None,
+                },
+            )]),
+        }),
+        "workspace",
+        cwd.path(),
+    )?;
+
+    assert_eq!(
+        workspace_roots,
+        vec![AbsolutePathBuf::resolve_path_against_base(
+            "backend",
+            cwd.path()
+        )]
+    );
+    Ok(())
+}
+
+#[test]
 fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,
@@ -289,9 +326,9 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
                 FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
             ),
             (
-                ":project_roots".to_string(),
+                ":workspace_roots".to_string(),
                 FilesystemPermissionToml::Scoped(BTreeMap::from([
-                    ("**/*.env".to_string(), FileSystemAccessMode::None),
+                    ("**/*.env".to_string(), FileSystemAccessMode::Deny),
                     ("docs/**".to_string(), FileSystemAccessMode::Read),
                     ("src/**/*.rs".to_string(), FileSystemAccessMode::Write),
                 ])),
@@ -303,9 +340,9 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
         unsupported_read_write_glob_paths(&filesystem),
         vec![
             "/tmp/**/*.log".to_string(),
-            ":project_roots/src/**/*.rs".to_string()
+            ":workspace_roots/src/**/*.rs".to_string()
         ],
-        "`none` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
+        "`deny` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
     );
 }
 
@@ -314,17 +351,17 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,
         entries: BTreeMap::from([(
-            ":project_roots".to_string(),
+            ":workspace_roots".to_string(),
             FilesystemPermissionToml::Scoped(BTreeMap::from([
-                ("**/*.env".to_string(), FileSystemAccessMode::None),
-                ("*.pem".to_string(), FileSystemAccessMode::None),
+                ("**/*.env".to_string(), FileSystemAccessMode::Deny),
+                ("*.pem".to_string(), FileSystemAccessMode::Deny),
             ])),
         )]),
     };
 
     assert_eq!(
         unbounded_unreadable_globstar_paths(&filesystem),
-        vec![":project_roots/**/*.env".to_string()]
+        vec![":workspace_roots/**/*.env".to_string()]
     );
 
     let configured_filesystem = FilesystemPermissionsToml {
@@ -359,10 +396,12 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
             entries: BTreeMap::from([(
                 "workspace".to_string(),
                 PermissionProfileToml {
+                    description: None,
+                    workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
                         entries: BTreeMap::from([(
-                            ":project_roots".to_string(),
+                            ":workspace_roots".to_string(),
                             FilesystemPermissionToml::Scoped(BTreeMap::from([(
                                 "docs/**".to_string(),
                                 FileSystemAccessMode::Read,
@@ -399,7 +438,7 @@ fn read_write_glob_patterns_still_reject_non_subpath_globs() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         err.to_string()
-            .contains("filesystem glob path `src/**/*.rs` only supports `none` access"),
+            .contains("filesystem glob path `src/**/*.rs` only supports `deny` access"),
         "{err}"
     );
 }

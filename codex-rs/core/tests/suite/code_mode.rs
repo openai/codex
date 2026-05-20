@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -144,13 +145,21 @@ async fn run_code_mode_turn(
     server: &MockServer,
     prompt: &str,
     code: &str,
-    include_apply_patch: bool,
+) -> Result<(TestCodex, ResponseMock)> {
+    run_code_mode_turn_with_config(server, prompt, code, |_| {}).await
+}
+
+async fn run_code_mode_turn_with_config(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<(TestCodex, ResponseMock)> {
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
-            config.include_apply_patch_tool = include_apply_patch;
+            configure(config);
         });
     let test = builder.build(server).await?;
 
@@ -244,6 +253,7 @@ async fn run_code_mode_turn_with_rmcp_config(
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth: None,
                 oauth_resource: None,
                 tools: HashMap::new(),
             },
@@ -290,12 +300,10 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
         r#"
 text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marker" })));
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(
@@ -401,10 +409,6 @@ if (!tool) {
             config
                 .features
                 .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::ToolSearch)
                 .expect("test config should allow feature update");
             config
                 .features
@@ -540,7 +544,6 @@ const result = await tools.update_plan({
 });
 text(JSON.stringify(result));
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -652,41 +655,217 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
+async fn code_mode_exec_command_explicit_max_output_tokens_truncates() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use exec to truncate the final result",
-        r#"// @exec: {"max_output_tokens": 6}
-text(JSON.stringify(await tools.exec_command({
-  cmd: "printf 'token one token two token three token four token five token six token seven'",
-  max_output_tokens: 100
-})));
+        "use exec_command from code mode",
+        r#"
+const result = await tools.exec_command({
+  cmd: "printf '0123456789012345678901234567890123456789'",
+  max_output_tokens: 5
+});
+text(result.output);
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
         ),
-        text_item(&items, /*index*/ 0),
+        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
     );
-    let expected_pattern = r#"(?sx)
-\A
-Total\ output\ lines:\ 1\n
-\n
-.*…\d+\ tokens\ truncated….*
-\z
-"#;
-    assert_regex_match(expected_pattern, text_item(&items, /*index*/ 1));
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_truncates_larger_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 25000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        format!(
+            "Total output lines: 1\n\n{}…2500 tokens truncated…{}",
+            "A".repeat(40_000),
+            "A".repeat(40_000)
+        )
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+});
+text(result.output);
+"#,
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_output_tokens_truncates() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 5}
+const result = await tools.exec_command({
+  cmd: "printf '0123456789012345678901234567890123456789'"
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
+    );
 
     Ok(())
 }
@@ -704,7 +883,6 @@ text("before crash");
 text("still before crash");
 throw new Error("boom");
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -751,7 +929,6 @@ try {
   text(`caught:${error?.message ?? String(error)}`);
 }
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1768,7 +1945,6 @@ async fn code_mode_can_output_serialized_text_via_global_helper() -> Result<()> 
         r#"
 text({ json: true });
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1800,7 +1976,6 @@ async fn code_mode_can_resume_after_set_timeout() -> Result<()> {
 await new Promise((resolve) => setTimeout(resolve, 10));
 text("timer done");
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1829,7 +2004,6 @@ notify("code_mode_notify_marker");
 await tools.test_sync_tool({});
 text("done");
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1867,7 +2041,6 @@ text("before");
 exit();
 text("after");
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1906,7 +2079,6 @@ const circular = {};
 circular.self = circular;
 text(circular);
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -1946,7 +2118,6 @@ async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
 image("https://example.com/image.jpg");
 image("data:image/png;base64,AAA");
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 
@@ -2136,13 +2307,8 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     );
     let code = format!("text(await tools.apply_patch({patch:?}));\n");
 
-    let (test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to run apply_patch",
-        &code,
-        /*include_apply_patch*/ true,
-    )
-    .await?;
+    let (test, second_mock) =
+        run_code_mode_turn(&server, "use exec to run apply_patch", &code).await?;
 
     let req = second_mock.single_request();
     let items = custom_tool_output_items(&req, "call-1");
@@ -2464,13 +2630,8 @@ const tool = ALL_TOOLS.find(({ name }) => name === "view_image");
 text(JSON.stringify(tool));
 "#;
 
-    let (_test, second_mock) = run_code_mode_turn(
-        &server,
-        "use exec to inspect ALL_TOOLS",
-        code,
-        /*include_apply_patch*/ false,
-    )
-    .await?;
+    let (_test, second_mock) =
+        run_code_mode_turn(&server, "use exec to inspect ALL_TOOLS", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
@@ -2488,7 +2649,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`.\n  detail: string | null;\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
         })
     );
 
@@ -2610,24 +2771,29 @@ text(
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
 
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "use exec to inspect and call hidden tools".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2889,7 +3055,6 @@ text(JSON.stringify({
   waited_long_enough: end_ms - start_ms >= 100,
 }));
 "#,
-        /*include_apply_patch*/ false,
     )
     .await?;
 

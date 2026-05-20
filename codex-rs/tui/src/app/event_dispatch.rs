@@ -23,6 +23,10 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::StartupThreadStarted { result } => {
+                self.handle_startup_thread_started(app_server, result)
+                    .await?;
+            }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -57,10 +61,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_endpoint.clone() {
-                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
-                        None => crate::AppServerTarget::Embedded,
-                    },
+                    &self.app_server_target,
                     self.state_db.clone(),
                     self.environment_manager.clone(),
                 )
@@ -152,7 +153,7 @@ impl App {
                                         if let Some(usage_line) = summary.usage_line {
                                             lines.push(usage_line.into());
                                         }
-                                        if let Some(command) = summary.resume_command {
+                                        if let Some(command) = summary.resume_hint {
                                             let spans = vec![
                                                 "To continue this session, run ".into(),
                                                 command.cyan(),
@@ -296,10 +297,14 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
+                if mode == ExitMode::ShutdownFirst {
+                    self.show_shutdown_feedback(tui)?;
+                }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
+                    self.show_shutdown_feedback(tui)?;
                     return Ok(self
                         .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
                         .await);
@@ -415,6 +420,9 @@ impl App {
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
+            }
+            AppEvent::FetchConnectorsList { force_refetch } => {
+                self.fetch_connectors_list(app_server, force_refetch);
             }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
@@ -752,15 +760,18 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.sync_active_thread_reasoning_setting(app_server, effort)
+                    .await;
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-            }
-            AppEvent::UpdateCollaborationMode(mask) => {
-                self.chat_widget.set_collaboration_mask(mask);
+                self.sync_active_thread_model_setting(app_server, model)
+                    .await;
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
+                self.sync_active_thread_personality_setting(app_server, personality)
+                    .await;
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
@@ -1082,7 +1093,7 @@ impl App {
                     }
                     let profile = self.active_profile.as_deref();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    let builder = ConfigEditsBuilder::for_config(&self.config)
                         .with_profile(profile)
                         .set_windows_sandbox_mode(if elevated_enabled {
                             "elevated"
@@ -1114,7 +1125,7 @@ impl App {
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
-                                        /*permission_profile*/ None,
+                                        /*active_permission_profile*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -1139,7 +1150,7 @@ impl App {
                                         /*cwd*/ None,
                                         Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
-                                        Some(preset.permission_profile.clone()),
+                                        Some(preset.active_permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
                                         /*model*/ None,
@@ -1153,9 +1164,10 @@ impl App {
                                 self.app_event_tx.send(AppEvent::UpdateAskForApprovalPolicy(
                                     AskForApproval::from(preset.approval),
                                 ));
-                                self.app_event_tx.send(AppEvent::UpdatePermissionProfile(
-                                    preset.permission_profile.clone(),
-                                ));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateActivePermissionProfile(
+                                        preset.active_permission_profile.clone(),
+                                    ));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -1185,11 +1197,15 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort)
-                    .apply()
-                    .await
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    crate::config_update::build_model_selection_edits(
+                        profile,
+                        model.as_str(),
+                        effort,
+                    ),
+                )
+                .await
                 {
                     Ok(()) => {
                         let effort_label = effort
@@ -1253,7 +1269,7 @@ impl App {
                 }
             }
             AppEvent::RefreshPluginMentions => {
-                self.refresh_plugin_mentions();
+                self.refresh_plugin_mentions(app_server);
             }
             AppEvent::PluginMentionsLoaded { mut plugins } => {
                 if !self.config.features.enabled(Feature::Plugins) {
@@ -1263,11 +1279,14 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .set_personality(Some(personality))
-                    .apply()
-                    .await
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        crate::config_update::profile_scoped_key_path(profile, "personality"),
+                        serde_json::json!(personality.to_string()),
+                    )],
+                )
+                .await
                 {
                     Ok(()) => {
                         let label = Self::personality_label(personality);
@@ -1298,16 +1317,20 @@ impl App {
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
-                let profile = self.active_profile.as_deref();
                 self.config.service_tier = service_tier.clone();
-                let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .set_service_tier(service_tier.clone());
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
+                let profile = self.active_profile.as_deref();
+                let edits = crate::config_update::build_service_tier_selection_edits(
+                    profile,
+                    service_tier.as_deref(),
+                );
                 if service_tier.is_none() {
                     self.config.notices.fast_default_opt_out = Some(true);
-                    edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
                 }
-                match edits.apply().await {
+                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
+                    .await
+                {
                     Ok(()) => {
                         let mut message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
@@ -1338,11 +1361,11 @@ impl App {
             AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
                 let builder = match kind {
                     RealtimeAudioDeviceKind::Microphone => {
-                        ConfigEditsBuilder::new(&self.config.codex_home)
+                        ConfigEditsBuilder::for_config(&self.config)
                             .set_realtime_microphone(name.as_deref())
                     }
                     RealtimeAudioDeviceKind::Speaker => {
-                        ConfigEditsBuilder::new(&self.config.codex_home)
+                        ConfigEditsBuilder::for_config(&self.config)
                             .set_realtime_speaker(name.as_deref())
                     }
                 };
@@ -1403,25 +1426,32 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
             }
-            AppEvent::UpdatePermissionProfile(permission_profile) => {
+            AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
+                let mut config = self.config.clone();
+                let Some(permission_profile) = self
+                    .try_set_builtin_active_permission_profile_on_config(
+                        &mut config,
+                        active_permission_profile.clone(),
+                        "Failed to set permission profile",
+                        "failed to set active permission profile on app config",
+                    )
+                else {
+                    return Ok(AppRunControl::Continue);
+                };
                 #[cfg(target_os = "windows")]
                 let permission_profile_is_managed_restricted =
                     managed_filesystem_sandbox_is_restricted(&permission_profile);
                 let permission_profile_for_chat = permission_profile.clone();
 
-                let mut config = self.config.clone();
-                if !self.try_set_permission_profile_on_config(
-                    &mut config,
-                    permission_profile,
-                    "Failed to set permission profile",
-                    "failed to set permission profile on app config",
-                ) {
-                    return Ok(AppRunControl::Continue);
-                }
                 self.config = config;
                 if let Err(err) = self
                     .chat_widget
-                    .set_permission_profile(permission_profile_for_chat)
+                    .set_permission_profile_from_session_snapshot(
+                        PermissionProfileSnapshot::active(
+                            permission_profile_for_chat,
+                            active_permission_profile,
+                        ),
+                    )
                 {
                     tracing::warn!(%err, "failed to set permission profile on chat config");
                     self.chat_widget
@@ -1429,7 +1459,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_permission_profile_override =
-                    Some(self.config.permissions.permission_profile());
+                    Some(self.config.permissions.permission_profile().clone());
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
@@ -1453,7 +1483,8 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let permission_profile = self.config.permissions.permission_profile();
+                        let permission_profile =
+                            self.config.permissions.effective_permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -1470,23 +1501,17 @@ impl App {
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "approvals_reviewer".to_string(),
-                    ]
-                } else {
-                    vec!["approvals_reviewer".to_string()]
-                };
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .with_edits([ConfigEdit::SetPath {
-                        segments,
-                        value: policy.to_string().into(),
-                    }])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        crate::config_update::profile_scoped_key_path(
+                            profile,
+                            "approvals_reviewer",
+                        ),
+                        serde_json::json!(policy.to_string()),
+                    )],
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1529,9 +1554,11 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_plan_mode_reasoning_setting(app_server)
+                    .await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_full_access_warning(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1546,7 +1573,7 @@ impl App {
                 }
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_world_writable_warning(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1561,7 +1588,7 @@ impl App {
                 }
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .set_hide_rate_limit_model_nudge(/*acknowledged*/ true)
                     .apply()
                     .await
@@ -1577,27 +1604,23 @@ impl App {
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
                 let profile = self.active_profile.as_deref();
-                let segments = if let Some(profile) = profile {
-                    vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "plan_mode_reasoning_effort".to_string(),
-                    ]
-                } else {
-                    vec!["plan_mode_reasoning_effort".to_string()]
-                };
+                let key_path = crate::config_update::profile_scoped_key_path(
+                    profile,
+                    "plan_mode_reasoning_effort",
+                );
                 let edit = if let Some(effort) = effort {
-                    ConfigEdit::SetPath {
-                        segments,
-                        value: effort.to_string().into(),
-                    }
+                    crate::config_update::replace_config_value(
+                        key_path,
+                        serde_json::json!(effort.to_string()),
+                    )
                 } else {
-                    ConfigEdit::ClearPath { segments }
+                    crate::config_update::clear_config_value(key_path)
                 };
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits([edit])
-                    .apply()
-                    .await
+                if let Err(err) = crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![edit],
+                )
+                .await
                 {
                     tracing::error!(
                         error = %err,
@@ -1618,7 +1641,7 @@ impl App {
                 from_model,
                 to_model,
             } => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
                     .record_model_migration_seen(from_model.as_str(), to_model.as_str())
                     .apply()
                     .await
@@ -1657,18 +1680,18 @@ impl App {
                 self.chat_widget.open_manage_skills_popup();
             }
             AppEvent::SetSkillEnabled { path, enabled } => {
-                let edits = [ConfigEdit::SetSkillConfig {
-                    path: path.to_path_buf(),
+                match crate::config_update::write_skill_enabled(
+                    app_server.request_handle(),
+                    path.clone(),
                     enabled,
-                }];
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits(edits)
-                    .apply()
-                    .await
+                )
+                .await
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        if !app_server.uses_remote_workspace()
+                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
+                        {
                             tracing::warn!(
                                 error = %err,
                                 "failed to refresh config after skill toggle"
@@ -1686,44 +1709,35 @@ impl App {
             AppEvent::SetAppEnabled { id, enabled } => {
                 let edits = if enabled {
                     vec![
-                        ConfigEdit::ClearPath {
-                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
-                        },
-                        ConfigEdit::ClearPath {
-                            segments: vec![
-                                "apps".to_string(),
-                                id.clone(),
-                                "disabled_reason".to_string(),
-                            ],
-                        },
+                        crate::config_update::clear_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "enabled"),
+                        ),
+                        crate::config_update::clear_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
+                        ),
                     ]
                 } else {
                     vec![
-                        ConfigEdit::SetPath {
-                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
-                            value: false.into(),
-                        },
-                        ConfigEdit::SetPath {
-                            segments: vec![
-                                "apps".to_string(),
-                                id.clone(),
-                                "disabled_reason".to_string(),
-                            ],
-                            value: "user".into(),
-                        },
+                        crate::config_update::replace_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "enabled"),
+                            serde_json::json!(false),
+                        ),
+                        crate::config_update::replace_config_value(
+                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
+                            serde_json::json!("user"),
+                        ),
                     ]
                 };
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_edits(edits)
-                    .apply()
+                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        if !app_server.uses_remote_workspace()
+                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
+                        {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");
                         }
-                        self.chat_widget.submit_op(AppCommand::reload_user_config());
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
@@ -1876,7 +1890,7 @@ impl App {
                 let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
                 let colors_edit =
                     crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([items_edit, colors_edit])
                     .apply()
                     .await;
@@ -1908,7 +1922,7 @@ impl App {
             AppEvent::TerminalTitleSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = crate::legacy_core::config::edit::terminal_title_items_edit(&ids);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([edit])
                     .apply()
                     .await;
@@ -1934,7 +1948,7 @@ impl App {
             }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
-                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                let apply_result = ConfigEditsBuilder::for_config(&self.config)
                     .with_edits([edit])
                     .apply()
                     .await;
@@ -2046,7 +2060,7 @@ impl App {
 
         let edit =
             crate::legacy_core::config::edit::keymap_bindings_edit(&context, &action, &bindings);
-        match ConfigEditsBuilder::new(&self.config.codex_home)
+        match ConfigEditsBuilder::for_config(&self.config)
             .with_edits([edit])
             .apply()
             .await
@@ -2091,7 +2105,7 @@ impl App {
         };
 
         let edit = crate::legacy_core::config::edit::keymap_binding_clear_edit(&context, &action);
-        match ConfigEditsBuilder::new(&self.config.codex_home)
+        match ConfigEditsBuilder::for_config(&self.config)
             .with_edits([edit])
             .apply()
             .await

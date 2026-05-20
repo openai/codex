@@ -13,6 +13,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionToml;
 use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::NetworkProxyDomainPermissionToml;
@@ -23,6 +24,9 @@ use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -30,13 +34,15 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::project_roots_glob_pattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ProjectConfig;
 
-pub(crate) const BUILT_IN_READ_ONLY_PROFILE: &str = ":read-only";
-pub(crate) const BUILT_IN_WORKSPACE_PROFILE: &str = ":workspace";
-pub(crate) const BUILT_IN_DANGER_NO_SANDBOX_PROFILE: &str = ":danger-no-sandbox";
+pub(crate) const BUILT_IN_READ_ONLY_PROFILE: &str = BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+pub(crate) const BUILT_IN_WORKSPACE_PROFILE: &str = BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+pub(crate) const BUILT_IN_DANGER_FULL_ACCESS_PROFILE: &str =
+    BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 
 pub(crate) fn default_builtin_permission_profile_name(
     active_project: &ProjectConfig,
@@ -56,7 +62,7 @@ pub(crate) fn is_builtin_permission_profile_name(profile_name: &str) -> bool {
         profile_name,
         BUILT_IN_READ_ONLY_PROFILE
             | BUILT_IN_WORKSPACE_PROFILE
-            | BUILT_IN_DANGER_NO_SANDBOX_PROFILE
+            | BUILT_IN_DANGER_FULL_ACCESS_PROFILE
     )
 }
 
@@ -68,12 +74,12 @@ pub(crate) fn builtin_permission_profile(
         BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
         BUILT_IN_WORKSPACE_PROFILE => Some(match workspace_write {
             Some(SandboxWorkspaceWrite {
-                writable_roots,
+                writable_roots: _,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             }) => PermissionProfile::workspace_write_with(
-                writable_roots,
+                &[],
                 if *network_access {
                     NetworkSandboxPolicy::Enabled
                 } else {
@@ -84,7 +90,7 @@ pub(crate) fn builtin_permission_profile(
             ),
             None => PermissionProfile::workspace_write(),
         }),
-        BUILT_IN_DANGER_NO_SANDBOX_PROFILE => Some(PermissionProfile::Disabled),
+        BUILT_IN_DANGER_FULL_ACCESS_PROFILE => Some(PermissionProfile::Disabled),
         _ => None,
     }
 }
@@ -237,7 +243,7 @@ pub(crate) fn compile_permission_profile(
                     push_warning(
                         startup_warnings,
                         format!(
-                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `none` deny-read globs are supported."
+                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `deny` globs are supported."
                         ),
                     );
                 }
@@ -297,6 +303,41 @@ pub(crate) fn compile_permission_profile_selection(
         )
     })?;
     compile_permission_profile(permissions, profile_name, policy_cwd, startup_warnings)
+}
+
+pub(crate) fn compile_permission_profile_workspace_roots(
+    permissions: Option<&PermissionsToml>,
+    profile_name: &str,
+    policy_cwd: &Path,
+) -> io::Result<Vec<AbsolutePathBuf>> {
+    if is_builtin_permission_profile_name(profile_name) {
+        return Ok(Vec::new());
+    }
+    reject_unknown_builtin_permission_profile(profile_name)?;
+
+    let permissions = permissions.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "default_permissions requires a `[permissions]` table",
+        )
+    })?;
+    let profile = resolve_permission_profile(permissions, profile_name)?;
+    Ok(compile_workspace_roots(
+        profile.workspace_roots.as_ref(),
+        policy_cwd,
+    ))
+}
+
+fn compile_workspace_roots(
+    workspace_roots: Option<&WorkspaceRootsToml>,
+    policy_cwd: &Path,
+) -> Vec<AbsolutePathBuf> {
+    workspace_roots.map_or_else(Vec::new, |workspace_roots| {
+        workspace_roots
+            .enabled_roots()
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, policy_cwd))
+            .collect()
+    })
 }
 
 fn reject_unknown_builtin_permission_profile(profile_name: &str) -> io::Result<()> {
@@ -373,7 +414,7 @@ fn compile_filesystem_permission(
                     Some(FileSystemSpecialPath::ProjectRoots { .. }) | None => true,
                     Some(_) => false,
                 };
-                if has_glob && *access == FileSystemAccessMode::None && can_compile_as_pattern {
+                if has_glob && *access == FileSystemAccessMode::Deny && can_compile_as_pattern {
                     // Scoped glob syntax is a first-class filesystem policy
                     // pattern entry. Literal scoped paths continue through the
                     // exact-path parser so existing path semantics stay intact.
@@ -408,7 +449,7 @@ fn compile_filesystem_access_path(
         return compile_filesystem_path(path, startup_warnings);
     }
 
-    if access == FileSystemAccessMode::None {
+    if access == FileSystemAccessMode::Deny {
         // At this point `path` is an unscoped filesystem table key. Top-level
         // glob deny entries still go through the absolute-path parser before
         // becoming policy patterns; relative project-root glob syntax is
@@ -474,30 +515,25 @@ fn compile_scoped_filesystem_pattern(
     path: &str,
     subpath: &str,
     access: FileSystemAccessMode,
-    policy_cwd: &Path,
+    _policy_cwd: &Path,
 ) -> io::Result<String> {
     // Pattern entries currently mean deny-read only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
     // sandbox policy does not express yet.
-    if access != FileSystemAccessMode::None {
+    if access != FileSystemAccessMode::Deny {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("filesystem glob subpath `{subpath}` only supports `none` access"),
+            format!("filesystem glob subpath `{subpath}` only supports `deny` access"),
         ));
     }
     let subpath = parse_relative_subpath(subpath)?;
 
     match parse_special_path(path) {
         Some(FileSystemSpecialPath::ProjectRoots { .. }) => {
-            // `:project_roots` is represented as a special path, but current
-            // filesystem-policy resolution defines it relative to the session
-            // cwd. Use the same policy cwd here so glob entries and exact
-            // scoped entries resolve consistently.
-            Ok(
-                AbsolutePathBuf::resolve_path_against_base(&subpath, policy_cwd)
-                    .to_string_lossy()
-                    .to_string(),
-            )
+            // Keep `:workspace_roots` glob patterns symbolic until the active
+            // workspace roots are known, then materialize them for cwd and any
+            // runtime/profile-added workspace roots together.
+            Ok(project_roots_glob_pattern(&subpath))
         }
         Some(_) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -523,7 +559,7 @@ fn compile_read_write_glob_path(path: &str, access: FileSystemAccessMode) -> io:
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "filesystem glob path `{path}` only supports `none` access; use an exact path or trailing `/**` for `{access}` subtree access"
+            "filesystem glob path `{path}` only supports `deny` access; use an exact path or trailing `/**` for `{access}` subtree access"
         ),
     ))
 }
@@ -533,7 +569,7 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
     for (path, permission) in &filesystem.entries {
         match permission {
             FilesystemPermissionToml::Access(access) => {
-                if *access != FileSystemAccessMode::None
+                if *access != FileSystemAccessMode::Deny
                     && contains_glob_chars(remove_trailing_glob_suffix(path))
                 {
                     patterns.push(path.clone());
@@ -541,7 +577,7 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
             }
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access != FileSystemAccessMode::None
+                    if *access != FileSystemAccessMode::Deny
                         && contains_glob_chars(remove_trailing_glob_suffix(subpath))
                     {
                         patterns.push(format!("{path}/{subpath}"));
@@ -561,7 +597,7 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
     let mut patterns = Vec::new();
     for (path, permission) in &filesystem.entries {
         match permission {
-            FilesystemPermissionToml::Access(FileSystemAccessMode::None) => {
+            FilesystemPermissionToml::Access(FileSystemAccessMode::Deny) => {
                 if path.contains("**") {
                     patterns.push(path.clone());
                 }
@@ -569,7 +605,7 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
             FilesystemPermissionToml::Access(_) => {}
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access == FileSystemAccessMode::None && subpath.contains("**") {
+                    if *access == FileSystemAccessMode::Deny && subpath.contains("**") {
                         patterns.push(format!("{path}/{subpath}"));
                     }
                 }
@@ -616,7 +652,7 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":project_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        ":workspace_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
         _ if path.starts_with(':') => {
             Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))

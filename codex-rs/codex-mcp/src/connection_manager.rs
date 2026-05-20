@@ -71,6 +71,7 @@ use tracing::warn;
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -81,13 +82,21 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         permission_profile: &Constrained<PermissionProfile>,
     ) -> Self {
+        Self::new_uninitialized_with_permission_profile(approval_policy, permission_profile.get())
+    }
+
+    pub fn new_uninitialized_with_permission_profile(
+        approval_policy: &Constrained<AskForApproval>,
+        permission_profile: &PermissionProfile,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
-                permission_profile.get().clone(),
+                permission_profile.clone(),
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
@@ -127,6 +136,11 @@ impl McpConnectionManager {
         self.server_metadata
             .get(server_name)
             .is_none_or(|metadata| metadata.pollutes_memory)
+    }
+
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+        self.tool_plugin_provenance
+            .plugin_id_for_mcp_server_name(server_name)
     }
 
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
@@ -276,6 +290,7 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_metadata,
+            tool_plugin_provenance,
             host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),

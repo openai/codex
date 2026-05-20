@@ -385,7 +385,7 @@ fn format_config_layer_source(source: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("system ({})", file.as_path().display())
         }
-        ConfigLayerSource::User { file } => {
+        ConfigLayerSource::User { file, .. } => {
             format!("user ({})", file.as_path().display())
         }
         ConfigLayerSource::Project { dot_codex_folder } => {
@@ -700,6 +700,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             allow_managed_hooks_only: Some(true),
+            computer_use: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -728,7 +729,10 @@ mod tests {
         };
         let stack = ConfigLayerStack::new(
             vec![ConfigLayerEntry::new(
-                ConfigLayerSource::User { file: user_file },
+                ConfigLayerSource::User {
+                    file: user_file,
+                    profile: None,
+                },
                 empty_toml_table(),
             )],
             requirements,
@@ -911,6 +915,7 @@ approval_policy = "never"
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             allow_managed_hooks_only: None,
+            computer_use: None,
             guardian_policy_config: None,
             feature_requirements: None,
             hooks: None,
