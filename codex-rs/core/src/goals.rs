@@ -459,7 +459,7 @@ impl Session {
 
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
         )
         .await?;
@@ -476,7 +476,7 @@ impl Session {
                     .thread_goals()
                     .update_thread_goal(
                         self.conversation_id,
-                        codex_state::ThreadGoalUpdate {
+                        codex_state::GoalUpdate {
                             objective: Some(objective.to_string()),
                             status: status.map(state_goal_status_from_protocol),
                             token_budget,
@@ -516,7 +516,7 @@ impl Session {
                 .thread_goals()
                 .update_thread_goal(
                     self.conversation_id,
-                    codex_state::ThreadGoalUpdate {
+                    codex_state::GoalUpdate {
                         objective: None,
                         status,
                         token_budget,
@@ -601,7 +601,7 @@ impl Session {
         let state_db = self.require_state_db_for_thread_goals().await?;
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
         )
         .await?;
@@ -1028,7 +1028,7 @@ impl Session {
                 self.conversation_id,
                 time_delta_seconds,
                 token_delta,
-                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+                codex_state::GoalAccountingMode::ActiveOnly,
                 expected_goal_id.as_deref(),
             )
             .await?;
@@ -1119,7 +1119,7 @@ impl Session {
         };
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Suppress,
         )
         .await?;
@@ -1129,7 +1129,7 @@ impl Session {
     async fn account_thread_goal_wall_clock_usage(
         &self,
         state_db: &StateDbHandle,
-        mode: codex_state::ThreadGoalAccountingMode,
+        mode: codex_state::GoalAccountingMode,
         terminal_metric_emission: TerminalMetricEmission,
     ) -> anyhow::Result<Option<ThreadGoal>> {
         let _accounting_permit = self.goal_runtime.accounting_permit().await?;
