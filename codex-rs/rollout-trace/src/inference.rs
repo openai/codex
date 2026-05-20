@@ -166,7 +166,11 @@ impl InferenceTraceAttempt {
         headers.insert(INFERENCE_CALL_ID_HEADER, inference_call_id);
     }
 
-    /// Records the exact request object about to be sent to the model provider.
+    /// Records the request payload replay should treat as the model-visible inference input.
+    ///
+    /// This is usually the exact provider request. Callers may instead pass a
+    /// logical request when the transport omits already-sent input, such as
+    /// websocket reuse after an untraced warmup response.
     pub fn record_started(&self, request: &impl Serialize) {
         let InferenceTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
