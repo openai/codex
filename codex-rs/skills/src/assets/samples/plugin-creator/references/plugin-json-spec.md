@@ -169,6 +169,8 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
 - Replace an existing entry for the same plugin only when overwrite is intentional.
 - Default new plugin creation to the personal marketplace.
 - Use a repo/team marketplace only when the user specifically requests that destination.
+- Only override the marketplace `name` when the default `personal` name is already taken or
+  installed and you need to seed a different new marketplace file.
 - Choose marketplace location to match the selected destination:
   - Personal plugin: `~/.agents/plugins/marketplace.json`
   - Repo/team plugin: `<repo-root>/.agents/plugins/marketplace.json`
