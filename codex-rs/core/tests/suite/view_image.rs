@@ -1497,7 +1497,14 @@ async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()
     } = &test;
 
     let rel_path = "assets/poisoned.png";
-    let abs_path = write_workspace_png(&test, rel_path, 1024, 512, [10u8, 20, 30, 255]).await?;
+    let abs_path = write_workspace_png(
+        &test,
+        rel_path,
+        /*width*/ 1024,
+        /*height*/ 512,
+        [10u8, 20, 30, 255],
+    )
+    .await?;
 
     let session_model = session_configured.model.clone();
     let rollout_path = session_configured
@@ -1518,7 +1525,7 @@ async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()
         .await?;
 
     let rollback_event = wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::ThreadRolledBack(_)),
         VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
@@ -1529,7 +1536,7 @@ async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()
     assert_eq!(rollback.num_turns, 1);
 
     let error_event = wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::Error(_)),
         VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
@@ -1543,7 +1550,7 @@ async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()
     );
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
