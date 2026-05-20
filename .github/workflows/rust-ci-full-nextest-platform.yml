@@ -417,7 +417,7 @@ jobs:
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
             --partition "hash:${{ matrix.shard }}/4"
-            --filterset "${{ inputs.nextest_filterset }}"
+            --filterset "${NEXTEST_FILTERSET}"
           )
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
@@ -448,6 +448,7 @@ jobs:
             "${test_command[@]}"
           done
         env:
+          NEXTEST_FILTERSET: ${{ inputs.nextest_filterset }}
           RUST_BACKTRACE: 1
           RUST_MIN_STACK: "8388608" # 8 MiB
           NEXTEST_STATUS_LEVEL: leak
