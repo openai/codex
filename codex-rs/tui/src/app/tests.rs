@@ -5282,6 +5282,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             /*cwd*/ None,
             Some(AskForApproval::OnRequest),
             Some(ApprovalsReviewer::AutoReview),
+            /*permission_profile*/ None,
             Some(ActivePermissionProfile::new(
                 codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
