@@ -251,9 +251,16 @@ fn build_code_mode_executors(
             executor.spec()
         })
         .collect::<Vec<_>>();
-    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+    let code_mode_prompt_tool_specs = executors
+        .iter()
+        .filter_map(|executor| match executor.exposure() {
+            ToolExposure::Direct => executor.spec(),
+            ToolExposure::DirectModelOnly | ToolExposure::Deferred => None,
+        })
+        .collect::<Vec<_>>();
+    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_prompt_tool_specs);
     let mut enabled_tools =
-        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+        collect_code_mode_exec_prompt_tool_definitions(code_mode_prompt_tool_specs.iter());
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
 
