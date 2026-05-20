@@ -80,12 +80,22 @@ impl ChatWidget {
             Some(session.reasoning_effort),
             /*developer_instructions*/ None,
         );
-        if let Some(mask) = self.active_collaboration_mask.as_mut() {
-            mask.model = Some(default_model);
-            mask.reasoning_effort = Some(session.reasoning_effort);
-        }
-        if let Some(collaboration_mode) = session.collaboration_mode.as_deref() {
-            self.set_effective_collaboration_mode(collaboration_mode.clone());
+        match session.collaboration_mode.as_deref() {
+            Some(collaboration_mode) => {
+                self.set_effective_collaboration_mode(collaboration_mode.clone());
+            }
+            None => {
+                self.active_collaboration_mask = Self::initial_collaboration_mask(
+                    &self.config,
+                    self.model_catalog.as_ref(),
+                    Some(&default_model),
+                );
+                if let Some(mask) = self.active_collaboration_mask.as_mut() {
+                    mask.reasoning_effort = Some(session.reasoning_effort);
+                }
+                self.update_collaboration_mode_indicator();
+                self.refresh_plan_mode_nudge();
+            }
         }
         self.refresh_model_display();
         self.refresh_status_surfaces();
