@@ -321,6 +321,65 @@ async fn budget_limited_goal_keeps_accruing_until_turn_stop() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn budget_limited_goal_steering_injects_once_after_later_tool_finish() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({
+                "objective": "ship goal extension backend",
+                "token_budget": 25,
+            }),
+        ))
+        .await?;
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5,
+                /*output_tokens*/ 10, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 30,
+            ),
+        )
+        .await;
+    harness
+        .notify_tool_finish("turn-1", "call-shell-1", "shell")
+        .await;
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 24, /*cached_input_tokens*/ 5,
+                /*output_tokens*/ 16, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 40,
+            ),
+        )
+        .await;
+    harness
+        .notify_tool_finish("turn-1", "call-shell-2", "shell")
+        .await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(35, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(1, harness.response_item_injector.items().len());
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_goal_can_block_and_accounts_final_progress() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;

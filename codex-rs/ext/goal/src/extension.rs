@@ -50,6 +50,11 @@ pub struct GoalExtension<C> {
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
+struct AccountedGoalProgress {
+    goal: ThreadGoal,
+    goal_id: String,
+}
+
 impl<C> std::fmt::Debug for GoalExtension<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GoalExtension").finish_non_exhaustive()
@@ -223,7 +228,7 @@ where
             if !should_count_for_goal_progress {
                 return;
             }
-            let Some(goal) = self
+            let Some(progress) = self
                 .account_active_goal_progress(
                     input.thread_store,
                     input.turn_id,
@@ -235,7 +240,13 @@ where
             else {
                 return;
             };
+            let goal = progress.goal;
             if goal.status != ThreadGoalStatus::BudgetLimited {
+                return;
+            }
+            if !accounting_state(input.thread_store)
+                .mark_budget_limit_reported_if_new(progress.goal_id.as_str())
+            {
                 return;
             }
             let item = budget_limit_steering_item(&goal);
@@ -350,7 +361,7 @@ impl<C> GoalExtension<C> {
         event_id: &str,
         mode: codex_state::GoalAccountingMode,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
-    ) -> Option<ThreadGoal> {
+    ) -> Option<AccountedGoalProgress> {
         let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
             return None;
         };
@@ -370,6 +381,7 @@ impl<C> GoalExtension<C> {
             .ok()?;
         match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
+                let goal_id = goal.goal_id.clone();
                 accounting.mark_progress_accounted_for_status(
                     turn_id,
                     &snapshot,
@@ -382,7 +394,7 @@ impl<C> GoalExtension<C> {
                     Some(turn_id.to_string()),
                     goal.clone(),
                 );
-                Some(goal)
+                Some(AccountedGoalProgress { goal, goal_id })
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
         }

@@ -1,16 +1,9 @@
-use codex_protocol::models::ContentItem;
+use codex_core::context::GoalContext;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 
 pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    let prompt = budget_limit_prompt(goal);
-    ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!("<goal_context>\n{prompt}\n</goal_context>"),
-        }],
-        phase: None,
-    }
+    GoalContext::new(budget_limit_prompt(goal)).into_response_input_item()
 }
 
 fn budget_limit_prompt(goal: &ThreadGoal) -> String {
