@@ -764,6 +764,30 @@
             },
             "method": {
               "enum": [
+                "plugin/installed"
+              ],
+              "title": "Plugin/installedRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginInstalledParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installedRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/read"
               ],
               "title": "Plugin/readRequestMethod",
@@ -6290,6 +6314,25 @@
           }
         ]
       },
+      "AutoCompactTokenLimitScope": {
+        "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
+        "oneOf": [
+          {
+            "description": "Count the full active context against the limit.",
+            "enum": [
+              "total"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Count sampled output and later growth after the carried window prefix.",
+            "enum": [
+              "body_after_prefix"
+            ],
+            "type": "string"
+          }
+        ]
+      },
       "AutoReviewDecisionSource": {
         "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
         "enum": [
@@ -7136,6 +7179,16 @@
             "type": [
               "integer",
               "null"
+            ]
+          },
+          "model_auto_compact_token_limit_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AutoCompactTokenLimitScope"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "model_context_window": {
@@ -8170,6 +8223,13 @@
               "integer",
               "null"
             ]
+          },
+          "threadId": {
+            "description": "Optional loaded thread id. Pass this when showing feature state for an existing thread so enablement is computed from that thread's refreshed config, including project-local config for the thread's cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "ExperimentalFeatureListParams",
@@ -8464,7 +8524,7 @@
         "enum": [
           "read",
           "write",
-          "none"
+          "deny"
         ],
         "type": "string"
       },
@@ -9922,8 +9982,6 @@
       },
       "ImageDetail": {
         "enum": [
-          "auto",
-          "low",
           "high",
           "original"
         ],
@@ -11637,194 +11695,6 @@
           }
         ]
       },
-      "PermissionProfile": {
-        "oneOf": [
-          {
-            "description": "Codex owns sandbox construction for this profile.",
-            "properties": {
-              "fileSystem": {
-                "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
-              },
-              "network": {
-                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
-              },
-              "type": {
-                "enum": [
-                  "managed"
-                ],
-                "title": "ManagedPermissionProfileType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "fileSystem",
-              "network",
-              "type"
-            ],
-            "title": "ManagedPermissionProfile",
-            "type": "object"
-          },
-          {
-            "description": "Do not apply an outer sandbox.",
-            "properties": {
-              "type": {
-                "enum": [
-                  "disabled"
-                ],
-                "title": "DisabledPermissionProfileType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "DisabledPermissionProfile",
-            "type": "object"
-          },
-          {
-            "description": "Filesystem isolation is enforced by an external caller.",
-            "properties": {
-              "network": {
-                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
-              },
-              "type": {
-                "enum": [
-                  "external"
-                ],
-                "title": "ExternalPermissionProfileType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "network",
-              "type"
-            ],
-            "title": "ExternalPermissionProfile",
-            "type": "object"
-          }
-        ]
-      },
-      "PermissionProfileFileSystemPermissions": {
-        "oneOf": [
-          {
-            "properties": {
-              "entries": {
-                "items": {
-                  "$ref": "#/definitions/v2/FileSystemSandboxEntry"
-                },
-                "type": "array"
-              },
-              "globScanMaxDepth": {
-                "format": "uint",
-                "minimum": 1.0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "restricted"
-                ],
-                "title": "RestrictedPermissionProfileFileSystemPermissionsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "entries",
-              "type"
-            ],
-            "title": "RestrictedPermissionProfileFileSystemPermissions",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "unrestricted"
-                ],
-                "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "UnrestrictedPermissionProfileFileSystemPermissions",
-            "type": "object"
-          }
-        ]
-      },
-      "PermissionProfileModificationParams": {
-        "oneOf": [
-          {
-            "description": "Additional concrete directory that should be writable.",
-            "properties": {
-              "path": {
-                "$ref": "#/definitions/v2/AbsolutePathBuf"
-              },
-              "type": {
-                "enum": [
-                  "additionalWritableRoot"
-                ],
-                "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "path",
-              "type"
-            ],
-            "title": "AdditionalWritableRootPermissionProfileModificationParams",
-            "type": "object"
-          }
-        ]
-      },
-      "PermissionProfileNetworkPermissions": {
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "enabled"
-        ],
-        "type": "object"
-      },
-      "PermissionProfileSelectionParams": {
-        "oneOf": [
-          {
-            "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "modifications": {
-                "items": {
-                  "$ref": "#/definitions/v2/PermissionProfileModificationParams"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "profile"
-                ],
-                "title": "ProfilePermissionProfileSelectionParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "type"
-            ],
-            "title": "ProfilePermissionProfileSelectionParams",
-            "type": "object"
-          }
-        ]
-      },
       "Personality": {
         "enum": [
           "none",
@@ -12029,6 +11899,56 @@
           "authPolicy"
         ],
         "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginInstalledParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Optional working directories used to discover repo marketplaces.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "installSuggestionPluginNames": {
+            "description": "Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "PluginInstalledParams",
+        "type": "object"
+      },
+      "PluginInstalledResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaceLoadErrors": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/MarketplaceLoadErrorInfo"
+            },
+            "type": "array"
+          },
+          "marketplaces": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginMarketplaceEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "marketplaces"
+        ],
+        "title": "PluginInstalledResponse",
         "type": "object"
       },
       "PluginInterface": {
@@ -13521,12 +13441,16 @@
           "installationId": {
             "type": "string"
           },
+          "serverName": {
+            "type": "string"
+          },
           "status": {
             "$ref": "#/definitions/v2/RemoteControlConnectionStatus"
           }
         },
         "required": [
           "installationId",
+          "serverName",
           "status"
         ],
         "title": "RemoteControlStatusChangedNotification",
@@ -14138,6 +14062,22 @@
               "type"
             ],
             "title": "CompactionResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "compaction_trigger"
+                ],
+                "title": "CompactionTriggerResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "CompactionTriggerResponseItem",
             "type": "object"
           },
           {
@@ -15586,7 +15526,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
           },
           "serviceTier": {
             "type": [
@@ -15673,6 +15613,8 @@
         "enum": [
           "active",
           "paused",
+          "blocked",
+          "usageLimited",
           "budgetLimited",
           "complete"
         ],
@@ -17078,7 +17020,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
           },
           "serviceTier": {
             "type": [
@@ -17386,7 +17328,7 @@
                 "$ref": "#/definitions/v2/SandboxPolicy"
               }
             ],
-            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
           },
           "serviceTier": {
             "type": [
@@ -18189,6 +18131,17 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "type": {
                 "enum": [
                   "image"
@@ -18209,6 +18162,17 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "path": {
                 "type": "string"
               },

@@ -48,10 +48,9 @@ pub(crate) async fn repair_files(
         Err(err) => return Err(err),
     }
 
-    let logs_db_path = codex_state::logs_db_path(sqlite_home);
-    for path in sqlite_paths(state_db_path)
+    for path in codex_state::runtime_db_paths(sqlite_home)
         .into_iter()
-        .chain(sqlite_paths(logs_db_path.as_path()))
+        .flat_map(|db| sqlite_paths(db.path.as_path()))
     {
         if tokio::fs::try_exists(path.as_path()).await? {
             backups.push(backup_path(path.as_path(), &repair_suffix).await?);
@@ -137,19 +136,22 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let state_path = codex_state::state_db_path(temp_dir.path());
         let logs_path = codex_state::logs_db_path(temp_dir.path());
+        let goals_path = codex_state::goals_db_path(temp_dir.path());
         let state_sidecars = sqlite_paths(state_path.as_path());
         tokio::fs::write(state_path.as_path(), b"state").await?;
         tokio::fs::write(state_sidecars[1].as_path(), b"state-wal").await?;
         tokio::fs::write(logs_path.as_path(), b"logs").await?;
+        tokio::fs::write(goals_path.as_path(), b"goals").await?;
 
         let startup_error =
             LocalStateDbStartupError::new(state_path.clone(), "corrupt".to_string());
         let backups = repair_files(&startup_error).await?;
 
-        assert_eq!(backups.len(), 3);
+        assert_eq!(backups.len(), 4);
         assert!(!tokio::fs::try_exists(state_path.as_path()).await?);
         assert!(!tokio::fs::try_exists(state_sidecars[1].as_path()).await?);
         assert!(!tokio::fs::try_exists(logs_path.as_path()).await?);
+        assert!(!tokio::fs::try_exists(goals_path.as_path()).await?);
         for backup in backups {
             assert!(tokio::fs::try_exists(backup.as_path()).await?);
         }

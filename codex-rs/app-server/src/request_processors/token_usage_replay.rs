@@ -152,6 +152,7 @@ mod tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             })),
             RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
                 message: "first answer".to_string(),
@@ -167,6 +168,7 @@ mod tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             })),
         ]
     }

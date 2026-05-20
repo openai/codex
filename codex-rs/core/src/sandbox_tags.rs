@@ -1,23 +1,9 @@
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-#[cfg(test)]
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use codex_sandboxing::policy_transforms::should_require_platform_sandbox;
 use std::path::Path;
-
-#[cfg(test)]
-pub(crate) fn sandbox_tag(
-    policy: &SandboxPolicy,
-    windows_sandbox_level: WindowsSandboxLevel,
-) -> &'static str {
-    permission_profile_sandbox_tag(
-        &PermissionProfile::from_legacy_sandbox_policy(policy),
-        windows_sandbox_level,
-        /*enforce_managed_network*/ false,
-    )
-}
 
 pub(crate) fn permission_profile_sandbox_tag(
     profile: &PermissionProfile,

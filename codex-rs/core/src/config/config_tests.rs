@@ -740,6 +740,7 @@ default_permissions = "workspace"
 
 [permissions.workspace.filesystem]
 ":minimal" = "read"
+"/tmp/secret.env" = "deny"
 
 [permissions.workspace.filesystem.":workspace_roots"]
 "." = "write"
@@ -776,6 +777,10 @@ allow_upstream_proxy = false
                             (
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                "/tmp/secret.env".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Deny),
                             ),
                             (
                                 ":workspace_roots".to_string(),
@@ -1453,6 +1458,30 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
     Ok(())
 }
 
+#[test]
+fn permission_snapshot_setter_preserves_permission_constraints() {
+    let initial_profile = PermissionProfile::read_only();
+    let mut permissions = Permissions::from_approval_and_profile(
+        Constrained::allow_any(AskForApproval::Never),
+        Constrained::allow_only(initial_profile.clone()),
+    )
+    .expect("initial permissions should satisfy constraints");
+
+    let err = permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
+        ))
+        .expect_err("workspace profile should violate read-only constraint");
+
+    assert_eq!(permissions.permission_profile(), &initial_profile);
+    assert_eq!(permissions.active_permission_profile(), None);
+    assert!(
+        matches!(err, ConstraintError::InvalidValue { .. }),
+        "expected invalid value constraint error, got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
 -> std::io::Result<()> {
@@ -1676,7 +1705,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                                 ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
-                                    ("**/*.env".to_string(), FileSystemAccessMode::None),
+                                    ("**/*.env".to_string(), FileSystemAccessMode::Deny),
                                 ])),
                             )]),
                         }),
@@ -1715,7 +1744,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                     path: FileSystemPath::GlobPattern {
                         pattern: expected_pattern,
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 })
         );
     }
@@ -1798,6 +1827,8 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     )
     .await?;
 
+    assert!(config.explicit_permission_profile_mode);
+    assert!(config.custom_permission_profile_ids.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -1905,9 +1936,28 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
     )
     .await?;
 
+    let cwd_abs = cwd.abs();
+    let runtime_root_abs = runtime_root.abs();
     let profile_root_abs = profile_root.abs();
+    assert_eq!(
+        config.workspace_roots,
+        vec![cwd_abs.clone(), runtime_root_abs.clone()]
+    );
+    assert_eq!(
+        config.permissions.workspace_roots(),
+        &[cwd_abs.clone(), runtime_root_abs.clone()]
+    );
+    assert_eq!(
+        config.effective_workspace_roots(),
+        vec![
+            cwd_abs.clone(),
+            runtime_root_abs.clone(),
+            profile_root_abs.clone()
+        ]
+    );
+
     let policy = config.permissions.file_system_sandbox_policy();
-    for root in [cwd.abs(), runtime_root.abs(), profile_root_abs.clone()] {
+    for root in [cwd_abs, runtime_root_abs, profile_root_abs.clone()] {
         assert!(
             policy.can_write_path_with_cwd(root.as_path(), cwd.as_path()),
             "expected workspace root to be writable, policy: {policy:?}"
@@ -2334,6 +2384,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
+    assert_eq!(
+        config.custom_permission_profile_ids,
+        vec!["workspace".to_string()]
+    );
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
@@ -3806,6 +3860,63 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         mcp_config.configured_mcp_servers.get("sample"),
         Some(&http_mcp("https://sample.example/mcp"))
     );
+    assert_eq!(
+        mcp_config.plugin_ids_by_mcp_server_name,
+        HashMap::from([("sample".to_string(), "sample@test".to_string())])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn to_mcp_config_omits_plugin_id_when_user_server_shadows_plugin_mcp() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://plugin.example/mcp"
+    }
+  }
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+plugins = true
+
+[mcp_servers.sample]
+url = "https://user.example/mcp"
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+
+    assert_eq!(
+        mcp_config.configured_mcp_servers.get("sample"),
+        Some(&http_mcp("https://user.example/mcp"))
+    );
+    assert!(mcp_config.plugin_ids_by_mcp_server_name.is_empty());
 
     Ok(())
 }
@@ -4260,8 +4371,7 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let permission_profile =
-        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy());
+    let permission_profile = PermissionProfile::read_only();
     let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
 
     assert_eq!(mode, WebSearchMode::Cached);
@@ -4858,12 +4968,14 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     config.apps_mcp_path_override = Some("/custom/mcp".to_string());
+    config.apps_mcp_product_sku = Some("tpp".to_string());
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert!(mcp_config.apps_enabled);
     assert_eq!(
         mcp_config.apps_mcp_path_override.as_deref(),
         Some("/custom/mcp")
     );
+    assert_eq!(mcp_config.apps_mcp_product_sku.as_deref(), Some("tpp"));
 
     let _ = config.features.disable(Feature::Apps);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
@@ -7604,6 +7716,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
             service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -7620,6 +7733,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
             },
+            explicit_permission_profile_mode: false,
+            custom_permission_profile_ids: Vec::new(),
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
@@ -7673,6 +7788,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             apps_mcp_path_override: None,
+            apps_mcp_product_sku: None,
             realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
@@ -8054,6 +8170,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai-custom".to_string(),
         model_provider: fixture.openai_custom_provider.clone(),
@@ -8070,6 +8187,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8123,6 +8242,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -8218,6 +8338,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
@@ -8234,6 +8355,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8287,6 +8410,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -8367,6 +8491,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
@@ -8383,6 +8508,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8436,6 +8563,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         apps_mcp_path_override: None,
+        apps_mcp_product_sku: None,
         realtime_audio: RealtimeAudioConfig::default(),
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
@@ -8877,29 +9005,26 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
     let active_project = ProjectConfig {
         trust_level: Some(TrustLevel::Trusted),
     };
-    let constrained = Constrained::new(
-        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
-        |candidate| {
-            if matches!(
-                candidate,
-                PermissionProfile::Managed {
-                    file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
-                    ..
-                } if entries
-                        .iter()
-                        .any(|entry| entry.access.can_write())
-            ) {
-                Ok(())
-            } else {
-                Err(ConstraintError::InvalidValue {
-                    field_name: "sandbox_mode",
-                    candidate: format!("{candidate:?}"),
-                    allowed: "[WorkspaceWrite]".to_string(),
-                    requirement_source: RequirementSource::Unknown,
-                })
-            }
-        },
-    )?;
+    let constrained = Constrained::new(PermissionProfile::workspace_write(), |candidate| {
+        if matches!(
+            candidate,
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+                ..
+            } if entries
+                    .iter()
+                    .any(|entry| entry.access.can_write())
+        ) {
+            Ok(())
+        } else {
+            Err(ConstraintError::InvalidValue {
+                field_name: "sandbox_mode",
+                candidate: format!("{candidate:?}"),
+                allowed: "[WorkspaceWrite]".to_string(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        }
+    })?;
 
     let resolution = derive_legacy_sandbox_policy_for_test(
         &cfg,
@@ -9155,6 +9280,27 @@ path = "/custom/mcp"
         Some("/custom/mcp")
     );
     assert!(config.features.enabled(Feature::AppsMcpPathOverride));
+    Ok(())
+}
+
+#[tokio::test]
+async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let toml = r#"
+model = "gpt-5.4"
+apps_mcp_product_sku = "tpp"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP SKU");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.apps_mcp_product_sku.as_deref(), Some("tpp"));
     Ok(())
 }
 
@@ -10046,6 +10192,7 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
 "#,
@@ -10076,6 +10223,10 @@ non_code_mode_only = true
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("Subagent guidance.")
     );
+    assert_eq!(
+        config.multi_agent_v2.tool_namespace.as_deref(),
+        Some("agents")
+    );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
@@ -10098,6 +10249,7 @@ usage_hint_enabled = true
 usage_hint_text = "base hint"
 root_agent_usage_hint_text = "base root hint"
 subagent_usage_hint_text = "base subagent hint"
+tool_namespace = "base_agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = false
 
@@ -10110,6 +10262,7 @@ usage_hint_enabled = false
 usage_hint_text = "profile hint"
 root_agent_usage_hint_text = "profile root hint"
 subagent_usage_hint_text = "profile subagent hint"
+tool_namespace = "profile_agents"
 hide_spawn_agent_metadata = false
 non_code_mode_only = true
 "#,
@@ -10137,6 +10290,10 @@ non_code_mode_only = true
     assert_eq!(
         config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
         Some("profile subagent hint")
+    );
+    assert_eq!(
+        config.multi_agent_v2.tool_namespace.as_deref(),
+        Some("profile_agents")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
@@ -10394,6 +10551,42 @@ default_wait_timeout_ms = 2500
         err.to_string(),
         "features.multi_agent_v2.default_wait_timeout_ms must be at most features.multi_agent_v2.max_wait_timeout_ms"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_rejects_invalid_tool_namespace() -> std::io::Result<()> {
+    for (namespace, expected_message) in [
+        (
+            "bad namespace",
+            "features.multi_agent_v2.tool_namespace must match ^[a-zA-Z0-9_-]+$",
+        ),
+        (
+            "functions",
+            "features.multi_agent_v2.tool_namespace uses a reserved namespace: functions",
+        ),
+    ] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"[features.multi_agent_v2]
+enabled = true
+tool_namespace = "{namespace}"
+"#
+            ),
+        )?;
+
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await
+            .expect_err("invalid multi_agent_v2 tool namespace should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), expected_message);
+    }
 
     Ok(())
 }

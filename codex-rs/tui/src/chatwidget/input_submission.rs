@@ -164,12 +164,14 @@ impl ChatWidget {
         for image_url in &remote_image_urls {
             items.push(UserInput::Image {
                 url: image_url.clone(),
+                detail: None,
             });
         }
 
         for image in &local_images {
             items.push(UserInput::LocalImage {
                 path: image.path.clone(),
+                detail: None,
             });
         }
 
@@ -334,12 +336,12 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
-        let permission_profile = self.config.permissions.effective_permission_profile();
+        let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             AskForApproval::from(self.config.permissions.approval_policy.value()),
-            permission_profile,
+            active_permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,

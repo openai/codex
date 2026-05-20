@@ -48,13 +48,18 @@ pub use model::ThreadGoalStatus;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::GoalStore;
 pub use runtime::RemoteControlEnrollmentRecord;
+pub use runtime::RuntimeDbPath;
 pub use runtime::ThreadFilterOptions;
 pub use runtime::ThreadGoalAccountingMode;
 pub use runtime::ThreadGoalAccountingOutcome;
 pub use runtime::ThreadGoalUpdate;
+pub use runtime::goals_db_filename;
+pub use runtime::goals_db_path;
 pub use runtime::logs_db_filename;
 pub use runtime::logs_db_path;
+pub use runtime::runtime_db_paths;
 pub use runtime::sqlite_integrity_check;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
@@ -68,6 +73,7 @@ pub use telemetry::record_fallback;
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 pub const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
+pub const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
 pub const STATE_DB_FILENAME: &str = "state_5.sqlite";
 
 /// Errors encountered during DB operations. Tags: [stage]

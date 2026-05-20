@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_tools::ToolOutput;
@@ -290,20 +290,23 @@ async fn search_tool_rejects_legacy_single_query() {
         .to_string(),
     };
 
-    let err = tool
+    let result = tool
         .handle(ToolCall {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             payload,
         })
-        .await
-        .expect_err("legacy query field should be rejected");
+        .await;
+    let err = match result {
+        Ok(_) => panic!("legacy query field should be rejected"),
+        Err(err) => err,
+    };
 
     assert!(err.to_string().contains("unknown field"));
     assert!(err.to_string().contains("query"));
 }
 
-fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ExtensionToolExecutor> {
+fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ToolExecutor<ToolCall>> {
     let expected_tool_name = memory_tool_name(tool_name);
     crate::tools::memory_tools(LocalMemoriesBackend::from_memory_root(memory_root))
         .into_iter()

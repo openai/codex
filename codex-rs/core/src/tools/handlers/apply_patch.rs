@@ -17,8 +17,8 @@ use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
@@ -27,11 +27,11 @@ use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
@@ -299,8 +299,6 @@ async fn effective_patch_permissions(
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
-    type Output = ApplyPatchToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("apply_patch")
     }
@@ -309,7 +307,10 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
         Some(create_apply_patch_freeform_tool(self.multi_environment))
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -359,7 +360,7 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
-                        Ok(ApplyPatchToolOutput::from_text(content))
+                        Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
                     }
                     InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
@@ -414,7 +415,7 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
                             Some(&tracker),
                         );
                         let content = emitter.finish(event_ctx, out, delta.as_ref()).await?;
-                        Ok(ApplyPatchToolOutput::from_text(content))
+                        Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
                     }
                 }
             }
@@ -438,7 +439,7 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
     }
 }
 
-impl ToolHandler for ApplyPatchHandler {
+impl CoreToolRuntime for ApplyPatchHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }
@@ -472,7 +473,7 @@ impl ToolHandler for ApplyPatchHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
