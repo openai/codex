@@ -30,6 +30,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
@@ -67,6 +68,10 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         _invocation: &ToolInvocation,
         _result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
+        None
+    }
+
+    fn history_truncation_policy(&self, _invocation: &ToolInvocation) -> Option<TruncationPolicy> {
         None
     }
 
@@ -112,9 +117,16 @@ pub(crate) struct AnyToolResult {
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
+    pub(crate) history_truncation_policy: Option<TruncationPolicy>,
+}
+
+pub(crate) struct RecordedToolResponse {
+    pub(crate) response_item: ResponseInputItem,
+    pub(crate) history_truncation_policy: Option<TruncationPolicy>,
 }
 
 impl AnyToolResult {
+    #[cfg(test)]
     pub(crate) fn into_response(self) -> ResponseInputItem {
         let Self {
             call_id,
@@ -123,6 +135,20 @@ impl AnyToolResult {
             ..
         } = self;
         result.to_response_item(&call_id, &payload)
+    }
+
+    pub(crate) fn into_recorded_response(self) -> RecordedToolResponse {
+        let Self {
+            call_id,
+            payload,
+            result,
+            history_truncation_policy,
+            ..
+        } = self;
+        RecordedToolResponse {
+            response_item: result.to_response_item(&call_id, &payload),
+            history_truncation_policy,
+        }
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -223,6 +249,10 @@ impl CoreToolRuntime for ExposureOverride {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         self.handler.post_tool_use_payload(invocation, result)
+    }
+
+    fn history_truncation_policy(&self, invocation: &ToolInvocation) -> Option<TruncationPolicy> {
+        self.handler.history_truncation_policy(invocation)
     }
 
     fn with_updated_hook_input(
@@ -610,11 +640,13 @@ async fn handle_any_tool(
     let output = tool.handle(invocation.clone()).await?;
     let post_tool_use_payload =
         CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
+    let history_truncation_policy = CoreToolRuntime::history_truncation_policy(tool, &invocation);
     Ok(AnyToolResult {
         call_id,
         payload,
         result: output,
         post_tool_use_payload,
+        history_truncation_policy,
     })
 }
 
