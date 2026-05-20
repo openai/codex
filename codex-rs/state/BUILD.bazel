@@ -1,13 +1,31 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "state",
     crate_name = "codex_state",
-    build_script_data = glob(["vendor/sqlite-recover/**"]),
+    # Cargo uses build.rs to compile the SQLite recovery extension. Bazel wires
+    # the same C sources directly so the native archive is a normal dependency.
+    build_script_enabled = False,
     compile_data = glob([
         "goals_migrations/**",
         "logs_migrations/**",
         "memory_migrations/**",
         "migrations/**",
     ]),
+    deps_extra = [":sqlite-recover"],
+)
+
+cc_library(
+    name = "sqlite-recover",
+    srcs = [
+        "vendor/sqlite-recover/dbdata.c",
+        "vendor/sqlite-recover/sqlite3recover.c",
+    ],
+    hdrs = [
+        "vendor/sqlite-recover/sqlite3.h",
+        "vendor/sqlite-recover/sqlite3recover.h",
+    ],
+    includes = ["vendor/sqlite-recover"],
+    visibility = ["//visibility:private"],
 )
