@@ -186,8 +186,6 @@ async fn startup_thread_start_failure_returns_error() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let request_id = "startup-thread-start-failed".to_string();
     app.pending_startup_thread_start_request_id = Some(request_id.clone());
-    app.chat_widget
-        .set_queue_submissions_until_session_configured(/*queue*/ true);
 
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
@@ -239,7 +237,7 @@ fn stale_startup_thread_started_removes_local_routing_state() -> Result<()> {
         );
         app.agent_navigation.upsert(
             stale_thread_id,
-            Some("Stale".to_string()),
+            /*agent_nickname*/ None,
             /*agent_role*/ None,
             /*is_closed*/ false,
         );

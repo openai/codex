@@ -453,14 +453,9 @@ impl App {
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
-                let message =
-                    format!("Failed to start a fresh session through the app server: {err}");
-                tracing::warn!(
-                    error = %err,
-                    "startup thread/start failed"
-                );
-                self.chat_widget.add_error_message(message.clone());
-                return Err(color_eyre::eyre::eyre!(message));
+                return Err(color_eyre::eyre::eyre!(
+                    "Failed to start a fresh session through the app server: {err}"
+                ));
             }
         }
         Ok(())

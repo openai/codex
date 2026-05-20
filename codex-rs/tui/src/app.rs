@@ -585,21 +585,17 @@ fn spawn_startup_thread_start(
     let request_handle = app_server.request_handle();
     let thread_params_mode = app_server.thread_params_mode();
     let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
-    let event_request_id = request_id.clone();
     tokio::spawn(async move {
         let result = crate::app_server_session::start_thread_with_request_handle(
             request_handle,
-            request_id,
+            request_id.clone(),
             config,
             thread_params_mode,
             remote_cwd_override,
         )
         .await
         .map_err(|err| format!("{err:#}"));
-        app_event_tx.send(AppEvent::StartupThreadStarted {
-            request_id: event_request_id,
-            result,
-        });
+        app_event_tx.send(AppEvent::StartupThreadStarted { request_id, result });
     });
 }
 
