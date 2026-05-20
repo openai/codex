@@ -119,6 +119,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -167,6 +168,7 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
@@ -337,6 +339,7 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
         self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
             .await
@@ -427,7 +430,7 @@ impl AppServerSession {
         Ok(started)
     }
 
-    fn thread_params_mode(&self) -> ThreadParamsMode {
+    pub(crate) fn thread_params_mode(&self) -> ThreadParamsMode {
         self.thread_params_mode
     }
 
@@ -1000,6 +1003,27 @@ impl AppServerSession {
         self.next_request_id += 1;
         RequestId::Integer(request_id)
     }
+}
+
+pub(crate) async fn start_thread_with_request_handle(
+    request_handle: AppServerRequestHandle,
+    config: Config,
+    thread_params_mode: ThreadParamsMode,
+    remote_cwd_override: Option<PathBuf>,
+) -> Result<AppServerStartedThread> {
+    let response: ThreadStartResponse = request_handle
+        .request_typed(ClientRequest::ThreadStart {
+            request_id: RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4())),
+            params: thread_start_params_from_config(
+                &config,
+                thread_params_mode,
+                remote_cwd_override.as_deref(),
+                /*session_start_source*/ None,
+            ),
+        })
+        .await
+        .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;
+    started_thread_from_start_response(response, &config, thread_params_mode).await
 }
 
 fn thread_realtime_start_params(

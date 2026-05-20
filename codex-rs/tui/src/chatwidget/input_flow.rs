@@ -72,6 +72,11 @@ impl ChatWidget {
         self.queue_user_message_with_options(user_message, QueuedInputAction::Plain);
     }
 
+    pub(crate) fn set_queue_submissions_until_session_configured(&mut self, queue: bool) {
+        self.bottom_pane
+            .set_queue_submissions(queue && !self.is_session_configured());
+    }
+
     pub(super) fn queue_user_message_with_options(
         &mut self,
         user_message: UserMessage,
