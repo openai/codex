@@ -732,43 +732,44 @@ async fn runtime_config_uses_tui_raw_output_mode() {
 #[test]
 fn config_toml_deserializes_permission_profiles() {
     let toml = r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace]
+[permissions.dev]
 description = "Day-to-day workspace access."
 
-[permissions.workspace.workspace_roots]
+[permissions.dev.workspace_roots]
 "~/code/openai" = true
 "~/code/ignored" = false
 
-[permissions.workspace.filesystem]
+[permissions.dev.filesystem]
 ":minimal" = "read"
 "/tmp/secret.env" = "deny"
 
-[permissions.workspace.filesystem.":workspace_roots"]
+[permissions.dev.filesystem.":workspace_roots"]
 "." = "write"
 "docs" = "read"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "openai.com" = "allow"
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
 
-    assert_eq!(cfg.default_permissions.as_deref(), Some("workspace"));
+    assert_eq!(cfg.default_permissions.as_deref(), Some("dev"));
     assert_eq!(
         cfg.permissions.expect("[permissions] should deserialize"),
         PermissionsToml {
             entries: BTreeMap::from([(
-                "workspace".to_string(),
+                "dev".to_string(),
                 PermissionProfileToml {
                     description: Some("Day-to-day workspace access.".to_string()),
+                    extends: None,
                     workspace_roots: Some(WorkspaceRootsToml {
                         entries: BTreeMap::from([
                             ("~/code/ignored".to_string(), false),
@@ -829,12 +830,13 @@ async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -984,12 +986,13 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
             .then(|| toml::from_str("network_proxy = true").expect("valid features"));
         let base_config = match case.surface {
             Surface::PermissionProfile => ConfigToml {
-                default_permissions: Some("workspace".to_string()),
+                default_permissions: Some("dev".to_string()),
                 permissions: Some(PermissionsToml {
                     entries: BTreeMap::from([(
-                        "workspace".to_string(),
+                        "dev".to_string(),
                         PermissionProfileToml {
                             description: None,
+                            extends: None,
                             workspace_roots: None,
                             filesystem: Some(FilesystemPermissionsToml {
                                 glob_scan_max_depth: None,
@@ -1136,12 +1139,13 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             features: Some(toml::from_str("network_proxy = true").expect("valid features")),
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1240,12 +1244,13 @@ enabled = false
                 )
                 .expect("valid features"),
             ),
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1290,12 +1295,13 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1338,12 +1344,13 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
 
     let cfg = ConfigToml {
-        default_permissions: Some("workspace".to_string()),
+        default_permissions: Some("dev".to_string()),
         permissions: Some(PermissionsToml {
             entries: BTreeMap::from([(
-                "workspace".to_string(),
+                "dev".to_string(),
                 PermissionProfileToml {
                     description: None,
+                    extends: None,
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
@@ -1434,7 +1441,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some("workspace")
+        Some("dev")
     );
     Ok(())
 }
@@ -1643,12 +1650,13 @@ async fn permission_profile_override_preserves_configured_network_policy_without
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1704,12 +1712,13 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: Some(2),
@@ -1787,9 +1796,10 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
         ConfigToml {
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1918,6 +1928,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
                     "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: Some(WorkspaceRootsToml {
                             entries: BTreeMap::from([(
                                 profile_root.to_string_lossy().into_owned(),
@@ -2371,12 +2382,13 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2401,7 +2413,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 
     assert_eq!(
         config.custom_permission_profile_ids,
-        vec!["workspace".to_string()]
+        vec!["dev".to_string()]
     );
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
@@ -2433,12 +2445,13 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
 
     let err = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2482,9 +2495,9 @@ async fn load_workspace_permission_profile(
 
     Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([("workspace".to_string(), profile)]),
+                entries: BTreeMap::from([("dev".to_string(), profile)]),
             }),
             ..Default::default()
         },
@@ -2501,6 +2514,7 @@ async fn load_workspace_permission_profile(
 async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
+        extends: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2546,6 +2560,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
+        extends: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2584,6 +2599,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
+        extends: None,
         workspace_roots: None,
         filesystem: None,
         network: None,
@@ -2602,7 +2618,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
-            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+            "Permissions profile `dev` does not define any recognized filesystem entries for this version of Codex."
         )),
         "{:?}",
         config.startup_warnings
@@ -2614,6 +2630,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
+        extends: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2629,7 +2646,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
-            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+            "Permissions profile `dev` does not define any recognized filesystem entries for this version of Codex."
         )),
         "{:?}",
         config.startup_warnings
@@ -2645,12 +2662,13 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
 
     let err = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2693,12 +2711,13 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
