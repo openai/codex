@@ -360,6 +360,14 @@ impl App {
                     &effective_config,
                     &feature_updates_to_apply,
                 );
+                self.sync_auto_review_runtime_state_from_effective_config(
+                    &effective_config,
+                    &feature_updates_to_apply,
+                )
+                .await;
+                if windows_sandbox_changed {
+                    self.propagate_windows_sandbox_turn_context();
+                }
             }
             return;
         }
@@ -443,25 +451,7 @@ impl App {
         }
 
         if windows_sandbox_changed {
-            #[cfg(target_os = "windows")]
-            {
-                let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(AppCommand::override_turn_context(
-                        /*cwd*/ None,
-                        /*approval_policy*/ None,
-                        /*approvals_reviewer*/ None,
-                        /*active_permission_profile*/ None,
-                        #[cfg(target_os = "windows")]
-                        Some(windows_sandbox_level),
-                        /*model*/ None,
-                        /*effort*/ None,
-                        /*summary*/ None,
-                        /*service_tier*/ None,
-                        /*collaboration_mode*/ None,
-                        /*personality*/ None,
-                    )));
-            }
+            self.propagate_windows_sandbox_turn_context();
         }
 
         if let Some(label) = permissions_history_label {
@@ -478,11 +468,8 @@ impl App {
         use_memories: bool,
         generate_memories: bool,
     ) -> bool {
-        let edits = crate::config_update::build_memory_settings_edits(
-            self.active_profile.as_deref(),
-            use_memories,
-            generate_memories,
-        );
+        let edits =
+            crate::config_update::build_memory_settings_edits(use_memories, generate_memories);
 
         let write_response = match crate::config_update::write_config_batch(
             app_server.request_handle(),
@@ -660,11 +647,8 @@ impl App {
         let active_profile = self.active_profile.clone();
         let active_profile = active_profile.as_deref();
         for (feature, _) in feature_updates {
-            let Some(enabled) =
-                feature_enabled_from_effective_config(effective_config, active_profile, *feature)
-            else {
-                continue;
-            };
+            let enabled =
+                feature_enabled_from_effective_config(effective_config, active_profile, *feature);
             if let Err(err) = self.config.features.set_enabled(*feature, enabled) {
                 tracing::warn!(
                     error = %err,
@@ -700,6 +684,76 @@ impl App {
             } else {
                 self.chat_widget.set_approval_policy(policy);
             }
+        }
+    }
+
+    async fn sync_auto_review_runtime_state_from_effective_config(
+        &mut self,
+        effective_config: &ConfigReadResponse,
+        feature_updates: &[(Feature, bool)],
+    ) {
+        if !feature_updates
+            .iter()
+            .any(|(feature, _)| *feature == Feature::GuardianApproval)
+            || !self.config.features.enabled(Feature::GuardianApproval)
+            || sandbox_mode_from_effective_config(effective_config, self.active_profile.as_deref())
+                != Some(AppServerSandboxMode::WorkspaceWrite)
+        {
+            return;
+        }
+
+        let auto_review_preset = auto_review_mode();
+        let mut config = self.config.clone();
+        let Some(permission_profile) = self.try_set_builtin_active_permission_profile_on_config(
+            &mut config,
+            auto_review_preset.active_permission_profile.clone(),
+            "Failed to refresh overridden Auto-review settings",
+            "failed to sync overridden Auto-review permission profile",
+        ) else {
+            return;
+        };
+        self.config = config;
+        if let Err(err) = self
+            .chat_widget
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                permission_profile.clone(),
+                auto_review_preset.active_permission_profile.clone(),
+            ))
+        {
+            tracing::warn!(
+                error = %err,
+                "failed to sync overridden Auto-review permission profile on chat config"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to refresh overridden Auto-review settings: {err}"
+            ));
+            return;
+        }
+
+        self.runtime_permission_profile_override = Some(permission_profile);
+        self.sync_active_thread_permission_settings_to_cached_session()
+            .await;
+
+        let approval_policy = AskForApproval::from(self.config.permissions.approval_policy.value());
+        let op = AppCommand::override_turn_context(
+            /*cwd*/ None,
+            Some(approval_policy),
+            Some(self.config.approvals_reviewer),
+            Some(auto_review_preset.active_permission_profile),
+            /*windows_sandbox_level*/ None,
+            /*model*/ None,
+            /*effort*/ None,
+            /*summary*/ None,
+            /*service_tier*/ None,
+            /*collaboration_mode*/ None,
+            /*personality*/ None,
+        );
+        let replay_state_op =
+            ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+        let submitted = self.chat_widget.submit_op(op);
+        if submitted && let Some(op) = replay_state_op.as_ref() {
+            self.note_active_thread_outbound_op(op).await;
+            self.refresh_pending_thread_approvals().await;
         }
     }
 
@@ -754,21 +808,28 @@ impl App {
         };
         self.config.permissions.windows_sandbox_mode = Some(mode);
         self.chat_widget.set_windows_sandbox_mode(Some(mode));
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-        self.app_event_tx
-            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
-                /*cwd*/ None,
-                /*approval_policy*/ None,
-                /*approvals_reviewer*/ None,
-                /*active_permission_profile*/ None,
-                Some(windows_sandbox_level),
-                /*model*/ None,
-                /*effort*/ None,
-                /*summary*/ None,
-                /*service_tier*/ None,
-                /*collaboration_mode*/ None,
-                /*personality*/ None,
-            )));
+        self.propagate_windows_sandbox_turn_context();
+    }
+
+    fn propagate_windows_sandbox_turn_context(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+            self.app_event_tx
+                .send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                    /*cwd*/ None,
+                    /*approval_policy*/ None,
+                    /*approvals_reviewer*/ None,
+                    /*active_permission_profile*/ None,
+                    Some(windows_sandbox_level),
+                    /*model*/ None,
+                    /*effort*/ None,
+                    /*summary*/ None,
+                    /*service_tier*/ None,
+                    /*collaboration_mode*/ None,
+                    /*personality*/ None,
+                )));
+        }
     }
 }
 
@@ -784,7 +845,7 @@ fn feature_enabled_from_effective_config(
     effective_config: &ConfigReadResponse,
     active_profile: Option<&str>,
     feature: Feature,
-) -> Option<bool> {
+) -> bool {
     let profile_features = active_profile
         .and_then(|profile| effective_config.config.profiles.get(profile))
         .and_then(|profile| profile.additional.get("features"))
@@ -802,6 +863,7 @@ fn feature_enabled_from_effective_config(
                 .as_ref()
                 .and_then(|features| features.entries().get(feature.key()).copied())
         })
+        .unwrap_or_else(|| feature.default_enabled())
 }
 
 fn approvals_reviewer_from_effective_config(
@@ -823,6 +885,17 @@ fn approval_policy_from_effective_config(
         .and_then(|profile| effective_config.config.profiles.get(profile))
         .and_then(|profile| profile.approval_policy)
         .or(effective_config.config.approval_policy)
+}
+
+fn sandbox_mode_from_effective_config(
+    effective_config: &ConfigReadResponse,
+    active_profile: Option<&str>,
+) -> Option<AppServerSandboxMode> {
+    active_profile
+        .and_then(|profile| effective_config.config.profiles.get(profile))
+        .and_then(|profile| profile.additional.get("sandbox_mode"))
+        .and_then(|mode| serde_json::from_value(mode.clone()).ok())
+        .or(effective_config.config.sandbox_mode)
 }
 
 fn memories_from_effective_config(effective_config: &ConfigReadResponse) -> Option<MemoriesToml> {

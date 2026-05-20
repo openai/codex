@@ -140,17 +140,13 @@ pub(crate) fn build_feature_enabled_edit(
 }
 
 pub(crate) fn build_memory_settings_edits(
-    profile: Option<&str>,
     use_memories: bool,
     generate_memories: bool,
 ) -> Vec<ConfigEdit> {
     vec![
+        replace_config_value("memories.use_memories", serde_json::json!(use_memories)),
         replace_config_value(
-            profile_scoped_key_path(profile, "memories.use_memories"),
-            serde_json::json!(use_memories),
-        ),
-        replace_config_value(
-            profile_scoped_key_path(profile, "memories.generate_memories"),
+            "memories.generate_memories",
             serde_json::json!(generate_memories),
         ),
     ]
