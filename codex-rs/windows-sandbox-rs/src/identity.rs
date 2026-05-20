@@ -1,6 +1,10 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
+use crate::setup::SandboxNetworkIdentity;
+use crate::setup::SandboxUserRecord;
+use crate::setup::SandboxUsersFile;
+use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
 use crate::setup::offline_proxy_settings_from_env;
@@ -8,15 +12,14 @@ use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
-use crate::setup::SandboxNetworkIdentity;
-use crate::setup::SandboxUserRecord;
-use crate::setup::SandboxUsersFile;
-use crate::setup::SetupMarker;
-use anyhow::anyhow;
+use crate::setup_error::SetupErrorCode;
+use crate::setup_error::SetupFailure;
+use crate::setup_error::read_setup_error_report;
 use anyhow::Context;
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use anyhow::anyhow;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -129,6 +132,21 @@ fn select_identity(
     }))
 }
 
+fn canceled_setup_failure(codex_home: &Path) -> Result<Option<anyhow::Error>> {
+    let report = match read_setup_error_report(codex_home)? {
+        Some(report) => report,
+        None => return Ok(None),
+    };
+
+    if report.code != SetupErrorCode::OrchestratorHelperLaunchCanceled {
+        return Ok(None);
+    }
+
+    Ok(Some(anyhow::Error::new(SetupFailure::from_report(report)).context(
+        "Windows sandbox setup was canceled previously; rerun setup explicitly to retry elevation",
+    )))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
     policy: &SandboxPolicy,
@@ -150,8 +168,7 @@ pub fn require_logon_sandbox_creds(
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
     let network_identity = SandboxNetworkIdentity::from_policy(policy, proxy_enforced);
-    let desired_offline_proxy_settings =
-        offline_proxy_settings_from_env(env_map, network_identity);
+    let desired_offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -167,8 +184,9 @@ pub fn require_logon_sandbox_creds(
             } else {
                 let selected = select_identity(network_identity, codex_home)?;
                 if selected.is_none() {
-                    setup_reason =
-                        Some("sandbox users missing or incompatible with marker version".to_string());
+                    setup_reason = Some(
+                        "sandbox users missing or incompatible with marker version".to_string(),
+                    );
                 }
                 selected
             }
@@ -180,6 +198,9 @@ pub fn require_logon_sandbox_creds(
     };
 
     if identity.is_none() {
+        if let Some(err) = canceled_setup_failure(codex_home)? {
+            return Err(err);
+        }
         if let Some(reason) = &setup_reason {
             crate::logging::log_note(
                 &format!("sandbox setup required: {reason}"),
@@ -232,4 +253,34 @@ pub fn require_logon_sandbox_creds(
         username: identity.username,
         password: identity.password,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canceled_setup_failure;
+    use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::SetupErrorReport;
+    use crate::setup_error::write_setup_error_report;
+    use tempfile::TempDir;
+
+    #[test]
+    fn canceled_setup_failure_returns_previous_cancellation() {
+        let codex_home = TempDir::new().expect("tempdir");
+        write_setup_error_report(
+            codex_home.path(),
+            &SetupErrorReport {
+                code: SetupErrorCode::OrchestratorHelperLaunchCanceled,
+                message: "ShellExecuteExW failed to launch setup helper: 1223".to_string(),
+            },
+        )
+        .expect("write setup report");
+
+        let err = canceled_setup_failure(codex_home.path())
+            .expect("read setup report")
+            .expect("expected cancellation error");
+
+        let message = err.to_string();
+        assert!(message.contains("rerun setup explicitly"));
+        assert!(message.contains("orchestrator_helper_launch_canceled"));
+    }
 }

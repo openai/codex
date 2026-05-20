@@ -17,10 +17,12 @@ use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
+use crate::setup_error::SetupErrorReport;
 use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
+use crate::setup_error::write_setup_error_report;
 use crate::ssh_config_dependencies::ssh_config_dependency_paths;
 use anyhow::Context;
 use anyhow::Result;
@@ -680,10 +682,22 @@ fn run_setup_exe(
         } else {
             SetupErrorCode::OrchestratorHelperLaunchFailed
         };
-        return Err(failure(
-            code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
-        ));
+        let message = format!("ShellExecuteExW failed to launch setup helper: {last_error}");
+        if matches!(code, SetupErrorCode::OrchestratorHelperLaunchCanceled)
+            && let Err(err) = write_setup_error_report(
+                codex_home,
+                &SetupErrorReport {
+                    code,
+                    message: message.clone(),
+                },
+            )
+        {
+            log_note(
+                &format!("setup orchestrator: failed to persist canceled setup attempt: {err}"),
+                Some(&sandbox_dir(codex_home)),
+            );
+        }
+        return Err(failure(code, message));
     }
     unsafe {
         WaitForSingleObject(sei.hProcess, INFINITE);
