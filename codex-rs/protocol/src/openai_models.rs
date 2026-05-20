@@ -17,6 +17,7 @@ use ts_rs::TS;
 
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 
@@ -502,7 +503,7 @@ impl ModelInfo {
 
     pub fn service_tier_for_request(&self, service_tier: Option<String>) -> Option<String> {
         service_tier.filter(|service_tier| {
-            service_tier != ServiceTier::Default.request_value()
+            service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE
                 && self.supports_service_tier(service_tier)
         })
     }
@@ -905,7 +906,7 @@ mod tests {
         };
 
         assert_eq!(
-            model.service_tier_for_request(Some(ServiceTier::Default.request_value().to_string())),
+            model.service_tier_for_request(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
             None
         );
     }

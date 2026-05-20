@@ -70,6 +70,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -8293,7 +8294,7 @@ async fn explicit_null_service_tier_override_maps_to_default_service_tier() -> s
 
     assert_eq!(
         config.service_tier,
-        Some(ServiceTier::Default.request_value().to_string())
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
     assert_eq!(config.notices.fast_default_opt_out, None);
     Ok(())
@@ -8316,7 +8317,7 @@ async fn default_service_tier_override_uses_default_request_value() -> std::io::
 
     assert_eq!(
         config.service_tier,
-        Some(ServiceTier::Default.request_value().to_string())
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
     Ok(())
 }

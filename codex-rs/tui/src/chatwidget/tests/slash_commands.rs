@@ -2182,7 +2182,7 @@ async fn model_switch_recomputes_catalog_default_service_tier() {
         Op::UserTurn {
             service_tier: Some(Some(service_tier)),
             ..
-        } if service_tier == ServiceTier::Default.request_value() => {}
+        } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => {}
         other => panic!("expected Op::UserTurn with default service tier override, got {other:?}"),
     }
 }
@@ -2248,7 +2248,7 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 service_tier: Some(Some(service_tier)),
                 ..
-            }) if service_tier == ServiceTier::Default.request_value()
+            }) if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
         )),
         "expected fast-mode off default service tier app event; events: {events:?}"
     );
@@ -2257,7 +2257,7 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
             event,
             AppEvent::PersistServiceTierSelection {
                 service_tier: Some(service_tier)
-            } if service_tier == ServiceTier::Default.request_value()
+            } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
         )),
         "expected default service tier persistence app event; events: {events:?}"
     );
@@ -2270,7 +2270,7 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
         Op::UserTurn {
             service_tier: Some(Some(service_tier)),
             ..
-        } if service_tier == ServiceTier::Default.request_value() => {}
+        } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => {}
         other => panic!("expected Op::UserTurn with default service tier override, got {other:?}"),
     }
 }

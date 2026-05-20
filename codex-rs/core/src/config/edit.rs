@@ -553,7 +553,6 @@ impl ConfigDocument {
                     // Keep the legacy config spelling stable. Runtime values use
                     // `priority`, but config.toml continues to store it as `fast`.
                     let config_value = match ServiceTier::from_request_value(service_tier) {
-                        Some(ServiceTier::Default) => "default",
                         Some(ServiceTier::Fast) => "fast",
                         Some(ServiceTier::Flex) => "flex",
                         None => service_tier.as_str(),

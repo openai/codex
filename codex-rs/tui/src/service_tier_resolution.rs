@@ -1,12 +1,12 @@
 use crate::legacy_core::config::Config;
 use codex_features::Feature;
-use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::openai_models::ModelPreset;
 
 pub(crate) fn configured_service_tier(config: &Config) -> Option<String> {
     config.service_tier.clone().or_else(|| {
         (config.notices.fast_default_opt_out == Some(true))
-            .then(|| ServiceTier::Default.request_value().to_string())
+            .then(|| SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     })
 }
 
@@ -25,7 +25,7 @@ pub(crate) fn effective_service_tier(
     };
 
     match configured.as_deref() {
-        Some(service_tier) if service_tier == ServiceTier::Default.request_value() => configured,
+        Some(service_tier) if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => configured,
         Some(service_tier) if model_supports_service_tier(preset, service_tier) => configured,
         Some(_) => None,
         None => preset
@@ -53,7 +53,7 @@ pub(crate) fn service_tier_update_for_core(
         return None;
     }
 
-    Some(Some(ServiceTier::Default.request_value().to_string()))
+    Some(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
 }
 
 pub(crate) fn model_supports_service_tier(model: &ModelPreset, service_tier: &str) -> bool {

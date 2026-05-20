@@ -4,6 +4,7 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -290,7 +291,7 @@ async fn service_tier_change_is_applied_on_next_http_turn() -> Result<()> {
 
     let test = test_codex().build(&server).await?;
 
-    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast))
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast.request_value()))
         .await?;
     test.submit_turn_with_service_tier("standard turn", /*service_tier*/ None)
         .await?;
@@ -335,7 +336,7 @@ async fn flex_service_tier_is_applied_to_http_turn() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex))
+    test.submit_turn_with_service_tier("flex turn", Some(ServiceTier::Flex.request_value()))
         .await?;
 
     let request = resp_mock.single_request();
@@ -368,7 +369,7 @@ async fn unsupported_service_tier_is_omitted_from_http_turn() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast))
+    test.submit_turn_with_service_tier("fast turn", Some(ServiceTier::Fast.request_value()))
         .await?;
 
     let request = resp_mock.single_request();
@@ -407,7 +408,7 @@ async fn default_service_tier_override_is_omitted_from_http_turn() -> Result<()>
         });
     let test = builder.build(&server).await?;
 
-    test.submit_turn_with_service_tier("default turn", Some(ServiceTier::Default))
+    test.submit_turn_with_service_tier("default turn", Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE))
         .await?;
 
     let request = resp_mock.single_request();

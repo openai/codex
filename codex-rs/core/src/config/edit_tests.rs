@@ -4,6 +4,7 @@ use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::SessionPickerViewMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -40,7 +41,7 @@ fn set_service_tier_saves_default_as_default() {
     let codex_home = tmp.path();
 
     ConfigEditsBuilder::new(codex_home)
-        .set_service_tier(Some(ServiceTier::Default.request_value().to_string()))
+        .set_service_tier(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
         .apply_blocking()
         .expect("persist");
 

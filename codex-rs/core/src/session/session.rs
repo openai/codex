@@ -5,6 +5,7 @@ use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
@@ -230,7 +231,7 @@ impl SessionConfiguration {
                             service_tier.request_value().to_string()
                         }),
                 ),
-                None => Some(ServiceTier::Default.request_value().to_string()),
+                None => Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             };
         }
         if let Some(personality) = updates.personality {

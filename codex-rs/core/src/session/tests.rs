@@ -32,6 +32,7 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -3479,11 +3480,11 @@ fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
     );
     assert_eq!(
         get_service_tier(
-            Some(ServiceTier::Default.request_value().to_string()),
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             /*fast_mode_enabled*/ true,
             &model_info,
         ),
-        Some(ServiceTier::Default.request_value().to_string())
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
 }
 
@@ -3501,7 +3502,7 @@ fn get_service_tier_ignores_configured_tier_when_fast_mode_disabled() {
     );
     assert_eq!(
         get_service_tier(
-            Some(ServiceTier::Default.request_value().to_string()),
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             /*fast_mode_enabled*/ false,
             &model_info,
         ),
@@ -3538,7 +3539,7 @@ async fn session_settings_null_service_tier_update_uses_default_service_tier() {
 
     assert_eq!(
         updated.service_tier,
-        Some(ServiceTier::Default.request_value().to_string())
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
 }
 

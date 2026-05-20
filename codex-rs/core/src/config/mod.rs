@@ -81,6 +81,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -3173,12 +3174,11 @@ impl Config {
         let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
-            Some(None) => Some(ServiceTier::Default.request_value().to_string()),
+            Some(None) => Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = service_tier.and_then(|service_tier| {
             match ServiceTier::from_request_value(&service_tier) {
-                Some(ServiceTier::Default) => Some(ServiceTier::Default.request_value().to_string()),
                 Some(ServiceTier::Fast) => features
                     .enabled(Feature::FastMode)
                     .then(|| ServiceTier::Fast.request_value().to_string()),

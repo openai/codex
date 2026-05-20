@@ -108,7 +108,7 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
-use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -474,8 +474,7 @@ impl AppServerSession {
                 session_config.notices.fast_default_opt_out = None;
             }
             Some(None) => {
-                session_config.service_tier =
-                    Some(ServiceTier::Default.request_value().to_string());
+                session_config.service_tier = Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string());
                 session_config.notices.fast_default_opt_out = None;
             }
             None => {
@@ -1260,7 +1259,7 @@ fn config_request_overrides_from_config(
 fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
     config.service_tier.clone().map(Some).or_else(|| {
         (config.notices.fast_default_opt_out == Some(true))
-            .then(|| Some(ServiceTier::Default.request_value().to_string()))
+            .then(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
     })
 }
 
