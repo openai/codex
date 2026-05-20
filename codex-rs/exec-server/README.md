@@ -31,6 +31,9 @@ remote registration needs authentication. Containerized callers that receive an
 Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
 `--use-agent-identity-auth`; Codex then registers an Agent task and sends the
 derived AgentAssertion headers on the registry request.
+When the container cannot fetch the Agent Identity JWKS endpoint, set
+`CODEX_AGENT_IDENTITY_JWKS_JSON` to the trusted JWKS endpoint JSON so Codex can
+verify the JWT without that network request.
 
 Wire framing:
 

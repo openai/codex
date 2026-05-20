@@ -465,6 +465,7 @@ impl ChatgptAuth {
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
 pub const CODEX_ACCESS_TOKEN_ENV_VAR: &str = "CODEX_ACCESS_TOKEN";
+const CODEX_AGENT_IDENTITY_JWKS_JSON_ENV_VAR: &str = "CODEX_AGENT_IDENTITY_JWKS_JSON";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
     env::var(OPENAI_API_KEY_ENV_VAR)
@@ -493,9 +494,14 @@ async fn verified_agent_identity_record(
     chatgpt_base_url: &str,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-    let jwks = fetch_agent_identity_jwks(&build_reqwest_client(), chatgpt_base_url)
-        .await
-        .map_err(std::io::Error::other)?;
+    let jwks =
+        if let Some(jwks_json) = read_non_empty_env_var(CODEX_AGENT_IDENTITY_JWKS_JSON_ENV_VAR) {
+            serde_json::from_str(&jwks_json).map_err(std::io::Error::other)?
+        } else {
+            fetch_agent_identity_jwks(&build_reqwest_client(), chatgpt_base_url)
+                .await
+                .map_err(std::io::Error::other)?
+        };
     let claims = decode_agent_identity_jwt(jwt, Some(&jwks)).map_err(std::io::Error::other)?;
     Ok(claims.into())
 }

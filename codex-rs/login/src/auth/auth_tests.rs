@@ -127,6 +127,65 @@ async fn login_with_access_token_writes_only_token() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_reads_agent_identity_jwks_from_env() {
+    let dir = tempdir().unwrap();
+    let auth_path = dir.path().join("auth.json");
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let _jwks_guard = EnvVarGuard::set(
+        CODEX_AGENT_IDENTITY_JWKS_JSON_ENV_VAR,
+        &test_jwks_body().to_string(),
+    );
+    let server = MockServer::start().await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+
+    super::login_with_access_token(
+        dir.path(),
+        &agent_identity,
+        AuthCredentialsStoreMode::File,
+        Some(&chatgpt_base_url),
+    )
+    .await
+    .expect("login_with_access_token should use JWKS from env");
+
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    let auth = storage
+        .try_read_auth_json(&auth_path)
+        .expect("auth.json should parse");
+    assert_eq!(auth.auth_mode, Some(AuthMode::AgentIdentity));
+    assert_eq!(
+        auth.agent_identity.as_deref(),
+        Some(agent_identity.as_str())
+    );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn login_with_access_token_rejects_invalid_agent_identity_jwks_env() {
+    let dir = tempdir().unwrap();
+    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
+    let agent_identity =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
+    let _jwks_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_JWKS_JSON_ENV_VAR, "not-jwks-json");
+
+    super::login_with_access_token(
+        dir.path(),
+        &agent_identity,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect_err("invalid JWKS env should fail");
+
+    assert!(
+        !get_auth_file(dir.path()).exists(),
+        "invalid JWKS env should not write auth.json"
+    );
+}
+
+#[tokio::test]
 async fn login_with_access_token_rejects_invalid_jwt() {
     let dir = tempdir().unwrap();
 
