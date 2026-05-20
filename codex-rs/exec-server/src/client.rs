@@ -12,7 +12,6 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -192,27 +191,60 @@ pub struct ExecServerClient {
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: ExecServerTransportParams,
-    client: Arc<OnceCell<ExecServerClient>>,
+    client: Arc<StdMutex<Option<ExecServerClient>>>,
+    connect_lock: Arc<Mutex<()>>,
 }
 
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
             transport_params,
-            client: Arc::new(OnceCell::new()),
+            client: Arc::new(StdMutex::new(None)),
+            connect_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
+        if let Some(client) = self.connected_client() {
+            return Ok(client);
+        }
+
+        let _connect_guard = self.connect_lock.lock().await;
+        if let Some(client) = self.connected_client() {
+            return Ok(client);
+        }
+
+        let next_client = match self.cached_client() {
+            Some(client)
+                if matches!(
+                    &self.transport_params,
+                    ExecServerTransportParams::WebSocketUrl { .. }
+                ) =>
+            {
+                ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
+            }
+            Some(client) => return Ok(client),
+            None => ExecServerClient::connect_for_transport(self.transport_params.clone()).await?,
+        };
+
+        let mut cached_client = self
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cached_client = Some(next_client.clone());
+        Ok(next_client)
+    }
+
+    fn connected_client(&self) -> Option<ExecServerClient> {
+        self.cached_client()
+            .filter(|client| !client.is_disconnected())
+    }
+
+    fn cached_client(&self) -> Option<ExecServerClient> {
         self.client
-            // TODO: Add reconnect/disconnect handling here instead of reusing
-            // the first successfully initialized connection forever.
-            .get_or_try_init(|| {
-                let transport_params = self.transport_params.clone();
-                async move { ExecServerClient::connect_for_transport(transport_params).await }
-            })
-            .await
-            .cloned()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -422,6 +454,10 @@ impl ExecServerClient {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    fn is_disconnected(&self) -> bool {
+        self.inner.disconnected.get().is_some()
     }
 
     pub(crate) async fn connect(
@@ -879,6 +915,7 @@ mod tests {
     use std::path::Path;
     #[cfg(unix)]
     use std::process::Command;
+    use std::sync::Arc;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
@@ -1351,6 +1388,57 @@ mod tests {
         ));
 
         drop(client);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn remote_websocket_client_replaces_disconnected_client_with_fresh_session() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let server = tokio::spawn({
+            async move {
+                let mut first = accept_websocket(&listener).await;
+                complete_websocket_initialize(
+                    &mut first,
+                    "session-1",
+                    /*expected_resume_session_id*/ None,
+                )
+                .await;
+                first
+                    .close(None)
+                    .await
+                    .expect("first websocket should close");
+
+                let mut second = accept_websocket(&listener).await;
+                complete_websocket_initialize(
+                    &mut second,
+                    "session-2",
+                    /*expected_resume_session_id*/ None,
+                )
+                .await;
+            }
+        });
+
+        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+            websocket_url,
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+        });
+        let first = client.get().await.expect("first client should connect");
+        wait_for_disconnect(&first).await;
+
+        let (replacement_a, replacement_b) = tokio::join!(client.get(), client.get());
+        let replacement_a = replacement_a.expect("first replacement should connect");
+        let replacement_b = replacement_b.expect("second replacement should reuse client");
+        assert_eq!(replacement_a.session_id().as_deref(), Some("session-2"));
+        assert_eq!(replacement_b.session_id().as_deref(), Some("session-2"));
+        assert!(Arc::ptr_eq(&replacement_a.inner, &replacement_b.inner));
+
         server.await.expect("server task should finish");
     }
 
