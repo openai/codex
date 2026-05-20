@@ -426,6 +426,22 @@ fn windows_proxy_enforcement_uses_elevated_backend() {
 }
 
 #[test]
+fn windows_proxy_enforcement_only_bootstraps_setup_for_explicit_elevated_mode() {
+    assert!(windows_sandbox_allows_setup_bootstrap(
+        WindowsSandboxLevel::RestrictedToken,
+        /*proxy_enforced*/ false,
+    ));
+    assert!(!windows_sandbox_allows_setup_bootstrap(
+        WindowsSandboxLevel::RestrictedToken,
+        /*proxy_enforced*/ true,
+    ));
+    assert!(windows_sandbox_allows_setup_bootstrap(
+        WindowsSandboxLevel::Elevated,
+        /*proxy_enforced*/ false,
+    ));
+}
+
+#[test]
 fn windows_restricted_token_rejects_network_only_restrictions() {
     let policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,

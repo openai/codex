@@ -121,6 +121,14 @@ fn windows_sandbox_uses_elevated_backend(
     proxy_enforced || matches!(sandbox_level, WindowsSandboxLevel::Elevated)
 }
 
+fn windows_sandbox_allows_setup_bootstrap(
+    sandbox_level: WindowsSandboxLevel,
+    proxy_enforced: bool,
+) -> bool {
+    matches!(sandbox_level, WindowsSandboxLevel::Elevated)
+        || !windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExecCapturePolicy {
     /// Shell-like execs keep the historical output cap and timeout behavior.
@@ -604,6 +612,8 @@ async fn exec_windows_sandbox(
     let sandbox_level = windows_sandbox_level;
     let proxy_enforced = network.is_some();
     let use_elevated = windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced);
+    let allow_setup_bootstrap =
+        windows_sandbox_allows_setup_bootstrap(sandbox_level, proxy_enforced);
     let additional_deny_write_paths = windows_sandbox_filesystem_overrides
         .map(|overrides| {
             overrides
@@ -641,6 +651,7 @@ async fn exec_windows_sandbox(
                     timeout_ms,
                     use_private_desktop: windows_sandbox_private_desktop,
                     proxy_enforced,
+                    allow_setup_bootstrap,
                     read_roots_override: elevated_read_roots_override.as_deref(),
                     read_roots_include_platform_defaults:
                         elevated_read_roots_include_platform_defaults,

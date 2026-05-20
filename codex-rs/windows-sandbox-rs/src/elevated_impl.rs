@@ -12,6 +12,7 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub timeout_ms: Option<u64>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
+    pub allow_setup_bootstrap: bool,
     pub read_roots_override: Option<&'a [PathBuf]>,
     pub read_roots_include_platform_defaults: bool,
     pub write_roots_override: Option<&'a [PathBuf]>,
@@ -121,6 +122,7 @@ mod windows_impl {
             timeout_ms,
             use_private_desktop,
             proxy_enforced,
+            allow_setup_bootstrap,
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
@@ -148,6 +150,7 @@ mod windows_impl {
             write_roots_override,
             deny_write_paths_override,
             proxy_enforced,
+            allow_setup_bootstrap,
         )?;
         // Build capability SID for ACL grants.
         if matches!(
