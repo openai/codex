@@ -1981,6 +1981,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
             model_context_window: turn_context.model_context_window(),
         }));
 
+    let turn_context = Arc::new(turn_context);
     let session = Arc::new(session);
     session
         .spawn_task(
