@@ -49,6 +49,12 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                         approval_mode: Some(AppToolApproval::Prompt),
                     },
                 ),
+                (
+                    "write".to_string(),
+                    McpServerToolConfig {
+                        approval_mode: Some(AppToolApproval::PromptForWrites),
+                    },
+                ),
             ]),
         },
     )]);
@@ -74,6 +80,9 @@ approval_mode = "prompt"
 
 [mcp_servers.docs.tools.search]
 approval_mode = "approve"
+
+[mcp_servers.docs.tools.write]
+approval_mode = "prompt_for_writes"
 "#
     );
 

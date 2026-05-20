@@ -5127,6 +5127,38 @@ approval_mode = "approve"
 }
 
 #[test]
+fn mcp_servers_toml_parses_prompt_for_writes_approval_overrides() {
+    let config = toml::from_str::<ConfigToml>(
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+name = "Docs"
+default_tools_approval_mode = "prompt_for_writes"
+
+[mcp_servers.docs.tools.write]
+approval_mode = "prompt_for_writes"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let server = config
+        .mcp_servers
+        .get("docs")
+        .expect("docs server config exists");
+
+    assert_eq!(
+        server.default_tools_approval_mode,
+        Some(AppToolApproval::PromptForWrites)
+    );
+
+    assert_eq!(
+        server.tools.get("write"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::PromptForWrites),
+        })
+    );
+}
+
+#[test]
 fn mcp_servers_toml_ignores_unknown_server_fields() {
     let config = toml::from_str::<ConfigToml>(
         r#"

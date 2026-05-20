@@ -124,6 +124,18 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
 }
 
 #[test]
+fn mcp_prompt_auto_approval_rejects_prompt_for_writes_even_with_full_access() {
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::Never,
+        &PermissionProfile::Disabled,
+        McpPermissionPromptAutoApproveContext {
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            tool_approval_mode: Some(AppToolApproval::PromptForWrites),
+        },
+    ));
+}
+
+#[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let mut config = test_mcp_config(PathBuf::new());
     config.plugin_ids_by_mcp_server_name =

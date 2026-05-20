@@ -192,6 +192,43 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
 }
 
 #[tokio::test]
+async fn write_value_supports_prompt_for_writes_app_default_tool_approval_mode() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "apps.app1.default_tools_approval_mode".to_string(),
+            value: serde_json::json!("prompt_for_writes"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write apps.app1.default_tools_approval_mode succeeds");
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read succeeds");
+
+    assert_eq!(
+        read.config.apps.and_then(|apps| {
+            apps.apps
+                .get("app1")
+                .and_then(|app| app.default_tools_approval_mode)
+        }),
+        Some(AppToolApproval::PromptForWrites)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_supports_custom_mcp_server_default_tool_approval_mode() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
@@ -229,6 +266,49 @@ async fn write_value_supports_custom_mcp_server_default_tool_approval_mode() -> 
             .and_then(|servers| servers.get("docs"))
             .and_then(|docs| docs.get("default_tools_approval_mode")),
         Some(&serde_json::json!("approve"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_value_supports_prompt_for_writes_mcp_default_tool_approval_mode() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "mcp_servers.docs.default_tools_approval_mode".to_string(),
+            value: serde_json::json!("prompt_for_writes"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write mcp server default_tools_approval_mode succeeds");
+
+    let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE))?;
+    assert!(contents.contains("default_tools_approval_mode = \"prompt_for_writes\""));
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read succeeds");
+
+    assert_eq!(
+        read.config
+            .additional
+            .get("mcp_servers")
+            .and_then(|servers| servers.get("docs"))
+            .and_then(|docs| docs.get("default_tools_approval_mode")),
+        Some(&serde_json::json!("prompt_for_writes"))
     );
 
     Ok(())

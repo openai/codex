@@ -321,6 +321,7 @@ mod document_helpers {
             entry["default_tools_approval_mode"] = value(match approval_mode {
                 AppToolApproval::Auto => "auto",
                 AppToolApproval::Prompt => "prompt",
+                AppToolApproval::PromptForWrites => "prompt_for_writes",
                 AppToolApproval::Approve => "approve",
             });
         }
@@ -373,6 +374,7 @@ mod document_helpers {
             entry["approval_mode"] = value(match approval_mode {
                 AppToolApproval::Auto => "auto",
                 AppToolApproval::Prompt => "prompt",
+                AppToolApproval::PromptForWrites => "prompt_for_writes",
                 AppToolApproval::Approve => "approve",
             });
         }

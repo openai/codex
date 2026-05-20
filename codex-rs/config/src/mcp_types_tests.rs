@@ -364,6 +364,39 @@ fn deserialize_server_config_with_default_tool_approval_mode() {
 }
 
 #[test]
+fn deserialize_server_config_with_prompt_for_writes_tool_approval_mode() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            default_tools_approval_mode = "prompt_for_writes"
+
+            [tools.write]
+            approval_mode = "prompt_for_writes"
+        "#,
+    )
+    .expect("should deserialize prompt_for_writes approval mode");
+
+    assert_eq!(
+        cfg.default_tools_approval_mode,
+        Some(AppToolApproval::PromptForWrites)
+    );
+    assert_eq!(
+        cfg.tools.get("write"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::PromptForWrites),
+        })
+    );
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(serialized.contains("default_tools_approval_mode = \"prompt_for_writes\""));
+    assert!(serialized.contains("approval_mode = \"prompt_for_writes\""));
+
+    let round_tripped: McpServerConfig =
+        toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+    assert_eq!(round_tripped, cfg);
+}
+
+#[test]
 fn serialize_round_trips_server_config_with_parallel_tool_calls() {
     let cfg: McpServerConfig = toml::from_str(
         r#"

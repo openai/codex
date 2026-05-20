@@ -75,6 +75,9 @@ pub fn mcp_permission_prompt_is_auto_approved(
     if context.tool_approval_mode == Some(AppToolApproval::Approve) {
         return true;
     }
+    if context.tool_approval_mode == Some(AppToolApproval::PromptForWrites) {
+        return false;
+    }
 
     if approval_policy != AskForApproval::Never {
         return false;

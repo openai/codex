@@ -405,6 +405,24 @@ fn prompt_mode_does_not_allow_persistent_remember() {
     );
 }
 
+#[test]
+fn prompt_for_writes_allows_persistent_remember() {
+    assert_eq!(
+        normalize_approval_decision_for_mode(
+            McpToolApprovalDecision::AcceptForSession,
+            AppToolApproval::PromptForWrites,
+        ),
+        McpToolApprovalDecision::AcceptForSession
+    );
+    assert_eq!(
+        normalize_approval_decision_for_mode(
+            McpToolApprovalDecision::AcceptAndRemember,
+            AppToolApproval::PromptForWrites,
+        ),
+        McpToolApprovalDecision::AcceptAndRemember
+    );
+}
+
 #[tokio::test]
 async fn mcp_tool_call_span_records_expected_fields() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
@@ -861,6 +879,22 @@ fn custom_servers_support_session_and_persistent_approval() {
             /*metadata*/ None,
             AppToolApproval::Auto
         ),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        session_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::PromptForWrites
+        ),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        persistent_mcp_tool_approval_key(
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::PromptForWrites
+        ),
         Some(expected)
     );
 }
@@ -891,6 +925,22 @@ fn codex_apps_connectors_support_persistent_approval() {
     );
     assert_eq!(
         persistent_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        session_mcp_tool_approval_key(
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::PromptForWrites
+        ),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        persistent_mcp_tool_approval_key(
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::PromptForWrites
+        ),
         Some(expected)
     );
 }
@@ -1915,6 +1965,78 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
 }
 
 #[tokio::test]
+async fn prompt_for_writes_session_approval_is_remembered() {
+    let (session, turn_context) = make_session_and_context().await;
+    let invocation = McpInvocation {
+        server: "docs".to_string(),
+        tool: "write".to_string(),
+        arguments: None,
+    };
+    let key = session_mcp_tool_approval_key(&invocation, None, AppToolApproval::PromptForWrites)
+        .expect("prompt_for_writes should support session approval");
+
+    apply_mcp_tool_approval_decision(
+        &session,
+        &turn_context,
+        &McpToolApprovalDecision::AcceptForSession,
+        Some(key.clone()),
+        None,
+    )
+    .await;
+
+    assert!(mcp_tool_approval_is_remembered(&session, &key).await);
+}
+
+#[tokio::test]
+async fn prompt_for_writes_always_allow_persists_approve_override() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.config = Arc::new(config);
+    let invocation = McpInvocation {
+        server: "docs".to_string(),
+        tool: "write".to_string(),
+        arguments: None,
+    };
+    let key = persistent_mcp_tool_approval_key(&invocation, None, AppToolApproval::PromptForWrites)
+        .expect("prompt_for_writes should support persistent approval");
+
+    apply_mcp_tool_approval_decision(
+        &session,
+        &turn_context,
+        &McpToolApprovalDecision::AcceptAndRemember,
+        None,
+        Some(key.clone()),
+    )
+    .await;
+
+    let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
+    let tool = parsed
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("write"))
+        .expect("docs/write tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+    assert!(mcp_tool_approval_is_remembered(&session, &key).await);
+}
+
+#[tokio::test]
 async fn custom_mcp_tool_approval_mode_uses_server_default_with_tool_override() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
@@ -2698,7 +2820,220 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
 }
 
 #[tokio::test]
-async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
+async fn prompt_for_writes_skips_explicit_read_only_tool() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "read_only_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(true), Some(true), Some(true))),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        plugin_id: None,
+        tool_title: Some("Read Only Tool".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-prompt-for-writes-read",
+        &invocation,
+        "mcp__test__tool",
+        Some(&metadata),
+        AppToolApproval::PromptForWrites,
+    )
+    .await;
+
+    assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn prompt_for_writes_waits_for_approval_when_read_only_is_false() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "write_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            Some(false),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        plugin_id: None,
+        tool_title: Some("Write Tool".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let mut approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-prompt-for-writes-false",
+                &invocation,
+                "mcp__test__tool",
+                Some(&metadata),
+                AppToolApproval::PromptForWrites,
+            )
+            .await
+        })
+    };
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+            .await
+            .is_err(),
+        "prompt_for_writes should wait for approval when read_only_hint is false"
+    );
+    approval_task.abort();
+}
+
+#[tokio::test]
+async fn prompt_for_writes_waits_for_approval_when_annotations_are_absent() {
+    let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "unknown_tool".to_string(),
+        arguments: None,
+    };
+
+    let mut approval_task = {
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            maybe_request_mcp_tool_approval(
+                &session,
+                &turn_context,
+                "call-prompt-for-writes-absent",
+                &invocation,
+                "mcp__test__tool",
+                /*metadata*/ None,
+                AppToolApproval::PromptForWrites,
+            )
+            .await
+        })
+    };
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+            .await
+            .is_err(),
+        "prompt_for_writes should wait for approval when read_only_hint is absent"
+    );
+    approval_task.abort();
+}
+
+#[tokio::test]
+async fn prompt_for_writes_bypasses_guardian_for_write_prompts() {
+    use wiremock::Mock;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+    turn_context
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    let mut config = (*turn_context.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    let config = Arc::new(config);
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    session.services.models_manager = models_manager;
+    turn_context.config = Arc::clone(&config);
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "write_tool".to_string(),
+        arguments: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        plugin_id: None,
+        tool_title: Some("Write Tool".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let mut approval_task = tokio::spawn(async move {
+        maybe_request_mcp_tool_approval(
+            &session,
+            &turn_context,
+            "call-prompt-for-writes-guardian",
+            &invocation,
+            "mcp__test__tool",
+            Some(&metadata),
+            AppToolApproval::PromptForWrites,
+        )
+        .await
+    });
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), &mut approval_task)
+            .await
+            .is_err(),
+        "prompt_for_writes should show the user prompt instead of routing to guardian"
+    );
+    approval_task.abort();
+}
+
+#[tokio::test]
+async fn full_access_mode_skips_mcp_tool_approval_for_existing_approval_modes() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context
         .approval_policy

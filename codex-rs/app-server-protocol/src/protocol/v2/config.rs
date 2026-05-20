@@ -172,6 +172,7 @@ pub struct AnalyticsConfig {
 pub enum AppToolApproval {
     Auto,
     Prompt,
+    PromptForWrites,
     Approve,
 }
 

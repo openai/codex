@@ -19,6 +19,7 @@ pub enum AppToolApproval {
     #[default]
     Auto,
     Prompt,
+    PromptForWrites,
     Approve,
 }
 

@@ -1149,21 +1149,27 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    if mcp_permission_prompt_is_auto_approved(
-        turn_context.approval_policy.value(),
-        &turn_context.permission_profile(),
-        McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(turn_context.config.approvals_reviewer),
-            tool_approval_mode: Some(approval_mode),
-        },
-    ) {
-        return None;
-    }
-
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    let approval_required = requires_mcp_tool_approval(annotations);
-    if !approval_required && approval_mode != AppToolApproval::Prompt {
-        return None;
+    if approval_mode == AppToolApproval::PromptForWrites {
+        if mcp_tool_is_read_only(annotations) {
+            return None;
+        }
+    } else {
+        if mcp_permission_prompt_is_auto_approved(
+            turn_context.approval_policy.value(),
+            &turn_context.permission_profile(),
+            McpPermissionPromptAutoApproveContext {
+                approvals_reviewer: Some(turn_context.config.approvals_reviewer),
+                tool_approval_mode: Some(approval_mode),
+            },
+        ) {
+            return None;
+        }
+
+        let approval_required = requires_mcp_tool_approval(annotations);
+        if !approval_required && approval_mode != AppToolApproval::Prompt {
+            return None;
+        }
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
@@ -1205,7 +1211,9 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if routes_approval_to_guardian(turn_context) {
+    if approval_mode != AppToolApproval::PromptForWrites
+        && routes_approval_to_guardian(turn_context)
+    {
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
@@ -1320,7 +1328,10 @@ fn session_mcp_tool_approval_key(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalKey> {
-    if approval_mode != AppToolApproval::Auto {
+    if !matches!(
+        approval_mode,
+        AppToolApproval::Auto | AppToolApproval::PromptForWrites
+    ) {
         return None;
     }
 
@@ -2085,6 +2096,10 @@ fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
         || annotations
             .and_then(|annotations| annotations.open_world_hint)
             .unwrap_or(true)
+}
+
+fn mcp_tool_is_read_only(annotations: Option<&ToolAnnotations>) -> bool {
+    annotations.and_then(|annotations| annotations.read_only_hint) == Some(true)
 }
 
 async fn notify_mcp_tool_call_skip(

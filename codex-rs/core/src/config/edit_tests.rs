@@ -1074,6 +1074,55 @@ approval_mode = \"approve\"
 }
 
 #[test]
+fn blocking_replace_mcp_servers_serializes_prompt_for_writes_default() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    let mut servers = BTreeMap::new();
+    servers.insert(
+        "docs".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: Some(AppToolApproval::PromptForWrites),
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    );
+
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::ReplaceMcpServers(servers)],
+    )
+    .expect("persist");
+
+    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = "\
+[mcp_servers.docs]
+command = \"docs-server\"
+default_tools_approval_mode = \"prompt_for_writes\"
+";
+    assert_eq!(raw, expected);
+}
+
+#[test]
 fn blocking_replace_mcp_servers_preserves_inline_comments() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();
