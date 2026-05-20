@@ -18,5 +18,8 @@ codex_rust_crate(
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/rmcp-client:test_stdio_server",
     ],
+    windows_cross_extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
+    ],
     test_tags = ["no-sandbox"],
 )
