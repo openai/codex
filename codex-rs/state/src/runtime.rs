@@ -62,6 +62,7 @@ mod backfill;
 mod goals;
 mod logs;
 mod memories;
+mod recovery;
 mod remote_control;
 #[cfg(test)]
 mod test_support;
@@ -354,6 +355,37 @@ async fn open_sqlite(
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
+    let pool = match connect_sqlite(options.clone(), spec, telemetry_override).await {
+        Ok(pool) => pool,
+        Err(err) => {
+            if !recovery::is_malformed_sqlite_error(&err) {
+                return Err(err);
+            }
+            recovery::recover_database(path, spec, migrator, &err).await?;
+            connect_sqlite(options.clone(), spec, telemetry_override).await?
+        }
+    };
+
+    match migrate_sqlite(&pool, migrator, spec, telemetry_override).await {
+        Ok(()) => Ok(pool),
+        Err(err) => {
+            if !recovery::is_malformed_sqlite_error(&err) {
+                return Err(err);
+            }
+            pool.close().await;
+            recovery::recover_database(path, spec, migrator, &err).await?;
+            let pool = connect_sqlite(options, spec, telemetry_override).await?;
+            migrate_sqlite(&pool, migrator, spec, telemetry_override).await?;
+            Ok(pool)
+        }
+    }
+}
+
+async fn connect_sqlite(
+    options: SqliteConnectOptions,
+    spec: RuntimeDbSpec,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
     let started = Instant::now();
     let pool_result = SqlitePoolOptions::new()
         .max_connections(5)
@@ -367,9 +399,17 @@ async fn open_sqlite(
         started.elapsed(),
         &pool_result,
     );
-    let pool = pool_result?;
+    pool_result
+}
+
+async fn migrate_sqlite(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+    spec: RuntimeDbSpec,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<()> {
     let started = Instant::now();
-    let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
+    let migrate_result = migrator.run(pool).await.map_err(anyhow::Error::from);
     crate::telemetry::record_init_result(
         telemetry_override,
         spec.kind,
@@ -377,8 +417,7 @@ async fn open_sqlite(
         started.elapsed(),
         &migrate_result,
     );
-    migrate_result?;
-    Ok(pool)
+    migrate_result
 }
 
 pub(super) async fn ensure_backfill_state_row_in_pool(

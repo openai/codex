@@ -3,6 +3,7 @@ name = "codex-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -10,6 +11,7 @@ chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
+libsqlite3-sys = { workspace = true }
 log = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -24,6 +26,9 @@ uuid = { workspace = true }
 [dev-dependencies]
 codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
 
 [lints]
 workspace = true

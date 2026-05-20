@@ -275,6 +275,14 @@ crate.annotation(
 
 inject_repo(crate, "zlib")
 
+crate.annotation(
+    build_script_env = {
+        "LIBSQLITE3_FLAGS": "SQLITE_ENABLE_DBPAGE_VTAB",
+    },
+    crate = "libsqlite3-sys",
+    gen_build_script = "on",
+)
+
 bazel_dep(name = "xz", version = "5.4.5.bcr.8")
 single_version_override(
     module_name = "xz",

@@ -3723,11 +3723,13 @@ name = "codex-state"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "cc",
  "chrono",
  "clap",
  "codex-git-utils",
  "codex-protocol",
  "dirs",
+ "libsqlite3-sys",
  "log",
  "owo-colors",
  "pretty_assertions",
