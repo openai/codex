@@ -27,6 +27,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -40,8 +41,10 @@ async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Re
 
     let create_tool = tool_by_name(&tools, "create_goal");
     let invocation = ToolCall {
+        turn_id: "turn-create-goal".to_string(),
         call_id: "call-create-goal".to_string(),
         tool_name: ToolName::plain("create_goal"),
+        truncation_policy: TruncationPolicy::Bytes(1024),
         payload: ToolPayload::Function {
             arguments: json!({
                 "objective": "ship goal extension backend",
@@ -534,8 +537,10 @@ fn tool_by_name<'a>(
 
 fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> ToolCall {
     ToolCall {
+        turn_id: "turn-1".to_string(),
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),
+        truncation_policy: TruncationPolicy::Bytes(1024),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },

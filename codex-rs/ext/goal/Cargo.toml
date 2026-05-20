@@ -26,6 +26,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

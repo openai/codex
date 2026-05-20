@@ -2959,6 +2959,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-output-truncation",
  "pretty_assertions",
  "serde",
  "serde_json",
