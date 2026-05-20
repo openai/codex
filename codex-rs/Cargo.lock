@@ -3017,6 +3017,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-install-context",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
