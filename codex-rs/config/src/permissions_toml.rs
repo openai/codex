@@ -171,6 +171,8 @@ fn merge_permission_profiles(
             .and_then(|network| network.domains.as_ref())
             .is_some();
 
+    // Description and inheritance metadata belong to the selected profile
+    // declaration, so an inherited profile must not fill those gaps.
     parent.description = None;
     parent.extends = None;
 
