@@ -881,6 +881,7 @@ pub struct ThreadQueueReorderResponse {
 pub struct ThreadQueueChangedNotification {
     pub thread_id: String,
     pub queued_turns: Vec<QueuedTurn>,
+    pub dispatching_queued_turn_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

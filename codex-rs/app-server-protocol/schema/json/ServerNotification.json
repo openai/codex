@@ -4329,6 +4329,12 @@
     },
     "ThreadQueueChangedNotification": {
       "properties": {
+        "dispatchingQueuedTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "queuedTurns": {
           "items": {
             "$ref": "#/definitions/QueuedTurn"

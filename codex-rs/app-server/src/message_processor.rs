@@ -429,6 +429,7 @@ impl MessageProcessor {
             config_manager.clone(),
             Arc::clone(&pending_thread_unloads),
             thread_state_manager.clone(),
+            state_db.clone(),
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             Arc::clone(&skills_watcher),
@@ -439,6 +440,7 @@ impl MessageProcessor {
             config_manager.clone(),
             state_db.clone(),
             thread_state_manager.clone(),
+            turn_processor.clone(),
         );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),

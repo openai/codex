@@ -1,9 +1,15 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
+use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::AdditionalContextEntry;
+use codex_app_server_protocol::AdditionalContextKind;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -11,6 +17,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::QueuedTurnStatus;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadQueueAddResponse;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
@@ -22,9 +29,11 @@ use codex_app_server_protocol::ThreadQueueReorderParams;
 use codex_app_server_protocol::ThreadQueueReorderResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSubmission;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -32,13 +41,14 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
-async fn queue_add_persists_turn_params_and_emits_snapshot() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_final_assistant_message_sse_response("unused")?,
-    ])
-    .await;
+async fn idle_queue_add_dispatches_serialized_turn_and_drains_visible_queue() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("queued done")?,
+        create_final_assistant_message_sse_response("second queued done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
-    write_queue_test_config(codex_home.path(), &server.uri())?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     initialize_experimental(&mut mcp).await?;
@@ -60,23 +70,83 @@ async fn queue_add_persists_turn_params_and_emits_snapshot() -> Result<()> {
     .await??;
     let ThreadQueueAddResponse { queued_turn } = to_response(add_response)?;
     assert!(matches!(queued_turn.status, QueuedTurnStatus::Pending));
-
-    let notification = timeout(
+    let add_notification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/queue/changed"),
     )
     .await??;
-    let notification: ThreadQueueChangedNotification =
-        serde_json::from_value(notification.params.expect("thread/queue/changed params"))?;
-    assert_eq!(notification.thread_id, thread.id);
-    assert_eq!(notification.queued_turns, vec![queued_turn.clone()]);
+    let add_notification: ThreadQueueChangedNotification = serde_json::from_value(
+        add_notification
+            .params
+            .expect("thread/queue/changed params"),
+    )?;
+    assert_eq!(add_notification.thread_id, thread.id);
+    assert_eq!(add_notification.queued_turns, vec![queued_turn.clone()]);
+    assert_eq!(add_notification.dispatching_queued_turn_id, None);
 
-    let ThreadQueueListResponse { data, next_cursor } = list_queue_page(
-        &mut mcp, &thread.id, /*cursor*/ None, /*limit*/ None,
+    let drain_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/queue/changed"),
     )
-    .await?;
-    assert_eq!(data, vec![queued_turn]);
+    .await??;
+    let drain_notification: ThreadQueueChangedNotification = serde_json::from_value(
+        drain_notification
+            .params
+            .expect("thread/queue/changed params"),
+    )?;
+    assert_eq!(drain_notification.thread_id, thread.id);
+    assert!(drain_notification.queued_turns.is_empty());
+    assert_eq!(
+        drain_notification.dispatching_queued_turn_id,
+        Some(queued_turn.id)
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let list_request_id = mcp
+        .send_raw_request(
+            "thread/queue/list",
+            Some(serde_json::to_value(ThreadQueueListParams {
+                thread_id: thread.id.clone(),
+                cursor: None,
+                limit: None,
+            })?),
+        )
+        .await?;
+    let list_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_request_id)),
+    )
+    .await??;
+    let ThreadQueueListResponse { data, next_cursor } = to_response(list_response)?;
+    assert!(data.is_empty());
     assert_eq!(next_cursor, None);
+
+    queue_turn(&mut mcp, &thread.id, "second queued serialized input").await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body).contains("queued serialized input"),
+        "queued turn payload should reach the model request after state round-trip"
+    );
+    assert!(
+        String::from_utf8_lossy(&requests[1].body).contains("second queued serialized input"),
+        "a later queued turn should still drain after a fast terminal dispatch"
+    );
 
     Ok(())
 }
@@ -88,7 +158,7 @@ async fn queue_add_rejects_ephemeral_threads() -> Result<()> {
     ])
     .await;
     let codex_home = TempDir::new()?;
-    write_queue_test_config(codex_home.path(), &server.uri())?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     initialize_experimental(&mut mcp).await?;
@@ -134,13 +204,56 @@ async fn queue_add_rejects_ephemeral_threads() -> Result<()> {
 }
 
 #[tokio::test]
+async fn queue_add_rejects_oversized_serialized_submission() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("unused")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+    let mut submission = text_submission("small prompt");
+    submission.additional_context = Some(HashMap::from([(
+        "oversized".to_string(),
+        AdditionalContextEntry {
+            value: "x".repeat((1 << 20) + 1),
+            kind: AdditionalContextKind::Application,
+        },
+    )]));
+
+    let add_request_id = mcp
+        .send_raw_request(
+            "thread/queue/add",
+            Some(serde_json::to_value(ThreadQueueAddParams {
+                thread_id: thread.id,
+                submission: submission.into(),
+            })?),
+        )
+        .await?;
+    let add_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(add_request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        add_error.error.message,
+        "Queued turn submission exceeds the maximum length of 1048576 bytes."
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn queue_add_rejects_requests_when_feature_is_disabled() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("unused")?,
     ])
     .await;
     let codex_home = TempDir::new()?;
-    write_queue_test_config_without_feature(codex_home.path(), &server.uri())?;
+    write_queue_test_config_without_feature(codex_home.path(), &server.uri(), "never")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     initialize_experimental(&mut mcp).await?;
@@ -172,16 +285,44 @@ async fn queue_add_rejects_requests_when_feature_is_disabled() -> Result<()> {
 
 #[tokio::test]
 async fn runtime_feature_enablement_controls_queue_access_without_deleting_rows() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_final_assistant_message_sse_response("unused")?,
-    ])
-    .await;
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "queue-feature-blocker",
+        )?,
+        create_final_assistant_message_sse_response("active turn done")?,
+        create_final_assistant_message_sse_response("queued turn done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    write_queue_test_config_without_feature(codex_home.path(), &server.uri())?;
+    write_queue_test_config_without_feature(codex_home.path(), &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     initialize_experimental(&mut mcp).await?;
     let thread = start_thread(&mut mcp).await?;
+
+    let active_turn_request_id = mcp
+        .send_turn_start_request(text_turn(&thread.id, "keep the thread running"))
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(active_turn_request_id)),
+    )
+    .await??;
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected command approval to keep the active turn open");
+    };
 
     set_queue_feature(&mut mcp, /*enabled*/ true).await?;
     let queued_turn_id = queue_turn(&mut mcp, &thread.id, "durable queued turn").await?;
@@ -214,21 +355,67 @@ async fn runtime_feature_enablement_controls_queue_access_without_deleting_rows(
         vec![queued_turn_id]
     );
 
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     Ok(())
 }
 
 #[tokio::test]
-async fn visible_queue_rows_support_pagination_reorder_and_delete() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_final_assistant_message_sse_response("unused")?,
-    ])
-    .await;
+async fn busy_thread_queue_rows_support_list_reorder_and_delete_before_drain() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "queue-blocker",
+        )?,
+        create_final_assistant_message_sse_response("active turn done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    write_queue_test_config(codex_home.path(), &server.uri())?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "untrusted")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     initialize_experimental(&mut mcp).await?;
     let thread = start_thread(&mut mcp).await?;
+
+    let active_turn_request_id = mcp
+        .send_turn_start_request(text_turn(&thread.id, "keep the thread running"))
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(active_turn_request_id)),
+    )
+    .await??;
+
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected command approval to keep the active turn open");
+    };
 
     let first = queue_turn(&mut mcp, &thread.id, "first queued").await?;
     let second = queue_turn(&mut mcp, &thread.id, "second queued").await?;
@@ -236,7 +423,6 @@ async fn visible_queue_rows_support_pagination_reorder_and_delete() -> Result<()
         list_queue_ids(&mut mcp, &thread.id).await?,
         vec![first.clone(), second.clone()]
     );
-
     let first_page = list_queue_page(&mut mcp, &thread.id, /*cursor*/ None, Some(1)).await?;
     assert_eq!(
         first_page
@@ -284,6 +470,216 @@ async fn visible_queue_rows_support_pagination_reorder_and_delete() -> Result<()
     delete_queue_turn(&mut mcp, &thread.id, &second).await?;
     delete_queue_turn(&mut mcp, &thread.id, &first).await?;
     assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_turns_stay_serial_after_the_first_dispatch_starts() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "queued-serial-blocker",
+        )?,
+        create_final_assistant_message_sse_response("first queued turn done")?,
+        create_final_assistant_message_sse_response("second queued turn done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+
+    queue_turn(&mut mcp, &thread.id, "first queued").await?;
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected queued turn approval request to keep the first dispatch active");
+    };
+
+    let second = queue_turn(&mut mcp, &thread.id, "second queued").await?;
+    assert_eq!(list_queue_ids(&mut mcp, &thread.id).await?, vec![second]);
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[2].body).contains("second queued"),
+        "second queued follow-up should become its own later model request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_turns_wait_for_a_just_accepted_direct_turn_to_become_visible() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "direct-turn-blocker",
+        )?,
+        create_final_assistant_message_sse_response("direct turn done")?,
+        create_final_assistant_message_sse_response("queued follow-up done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+
+    let direct_turn_request_id = mcp
+        .send_turn_start_request(text_turn(&thread.id, "direct turn first"))
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(direct_turn_request_id)),
+    )
+    .await??;
+
+    let queued_turn_id = queue_turn(&mut mcp, &thread.id, "queued turn after direct").await?;
+    assert_eq!(
+        list_queue_ids(&mut mcp, &thread.id).await?,
+        vec![queued_turn_id]
+    );
+
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected direct turn approval request to keep the direct turn open");
+    };
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[2].body).contains("queued turn after direct"),
+        "queued follow-up should become its own later model request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_turns_drain_after_a_direct_turn_has_already_completed() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("direct turn done")?,
+        create_final_assistant_message_sse_response("queued follow-up done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+
+    let direct_turn_request_id = mcp
+        .send_turn_start_request(text_turn(&thread.id, "direct turn first"))
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(direct_turn_request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    queue_turn(&mut mcp, &thread.id, "queued turn after completion").await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        String::from_utf8_lossy(&requests[1].body).contains("queued turn after completion"),
+        "queued follow-up should drain after an already completed direct turn"
+    );
 
     Ok(())
 }
@@ -426,30 +822,44 @@ fn text_submission(text: &str) -> TurnSubmission {
     }
 }
 
-fn write_queue_test_config(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    write_queue_test_config_with_feature(codex_home, server_uri, /*app_server_queue*/ true)
-}
-
-fn write_queue_test_config_with_feature(
-    codex_home: &std::path::Path,
-    server_uri: &str,
-    app_server_queue: bool,
-) -> std::io::Result<()> {
-    write_queue_test_config_with_optional_feature(codex_home, server_uri, Some(app_server_queue))
+fn text_turn(thread_id: &str, text: &str) -> TurnStartParams {
+    TurnStartParams {
+        thread_id: thread_id.to_string(),
+        input: text_submission(text).input,
+        ..Default::default()
+    }
 }
 
 fn write_queue_test_config_without_feature(
     codex_home: &std::path::Path,
     server_uri: &str,
+    approval_policy: &str,
 ) -> std::io::Result<()> {
     write_queue_test_config_with_optional_feature(
-        codex_home, server_uri, /*app_server_queue*/ None,
+        codex_home,
+        server_uri,
+        approval_policy,
+        /*app_server_queue*/ None,
+    )
+}
+
+fn write_queue_test_config(
+    codex_home: &std::path::Path,
+    server_uri: &str,
+    approval_policy: &str,
+) -> std::io::Result<()> {
+    write_queue_test_config_with_optional_feature(
+        codex_home,
+        server_uri,
+        approval_policy,
+        /*app_server_queue*/ Some(true),
     )
 }
 
 fn write_queue_test_config_with_optional_feature(
     codex_home: &std::path::Path,
     server_uri: &str,
+    approval_policy: &str,
     app_server_queue: Option<bool>,
 ) -> std::io::Result<()> {
     let feature_config = app_server_queue
@@ -460,7 +870,7 @@ fn write_queue_test_config_with_optional_feature(
         format!(
             r#"
 model = "mock-model"
-approval_policy = "never"
+approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
 {feature_config}

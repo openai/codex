@@ -261,6 +261,25 @@ RETURNING
         row.map(|row| thread_queued_turn_from_row(&row)).transpose()
     }
 
+    pub async fn dispatching_thread_queued_turn_id(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+SELECT queued_turn_id
+FROM thread_queued_turns
+WHERE thread_id = ?
+  AND state = 'dispatching'
+LIMIT 1
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn set_dispatching_thread_queued_turn_turn_id(
         &self,
         queued_turn_id: &str,
@@ -325,6 +344,35 @@ WHERE queued_turn_id = ?
         .bind(failure_json)
         .bind(now_ms)
         .bind(queued_turn_id)
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn mark_dispatching_thread_queued_turn_failed(
+        &self,
+        thread_id: ThreadId,
+        turn_id: &str,
+        failure_json: &[u8],
+    ) -> anyhow::Result<bool> {
+        let now_ms = datetime_to_epoch_millis(Utc::now());
+        let result = sqlx::query(
+            r#"
+UPDATE thread_queued_turns
+SET
+    state = 'failed',
+    failure_jsonb = jsonb(?),
+    updated_at_ms = ?
+WHERE thread_id = ?
+  AND state = 'dispatching'
+  AND dispatch_turn_id = ?
+            "#,
+        )
+        .bind(failure_json)
+        .bind(now_ms)
+        .bind(thread_id.to_string())
+        .bind(turn_id)
         .execute(self.pool.as_ref())
         .await?;
 
@@ -426,6 +474,13 @@ mod tests {
                 .await
                 .expect("list visible queued turns"),
             Vec::new()
+        );
+        assert!(
+            queue
+                .dispatching_thread_queued_turn_id(thread_id)
+                .await
+                .expect("read dispatching queued turn id")
+                .is_some()
         );
     }
 
@@ -652,6 +707,46 @@ mod tests {
                 .remove_dispatching_thread_queued_turn(thread_id, "queued-turn")
                 .await
                 .expect("matching queued turn clears claim")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_claim_fails_only_for_its_submitted_turn() {
+        let (runtime, thread_id) = runtime_with_thread().await;
+        let queue = runtime.thread_queue();
+        let queued_turn = queue
+            .append_thread_queued_turn(thread_id, br#"{"threadId":"t","input":[]}"#)
+            .await
+            .expect("append queued turn");
+        queue
+            .claim_head_thread_queued_turn(thread_id)
+            .await
+            .expect("claim queued turn")
+            .expect("claimed row");
+        queue
+            .set_dispatching_thread_queued_turn_turn_id(&queued_turn.queued_turn_id, "queued-turn")
+            .await
+            .expect("record submitted queued turn id");
+
+        assert!(
+            !queue
+                .mark_dispatching_thread_queued_turn_failed(
+                    thread_id,
+                    "regular-turn",
+                    br#"{"message":"nope"}"#,
+                )
+                .await
+                .expect("unmatched turn must not fail claim")
+        );
+        assert!(
+            queue
+                .mark_dispatching_thread_queued_turn_failed(
+                    thread_id,
+                    "queued-turn",
+                    br#"{"message":"nope"}"#,
+                )
+                .await
+                .expect("matching queued turn fails claim")
         );
     }
 

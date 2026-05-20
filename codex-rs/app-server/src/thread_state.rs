@@ -26,6 +26,28 @@ use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalTurnOutcome {
+    Completed,
+    Aborted,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LastTerminalTurn {
+    turn_id: String,
+    outcome: TerminalTurnOutcome,
+}
+
+#[derive(Default)]
+pub(crate) enum PendingTurnStarts {
+    #[default]
+    None,
+    WaitingForLifecycle {
+        turn_ids: HashSet<String>,
+    },
+}
+
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) history_items: Vec<RolloutItem>,
@@ -74,8 +96,10 @@ pub(crate) struct TurnSummary {
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
+    pub(crate) pending_turn_starts: PendingTurnStarts,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) last_terminal_turn_id: Option<String>,
+    last_terminal_turn: Option<LastTerminalTurn>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
@@ -118,6 +142,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
+        self.pending_turn_starts = PendingTurnStarts::None;
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
@@ -137,17 +162,54 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
-    pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
+    pub(crate) fn terminal_outcome_for_turn(&self, turn_id: &str) -> Option<TerminalTurnOutcome> {
+        self.last_terminal_turn
+            .as_ref()
+            .filter(|terminal_turn| terminal_turn.turn_id == turn_id)
+            .map(|terminal_turn| terminal_turn.outcome)
+    }
+
+    pub(crate) fn track_current_turn_event(
+        &mut self,
+        event_turn_id: &str,
+        event: &EventMsg,
+    ) -> bool {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
-        if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
-            && !self.current_turn_history.has_active_turn()
-        {
+        let pending_turn_start_resolved = matches!(
+            event,
+            EventMsg::TurnStarted(_) | EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)
+        ) || matches!(event, EventMsg::Error(error) if error.affects_turn_status());
+        let pending_turn_starts_cleared = match &mut self.pending_turn_starts {
+            PendingTurnStarts::None => false,
+            PendingTurnStarts::WaitingForLifecycle { turn_ids } => {
+                pending_turn_start_resolved && turn_ids.remove(event_turn_id) && turn_ids.is_empty()
+            }
+        };
+        if pending_turn_starts_cleared {
+            self.pending_turn_starts = PendingTurnStarts::None;
+        }
+        let terminal_outcome = match event {
+            EventMsg::TurnComplete(_) if !self.current_turn_history.has_active_turn() => {
+                Some(TerminalTurnOutcome::Completed)
+            }
+            EventMsg::TurnAborted(_) => Some(TerminalTurnOutcome::Aborted),
+            EventMsg::Error(error) if error.affects_turn_status() => {
+                Some(TerminalTurnOutcome::Error)
+            }
+            _ => None,
+        };
+        if let Some(outcome) = terminal_outcome {
+            self.last_terminal_turn = Some(LastTerminalTurn {
+                turn_id: event_turn_id.to_string(),
+                outcome,
+            });
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
         }
+        pending_turn_starts_cleared
     }
 
     pub(crate) fn note_thread_settings(&mut self, thread_settings: ThreadSettings) -> bool {
@@ -198,7 +260,62 @@ mod tests {
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
+
+    fn turn_started(turn_id: &str) -> EventMsg {
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })
+    }
+
+    #[test]
+    fn aborted_turn_clears_active_snapshot() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event("turn-1", &turn_started("turn-1"));
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some("turn-1".to_string()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }),
+        );
+
+        assert!(state.active_turn_snapshot().is_none());
+        assert_eq!(
+            state.terminal_outcome_for_turn("turn-1"),
+            Some(TerminalTurnOutcome::Aborted)
+        );
+    }
+
+    #[test]
+    fn status_affecting_error_clears_active_snapshot() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event("turn-1", &turn_started("turn-1"));
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::Error(ErrorEvent {
+                message: "boom".to_string(),
+                codex_error_info: None,
+            }),
+        );
+
+        assert!(state.active_turn_snapshot().is_none());
+        assert_eq!(
+            state.terminal_outcome_for_turn("turn-1"),
+            Some(TerminalTurnOutcome::Error)
+        );
+        assert_eq!(state.last_terminal_turn_id.as_deref(), Some("turn-1"));
+    }
 
     #[test]
     fn note_thread_settings_reports_only_effective_changes() {

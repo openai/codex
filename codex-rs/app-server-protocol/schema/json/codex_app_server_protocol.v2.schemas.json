@@ -14888,6 +14888,12 @@
     "ThreadQueueChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "dispatchingQueuedTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "queuedTurns": {
           "items": {
             "$ref": "#/definitions/QueuedTurn"
