@@ -15,7 +15,7 @@ use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 #[cfg(not(test))]
@@ -25,7 +25,7 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(crate) struct SkillsWatcher {
     subscriber: FileWatcherSubscriber,
-    shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    shutdown_token: CancellationToken,
 }
 
 impl SkillsWatcher {
@@ -41,22 +41,16 @@ impl SkillsWatcher {
             }
         };
         let (subscriber, rx) = file_watcher.add_subscriber();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        Self::spawn_event_loop(rx, skills_manager, outgoing, shutdown_rx);
+        let shutdown_token = CancellationToken::new();
+        Self::spawn_event_loop(rx, skills_manager, outgoing, shutdown_token.child_token());
         Arc::new(Self {
             subscriber,
-            shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
+            shutdown_token,
         })
     }
 
     pub(crate) fn shutdown(&self) {
-        let mut shutdown_tx = self
-            .shutdown_tx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(shutdown_tx) = shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
+        self.shutdown_token.cancel();
     }
 
     pub(crate) async fn register_thread_config(
@@ -108,7 +102,7 @@ impl SkillsWatcher {
         rx: Receiver,
         skills_manager: Arc<SkillsManager>,
         outgoing: Arc<OutgoingMessageSender>,
-        mut shutdown_rx: oneshot::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) {
         let mut rx = ThrottledWatchReceiver::new(rx, WATCHER_THROTTLE_INTERVAL);
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -118,7 +112,7 @@ impl SkillsWatcher {
         handle.spawn(async move {
             loop {
                 let event = tokio::select! {
-                    _ = &mut shutdown_rx => break,
+                    _ = shutdown_token.cancelled() => break,
                     event = rx.recv() => event,
                 };
                 if event.is_none() {

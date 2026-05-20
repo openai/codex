@@ -43,10 +43,11 @@ impl std::fmt::Debug for AppServerAttestationProvider {
 
 impl AttestationProvider for AppServerAttestationProvider {
     fn header_for_request(&self, context: AttestationContext) -> GenerateAttestationFuture<'_> {
-        let outgoing = self.outgoing.upgrade();
+        let Some(outgoing) = self.outgoing.upgrade() else {
+            return Box::pin(async { None });
+        };
         let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
-            let outgoing = outgoing?;
             request_attestation_header_value_with_timeout(
                 outgoing,
                 thread_state_manager,
