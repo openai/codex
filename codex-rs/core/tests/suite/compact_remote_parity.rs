@@ -934,6 +934,10 @@ fn normalize_string(value: &str) -> String {
         return "<UUID>".to_string();
     }
 
+    if value.starts_with("<skills_instructions>\n") && value.ends_with("\n</skills_instructions>") {
+        return "<skills_instructions>\n...\n</skills_instructions>".to_string();
+    }
+
     let mut text = value.to_string();
     normalize_tmp_prefix_before_marker(&mut text, "/skills/");
     normalize_tmp_prefix_before_marker(&mut text, "\\skills\\");
@@ -1027,6 +1031,15 @@ fn normalize_string_rewrites_windows_temp_skill_paths() {
         "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
          <CODEX_HOME>\\skills\\custom\\SKILL.md"
     );
+}
+
+#[test]
+fn normalize_string_rewrites_skills_instructions_body() {
+    let text = normalize_string(
+        "<skills_instructions>\n## Skills\n- imagegen: ...\n</skills_instructions>",
+    );
+
+    assert_eq!(text, "<skills_instructions>\n...\n</skills_instructions>");
 }
 
 #[test]
