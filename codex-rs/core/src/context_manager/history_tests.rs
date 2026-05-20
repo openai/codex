@@ -1755,6 +1755,26 @@ fn non_base64_image_urls_are_unchanged() {
 }
 
 #[test]
+fn encrypted_function_output_uses_plaintext_byte_estimate() {
+    let encrypted_content = "A".repeat(1_868);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-encrypted".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: encrypted_content.clone(),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - encrypted_content.len() as i64
+        + estimate_encrypted_function_output_length(encrypted_content.len()) as i64;
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
 fn data_url_without_base64_marker_is_unchanged() {
     let item = ResponseItem::Message {
         id: None,

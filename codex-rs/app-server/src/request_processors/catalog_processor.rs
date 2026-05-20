@@ -1,4 +1,5 @@
 use super::*;
+use codex_config::config_toml::ConfigToml;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -151,6 +152,15 @@ impl CatalogRequestProcessor {
         params: ExperimentalFeatureListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.experimental_feature_list_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn permission_profile_list(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.permission_profile_list_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -387,6 +397,78 @@ impl CatalogRequestProcessor {
         };
 
         Ok(ExperimentalFeatureListResponse { data, next_cursor })
+    }
+
+    async fn permission_profile_list_response(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
+        let PermissionProfileListParams { cursor, limit, cwd } = params;
+        let config_layer_stack = match cwd {
+            Some(cwd) => {
+                let cwd = PathBuf::from(cwd);
+                let (_, config_layer_stack) = self
+                    .resolve_cwd_config(&cwd)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                config_layer_stack
+            }
+            None => self
+                .config_manager
+                .load_config_layers(/*cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+        };
+        let effective_config: ConfigToml = config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
+        let mut profiles = vec![
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
+                description: None,
+            },
+        ];
+        let mut configured_profiles = effective_config
+            .permissions
+            .into_iter()
+            .flat_map(|permissions| permissions.entries)
+            .map(|(id, profile)| PermissionProfileSummary {
+                id,
+                description: profile.description,
+            })
+            .collect::<Vec<_>>();
+        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles.extend(configured_profiles);
+        let total = profiles.len();
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            None => 0,
+        };
+
+        if start > total {
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total permission profiles {total}"
+            )));
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = profiles[start..end].to_vec();
+        let next_cursor = (end < total).then_some(end.to_string());
+
+        Ok(PermissionProfileListResponse { data, next_cursor })
     }
 
     async fn mock_experimental_method_inner(

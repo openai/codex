@@ -1808,7 +1808,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     .await;
 
     // Phase 2: start the Streamable HTTP MCP test server in the active
-    // placement. In full CI this may be the remote executor container; locally
+    // placement. In full CI this may be the remote environment container; locally
     // it is a host process.
     let expected_env_value = "propagated-env-http";
     let Some(http_server) =

@@ -2708,14 +2708,14 @@ fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
 fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
     assert_eq!(
         serde_json::to_value(PluginMarketplaceEntry {
-            name: "openai-curated".to_string(),
+            name: "openai-curated-remote".to_string(),
             path: None,
             interface: None,
             plugins: Vec::new(),
         })
         .unwrap(),
         json!({
-            "name": "openai-curated",
+            "name": "openai-curated-remote",
             "path": null,
             "interface": null,
             "plugins": [],
@@ -2799,6 +2799,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             cwds: None,
             marketplace_kinds: Some(vec![
                 PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
                 PluginListMarketplaceKind::WorkspaceDirectory,
                 PluginListMarketplaceKind::SharedWithMe,
             ]),
@@ -2808,6 +2809,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             "cwds": null,
             "marketplaceKinds": [
                 "local",
+                "vertical",
                 "workspace-directory",
                 "shared-with-me",
             ],
@@ -2875,13 +2877,13 @@ fn plugin_read_params_serialization_uses_install_source_fields() {
 
     assert_eq!(
         serde_json::from_value::<PluginReadParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
         }))
         .unwrap(),
         PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2926,14 +2928,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 
     assert_eq!(
         serde_json::from_value::<PluginInstallParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
             "forceRemoteSync": true,
         }))
         .unwrap(),
         PluginInstallParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2943,13 +2945,13 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
     assert_eq!(
         serde_json::to_value(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
         .unwrap(),
         json!({
-            "remoteMarketplaceName": "chatgpt-global",
+            "remoteMarketplaceName": "openai-curated-remote",
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "skillName": "plan-work",
         }),
@@ -3144,7 +3146,7 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "gmail@chatgpt-global".to_string(),
+                    id: "gmail@openai-curated-remote".to_string(),
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     ),
@@ -3167,7 +3169,7 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "gmail@chatgpt-global",
+                    "id": "gmail@openai-curated-remote",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "localVersion": null,
                     "name": "gmail",

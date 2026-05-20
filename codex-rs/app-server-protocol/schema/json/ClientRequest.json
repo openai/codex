@@ -984,6 +984,26 @@
           ],
           "title": "InputImageFunctionCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "encrypted_content"
+              ],
+              "title": "EncryptedContentFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "EncryptedContentFunctionCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
@@ -1541,6 +1561,34 @@
       ],
       "type": "string"
     },
+    "PermissionProfileListParams": {
+      "properties": {
+        "cursor": {
+          "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "Optional working directory to resolve project config layers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional page size; defaults to the full result set.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -1604,6 +1652,7 @@
     "PluginListMarketplaceKind": {
       "enum": [
         "local",
+        "vertical",
         "workspace-directory",
         "shared-with-me"
       ],
@@ -5322,6 +5371,30 @@
         "params"
       ],
       "title": "ExperimentalFeature/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "permissionProfile/list"
+          ],
+          "title": "PermissionProfile/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionProfileListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "PermissionProfile/listRequest",
       "type": "object"
     },
     {

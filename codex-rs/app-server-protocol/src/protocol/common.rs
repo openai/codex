@@ -800,6 +800,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureListResponse,
     },
+    PermissionProfileList => "permissionProfile/list" {
+        params: v2::PermissionProfileListParams,
+        serialization: global_shared_read("config"),
+        response: v2::PermissionProfileListResponse,
+    },
     ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
         params: v2::ExperimentalFeatureEnablementSetParams,
         serialization: global("config"),

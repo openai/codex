@@ -2952,12 +2952,19 @@ dependencies = [
 name = "codex-goal-extension"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "chrono",
  "codex-extension-api",
  "codex-protocol",
+ "codex-state",
  "codex-tools",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2997,6 +3004,7 @@ dependencies = [
 name = "codex-install-context"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "pretty_assertions",
  "tempfile",
@@ -3016,6 +3024,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-install-context",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",

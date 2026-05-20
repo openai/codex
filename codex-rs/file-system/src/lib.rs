@@ -130,7 +130,7 @@ fn file_system_policy_has_cwd_dependent_entries(
 pub type FileSystemResult<T> = io::Result<T>;
 
 /// Abstract filesystem access used by components that may operate locally or via
-/// a remote executor.
+/// a remote environment.
 #[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
     async fn read_file(
