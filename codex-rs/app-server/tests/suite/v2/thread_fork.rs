@@ -10,6 +10,8 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+#[cfg(windows)]
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
@@ -28,7 +30,11 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+#[cfg(windows)]
+use codex_core::config::set_project_trust_level;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+#[cfg(windows)]
+use codex_protocol::config_types::TrustLevel;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -585,6 +591,84 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
             "statusCode": 401,
             "detail": "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
         }))
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn thread_fork_reloads_windows_sandbox_config_instead_of_startup_snapshot() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let workspace = codex_home.path().join("workspace");
+    std::fs::create_dir_all(&workspace)?;
+    set_project_trust_level(codex_home.path(), &workspace, TrustLevel::Trusted)?;
+
+    let config_toml = |windows_section: &str| {
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+{windows_section}
+"#,
+            server.uri()
+        )
+    };
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        config_toml(
+            r#"[windows]
+sandbox = "elevated""#,
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let start_response: ThreadStartResponse = to_response(start_response)?;
+    assert!(
+        matches!(start_response.sandbox, SandboxPolicy::WorkspaceWrite { .. }),
+        "elevated Windows sandbox config should select workspace-write defaults"
+    );
+
+    std::fs::write(codex_home.path().join("config.toml"), config_toml(""))?;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: start_response.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let fork_response: ThreadForkResponse = to_response(fork_response)?;
+    assert!(
+        matches!(fork_response.sandbox, SandboxPolicy::ReadOnly { .. }),
+        "fork should resolve the updated config.toml instead of pinning startup Windows sandbox state"
     );
 
     Ok(())

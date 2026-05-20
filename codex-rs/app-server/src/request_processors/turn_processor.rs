@@ -1040,6 +1040,9 @@ impl TurnRequestProcessor {
                 ))
             })?;
 
+        // Detached reviews currently use the app-server startup snapshot and are left unchanged
+        // in this patch. Revisit this if host-scoped config should cover every app-server-created
+        // thread.
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
