@@ -10,7 +10,7 @@ The builder creates a canonical Codex package directory:
 .
 ├── codex-package.json
 ├── bin
-│   └── codex[.exe]
+│   └── <entrypoint>[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── codex-command-runner.exe          # Windows only
@@ -28,18 +28,24 @@ artifacts; pass a GNU Linux target explicitly for native glibc local builds. If
 `--package-dir` is omitted, the builder creates a new temporary directory and
 prints its path after the package is built.
 
+The `--variant` flag selects the package entrypoint. Supported variants are
+`codex` and `codex-app-server`. The `version` field in `codex-package.json` is
+read from `[workspace.package].version` in `codex-rs/Cargo.toml`.
+
 ## Source-built artifacts
 
 Artifacts built from this repository are always built by the package builder in
-one grouped `cargo build` command per package:
+one grouped `cargo build` command per package when they are needed:
 
-- all targets: `codex`
+- all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
 - Linux targets: `bwrap`
 - Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`
 
 The default cargo profile is `dev-small` because local iteration should favor
 fast, small builds. Release jobs should pass `--cargo-profile release` and an
-explicit target.
+explicit target. Release jobs that already built and signed/notarized the
+entrypoint should pass `--entrypoint-bin` so the package contains that exact
+binary instead of rebuilding it.
 
 `rg` is not built from this repository, so the builder fetches it from the
 DotSlash manifest at `codex-cli/bin/rg`. Downloaded archives are cached under
