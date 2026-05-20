@@ -847,26 +847,41 @@ fn describe_install_context(context: &InstallContext) -> String {
         InstallContext::Standalone {
             release_dir,
             resources_dir,
+            package_layout,
             platform,
         } => {
             let platform = match platform {
                 StandalonePlatform::Unix => "unix",
                 StandalonePlatform::Windows => "windows",
             };
-            let resources = resources_dir
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string());
-            format!(
-                "standalone ({platform}, release {}, resources {resources})",
-                release_dir.display()
-            )
+            let resources = display_optional_path(resources_dir.as_deref());
+            match package_layout {
+                Some(package_layout) => {
+                    let path = display_optional_path(package_layout.path_dir.as_deref());
+                    format!(
+                        "standalone ({platform}, package {}, bin {}, resources {resources}, path {path})",
+                        package_layout.package_dir.display(),
+                        package_layout.bin_dir.display()
+                    )
+                }
+                None => {
+                    format!(
+                        "standalone ({platform}, release {}, resources {resources})",
+                        release_dir.display()
+                    )
+                }
+            }
         }
         InstallContext::Npm => "npm".to_string(),
         InstallContext::Bun => "bun".to_string(),
         InstallContext::Brew => "brew".to_string(),
         InstallContext::Other => "other".to_string(),
     }
+}
+
+fn display_optional_path(path: Option<&Path>) -> String {
+    path.map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2791,7 +2806,12 @@ fn path_readiness(details: &mut Vec<String>, label: &str, path: &Path) {
 }
 
 fn standalone_release_cache_details(details: &mut Vec<String>) {
-    let InstallContext::Standalone { release_dir, .. } = InstallContext::current() else {
+    let InstallContext::Standalone {
+        release_dir,
+        package_layout: None,
+        ..
+    } = InstallContext::current()
+    else {
         return;
     };
     let Some(releases_dir) = release_dir.parent() else {

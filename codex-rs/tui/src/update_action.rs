@@ -94,6 +94,7 @@ mod tests {
                 platform: StandalonePlatform::Unix,
                 release_dir: native_release_dir.clone(),
                 resources_dir: Some(native_release_dir.join("codex-resources")),
+                package_layout: None,
             }),
             Some(UpdateAction::StandaloneUnix)
         );
@@ -102,6 +103,7 @@ mod tests {
                 platform: StandalonePlatform::Windows,
                 release_dir: native_release_dir.clone(),
                 resources_dir: Some(native_release_dir.join("codex-resources")),
+                package_layout: None,
             }),
             Some(UpdateAction::StandaloneWindows)
         );
