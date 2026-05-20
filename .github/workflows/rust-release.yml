@@ -346,7 +346,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+      - if: ${{ contains(matrix.target, 'linux') }}
         name: Build bwrap and export digest
         shell: bash
         run: |
