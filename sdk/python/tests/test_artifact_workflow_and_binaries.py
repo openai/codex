@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import io
 import json
+import os
 import sys
 import urllib.error
 from pathlib import Path
@@ -324,7 +325,12 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
     assert pyproject["project"]["name"] == "openai-codex-cli-bin"
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
         "packages": ["src/codex_cli_bin"],
-        "include": ["src/codex_cli_bin/bin/**"],
+        "include": [
+            "src/codex_cli_bin/codex-package.json",
+            "src/codex_cli_bin/bin/**",
+            "src/codex_cli_bin/codex-resources/**",
+            "src/codex_cli_bin/codex-path/**",
+        ],
         "hooks": {"custom": {}},
     }
     assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
@@ -350,9 +356,57 @@ def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) ->
     )
 
     assert staged == tmp_path / "runtime-stage"
-    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    package_root = script.staged_runtime_package_root(staged)
+    assert {
+        "codex": (package_root / "bin" / script.runtime_binary_name()).read_text(),
+        "metadata": json.loads((package_root / "codex-package.json").read_text()),
+        "resources_dir": (package_root / "codex-resources").is_dir(),
+        "path_dir": (package_root / "codex-path").is_dir(),
+    } == {
+        "codex": "fake codex\n",
+        "metadata": {
+            "layoutVersion": 1,
+            "version": "1.2.3",
+            "entrypoint": f"bin/{script.runtime_binary_name()}",
+            "resourcesDir": "codex-resources",
+            "pathDir": "codex-path",
+        },
+        "resources_dir": True,
+        "path_dir": True,
+    }
     assert 'name = "openai-codex-cli-bin"' in (staged / "pyproject.toml").read_text()
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
+
+
+def test_stage_runtime_release_copies_package_layout(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    package_dir = tmp_path / "codex-package"
+    (package_dir / "bin").mkdir(parents=True)
+    (package_dir / "codex-resources").mkdir()
+    (package_dir / "codex-path").mkdir()
+    (package_dir / "codex-package.json").write_text('{"variant":"codex"}\n')
+    (package_dir / "bin" / script.runtime_binary_name()).write_text("fake codex\n")
+    (package_dir / "codex-resources" / "bwrap").write_text("fake bwrap\n")
+    (package_dir / "codex-path" / "rg").write_text("fake rg\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        package_dir,
+    )
+    package_root = script.staged_runtime_package_root(staged)
+
+    assert {
+        "metadata": (package_root / "codex-package.json").read_text(),
+        "codex": (package_root / "bin" / script.runtime_binary_name()).read_text(),
+        "bwrap": (package_root / "codex-resources" / "bwrap").read_text(),
+        "rg": (package_root / "codex-path" / "rg").read_text(),
+    } == {
+        "metadata": '{"variant":"codex"}\n',
+        "codex": "fake codex\n",
+        "bwrap": "fake bwrap\n",
+        "rg": "fake rg\n",
+    }
 
 
 def test_normalize_codex_version_accepts_release_tags_and_pep440_versions() -> None:
@@ -402,7 +456,7 @@ def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> Non
 
 
 def test_stage_runtime_release_copies_resource_binaries(tmp_path: Path) -> None:
-    """Runtime staging should copy every helper binary into the wheel bin dir."""
+    """Runtime staging should copy every helper binary into codex-resources."""
     script = _load_update_script_module()
     fake_binary = tmp_path / script.runtime_binary_name()
     helper = tmp_path / "helper"
@@ -419,10 +473,11 @@ def test_stage_runtime_release_copies_resource_binaries(tmp_path: Path) -> None:
     )
 
     assert {
-        path.relative_to(staged / "src" / "codex_cli_bin" / "bin").as_posix(): path.read_text()
-        for path in (staged / "src" / "codex_cli_bin" / "bin").iterdir()
+        path.relative_to(
+            staged / "src" / "codex_cli_bin" / "codex-resources"
+        ).as_posix(): path.read_text()
+        for path in (staged / "src" / "codex_cli_bin" / "codex-resources").iterdir()
     } == {
-        script.runtime_binary_name(): "fake codex\n",
         "fallback-helper": "fake fallback\n",
         "helper": "fake helper\n",
     }
@@ -431,7 +486,7 @@ def test_stage_runtime_release_copies_resource_binaries(tmp_path: Path) -> None:
 def test_runtime_resource_binaries_are_included_by_wheel_config(
     tmp_path: Path,
 ) -> None:
-    """The runtime wheel config should include helper binaries beside Codex."""
+    """The runtime wheel config should include helper binaries in codex-resources."""
     script = _load_update_script_module()
     fake_binary = tmp_path / script.runtime_binary_name()
     helper = tmp_path / "helper"
@@ -448,9 +503,14 @@ def test_runtime_resource_binaries_are_included_by_wheel_config(
     pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
     assert {
         "include": pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["include"],
-        "helper": (staged / "src" / "codex_cli_bin" / "bin" / "helper").read_text(),
+        "helper": (staged / "src" / "codex_cli_bin" / "codex-resources" / "helper").read_text(),
     } == {
-        "include": ["src/codex_cli_bin/bin/**"],
+        "include": [
+            "src/codex_cli_bin/codex-package.json",
+            "src/codex_cli_bin/bin/**",
+            "src/codex_cli_bin/codex-resources/**",
+            "src/codex_cli_bin/codex-path/**",
+        ],
         "helper": "fake helper\n",
     }
 
@@ -651,6 +711,17 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(
     config = client_module.AppServerConfig()
     assert config.codex_bin is None
     assert client_module.resolve_codex_bin(config, ops) == fake_binary
+
+
+def test_runtime_path_dir_is_prepended_without_duplicates(tmp_path: Path) -> None:
+    from openai_codex import client as client_module
+
+    path_dir = tmp_path / "codex-path"
+    env = {"PATH": os.pathsep.join(["/usr/bin", str(path_dir), "/bin"])}
+
+    client_module._prepend_path_dirs(env, (path_dir,))
+
+    assert env["PATH"] == os.pathsep.join([str(path_dir), "/usr/bin", "/bin"])
 
 
 def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:

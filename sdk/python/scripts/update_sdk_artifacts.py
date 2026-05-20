@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import argparse
 import importlib
@@ -20,6 +19,14 @@ from typing import Any, Callable, Sequence, get_args, get_origin
 
 SDK_DISTRIBUTION_NAME = "openai-codex"
 RUNTIME_DISTRIBUTION_NAME = "openai-codex-cli-bin"
+RUNTIME_PACKAGE_ROOT = Path("src") / "codex_cli_bin"
+CODEX_PACKAGE_METADATA = "codex-package.json"
+CODEX_PACKAGE_LAYOUT_ENTRIES = (
+    CODEX_PACKAGE_METADATA,
+    "bin",
+    "codex-resources",
+    "codex-path",
+)
 
 
 def repo_root() -> Path:
@@ -53,15 +60,11 @@ def runtime_binary_name() -> str:
 
 
 def staged_runtime_bin_path(root: Path) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
+    return root / RUNTIME_PACKAGE_ROOT / "bin" / runtime_binary_name()
 
 
-def staged_runtime_resource_path(root: Path, resource: Path) -> Path:
-    """Stage runtime helper binaries beside the main bundled Codex binary."""
-    # Runtime wheels include the whole bin/ directory, so helper executables
-    # should be staged beside the main Codex binary instead of changing the
-    # package template for each platform.
-    return root / "src" / "codex_cli_bin" / "bin" / resource.name
+def staged_runtime_package_root(root: Path) -> Path:
+    return root / RUNTIME_PACKAGE_ROOT
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -259,7 +262,7 @@ def stage_python_sdk_package(staging_dir: Path, codex_version: str) -> Path:
 def stage_python_runtime_package(
     staging_dir: Path,
     codex_version: str,
-    binary_path: Path,
+    runtime_source: Path,
     platform_tag: str | None = None,
     resource_binaries: Sequence[Path] = (),
 ) -> Path:
@@ -274,22 +277,74 @@ def stage_python_runtime_package(
         pyproject_text = _rewrite_runtime_platform_tag(pyproject_text, platform_tag)
     pyproject_path.write_text(pyproject_text)
 
-    out_bin = staged_runtime_bin_path(staging_dir)
-    out_bin.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary_path, out_bin)
-    if not _is_windows():
-        out_bin.chmod(out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    for resource_binary in resource_binaries:
-        # Some release targets need helper executables beside the main binary
-        # (for example Linux bwrap or Windows sandbox helpers). Keep this
-        # generic so release workflows own the platform-specific list.
-        out_resource = staged_runtime_resource_path(staging_dir, resource_binary)
-        shutil.copy2(resource_binary, out_resource)
-        if not _is_windows():
-            out_resource.chmod(
-                out_resource.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    if runtime_source.is_dir():
+        if resource_binaries:
+            raise RuntimeError(
+                "--resource-binary is only supported when staging a legacy loose runtime binary"
             )
+        _copy_codex_package_layout(runtime_source, staged_runtime_package_root(staging_dir))
+    else:
+        runtime_package_root = staged_runtime_package_root(staging_dir)
+        (runtime_package_root / "codex-resources").mkdir(parents=True, exist_ok=True)
+        (runtime_package_root / "codex-path").mkdir(parents=True, exist_ok=True)
+        (runtime_package_root / CODEX_PACKAGE_METADATA).write_text(
+            json.dumps(
+                {
+                    "layoutVersion": 1,
+                    "version": codex_version,
+                    "entrypoint": f"bin/{runtime_binary_name()}",
+                    "resourcesDir": "codex-resources",
+                    "pathDir": "codex-path",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+        out_bin = staged_runtime_bin_path(staging_dir)
+        out_bin.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(runtime_source, out_bin)
+        if not _is_windows():
+            out_bin.chmod(out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        for resource_binary in resource_binaries:
+            # Compatibility path for older release workflows that stage helper
+            # executables from a loose Codex binary instead of a package dir.
+            out_resource = runtime_package_root / "codex-resources" / resource_binary.name
+            shutil.copy2(resource_binary, out_resource)
+            if not _is_windows():
+                out_resource.chmod(
+                    out_resource.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
     return staging_dir
+
+
+def _copy_codex_package_layout(package_dir: Path, runtime_package_root: Path) -> None:
+    missing_entries = []
+    if not (package_dir / CODEX_PACKAGE_METADATA).is_file():
+        missing_entries.append(CODEX_PACKAGE_METADATA)
+    for entry in ("bin", "codex-resources", "codex-path"):
+        if not (package_dir / entry).is_dir():
+            missing_entries.append(entry)
+    package_binary = package_dir / "bin" / runtime_binary_name()
+    if not package_binary.is_file():
+        missing_entries.append(str(Path("bin") / runtime_binary_name()))
+    if missing_entries:
+        missing = ", ".join(missing_entries)
+        raise RuntimeError(f"Missing Codex package layout entries in {package_dir}: {missing}")
+
+    for entry in CODEX_PACKAGE_LAYOUT_ENTRIES:
+        src = package_dir / entry
+        dest = runtime_package_root / entry
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        if src.is_dir():
+            shutil.copytree(src, dest)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
 
 
 def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
@@ -1220,7 +1275,10 @@ def build_parser() -> argparse.ArgumentParser:
     stage_runtime_parser.add_argument(
         "runtime_binary",
         type=Path,
-        help="Path to the codex binary to package for this platform",
+        help=(
+            "Path to a Codex package directory for this platform. For compatibility with "
+            "older workflows, a loose codex binary path is also accepted."
+        ),
     )
     stage_runtime_parser.add_argument(
         "--codex-version",
@@ -1245,7 +1303,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         type=Path,
-        help="Additional executable to package beside the codex runtime binary.",
+        help=(
+            "Additional executable to package beside a legacy loose codex runtime binary. "
+            "Package-layout runtime sources should already contain their resources."
+        ),
     )
     return parser
 
