@@ -19,6 +19,7 @@ use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
@@ -381,6 +382,25 @@ impl UnifiedExecProcessManager {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
+                let event_ctx = ToolEventCtx::new(
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    &context.call_id,
+                    /*turn_diff_tracker*/ None,
+                );
+                let emitter = ToolEmitter::unified_exec(
+                    &request.command,
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                    Some(request.process_id.to_string()),
+                );
+                emitter.emit(event_ctx, ToolEventStage::Begin).await;
+                emitter
+                    .emit(
+                        event_ctx,
+                        ToolEventStage::Failure(startup_failure_event(&err)),
+                    )
+                    .await;
                 self.release_process_id(request.process_id).await;
                 return Err(err);
             }
@@ -1278,6 +1298,13 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
+    }
+}
+
+fn startup_failure_event(err: &UnifiedExecError) -> ToolEventFailure<'_> {
+    match err {
+        UnifiedExecError::SandboxDenied { output, .. } => ToolEventFailure::Output(output.clone()),
+        _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
     }
 }
 
