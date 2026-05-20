@@ -145,6 +145,9 @@ pub(crate) async fn handle_mcp_tool_call(
     let mcp_app_resource_uri = metadata
         .as_ref()
         .and_then(|metadata| metadata.mcp_app_resource_uri.clone());
+    let plugin_id = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.plugin_id.clone());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         connectors::app_tool_policy(
             &turn_context.config,
@@ -176,6 +179,7 @@ pub(crate) async fn handle_mcp_tool_call(
             &call_id,
             invocation,
             mcp_app_resource_uri.clone(),
+            plugin_id.clone(),
             "MCP tool call blocked by app configuration".to_string(),
             /*already_started*/ false,
         )
@@ -205,6 +209,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &call_id,
         invocation.clone(),
         mcp_app_resource_uri.clone(),
+        plugin_id.clone(),
     )
     .await;
 
@@ -230,6 +235,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     invocation,
                     metadata.as_ref(),
                     mcp_app_resource_uri,
+                    plugin_id,
                 )
                 .await;
             }
@@ -241,6 +247,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     mcp_app_resource_uri.clone(),
+                    plugin_id.clone(),
                     message,
                     /*already_started*/ true,
                 )
@@ -254,6 +261,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     mcp_app_resource_uri.clone(),
+                    plugin_id.clone(),
                     message,
                     /*already_started*/ true,
                 )
@@ -266,6 +274,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     mcp_app_resource_uri.clone(),
+                    plugin_id.clone(),
                     message,
                     /*already_started*/ true,
                 )
@@ -297,6 +306,7 @@ pub(crate) async fn handle_mcp_tool_call(
         invocation,
         metadata.as_ref(),
         mcp_app_resource_uri,
+        plugin_id,
     )
     .await
 }
@@ -313,6 +323,7 @@ async fn handle_approved_mcp_tool_call(
     invocation: McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
     mcp_app_resource_uri: Option<String>,
+    plugin_id: Option<String>,
 ) -> HandledMcpToolCall {
     let server = invocation.server.clone();
     maybe_mark_thread_memory_mode_polluted(sess, turn_context, &server).await;
@@ -382,6 +393,7 @@ async fn handle_approved_mcp_tool_call(
         call_id,
         invocation,
         mcp_app_resource_uri,
+        plugin_id,
         duration,
         truncate_mcp_tool_result_for_event(&result),
     )
@@ -856,6 +868,7 @@ async fn notify_mcp_tool_call_started(
     call_id: &str,
     invocation: McpInvocation,
     mcp_app_resource_uri: Option<String>,
+    plugin_id: Option<String>,
 ) {
     let McpInvocation {
         server,
@@ -868,6 +881,7 @@ async fn notify_mcp_tool_call_started(
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
         mcp_app_resource_uri,
+        plugin_id,
         status: McpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -882,6 +896,7 @@ async fn notify_mcp_tool_call_completed(
     call_id: &str,
     invocation: McpInvocation,
     mcp_app_resource_uri: Option<String>,
+    plugin_id: Option<String>,
     duration: Duration,
     result: Result<CallToolResult, String>,
 ) {
@@ -907,6 +922,7 @@ async fn notify_mcp_tool_call_completed(
         tool,
         arguments: arguments.unwrap_or(JsonValue::Null),
         mcp_app_resource_uri,
+        plugin_id,
         status,
         result,
         error,
@@ -2201,6 +2217,7 @@ async fn notify_mcp_tool_call_skip(
     call_id: &str,
     invocation: McpInvocation,
     mcp_app_resource_uri: Option<String>,
+    plugin_id: Option<String>,
     message: String,
     already_started: bool,
 ) -> Result<CallToolResult, String> {
@@ -2211,6 +2228,7 @@ async fn notify_mcp_tool_call_skip(
             call_id,
             invocation.clone(),
             mcp_app_resource_uri.clone(),
+            plugin_id.clone(),
         )
         .await;
     }
@@ -2221,6 +2239,7 @@ async fn notify_mcp_tool_call_skip(
         call_id,
         invocation,
         mcp_app_resource_uri,
+        plugin_id,
         Duration::ZERO,
         truncate_mcp_tool_result_for_event(&Err(message.clone())),
     )
