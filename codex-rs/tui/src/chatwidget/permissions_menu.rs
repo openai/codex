@@ -60,14 +60,22 @@ impl ChatWidget {
             AskForApproval::from(read_only.approval),
             ApprovalsReviewer::User,
         ));
-        items.extend(self.config.custom_permission_profile_ids.iter().map(|id| {
-            Self::permission_profile_selection_item(
-                id,
-                id,
-                "Configured permission profile.",
-                active_profile_id.as_deref(),
-            )
-        }));
+        items.extend(
+            self.config
+                .custom_permission_profiles
+                .iter()
+                .map(|profile| {
+                    Self::permission_profile_selection_item(
+                        &profile.id,
+                        &profile.id,
+                        profile
+                            .description
+                            .as_deref()
+                            .unwrap_or("Configured permission profile."),
+                        active_profile_id.as_deref(),
+                    )
+                }),
+        );
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Update Model Permissions".to_string()),

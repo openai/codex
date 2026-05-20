@@ -16,7 +16,7 @@ expression: "render_bottom_popup(&chat, 80)"
   4. Read Only              Codex can read files in the current workspace.
                             Approval is required to edit files or access the
                             internet.
-› 5. locked-down (current)  Configured permission profile.
-  6. web-enabled            Configured permission profile.
+› 5. locked-down (current)  Inspect and patch only approved workspace files.
+  6. web-enabled            Workspace profile with network access.
 
   Press enter to confirm or esc to go back

@@ -585,8 +585,8 @@ pub struct Config {
     /// of the legacy `sandbox_mode` syntax.
     pub explicit_permission_profile_mode: bool,
 
-    /// User-defined permission profile IDs available from effective config.
-    pub custom_permission_profile_ids: Vec<String>,
+    /// User-defined permission profiles available from effective config.
+    pub custom_permission_profiles: Vec<CustomPermissionProfileSummary>,
 
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
@@ -1889,6 +1889,12 @@ pub struct AgentRoleConfig {
     pub nickname_candidates: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomPermissionProfileSummary {
+    pub id: String,
+    pub description: Option<String>,
+}
+
 fn resolve_tool_suggest_config(
     config_toml: &ConfigToml,
     config_layer_stack: &ConfigLayerStack,
@@ -2624,11 +2630,18 @@ impl Config {
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Profiles)
             );
-        let custom_permission_profile_ids = cfg
+        let custom_permission_profiles = cfg
             .permissions
             .as_ref()
             .map_or_else(Vec::new, |permissions| {
-                permissions.entries.keys().cloned().collect()
+                permissions
+                    .entries
+                    .iter()
+                    .map(|(id, profile)| CustomPermissionProfileSummary {
+                        id: id.clone(),
+                        description: profile.description.clone(),
+                    })
+                    .collect()
             });
         let using_implicit_builtin_profile = permission_config_syntax.is_none()
             && effective_permission_selection.selected_profile_id.is_none();
@@ -3361,7 +3374,7 @@ impl Config {
                 windows_sandbox_private_desktop,
             },
             explicit_permission_profile_mode,
-            custom_permission_profile_ids,
+            custom_permission_profiles,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,

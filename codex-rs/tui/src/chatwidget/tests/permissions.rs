@@ -1,4 +1,5 @@
 use super::*;
+use crate::legacy_core::config::CustomPermissionProfileSummary;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -88,8 +89,16 @@ async fn profile_permissions_selection_popup_snapshot() {
 async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
-    chat.config.custom_permission_profile_ids =
-        vec!["locked-down".to_string(), "web-enabled".to_string()];
+    chat.config.custom_permission_profiles = vec![
+        CustomPermissionProfileSummary {
+            id: "locked-down".to_string(),
+            description: Some("Inspect and patch only approved workspace files.".to_string()),
+        },
+        CustomPermissionProfileSummary {
+            id: "web-enabled".to_string(),
+            description: Some("Workspace profile with network access.".to_string()),
+        },
+    ];
     chat.config
         .permissions
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
@@ -142,7 +151,10 @@ async fn profile_permissions_selection_emits_named_profile_event_only() {
 async fn profile_permissions_selection_emits_active_custom_profile() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.explicit_permission_profile_mode = true;
-    chat.config.custom_permission_profile_ids = vec!["locked-down".to_string()];
+    chat.config.custom_permission_profiles = vec![CustomPermissionProfileSummary {
+        id: "locked-down".to_string(),
+        description: None,
+    }];
     chat.config
         .permissions
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
