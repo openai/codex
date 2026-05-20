@@ -379,3 +379,9 @@ async fn send_app_list_updated_notification(
         ))
         .await;
 }
+
+impl Drop for AppsRequestProcessor {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}

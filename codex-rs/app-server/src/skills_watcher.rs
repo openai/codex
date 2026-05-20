@@ -128,3 +128,9 @@ impl SkillsWatcher {
         });
     }
 }
+
+impl Drop for SkillsWatcher {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
