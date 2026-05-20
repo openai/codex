@@ -2997,6 +2997,7 @@ dependencies = [
 name = "codex-install-context"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "pretty_assertions",
  "tempfile",

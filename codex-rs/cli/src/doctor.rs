@@ -39,7 +39,9 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
+use codex_install_context::CodexPackageLayout;
 use codex_install_context::InstallContext;
+use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
@@ -812,7 +814,10 @@ fn installation_check(show_details: bool) -> DoctorCheck {
 
 fn doctor_install_context(current_exe: Option<&Path>) -> InstallContext {
     if inherited_managed_env_for_cargo_binary(current_exe) {
-        InstallContext::Other
+        InstallContext {
+            method: InstallMethod::Other,
+            package_layout: None,
+        }
     } else {
         InstallContext::current().clone()
     }
@@ -843,8 +848,8 @@ fn inherited_managed_env_for_cargo_binary(current_exe: Option<&Path>) -> bool {
 }
 
 fn describe_install_context(context: &InstallContext) -> String {
-    match context {
-        InstallContext::Standalone {
+    match &context.method {
+        InstallMethod::Standalone {
             release_dir,
             resources_dir,
             platform,
@@ -853,20 +858,61 @@ fn describe_install_context(context: &InstallContext) -> String {
                 StandalonePlatform::Unix => "unix",
                 StandalonePlatform::Windows => "windows",
             };
-            let resources = resources_dir
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string());
+            match &context.package_layout {
+                Some(package_layout) => {
+                    let resources = display_optional_path(package_layout.resources_dir.as_deref());
+                    let path = display_optional_path(package_layout.path_dir.as_deref());
+                    format!(
+                        "standalone ({platform}, package {}, bin {}, resources {resources}, path {path})",
+                        package_layout.package_dir.display(),
+                        package_layout.bin_dir.display()
+                    )
+                }
+                None => {
+                    let resources = display_optional_path(resources_dir.as_deref());
+                    format!(
+                        "standalone ({platform}, release {}, resources {resources})",
+                        release_dir.display()
+                    )
+                }
+            }
+        }
+        InstallMethod::Npm => {
+            describe_method_with_package_layout("npm", context.package_layout.as_ref())
+        }
+        InstallMethod::Bun => {
+            describe_method_with_package_layout("bun", context.package_layout.as_ref())
+        }
+        InstallMethod::Brew => {
+            describe_method_with_package_layout("brew", context.package_layout.as_ref())
+        }
+        InstallMethod::Other => {
+            describe_method_with_package_layout("other", context.package_layout.as_ref())
+        }
+    }
+}
+
+fn describe_method_with_package_layout(
+    method: &str,
+    package_layout: Option<&CodexPackageLayout>,
+) -> String {
+    match package_layout {
+        Some(package_layout) => {
+            let resources = display_optional_path(package_layout.resources_dir.as_deref());
+            let path = display_optional_path(package_layout.path_dir.as_deref());
             format!(
-                "standalone ({platform}, release {}, resources {resources})",
-                release_dir.display()
+                "{method} (package {}, bin {}, resources {resources}, path {path})",
+                package_layout.package_dir.display(),
+                package_layout.bin_dir.display()
             )
         }
-        InstallContext::Npm => "npm".to_string(),
-        InstallContext::Bun => "bun".to_string(),
-        InstallContext::Brew => "brew".to_string(),
-        InstallContext::Other => "other".to_string(),
+        None => method.to_string(),
     }
+}
+
+fn display_optional_path(path: Option<&Path>) -> String {
+    path.map(|path| path.display().to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2791,13 +2837,14 @@ fn path_readiness(details: &mut Vec<String>, label: &str, path: &Path) {
 }
 
 fn standalone_release_cache_details(details: &mut Vec<String>) {
-    let InstallContext::Standalone { release_dir, .. } = InstallContext::current() else {
+    let context = InstallContext::current();
+    let InstallMethod::Standalone { release_dir, .. } = &context.method else {
         return;
     };
     let Some(releases_dir) = release_dir.parent() else {
         return;
     };
-    let Ok(entries) = std::fs::read_dir(releases_dir) else {
+    let Ok(entries) = std::fs::read_dir(&releases_dir) else {
         return;
     };
     let release_count = entries.filter_map(Result::ok).count();
