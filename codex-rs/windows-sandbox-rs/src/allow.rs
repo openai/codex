@@ -14,12 +14,12 @@ pub struct AllowDenyPaths {
 
 pub(crate) fn compute_allow_paths(
     policy: &SandboxPolicy,
-    _policy_cwd: &Path,
+    policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> AllowDenyPaths {
     let permissions =
-        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, command_cwd);
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
     compute_allow_paths_for_permissions(&permissions, command_cwd, env_map)
 }
 
@@ -87,6 +87,35 @@ mod tests {
             paths
                 .allow
                 .contains(&dunce::canonicalize(&extra_root).unwrap())
+        );
+        assert!(paths.deny.is_empty(), "no deny paths expected");
+    }
+
+    #[test]
+    fn uses_policy_cwd_for_legacy_workspace_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_cwd = tmp.path().join("workspace");
+        let command_cwd = policy_cwd.join("subdir");
+        fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let paths = compute_allow_paths(&policy, &policy_cwd, &command_cwd, &HashMap::new());
+
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&policy_cwd).unwrap())
+        );
+        assert!(
+            !paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
         );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }

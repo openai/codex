@@ -287,18 +287,21 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::acl::revoke_ace;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
+    use super::spawn_prep::SpawnPrepOptions;
     use super::spawn_prep::allow_null_device_for_workspace_write;
     use super::spawn_prep::apply_legacy_session_acl_rules;
     use super::spawn_prep::legacy_session_capability_roots;
     use super::spawn_prep::prepare_legacy_session_security;
     use super::spawn_prep::prepare_legacy_spawn_context;
     use super::spawn_prep::root_capability_sids;
+    use super::token::LocalSid;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
@@ -400,17 +403,20 @@ mod windows_impl {
             .collect::<Vec<_>>();
         let common = prepare_legacy_spawn_context(
             policy_json_or_preset,
+            sandbox_policy_cwd,
             codex_home,
             cwd,
             &mut env_map,
             &command,
-            /*inherit_path*/ false,
-            /*add_git_safe_directory*/ false,
+            SpawnPrepOptions {
+                inherit_path: false,
+                add_git_safe_directory: false,
+            },
         )?;
         let policy = common.policy;
         let current_dir = common.current_dir;
         let logs_base_dir = common.logs_base_dir.as_deref();
-        let is_workspace_write = common.is_workspace_write;
+        let uses_write_capabilities = common.uses_write_capabilities;
         if !policy.has_full_disk_read_access() {
             anyhow::bail!(
                 "Restricted read-only access requires the elevated Windows sandbox backend"
@@ -429,8 +435,9 @@ mod windows_impl {
             codex_home,
         );
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
-        allow_null_device_for_workspace_write(is_workspace_write);
-        apply_legacy_session_acl_rules(
+        allow_null_device_for_workspace_write(uses_write_capabilities);
+        let persist_aces = uses_write_capabilities;
+        let guards = apply_legacy_session_acl_rules(
             &policy,
             sandbox_policy_cwd,
             codex_home,
@@ -443,6 +450,7 @@ mod windows_impl {
                 readonly_sid_str: security.readonly_sid_str.as_deref(),
                 write_root_sids: &security.write_root_sids,
             },
+            persist_aces,
         )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
@@ -467,6 +475,13 @@ mod windows_impl {
                     CloseHandle(out_w);
                     CloseHandle(err_r);
                     CloseHandle(err_w);
+                    if !persist_aces {
+                        for (p, sid_str) in &guards {
+                            if let Ok(sid) = LocalSid::from_string(sid_str) {
+                                revoke_ace(p, sid.as_ptr());
+                            }
+                        }
+                    }
                     CloseHandle(security.h_token);
                 }
                 return Err(err);
@@ -567,6 +582,16 @@ mod windows_impl {
             log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
         }
 
+        if !persist_aces {
+            unsafe {
+                for (p, sid_str) in guards {
+                    if let Ok(sid) = LocalSid::from_string(&sid_str) {
+                        revoke_ace(&p, sid.as_ptr());
+                    }
+                }
+            }
+        }
+
         Ok(CaptureResult {
             exit_code,
             stdout,
@@ -597,7 +622,7 @@ mod windows_impl {
             codex_home,
         );
         let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
-        apply_legacy_session_acl_rules(
+        let _guards = apply_legacy_session_acl_rules(
             sandbox_policy,
             sandbox_policy_cwd,
             codex_home,
@@ -610,6 +635,7 @@ mod windows_impl {
                 readonly_sid_str: None,
                 write_root_sids: &write_root_sids,
             },
+            /*persist_aces*/ true,
         )?;
 
         Ok(())
@@ -618,7 +644,8 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use crate::policy::SandboxPolicy;
-        use crate::spawn_prep::should_apply_network_block;
+        use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+        use std::path::Path;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
@@ -627,6 +654,11 @@ mod windows_impl {
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
+        }
+
+        fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, Path::new("."))
+                .should_apply_network_block()
         }
 
         #[test]
