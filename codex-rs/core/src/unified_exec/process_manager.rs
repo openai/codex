@@ -1106,6 +1106,7 @@ impl UnifiedExecProcessManager {
                     };
                     UnifiedExecError::sandbox_denied(message, output)
                 }
+                ToolError::Rejected(message) => UnifiedExecError::rejected(message),
                 other => UnifiedExecError::create_process(format!("{other:?}")),
             })
     }
@@ -1304,6 +1305,10 @@ impl UnifiedExecProcessManager {
 fn startup_failure_event(err: &UnifiedExecError) -> ToolEventFailure<'_> {
     match err {
         UnifiedExecError::SandboxDenied { output, .. } => ToolEventFailure::Output(output.clone()),
+        UnifiedExecError::Rejected { message } => ToolEventFailure::Rejected {
+            message: message.clone(),
+            applied_patch_delta: None,
+        },
         _ => ToolEventFailure::Message(format!("execution error: {err:?}")),
     }
 }
