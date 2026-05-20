@@ -464,32 +464,38 @@ fn configured_marketplace_snapshot_issues(
 
 fn is_implicit_system_marketplace_root(
     marketplace_name: &str,
-    codex_home: &Path,
+    _codex_home: &Path,
     root: &Path,
 ) -> bool {
     if matches!(
         marketplace_name,
         OPENAI_BUNDLED_MARKETPLACE_NAME | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
-    ) && root.starts_with(codex_home.join(".tmp").join("bundled-marketplaces"))
+    ) && path_ends_with(root, &[".tmp", "bundled-marketplaces", marketplace_name])
     {
         return true;
     }
 
     marketplace_name == OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME
-        && runtime_cache_root()
-            .is_some_and(|cache_root| root.starts_with(cache_root.join("codex-runtimes")))
+        && path_ends_with(
+            root,
+            &[
+                "codex-runtimes",
+                "codex-primary-runtime",
+                "plugins",
+                marketplace_name,
+            ],
+        )
 }
 
-fn runtime_cache_root() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|home| home.join(".cache"))
-        })
+fn path_ends_with(path: &Path, suffix: &[&str]) -> bool {
+    let path_components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    path_components.as_slice().ends_with(
+        &suffix
+            .iter()
+            .map(|part| part.to_string())
+            .collect::<Vec<_>>(),
+    )
 }
