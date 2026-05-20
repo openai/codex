@@ -42,7 +42,9 @@ impl ChatWidget {
                     profile,
                     active_permission_profile,
                 ),
-            )
+            )?;
+        self.refresh_status_surfaces();
+        Ok(())
     }
 
     pub(crate) fn set_permission_network(

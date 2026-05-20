@@ -885,7 +885,22 @@ impl App {
             } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = preset.permission_profile.clone();
+                    let permission_profile = match self
+                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                        .await
+                    {
+                        Ok(permission_profile) => permission_profile,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to resolve permission profile for elevated Windows sandbox setup"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -994,7 +1009,22 @@ impl App {
             } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = preset.permission_profile.clone();
+                    let permission_profile = match self
+                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                        .await
+                    {
+                        Ok(permission_profile) => permission_profile,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to resolve permission profile for legacy Windows sandbox setup"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =

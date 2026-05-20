@@ -34,11 +34,29 @@ impl App {
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
+            .loader_overrides(self.loader_overrides.clone())
             .build()
             .await
             .wrap_err_with(|| {
                 format!("Failed to rebuild config for permission profile {profile_id}")
             })
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) async fn permission_profile_for_windows_setup(
+        &self,
+        preset: &ApprovalPreset,
+        profile_selection: Option<&PermissionProfileSelection>,
+    ) -> Result<PermissionProfile> {
+        match profile_selection {
+            Some(selection) => Ok(self
+                .rebuild_config_for_permission_profile(selection.profile_id.as_str())
+                .await?
+                .permissions
+                .permission_profile()
+                .clone()),
+            None => Ok(preset.permission_profile.clone()),
+        }
     }
 
     pub(super) async fn apply_permission_profile_selection(

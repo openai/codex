@@ -1629,11 +1629,12 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
 }
 
 #[tokio::test]
-async fn apply_permission_profile_selection_ignores_legacy_harness_overrides() -> Result<()> {
+async fn apply_permission_profile_selection_preserves_loader_overrides() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
+    let selected_config = codex_home.path().join("work.config.toml");
     std::fs::write(
-        codex_home.path().join("config.toml"),
+        &selected_config,
         r#"
 default_permissions = "locked-down"
 
@@ -1642,6 +1643,7 @@ default_permissions = "locked-down"
 "#,
     )?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.loader_overrides.user_config_path = Some(selected_config.abs());
     app.harness_overrides.sandbox_mode = Some(SandboxMode::WorkspaceWrite);
     app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
 
