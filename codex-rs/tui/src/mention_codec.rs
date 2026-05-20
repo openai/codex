@@ -209,6 +209,11 @@ fn starts_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
 fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
     text_bytes.get(index).is_none_or(|byte| {
         byte.is_ascii_whitespace()
+            || *byte == b'.'
+                && text_bytes.get(index + 1).is_none_or(|next| {
+                    next.is_ascii_whitespace()
+                        || !next.is_ascii_alphanumeric() && *next != b'_' && *next != b'-'
+                })
             || !matches!(*byte, b'.' | b'/' | b'\\')
                 && !byte.is_ascii_alphanumeric()
                 && *byte != b'_'
@@ -356,6 +361,19 @@ mod tests {
             encoded,
             "[@figma](/tmp/figma/SKILL.md) then [@sample](plugin://sample@test) then $other"
         );
+    }
+
+    #[test]
+    fn encode_history_mentions_links_sentence_ending_at_mentions() {
+        let text = "Please ask @figma.";
+        let encoded = encode_history_mentions(
+            text,
+            &[LinkedMention {
+                mention: "figma".to_string(),
+                path: "/tmp/figma/SKILL.md".to_string(),
+            }],
+        );
+        assert_eq!(encoded, "Please ask [@figma](/tmp/figma/SKILL.md).");
     }
 
     #[test]
