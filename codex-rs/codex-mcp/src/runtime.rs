@@ -156,10 +156,15 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
+        let error = match runtime_context
+            .resolve_server_environment("stdio", &stdio_server(LOCAL_ENVIRONMENT_ID))
+        {
+            Ok(_) => panic!("local stdio MCP should require a local environment"),
+            Err(error) => error,
+        };
         assert_eq!(
-            runtime_context
-                .resolve_server_environment("stdio", &stdio_server(LOCAL_ENVIRONMENT_ID)),
-            Err("local stdio MCP server `stdio` requires a local environment".to_string())
+            error,
+            "local stdio MCP server `stdio` requires a local environment"
         );
     }
 
@@ -184,9 +189,14 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
+        let error =
+            match runtime_context.resolve_server_environment("stdio", &stdio_server("remote")) {
+                Ok(_) => panic!("unknown MCP environment should fail"),
+                Err(error) => error,
+            };
         assert_eq!(
-            runtime_context.resolve_server_environment("stdio", &stdio_server("remote")),
-            Err("MCP server `stdio` references unknown environment id `remote`".to_string())
+            error,
+            "MCP server `stdio` references unknown environment id `remote`"
         );
     }
 
