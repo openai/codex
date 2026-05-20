@@ -11,7 +11,7 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
-use crate::relay::run_multiplexed_executor;
+use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
@@ -143,7 +143,7 @@ pub async fn run_remote_environment(
         match connect_async(response.url.as_str()).await {
             Ok((websocket, _)) => {
                 backoff = Duration::from_secs(1);
-                run_multiplexed_executor(websocket, processor.clone()).await;
+                run_multiplexed_environment(websocket, processor.clone()).await;
             }
             Err(err) => {
                 warn!("failed to connect remote exec-server websocket: {err}");
