@@ -13,12 +13,15 @@ use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
+use codex_hooks::StartHookTarget;
+use codex_hooks::StopOutcome;
+use codex_hooks::StopRequest;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -28,12 +31,14 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
-use codex_protocol::user_input::UserInput;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde_json::Value;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
@@ -47,22 +52,6 @@ pub(crate) struct HookRuntimeOutcome {
 pub(crate) enum PreToolUseHookResult {
     Continue { updated_input: Option<Value> },
     Blocked(String),
-}
-
-pub(crate) enum PendingInputHookDisposition {
-    Accepted(Box<PendingInputRecord>),
-    Blocked { additional_contexts: Vec<String> },
-}
-
-pub(crate) enum PendingInputRecord {
-    UserMessage {
-        content: Vec<UserInput>,
-        response_item: ResponseItem,
-        additional_contexts: Vec<String>,
-    },
-    ConversationItem {
-        response_item: ResponseItem,
-    },
 }
 
 struct ContextInjectingHookOutcome {
@@ -114,6 +103,30 @@ pub(crate) async fn run_pending_session_start_hooks(
         return false;
     };
 
+    // Pending session-start hooks are reused to dispatch thread-spawn subagent
+    // starts. Other subagent sessions are internal/system work and do not run
+    // start hooks.
+    let target = match &turn_context.session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
+            if matches!(
+                session_start_source,
+                codex_hooks::SessionStartSource::Startup
+            ) =>
+        {
+            let agent_type = agent_role
+                .clone()
+                .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
+            StartHookTarget::SubagentStart {
+                turn_id: turn_context.sub_id.clone(),
+                agent_id: sess.thread_id().to_string(),
+                agent_type,
+            }
+        }
+        SessionSource::SubAgent(_) => return false,
+        _ => StartHookTarget::SessionStart {
+            source: session_start_source,
+        },
+    };
     let request = codex_hooks::SessionStartRequest {
         session_id: sess.session_id().into(),
         #[allow(deprecated)]
@@ -121,7 +134,7 @@ pub(crate) async fn run_pending_session_start_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        source: session_start_source,
+        target,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_session_start(&request);
@@ -336,12 +349,13 @@ pub(crate) async fn run_post_compact_hooks(
     }
 }
 
-pub(crate) async fn run_user_prompt_submit_hooks(
+pub(crate) async fn run_stop_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    prompt: String,
-) -> HookRuntimeOutcome {
-    let request = UserPromptSubmitRequest {
+    stop_hook_active: bool,
+    last_assistant_message: Option<String>,
+) -> StopOutcome {
+    let request = StopRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         #[allow(deprecated)]
@@ -349,70 +363,135 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        prompt,
+        stop_hook_active,
+        last_assistant_message,
     };
     let hooks = sess.hooks();
-    let preview_runs = hooks.preview_user_prompt_submit(&request);
-    run_context_injecting_hook(
-        sess,
-        turn_context,
-        preview_runs,
-        hooks.run_user_prompt_submit(request),
-    )
-    .await
+    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+    let mut outcome = hooks.run_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
+}
+
+pub(crate) async fn run_legacy_after_agent_hook(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[ResponseItem],
+    last_assistant_message: Option<String>,
+) -> bool {
+    let mut abort_message = None;
+    let input_messages = input
+        .iter()
+        .filter_map(|item| match parse_turn_item(item) {
+            Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
+            _ => None,
+        })
+        .collect();
+    let hooks = sess.hooks();
+    for hook_outcome in hooks
+        .dispatch(codex_hooks::HookPayload {
+            session_id: sess.session_id().into(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: codex_hooks::HookEvent::AfterAgent {
+                event: codex_hooks::HookEventAfterAgent {
+                    thread_id: sess.conversation_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    input_messages,
+                    last_assistant_message,
+                },
+            },
+        })
+        .await
+    {
+        let hook_name = hook_outcome.hook_name;
+        let (error, should_abort) = match hook_outcome.result {
+            codex_hooks::HookResult::Success => continue,
+            codex_hooks::HookResult::FailedContinue(error) => (error, false),
+            codex_hooks::HookResult::FailedAbort(error) => (error, true),
+        };
+        let action = if should_abort {
+            "aborting operation"
+        } else {
+            "continuing"
+        };
+        tracing::warn!(
+            turn_id = %turn_context.sub_id,
+            hook_name = %hook_name,
+            error = %error,
+            "after_agent hook failed; {action}"
+        );
+        if should_abort && abort_message.is_none() {
+            abort_message = Some(format!(
+                "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
+            ));
+        }
+    }
+    let Some(message) = abort_message else {
+        return false;
+    };
+    let event = EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+        message,
+        codex_error_info: None,
+    });
+    sess.send_event(turn_context, event).await;
+    true
 }
 
 pub(crate) async fn inspect_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    pending_input_item: ResponseInputItem,
-) -> PendingInputHookDisposition {
-    let response_item = ResponseItem::from(pending_input_item);
-    if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-        let user_prompt_submit_outcome =
-            run_user_prompt_submit_hooks(sess, turn_context, user_message.message()).await;
-        if user_prompt_submit_outcome.should_stop {
-            PendingInputHookDisposition::Blocked {
-                additional_contexts: user_prompt_submit_outcome.additional_contexts,
-            }
-        } else {
-            PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::UserMessage {
-                content: user_message.content,
-                response_item,
-                additional_contexts: user_prompt_submit_outcome.additional_contexts,
-            }))
+    pending_input_item: &TurnInput,
+) -> HookRuntimeOutcome {
+    match pending_input_item {
+        TurnInput::UserInput(content) => {
+            let request = UserPromptSubmitRequest {
+                session_id: sess.session_id().into(),
+                turn_id: turn_context.sub_id.clone(),
+                #[allow(deprecated)]
+                cwd: turn_context.cwd.clone(),
+                transcript_path: sess.hook_transcript_path().await,
+                model: turn_context.model_info.slug.clone(),
+                permission_mode: hook_permission_mode(turn_context),
+                prompt: UserMessageItem::new(content).message(),
+            };
+            let hooks = sess.hooks();
+            let preview_runs = hooks.preview_user_prompt_submit(&request);
+            run_context_injecting_hook(
+                sess,
+                turn_context,
+                preview_runs,
+                hooks.run_user_prompt_submit(request),
+            )
+            .await
         }
-    } else {
-        PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::ConversationItem {
-            response_item,
-        }))
+        TurnInput::ResponseInputItem(_) => HookRuntimeOutcome {
+            should_stop: false,
+            additional_contexts: Vec::new(),
+        },
     }
 }
 
 pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    pending_input: PendingInputRecord,
+    pending_input: TurnInput,
+    additional_contexts: Vec<String>,
 ) {
     match pending_input {
-        PendingInputRecord::UserMessage {
-            content,
-            response_item,
-            additional_contexts,
-        } => {
-            sess.record_user_prompt_and_emit_turn_item(
-                turn_context.as_ref(),
-                content.as_slice(),
-                response_item,
-            )
-            .await;
-            record_additional_contexts(sess, turn_context, additional_contexts).await;
+        TurnInput::UserInput(content) => {
+            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), content.as_slice())
+                .await;
         }
-        PendingInputRecord::ConversationItem { response_item } => {
+        TurnInput::ResponseInputItem(input) => {
+            let response_item = ResponseItem::from(input);
             sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
                 .await;
         }
     }
+    record_additional_contexts(sess, turn_context, additional_contexts).await;
 }
 
 async fn run_context_injecting_hook<Fut, Outcome>(
@@ -555,6 +634,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
         HookEventName::Stop => "Stop",
     };
     let hook_source = match run.source {

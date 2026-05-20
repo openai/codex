@@ -15,6 +15,7 @@ use codex_core_api::Arg0DispatchPaths;
 use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
+use codex_core_api::AutoCompactTokenLimitScope;
 use codex_core_api::CodexThread;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
@@ -115,7 +116,8 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     )?;
     let thread_store = thread_store_from_config(&config, state_db.clone());
     let environment_manager = Arc::new(
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?,
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
@@ -168,6 +170,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         model_provider_id,
         model_provider,
         personality: None,
@@ -175,6 +178,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
             Constrained::allow_any(AskForApproval::Never),
             Constrained::allow_any(PermissionProfile::read_only()),
         )?,
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,

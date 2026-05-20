@@ -106,8 +106,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         .await
         .list_all_tools()
         .await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
@@ -172,8 +172,8 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(vec![
@@ -220,8 +220,8 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
@@ -272,8 +272,8 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         },
     ];
 
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
@@ -328,8 +328,8 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
 
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn,
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,

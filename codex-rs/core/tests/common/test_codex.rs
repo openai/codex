@@ -431,7 +431,7 @@ impl TestCodexBuilder {
         } else {
             codex_exec_server::EnvironmentManager::create_for_tests(
                 exec_server_url,
-                local_runtime_paths,
+                Some(local_runtime_paths),
             )
             .await
         });

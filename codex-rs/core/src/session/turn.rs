@@ -4,14 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
-use crate::SkillLoadOutcome;
 use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
-use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -20,13 +18,12 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
-use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
-use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::hook_runtime::run_stop_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -37,9 +34,9 @@ use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
-use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -57,6 +54,8 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
+use crate::tools::spec_plan::search_tool_enabled;
+use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::backoff;
@@ -71,17 +70,13 @@ use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
-use codex_hooks::HookEvent;
-use codex_hooks::HookEventAfterAgent;
-use codex_hooks::HookPayload;
-use codex_hooks::HookResult;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -90,7 +85,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -142,30 +136,31 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() && !sess.input_queue.has_pending_input(&sess.active_turn).await {
-        return None;
-    }
-
-    let model_info = turn_context.model_info.clone();
-    let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
-            && let Err(err) = sess
-                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                    turn_context: turn_context.as_ref(),
-                })
-                .await
-        {
-            warn!("failed to usage-limit active goal after usage-limit error: {err}");
-        }
-        error!("Failed to run pre-sampling compact");
-        return None;
+    let pre_sampling_compact =
+        match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+            Ok(pre_sampling_compact) => pre_sampling_compact,
+            Err(err) => {
+                if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                    && let Err(err) = sess
+                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                            turn_context: turn_context.as_ref(),
+                        })
+                        .await
+                {
+                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
+                }
+                error!("Failed to run pre-sampling compact");
+                return None;
+            }
+        };
+    if pre_sampling_compact.reset_client_session {
+        client_session.reset_websocket_session();
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
@@ -177,17 +172,10 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
-    } else {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
-            &sess,
-            &turn_context,
-            UserMessageItem::new(&input).message(),
-        )
-        .await;
+    if !input.is_empty() {
+        let initial_turn_input = TurnInput::UserInput(input.clone());
+        let user_prompt_submit_outcome =
+            inspect_pending_input(&sess, &turn_context, &initial_turn_input).await;
         if user_prompt_submit_outcome.should_stop {
             record_additional_contexts(
                 &sess,
@@ -197,23 +185,22 @@ pub(crate) async fn run_turn(
             .await;
             return None;
         }
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
-        user_prompt_submit_outcome.additional_contexts
-    };
-    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
-        .await;
-    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    if !input.is_empty() {
-        // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review) cannot suppress future
-        // model/realtime injections.
-        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
-            realtime_active: Some(turn_context.realtime_active),
-        }))
+        record_pending_input(
+            &sess,
+            &turn_context,
+            initial_turn_input,
+            user_prompt_submit_outcome.additional_contexts,
+        )
         .await;
     }
+
+    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
+        .await;
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: turn_context.model_info.slug.clone(),
+        realtime_active: Some(turn_context.realtime_active),
+    }))
+    .await;
     for response_item in injection_items {
         sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -221,7 +208,6 @@ pub(crate) async fn run_turn(
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
 
-    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
@@ -251,10 +237,6 @@ pub(crate) async fn run_turn(
     let mut can_drain_pending_input = input.is_empty();
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
-        }
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -265,45 +247,26 @@ pub(crate) async fn run_turn(
         };
 
         let mut blocked_pending_input = false;
-        let mut blocked_pending_input_contexts = Vec::new();
-        let mut requeued_pending_input = false;
-        let mut accepted_pending_input = Vec::new();
-        if !pending_input.is_empty() {
-            let mut pending_input_iter = pending_input.into_iter();
-            while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push(*pending_input);
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
-                        if !remaining_pending_input.is_empty() {
-                            let _ = sess
-                                .input_queue
-                                .prepend_pending_input(&sess.active_turn, remaining_pending_input)
-                                .await;
-                            requeued_pending_input = true;
-                        }
-                        blocked_pending_input_contexts = additional_contexts;
-                        blocked_pending_input = true;
-                        break;
-                    }
-                }
+        let mut accepted_pending_input = false;
+        for pending_input_item in pending_input {
+            let hook_outcome =
+                inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
+            if hook_outcome.should_stop {
+                blocked_pending_input = true;
+                record_additional_contexts(&sess, &turn_context, hook_outcome.additional_contexts)
+                    .await;
+            } else {
+                accepted_pending_input = true;
+                record_pending_input(
+                    &sess,
+                    &turn_context,
+                    pending_input_item,
+                    hook_outcome.additional_contexts,
+                )
+                .await;
             }
         }
-
-        let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for pending_input in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input).await;
-        }
-        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
-
-        if blocked_pending_input && !has_accepted_pending_input {
-            if requeued_pending_input {
-                continue;
-            }
+        if blocked_pending_input && !accepted_pending_input {
             break;
         }
 
@@ -314,14 +277,6 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let sampling_request_input_messages = sampling_request_input
-            .iter()
-            .filter_map(|item| match parse_turn_item(item) {
-                Some(TurnItem::UserMessage(user_message)) => Some(user_message),
-                _ => None,
-            })
-            .map(|user_message| user_message.message())
-            .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
@@ -330,9 +285,7 @@ pub(crate) async fn run_turn(
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
-            sampling_request_input,
-            &explicitly_enabled_connectors,
-            skills_outcome,
+            sampling_request_input.clone(),
             cancellation_token.child_token(),
         )
         .await
@@ -345,17 +298,24 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = true;
                 let has_pending_input = sess.input_queue.has_pending_input(&sess.active_turn).await;
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
-                let total_usage_tokens = sess.get_total_token_usage().await;
-                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
+                let token_status =
+                    auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+                let token_limit_reached = token_status.token_limit_reached;
 
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
 
                 trace!(
                     turn_id = %turn_context.sub_id,
-                    total_usage_tokens,
+                    total_usage_tokens = token_status.active_context_tokens,
+                    auto_compact_scope_tokens = token_status.auto_compact_scope_tokens,
                     estimated_token_count = ?estimated_token_count,
-                    auto_compact_limit,
+                    auto_compact_scope_limit = token_status.auto_compact_scope_limit,
+                    auto_compact_limit_scope = ?turn_context.config.model_auto_compact_token_limit_scope,
+                    auto_compact_window_ordinal = ?token_status.auto_compact_window_ordinal,
+                    auto_compact_window_prefill_tokens = ?token_status.auto_compact_window_prefill_tokens,
+                    full_context_window_limit = ?token_status.full_context_window_limit,
+                    full_context_window_limit_reached = token_status.full_context_window_limit_reached,
                     token_limit_reached,
                     model_needs_follow_up,
                     has_pending_input,
@@ -365,7 +325,7 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    match run_auto_compact(
+                    let reset_client_session = match run_auto_compact(
                         &sess,
                         &turn_context,
                         &mut client_session,
@@ -375,7 +335,7 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        Ok(()) => {}
+                        Ok(reset_client_session) => reset_client_session,
                         Err(err) => {
                             if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
                                 && let Err(err) = sess
@@ -391,45 +351,22 @@ pub(crate) async fn run_turn(
                             return None;
                         }
                     };
+                    if reset_client_session {
+                        client_session.reset_websocket_session();
+                    }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
                 }
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    let stop_hook_permission_mode = match turn_context.approval_policy.value() {
-                        AskForApproval::Never => "bypassPermissions",
-                        AskForApproval::UnlessTrusted
-                        | AskForApproval::OnFailure
-                        | AskForApproval::OnRequest
-                        | AskForApproval::Granular(_) => "default",
-                    }
-                    .to_string();
-                    let stop_request = codex_hooks::StopRequest {
-                        session_id: sess.session_id().into(),
-                        turn_id: turn_context.sub_id.clone(),
-                        #[allow(deprecated)]
-                        cwd: turn_context.cwd.clone(),
-                        transcript_path: sess.hook_transcript_path().await,
-                        model: turn_context.model_info.slug.clone(),
-                        permission_mode: stop_hook_permission_mode,
+                    let stop_outcome = run_stop_hooks(
+                        &sess,
+                        &turn_context,
                         stop_hook_active,
-                        last_assistant_message: last_agent_message.clone(),
-                    };
-                    let hooks = sess.hooks();
-                    for run in hooks.preview_stop(&stop_request) {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
-                                turn_id: Some(turn_context.sub_id.clone()),
-                                run,
-                            }),
-                        )
-                        .await;
-                    }
-                    let stop_outcome = hooks.run_stop(stop_request).await;
-                    emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
-                        .await;
+                        last_agent_message.clone(),
+                    )
+                    .await;
                     if stop_outcome.should_block {
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
@@ -454,63 +391,14 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
-                    let hook_outcomes = sess
-                        .hooks()
-                        .dispatch(HookPayload {
-                            session_id: sess.session_id().into(),
-                            #[allow(deprecated)]
-                            cwd: turn_context.cwd.clone(),
-                            client: turn_context.app_server_client_name.clone(),
-                            triggered_at: chrono::Utc::now(),
-                            hook_event: HookEvent::AfterAgent {
-                                event: HookEventAfterAgent {
-                                    thread_id: sess.conversation_id,
-                                    turn_id: turn_context.sub_id.clone(),
-                                    input_messages: sampling_request_input_messages,
-                                    last_assistant_message: last_agent_message.clone(),
-                                },
-                            },
-                        })
-                        .await;
-
-                    let mut abort_message = None;
-                    for hook_outcome in hook_outcomes {
-                        let hook_name = hook_outcome.hook_name;
-                        match hook_outcome.result {
-                            HookResult::Success => {}
-                            HookResult::FailedContinue(error) => {
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; continuing"
-                                );
-                            }
-                            HookResult::FailedAbort(error) => {
-                                let message = format!(
-                                    "after_agent hook '{hook_name}' failed and aborted turn completion: {error}"
-                                );
-                                warn!(
-                                    turn_id = %turn_context.sub_id,
-                                    hook_name = %hook_name,
-                                    error = %error,
-                                    "after_agent hook failed; aborting operation"
-                                );
-                                if abort_message.is_none() {
-                                    abort_message = Some(message);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(message) = abort_message {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Error(ErrorEvent {
-                                message,
-                                codex_error_info: None,
-                            }),
-                        )
-                        .await;
+                    if run_legacy_after_agent_hook(
+                        &sess,
+                        &turn_context,
+                        &sampling_request_input,
+                        last_agent_message.clone(),
+                    )
+                    .await
+                    {
                         return None;
                     }
                     break;
@@ -746,27 +634,88 @@ async fn track_turn_resolved_config_analytics(
         });
 }
 
+struct PreSamplingCompactResult {
+    reset_client_session: bool,
+}
+
+#[derive(Debug)]
+struct AutoCompactTokenStatus {
+    // Full active context usage, independent of the configured auto-compact scope.
+    active_context_tokens: i64,
+    // Usage counted against `model_auto_compact_token_limit` for the current scope.
+    auto_compact_scope_tokens: i64,
+    auto_compact_scope_limit: i64,
+    full_context_window_limit: Option<i64>,
+    auto_compact_window_ordinal: Option<u64>,
+    auto_compact_window_prefill_tokens: Option<i64>,
+    full_context_window_limit_reached: bool,
+    token_limit_reached: bool,
+}
+
+async fn auto_compact_token_status(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> AutoCompactTokenStatus {
+    let active_context_tokens = sess.get_total_token_usage().await;
+    let mut auto_compact_window_ordinal = None;
+    let mut auto_compact_window_prefill_tokens = None;
+    let (auto_compact_scope_tokens, auto_compact_scope_limit, full_context_window_limit) =
+        match turn_context.config.model_auto_compact_token_limit_scope {
+            AutoCompactTokenLimitScope::Total => (
+                active_context_tokens,
+                turn_context
+                    .model_info
+                    .auto_compact_token_limit()
+                    .unwrap_or(i64::MAX),
+                None,
+            ),
+            AutoCompactTokenLimitScope::BodyAfterPrefix => {
+                let window = sess.auto_compact_window_snapshot().await;
+                auto_compact_window_ordinal = Some(window.ordinal);
+                auto_compact_window_prefill_tokens = window.prefill_input_tokens;
+                let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
+                (
+                    active_context_tokens.saturating_sub(baseline),
+                    turn_context
+                        .config
+                        .model_auto_compact_token_limit
+                        .or_else(|| turn_context.model_info.auto_compact_token_limit())
+                        .unwrap_or(i64::MAX),
+                    turn_context.model_context_window(),
+                )
+            }
+        };
+    let full_context_window_limit_reached =
+        full_context_window_limit.is_some_and(|full_context_window_limit| {
+            active_context_tokens >= full_context_window_limit
+        });
+    let token_limit_reached =
+        auto_compact_scope_tokens >= auto_compact_scope_limit || full_context_window_limit_reached;
+
+    AutoCompactTokenStatus {
+        active_context_tokens,
+        auto_compact_scope_tokens,
+        auto_compact_scope_limit,
+        full_context_window_limit,
+        auto_compact_window_ordinal,
+        auto_compact_window_prefill_tokens,
+        full_context_window_limit_reached,
+        token_limit_reached,
+    }
+}
+
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-) -> CodexResult<()> {
-    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
-        sess,
-        turn_context,
-        client_session,
-        total_usage_tokens_before_compaction,
-    )
-    .await?;
-    let total_usage_tokens = sess.get_total_token_usage().await;
-    let auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
-        .unwrap_or(i64::MAX);
-    // Compact if the total usage tokens are greater than the auto compact limit
-    if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(
+) -> CodexResult<PreSamplingCompactResult> {
+    let mut pre_sampling_compacted =
+        maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
+    let mut reset_client_session = pre_sampling_compacted;
+    let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+    // Compact if the configured auto-compaction budget or usable context window is exhausted.
+    if token_status.token_limit_reached {
+        reset_client_session |= run_auto_compact(
             sess,
             turn_context,
             client_session,
@@ -775,22 +724,26 @@ async fn run_pre_sampling_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
+        pre_sampling_compacted = true;
     }
-    Ok(())
+    Ok(PreSamplingCompactResult {
+        reset_client_session: pre_sampling_compacted && reset_client_session,
+    })
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
 ///
-/// Returns `Err(_)` only when compaction was attempted and failed.
+/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
+/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
+/// was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-    total_usage_tokens: i64,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(());
+        return Ok(false);
     };
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -799,20 +752,31 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
-    let new_auto_compact_limit = turn_context
-        .model_info
-        .auto_compact_token_limit()
-        .unwrap_or(i64::MAX);
-    let should_run = total_usage_tokens > new_auto_compact_limit
+    let active_context_tokens = sess.get_total_token_usage().await;
+    let previous_model_limit_reached = match turn_context
+        .config
+        .model_auto_compact_token_limit_scope
+    {
+        AutoCompactTokenLimitScope::Total => {
+            let new_auto_compact_limit = turn_context
+                .model_info
+                .auto_compact_token_limit()
+                .unwrap_or(i64::MAX);
+            active_context_tokens > new_auto_compact_limit
+                || active_context_tokens >= new_context_window
+        }
+        AutoCompactTokenLimitScope::BodyAfterPrefix => active_context_tokens >= new_context_window,
+    };
+    let should_run = previous_model_limit_reached
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
-        run_auto_compact(
+        let _ = run_auto_compact(
             sess,
             &previous_model_turn_context,
             client_session,
@@ -821,8 +785,9 @@ async fn maybe_run_previous_model_inline_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 async fn run_auto_compact(
@@ -832,7 +797,7 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
             run_inline_remote_auto_compact_task_v2(
@@ -844,7 +809,7 @@ async fn run_auto_compact(
                 phase,
             )
             .await?;
-            return Ok(());
+            return Ok(false);
         }
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
@@ -864,7 +829,7 @@ async fn run_auto_compact(
         )
         .await?;
     }
-    Ok(())
+    Ok(true)
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(
@@ -918,82 +883,6 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     connector_ids
 }
 
-pub(super) fn filter_connectors_for_input(
-    connectors: &[connectors::AppInfo],
-    input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> Vec<connectors::AppInfo> {
-    let connectors: Vec<connectors::AppInfo> = connectors
-        .iter()
-        .filter(|connector| connector.is_enabled)
-        .cloned()
-        .collect::<Vec<_>>();
-    if connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
-        return Vec::new();
-    }
-
-    let mentions = collect_tool_mentions_from_messages(&user_messages);
-    let mention_names_lower = mentions
-        .plain_names
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<HashSet<String>>();
-
-    let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
-    for path in mentions
-        .paths
-        .iter()
-        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        if let Some(connector_id) = app_id_from_path(path) {
-            allowed_connector_ids.insert(connector_id.to_string());
-        }
-    }
-
-    connectors
-        .into_iter()
-        .filter(|connector| {
-            connector_inserted_in_messages(
-                connector,
-                &mention_names_lower,
-                &allowed_connector_ids,
-                &connector_slug_counts,
-                skill_name_counts_lower,
-            )
-        })
-        .collect()
-}
-
-fn connector_inserted_in_messages(
-    connector: &connectors::AppInfo,
-    mention_names_lower: &HashSet<String>,
-    allowed_connector_ids: &HashSet<String>,
-    connector_slug_counts: &HashMap<String, usize>,
-    skill_name_counts_lower: &HashMap<String, usize>,
-) -> bool {
-    if allowed_connector_ids.contains(&connector.id) {
-        return true;
-    }
-
-    let mention_slug = codex_connectors::metadata::connector_mention_slug(connector);
-    let connector_count = connector_slug_counts
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    let skill_count = skill_name_counts_lower
-        .get(&mention_slug)
-        .copied()
-        .unwrap_or(0);
-    connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
-}
-
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     router: &ToolRouter,
@@ -1031,19 +920,9 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    explicitly_enabled_connectors: &HashSet<String>,
-    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let router = built_tools(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        &input,
-        explicitly_enabled_connectors,
-        skills_outcome,
-        &cancellation_token,
-    )
-    .await?;
+    let router = built_tools(sess.as_ref(), turn_context.as_ref(), &cancellation_token).await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -1173,9 +1052,6 @@ async fn run_sampling_request(
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
-    input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
-    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
@@ -1190,9 +1066,6 @@ pub(crate) async fn built_tools(
         .plugins_manager
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .await;
-
-    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
-    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
@@ -1217,7 +1090,7 @@ pub(crate) async fn built_tools(
         None
     };
     let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
+    let discoverable_tools = if apps_enabled && tool_suggest_enabled(turn_context) {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
@@ -1245,31 +1118,16 @@ pub(crate) async fn built_tools(
         None
     };
 
-    let explicitly_enabled = if let Some(connectors) = connectors.as_ref() {
-        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
-
-        filter_connectors_for_input(
-            connectors,
-            input,
-            &effective_explicitly_enabled_connectors,
-            &skill_name_counts_lower,
-        )
-    } else {
-        Vec::new()
-    };
     let mcp_tool_exposure = build_mcp_tool_exposure(
         &all_mcp_tools,
         connectors.as_deref(),
-        explicitly_enabled.as_slice(),
         &turn_context.config,
-        &turn_context.tools_config,
+        search_tool_enabled(turn_context),
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
+    Ok(Arc::new(ToolRouter::from_turn_context(
+        turn_context,
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
@@ -1476,6 +1334,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::ThreadSettingsApplied(_)
         | EventMsg::TurnComplete(_)
         | EventMsg::TokenCount(_)
         | EventMsg::UserMessage(_)

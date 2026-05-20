@@ -77,6 +77,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -527,6 +528,10 @@ pub struct Config {
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
 
+    /// Controls whether `model_auto_compact_token_limit` applies to the full
+    /// active context or only tokens after the carried compaction-window prefix.
+    pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
+
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
 
@@ -538,6 +543,13 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Whether config explicitly selected named permissions profiles instead
+    /// of the legacy `sandbox_mode` syntax.
+    pub explicit_permission_profile_mode: bool,
+
+    /// User-defined permission profile IDs available from effective config.
+    pub custom_permission_profile_ids: Vec<String>,
 
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
@@ -2019,7 +2031,7 @@ fn apply_managed_filesystem_constraints(
                 path: codex_protocol::permissions::FileSystemPath::GlobPattern {
                     pattern: deny_read.as_str().to_string(),
                 },
-                access: codex_protocol::permissions::FileSystemAccessMode::None,
+                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             }
         } else {
             let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
@@ -2027,7 +2039,7 @@ fn apply_managed_filesystem_constraints(
             };
             codex_protocol::permissions::FileSystemSandboxEntry {
                 path: codex_protocol::permissions::FileSystemPath::Path { path },
-                access: codex_protocol::permissions::FileSystemAccessMode::None,
+                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             }
         };
         if !file_system_sandbox_policy
@@ -2414,6 +2426,7 @@ impl Config {
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
+            computer_use: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
@@ -2425,14 +2438,17 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions =
-            AgentsMdManager::load_global_instructions(LOCAL_FS.as_ref(), Some(&codex_home))
-                .await
-                .map(|loaded| loaded.contents);
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
+        let user_instructions = AgentsMdManager::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&codex_home),
+            &mut startup_warnings,
+        )
+        .await
+        .map(|loaded| loaded.contents);
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -2604,6 +2620,17 @@ impl Config {
                 Some(PermissionConfigSyntax::Profiles)
             )
             || permission_config_syntax.is_none();
+        let explicit_permission_profile_mode = default_permissions_override.is_some()
+            || matches!(
+                permission_config_syntax,
+                Some(PermissionConfigSyntax::Profiles)
+            );
+        let custom_permission_profile_ids = cfg
+            .permissions
+            .as_ref()
+            .map_or_else(Vec::new, |permissions| {
+                permissions.entries.keys().cloned().collect()
+            });
         let using_implicit_builtin_profile =
             permission_config_syntax.is_none() && default_permissions.is_none();
         let should_seed_legacy_workspace_roots = default_permissions.is_none()
@@ -3355,6 +3382,9 @@ impl Config {
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
+            model_auto_compact_token_limit_scope: cfg
+                .model_auto_compact_token_limit_scope
+                .unwrap_or_default(),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -3371,6 +3401,8 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            explicit_permission_profile_mode,
+            custom_permission_profile_ids,
             approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,

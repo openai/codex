@@ -705,6 +705,128 @@ service_tier = "priority"
 }
 
 #[tokio::test]
+async fn spawn_agent_role_service_tier_falls_back_to_supported_parent_tier() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .await;
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("tiered-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "gpt-5.4"
+service_tier = "turbo"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let role_name = "tiered-role".to_string();
+    let mut config = (*turn.config).clone();
+    config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with an unsupported child tier".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name
+            })),
+        ))
+        .await
+        .expect("spawn_agent should fall back to the supported parent tier");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_role_service_tier_does_not_hide_invalid_spawn_request() {
+    let (session, mut turn) = make_session_and_context().await;
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("tiered-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "gpt-5.4"
+service_tier = "priority"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let role_name = "tiered-role".to_string();
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with a supported child tier".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    let result = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "service_tier": "turbo"
+            })),
+        ))
+        .await;
+
+    assert_eq!(
+        result.err(),
+        Some(FunctionCallError::RespondToModel(
+            "Service tier `turbo` is not supported for model `gpt-5.4`. Supported service tiers: priority"
+                .to_string()
+        ))
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_full_history_fork_accepts_explicit_service_tier() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
@@ -2106,7 +2228,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             path: FileSystemPath::GlobPattern {
                 pattern: "**/.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         });
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
     let expected_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(

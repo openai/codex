@@ -6,6 +6,7 @@ use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::RequestId;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -99,6 +100,33 @@ async fn process_spawn_returns_before_exit_and_emits_exit_notification() -> Resu
             stderr_cap_reached: false,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_spawn_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            "disabled-process".to_string(),
+            codex_home.path(),
+            vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+        )?)
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(process_request_id))
+        .await?;
+    assert_eq!(error.error.message, "local environment is not configured");
+
     Ok(())
 }
 

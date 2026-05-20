@@ -217,7 +217,7 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
+async fn app_search_sources_are_hidden_for_api_key_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -249,8 +249,13 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME} for API key auth: {tools:?}"
+        !tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "tools list should not include app tools for API key auth: {tools:?}"
+    );
+    let description = tool_search_description(&body).unwrap_or_default();
+    assert!(
+        !description.contains("Calendar"),
+        "tool_search description should not include app sources for API key auth: {description}"
     );
 
     Ok(())
@@ -335,7 +340,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> {
+async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -350,7 +355,13 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     )
     .await;
 
-    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -363,17 +374,21 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "explicit app mentions should leave app tools deferred when always-defer is active: {tools:?}"
+    );
+    assert!(
         namespace_child_tool(
             &body,
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_some(),
-        "expected explicit app mention to expose create tool, got tools: {tools:?}"
+        .is_none(),
+        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
-        "expected explicit app mention to expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
+        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())
@@ -657,6 +672,108 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
         "post-tool follow-up should still rely on tool_search_output history, not namespace injection: {third_request_tools:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search-spawn-agent";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "spawn agent",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Find the spawn agent tool",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_request_body = requests[0].body_json();
+    let first_request_tools = tool_names(&first_request_body);
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "first request should advertise tool_search: {first_request_tools:?}"
+    );
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert!(
+            !first_request_tools.iter().any(|name| name == tool_name),
+            "v1 multi-agent tools should be hidden before search: {first_request_tools:?}"
+        );
+    }
+    assert!(
+        !first_request_body
+            .to_string()
+            .contains("Only use `spawn_agent` if and only if"),
+        "deferred v1 multi-agent guidance should stay out of initial developer context"
+    );
+
+    let tools = tool_search_output_tools(&requests[1], call_id);
+    assert!(
+        !tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("function")
+                && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
+        }),
+        "spawn_agent should be returned as a namespace child, not a flat function: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("namespace")
+                && tool.get("name").and_then(Value::as_str) == Some("multi_agent_v1")
+        }),
+        "expected tool_search to return multi_agent_v1 namespace: {tools:?}"
+    );
+    let output = tool_search_output_item(&requests[1], call_id);
+    let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
+        .unwrap_or_else(|| {
+            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
+        });
+    assert_eq!(
+        spawn_agent.get("defer_loading").and_then(Value::as_bool),
+        Some(true)
+    );
+    let description = spawn_agent
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("spawn_agent description should be present");
+    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains("### Designing delegated subtasks"));
 
     Ok(())
 }

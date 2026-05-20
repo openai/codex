@@ -3,6 +3,7 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -251,6 +252,7 @@ pub struct Config {
     pub review_model: Option<String>,
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
@@ -386,12 +388,20 @@ pub struct ConfigRequirements {
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub computer_use: Option<ComputerUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseRequirements {
+    pub allow_locked_computer_use: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -421,6 +431,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStart")]
+    #[ts(rename = "SubagentStart")]
+    pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,

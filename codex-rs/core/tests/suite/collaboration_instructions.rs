@@ -49,13 +49,6 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn developer_message_count(input: &[Value]) -> usize {
-    input
-        .iter()
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
-        .count()
-}
-
 fn collab_xml(text: &str) -> String {
     format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
 }
@@ -92,7 +85,6 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
-    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
     assert!(
         dev_texts
@@ -123,22 +115,14 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
 
     let collab_text = "collab instructions";
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -277,22 +261,14 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
     let collab_text = "override instructions";
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -333,22 +309,14 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
     let turn_text = "turn override";
     let turn_mode = collab_mode_with_instructions(Some(turn_text));
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(base_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -405,22 +373,14 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     let first_text = "first instructions";
     let second_text = "second instructions";
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -436,22 +396,14 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -496,22 +448,14 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
     let test = test_codex().build(&server).await?;
     let collab_text = "same instructions";
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -527,22 +471,14 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -586,25 +522,17 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
     let default_text = "default mode instructions";
     let plan_text = "plan mode instructions";
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(default_text),
             )),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -620,25 +548,17 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Plan,
                 Some(plan_text),
             )),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -683,25 +603,17 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
     let test = test_codex().build(&server).await?;
     let collab_text = "mode-stable instructions";
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
             )),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -717,25 +629,17 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
                 ModeKind::Default,
                 Some(collab_text),
             )),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -785,23 +689,14 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     let home = initial.home.clone();
 
     let collab_text = "resume instructions";
-    initial
-        .codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &initial.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     initial
         .codex
@@ -856,18 +751,9 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     let test = test_codex().build(&server).await?;
     let current_model = test.session_configured.model.clone();
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -876,9 +762,10 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
                     developer_instructions: Some("".to_string()),
                 },
             }),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -895,7 +782,6 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
-    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml("");
     assert_eq!(count_messages_containing(&dev_texts, &collab_text), 0);

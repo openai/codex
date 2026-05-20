@@ -269,9 +269,20 @@ impl EnvironmentContext {
 }
 
 impl ContextualUserFragment for EnvironmentContext {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-    const END_MARKER: &'static str = codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+    fn role() -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG,
+            codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         let mut lines = Vec::new();

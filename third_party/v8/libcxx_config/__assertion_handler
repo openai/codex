@@ -1,0 +1,27 @@
+// -*- C++ -*-
+
+#ifndef _LIBCPP___ASSERTION_HANDLER
+#define _LIBCPP___ASSERTION_HANDLER
+
+#include <__config>
+#include <__verbose_abort>
+
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#pragma GCC system_header
+#endif
+
+#if defined(OFFICIAL_BUILD) && !defined(DCHECK_ALWAYS_ON)
+
+[[noreturn]] inline _LIBCPP_HIDE_FROM_ABI void __libcpp_hardening_failure() {
+  __builtin_trap();
+}
+
+#define _LIBCPP_ASSERTION_HANDLER(message) ((void)message, __libcpp_hardening_failure())
+
+#else
+
+#define _LIBCPP_ASSERTION_HANDLER(message) _LIBCPP_VERBOSE_ABORT("%s", message)
+
+#endif
+
+#endif  // _LIBCPP___ASSERTION_HANDLER

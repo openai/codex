@@ -126,7 +126,7 @@ impl FileSystemPermissions {
             match entry.access {
                 FileSystemAccessMode::Read => read.push(path.clone()),
                 FileSystemAccessMode::Write => write.push(path.clone()),
-                FileSystemAccessMode::None => return None,
+                FileSystemAccessMode::Deny => return None,
             }
         }
 
@@ -1788,7 +1788,7 @@ mod tests {
                 path: FileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             }]);
         file_system_sandbox_policy.glob_scan_max_depth = Some(2);
 

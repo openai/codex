@@ -7,6 +7,7 @@
 use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -23,6 +24,7 @@ use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -530,6 +532,14 @@ impl Session {
                 })?
         };
 
+        if objective.is_some() {
+            set_thread_preview_from_goal_objective(
+                &state_db,
+                self.conversation_id,
+                goal.objective.as_str(),
+            )
+            .await;
+        }
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let previous_status_for_goal = if replacing_goal {
@@ -611,6 +621,12 @@ impl Session {
                 )
             })?;
 
+        set_thread_preview_from_goal_objective(
+            &state_db,
+            self.conversation_id,
+            goal.objective.as_str(),
+        )
+        .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
@@ -1332,7 +1348,14 @@ impl Session {
             return;
         }
         self.input_queue
-            .extend_pending_input_for_turn_state(turn_state.as_ref(), candidate.items)
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                candidate
+                    .items
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
             .await;
 
         let turn_context = self
@@ -1508,6 +1531,21 @@ impl Session {
     }
 }
 
+async fn set_thread_preview_from_goal_objective(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    objective: &str,
+) {
+    if let Err(err) = state_db
+        .set_thread_preview_if_empty(thread_id, objective)
+        .await
+    {
+        tracing::warn!(
+            "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+        );
+    }
+}
+
 fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
     mode == ModeKind::Plan
 }
@@ -1596,7 +1634,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
 fn goal_context_input_item(prompt: String) -> ResponseInputItem {
     let context = GoalContext { prompt };
     ResponseInputItem::Message {
-        role: <GoalContext as ContextualUserFragment>::ROLE.to_string(),
+        role: GoalContext::role().to_string(),
         content: vec![ContentItem::InputText {
             text: context.render(),
         }],

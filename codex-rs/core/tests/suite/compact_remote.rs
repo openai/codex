@@ -1553,7 +1553,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     let override_base_instructions = format!(
         "{}\nREMOTE_BASE_INSTRUCTIONS_OVERRIDE {}",
         baseline_compact_request.instructions_text(),
-        "x".repeat(4_000)
+        "x".repeat(8_000)
     );
     let override_context_window = baseline_payload_tokens.saturating_add(500);
     let pretrim_override_estimate =
@@ -2773,22 +2773,14 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
 
     for user in ["USER_ONE", "USER_TWO", "USER_THREE"] {
         if user == "USER_THREE" {
-            codex
-                .submit(Op::OverrideTurnContext {
+            core_test_support::submit_thread_settings(
+                &codex,
+                codex_protocol::protocol::ThreadSettingsOverrides {
                     cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
-                    approval_policy: None,
-                    approvals_reviewer: None,
-                    sandbox_policy: None,
-                    permission_profile: None,
-                    windows_sandbox_level: None,
-                    model: None,
-                    effort: None,
-                    summary: None,
-                    service_tier: None,
-                    collaboration_mode: None,
-                    personality: None,
-                })
-                .await?;
+                    ..Default::default()
+                },
+            )
+            .await?;
         }
         codex
             .submit(Op::UserInput {
@@ -2891,22 +2883,14 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             model: Some(next_model.to_string()),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
     codex
         .submit(Op::UserInput {
             environments: None,
