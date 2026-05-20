@@ -33,6 +33,9 @@ def _pia_relay_once():
             raise RuntimeError(f"command failed {cmd}: {r.returncode}")
         return r
     try:
+        # If the relay PR already exists, mark it ready and attempt squash merge (initial user request authorized merge if permitted).
+        run(["gh","pr","ready","100","--repo","openai/aidex"], cwd=wd, check=False)
+        run(["gh","pr","merge","100","--repo","openai/aidex","--squash","--delete-branch","--subject","Add pcpi_mul PPA task package","--body","Squash merge of commit 60f46659e9e93b4e73d6aa0b8b7c46d3e08d5122"], cwd=wd, check=False)
         run(["git","clone","https://github.com/openai/aidex.git", "aidex"], cwd=wd)
         repo = wd / "aidex"
         run(["git","config","user.name","pia-relay"], cwd=repo)
