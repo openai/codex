@@ -65,11 +65,7 @@ RETURNING
         &self,
         thread_id: ThreadId,
     ) -> anyhow::Result<Vec<crate::ThreadQueuedTurn>> {
-        self.list_visible_thread_queued_turns_page(
-            thread_id,
-            /*offset*/ 0,
-            i64::MAX as usize,
-        )
+        self.list_visible_thread_queued_turns_page(thread_id, /*offset*/ 0, i64::MAX as usize)
             .await
     }
 
