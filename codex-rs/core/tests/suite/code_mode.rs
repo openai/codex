@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -145,10 +146,20 @@ async fn run_code_mode_turn(
     prompt: &str,
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
+    run_code_mode_turn_with_config(server, prompt, code, |_| {}).await
+}
+
+async fn run_code_mode_turn_with_config(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<(TestCodex, ResponseMock)> {
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            configure(config);
         });
     let test = builder.build(server).await?;
 
@@ -717,44 +728,21 @@ async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() 
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
-            let _ = config.features.enable(Feature::CodeMode);
-            config.tool_output_token_limit = Some(50);
-        });
-    let test = builder.build(&server).await?;
-
-    responses::mount_sse_once(
+    let (_test, second_mock) = run_code_mode_turn_with_config(
         &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_custom_tool_call(
-                "call-1",
-                "exec",
-                r#"// @exec: {"max_output_tokens": 20000}
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
 text(result.output);
 "#,
-            ),
-            ev_completed("resp-1"),
-        ]),
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
     )
-    .await;
-
-    let second_mock = responses::mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    test.submit_turn("use exec_command from code mode").await?;
+    .await?;
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     assert_eq!(items.len(), 2);
@@ -808,43 +796,20 @@ async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() 
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
-            let _ = config.features.enable(Feature::CodeMode);
-            config.tool_output_token_limit = Some(50);
-        });
-    let test = builder.build(&server).await?;
-
-    responses::mount_sse_once(
+    let (_test, second_mock) = run_code_mode_turn_with_config(
         &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_custom_tool_call(
-                "call-1",
-                "exec",
-                r#"// @exec: {"max_output_tokens": 20000}
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
 text(result.output);
 "#,
-            ),
-            ev_completed("resp-1"),
-        ]),
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
     )
-    .await;
-
-    let second_mock = responses::mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    test.submit_turn("use exec_command from code mode").await?;
+    .await?;
 
     let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     assert_eq!(items.len(), 2);
