@@ -35,6 +35,7 @@ mod agents_md;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
+mod auto_review;
 mod cli_stream;
 mod client;
 mod client_websockets;
