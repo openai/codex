@@ -1039,7 +1039,7 @@ impl Session {
                 .is_some_and(|goal_id| reported_goal_id.as_deref() == Some(goal_id))
         };
         let goal = match outcome {
-            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+            codex_state::GoalAccountingOutcome::Updated(goal) => {
                 let clear_active_goal = match goal.status {
                     codex_state::ThreadGoalStatus::Active => false,
                     codex_state::ThreadGoalStatus::BudgetLimited => {
@@ -1072,7 +1072,7 @@ impl Session {
                 }
                 goal
             }
-            codex_state::ThreadGoalAccountingOutcome::Unchanged(_) => return Ok(()),
+            codex_state::GoalAccountingOutcome::Unchanged(_) => return Ok(()),
         };
         let should_steer_budget_limit =
             matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
@@ -1158,7 +1158,7 @@ impl Session {
             )
             .await?
         {
-            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+            codex_state::GoalAccountingOutcome::Updated(goal) => {
                 if matches!(terminal_metric_emission, TerminalMetricEmission::Emit) {
                     self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
                 }
@@ -1171,7 +1171,7 @@ impl Session {
                 let goal = protocol_goal_from_state(goal);
                 Ok(Some(goal))
             }
-            codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
+            codex_state::GoalAccountingOutcome::Unchanged(goal) => {
                 {
                     let mut accounting = self.goal_runtime.accounting.lock().await;
                     accounting.wall_clock.reset_baseline();
