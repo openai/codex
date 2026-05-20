@@ -4,6 +4,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_install_context::InstallContext;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
@@ -180,6 +181,9 @@ impl CodexToolCallParam {
             codex_self_exe: arg0_paths.codex_self_exe.clone(),
             codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+            default_zsh_path: InstallContext::current()
+                .bundled_zsh_path()
+                .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf),
             base_instructions,
             developer_instructions,
             compact_prompt,

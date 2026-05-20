@@ -4383,6 +4383,56 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn default_zsh_path_is_lowest_precedence() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let configured_zsh_path = codex_home.path().join("configured-zsh");
+    let default_zsh_path = codex_home.path().join("packaged-zsh");
+    let override_zsh_path = codex_home.path().join("override-zsh");
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            default_zsh_path: Some(default_zsh_path.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(default_zsh_path.clone()));
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            zsh_path: Some(configured_zsh_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            default_zsh_path: Some(default_zsh_path.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(configured_zsh_path.clone()));
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            zsh_path: Some(configured_zsh_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            zsh_path: Some(override_zsh_path.clone()),
+            default_zsh_path: Some(default_zsh_path),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(override_zsh_path));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(
