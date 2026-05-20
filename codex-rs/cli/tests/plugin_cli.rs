@@ -60,7 +60,7 @@ fn write_marketplace_source(source: &Path) -> Result<()> {
     )?;
     std::fs::write(
         source.join("plugins/sample/.codex-plugin/plugin.json"),
-        r#"{"name":"sample","description":"Sample plugin"}"#,
+        r#"{"name":"sample","version":"1.2.3","description":"Sample plugin"}"#,
     )?;
     Ok(())
 }
@@ -118,6 +118,35 @@ fn setup_configured_marketplace_with_malformed_manifest() -> Result<(TempDir, Te
     Ok((codex_home, source))
 }
 
+fn setup_local_marketplace_with_implicit_system_roots() -> Result<(TempDir, TempDir, TempDir)> {
+    let (codex_home, source) = setup_local_marketplace()?;
+
+    let bundled_root = codex_home
+        .path()
+        .join(".tmp/bundled-marketplaces/openai-bundled");
+    std::fs::create_dir_all(&bundled_root)?;
+    let bundled_source = bundled_root.display().to_string();
+    record_user_marketplace(
+        codex_home.path(),
+        "openai-bundled",
+        &configured_local_marketplace(&bundled_source),
+    )?;
+
+    let cache_home = TempDir::new()?;
+    let runtime_root = cache_home
+        .path()
+        .join("codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime");
+    std::fs::create_dir_all(&runtime_root)?;
+    let runtime_source = runtime_root.display().to_string();
+    record_user_marketplace(
+        codex_home.path(),
+        "openai-primary-runtime",
+        &configured_local_marketplace(&runtime_source),
+    )?;
+
+    Ok((codex_home, source, cache_home))
+}
+
 #[tokio::test]
 async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
     let (codex_home, source) = setup_local_marketplace()?;
@@ -133,15 +162,44 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_list_shows_plugins_grouped_by_marketplace() -> Result<()> {
-    let (codex_home, _source) = setup_local_marketplace()?;
+async fn plugin_list_prints_plugins_in_a_table() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
+    let marketplace_manifest = source.path().join(".agents/plugins/marketplace.json");
+    let plugin_path = source.path().join("plugins/sample");
 
     codex_command(codex_home.path())?
         .args(["plugin", "list"])
         .assert()
         .success()
         .stdout(contains("Marketplace `debug`"))
-        .stdout(contains("sample@debug (not installed)"));
+        .stdout(contains("PLUGIN"))
+        .stdout(contains("STATUS"))
+        .stdout(contains("VERSION"))
+        .stdout(contains("PATH"))
+        .stdout(contains(marketplace_manifest.display().to_string()))
+        .stdout(contains("sample@debug"))
+        .stdout(contains("not installed"))
+        .stdout(contains(plugin_path.display().to_string()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_shows_installed_version_when_plugin_is_installed() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug"])
+        .assert()
+        .success();
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "list"])
+        .assert()
+        .success()
+        .stdout(contains("sample@debug"))
+        .stdout(contains("1.2.3"))
+        .stdout(contains("installed, enabled"));
 
     Ok(())
 }
@@ -151,10 +209,10 @@ async fn plugin_list_excludes_unconfigured_repo_local_marketplaces() -> Result<(
     let (codex_home, source) = setup_unconfigured_local_marketplace()?;
 
     codex_command_in(codex_home.path(), source.path())?
-        .args(["plugin", "list"])
+        .args(["plugin", "list", "--marketplace", "debug"])
         .assert()
         .success()
-        .stdout(contains("No marketplace plugins found."))
+        .stdout(contains("No plugins found in marketplace `debug`."))
         .stdout(predicates::str::is_match("sample@debug").unwrap().not());
 
     Ok(())
@@ -176,6 +234,30 @@ async fn plugin_list_fails_when_configured_marketplace_snapshot_is_missing() -> 
         .stderr(contains(
             "marketplace root does not contain a supported manifest",
         ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_ignores_implicit_system_marketplace_roots_without_manifests() -> Result<()> {
+    let (codex_home, source, cache_home) = setup_local_marketplace_with_implicit_system_roots()?;
+
+    codex_command(codex_home.path())?
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .args(["plugin", "list"])
+        .assert()
+        .success()
+        .stdout(contains("Marketplace `debug`"))
+        .stdout(contains(
+            source
+                .path()
+                .join(".agents/plugins/marketplace.json")
+                .display()
+                .to_string(),
+        ))
+        .stderr(
+            predicates::str::contains("failed to load configured marketplace snapshot(s):").not(),
+        );
 
     Ok(())
 }
@@ -258,7 +340,7 @@ async fn plugin_add_reinstalls_from_configured_marketplace_snapshot() -> Result<
     assert!(
         codex_home
             .path()
-            .join("plugins/cache/debug/sample/local/.codex-plugin/plugin.json")
+            .join("plugins/cache/debug/sample/1.2.3/.codex-plugin/plugin.json")
             .is_file()
     );
 
@@ -311,7 +393,7 @@ async fn plugin_add_rejects_cached_plugins_without_authorizing_marketplace_snaps
     assert!(
         codex_home
             .path()
-            .join("plugins/cache/debug/sample/local/.codex-plugin/plugin.json")
+            .join("plugins/cache/debug/sample/1.2.3/.codex-plugin/plugin.json")
             .is_file()
     );
 

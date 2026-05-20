@@ -15,6 +15,7 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::marketplace_cmd::MarketplaceCli;
@@ -168,9 +169,13 @@ pub async fn run_plugin_list(
             println!("No marketplace plugins found.");
         }
     } else {
-        for marketplace in marketplaces {
-            println!("Marketplace `{}`", marketplace.name);
-            println!("Path: {}", marketplace.path.as_path().display());
+        for (index, marketplace) in marketplaces.into_iter().enumerate() {
+            let mut rows = Vec::new();
+            let mut plugin_width = "PLUGIN".len();
+            let mut status_width = "STATUS".len();
+            let mut installed_version_width = "VERSION".len();
+            let mut path_width = "PATH".len();
+
             for plugin in &marketplace.plugins {
                 let state = if plugin.installed && plugin.enabled {
                     "installed, enabled"
@@ -179,7 +184,51 @@ pub async fn run_plugin_list(
                 } else {
                     "not installed"
                 };
-                println!("  {} ({state})", plugin.id);
+                let installed_version = plugin.installed_version.clone().unwrap_or_default();
+                let path = match &plugin.source {
+                    codex_core_plugins::marketplace::MarketplacePluginSource::Local { path } => {
+                        path.as_path().display().to_string()
+                    }
+                    codex_core_plugins::marketplace::MarketplacePluginSource::Git {
+                        url,
+                        path,
+                        ref_name,
+                        sha,
+                    } => {
+                        let mut parts = vec![url.clone()];
+                        if let Some(path) = path {
+                            parts.push(format!("path `{path}`"));
+                        }
+                        if let Some(ref_name) = ref_name {
+                            parts.push(format!("ref `{ref_name}`"));
+                        }
+                        if let Some(sha) = sha {
+                            parts.push(format!("sha `{sha}`"));
+                        }
+                        parts.join(", ")
+                    }
+                };
+                plugin_width = plugin_width.max(plugin.id.len());
+                status_width = status_width.max(state.len());
+                installed_version_width = installed_version_width.max(installed_version.len());
+                path_width = path_width.max(path.len());
+                rows.push((plugin.id.clone(), state, installed_version, path));
+            }
+
+            if index > 0 {
+                println!();
+            }
+            println!("Marketplace `{}`", marketplace.name);
+            println!("{}", marketplace.path.as_path().display());
+            println!();
+            println!(
+                "{:<plugin_width$}  {:<status_width$}  {:<installed_version_width$}  {:<path_width$}",
+                "PLUGIN", "STATUS", "VERSION", "PATH"
+            );
+            for (plugin, status, installed_version, path) in rows {
+                println!(
+                    "{plugin:<plugin_width$}  {status:<status_width$}  {installed_version:<installed_version_width$}  {path:<path_width$}"
+                );
             }
         }
     }
@@ -381,11 +430,16 @@ fn configured_marketplace_snapshot_issues(
         };
         match find_marketplace_manifest_path(&root) {
             Some(path) => manifest_paths.push((configured_name.clone(), path)),
-            None => issues.push(ConfiguredMarketplaceSnapshotIssue {
-                marketplace_name: configured_name.clone(),
-                path: root,
-                message: "marketplace root does not contain a supported manifest".to_string(),
-            }),
+            None => {
+                if is_implicit_system_marketplace_root(codex_home, &root) {
+                    continue;
+                }
+                issues.push(ConfiguredMarketplaceSnapshotIssue {
+                    marketplace_name: configured_name.clone(),
+                    path: root,
+                    message: "marketplace root does not contain a supported manifest".to_string(),
+                });
+            }
         }
     }
 
@@ -402,4 +456,27 @@ fn configured_marketplace_snapshot_issues(
         }
     }
     issues
+}
+
+fn is_implicit_system_marketplace_root(codex_home: &Path, root: &Path) -> bool {
+    if root.starts_with(codex_home.join(".tmp/bundled-marketplaces")) {
+        return true;
+    }
+
+    runtime_cache_root()
+        .is_some_and(|cache_root| root.starts_with(cache_root.join("codex-runtimes")))
+}
+
+fn runtime_cache_root() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".cache"))
+        })
 }
