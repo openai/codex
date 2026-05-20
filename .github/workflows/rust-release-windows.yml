@@ -295,7 +295,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
