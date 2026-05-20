@@ -4,6 +4,7 @@ CREATE TABLE thread_queued_turns (
     turn_start_params_jsonb BLOB NOT NULL,
     queue_order INTEGER NOT NULL,
     state TEXT NOT NULL CHECK(state IN ('pending', 'dispatching', 'failed')),
+    dispatch_turn_id TEXT,
     failure_jsonb BLOB,
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,

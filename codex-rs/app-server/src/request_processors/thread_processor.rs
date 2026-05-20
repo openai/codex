@@ -2597,7 +2597,7 @@ impl ThreadRequestProcessor {
                     .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
                     .await;
                 self.thread_queue_processor
-                    .emit_resume_queue_snapshot_and_drain(thread_id)
+                    .recover_resume_queue_snapshot_and_drain(thread_id)
                     .await;
             }
             Err(err) => {

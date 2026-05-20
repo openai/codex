@@ -17,6 +17,7 @@ INSERT INTO thread_queued_turns (
     turn_start_params_jsonb,
     queue_order,
     state,
+    dispatch_turn_id,
     failure_jsonb,
     created_at_ms,
     updated_at_ms
@@ -28,6 +29,7 @@ SELECT
     COALESCE(MAX(queue_order), -1) + 1,
     'pending',
     NULL,
+    NULL,
     ?,
     ?
 FROM thread_queued_turns
@@ -38,6 +40,7 @@ RETURNING
     CAST(json(turn_start_params_jsonb) AS BLOB) AS turn_start_params_jsonb,
     queue_order,
     state,
+    dispatch_turn_id,
     CASE
         WHEN failure_jsonb IS NULL THEN NULL
         ELSE CAST(json(failure_jsonb) AS BLOB)
@@ -70,6 +73,7 @@ SELECT
     CAST(json(turn_start_params_jsonb) AS BLOB) AS turn_start_params_jsonb,
     queue_order,
     state,
+    dispatch_turn_id,
     CASE
         WHEN failure_jsonb IS NULL THEN NULL
         ELSE CAST(json(failure_jsonb) AS BLOB)
@@ -215,6 +219,7 @@ RETURNING
     CAST(json(turn_start_params_jsonb) AS BLOB) AS turn_start_params_jsonb,
     queue_order,
     state,
+    dispatch_turn_id,
     CASE
         WHEN failure_jsonb IS NULL THEN NULL
         ELSE CAST(json(failure_jsonb) AS BLOB)
@@ -231,18 +236,44 @@ RETURNING
         row.map(|row| thread_queued_turn_from_row(&row)).transpose()
     }
 
+    pub async fn set_dispatching_thread_queued_turn_turn_id(
+        &self,
+        queued_turn_id: &str,
+        turn_id: &str,
+    ) -> anyhow::Result<bool> {
+        let now_ms = datetime_to_epoch_millis(Utc::now());
+        let result = sqlx::query(
+            r#"
+UPDATE thread_queued_turns
+SET dispatch_turn_id = ?, updated_at_ms = ?
+WHERE queued_turn_id = ?
+  AND state = 'dispatching'
+            "#,
+        )
+        .bind(turn_id)
+        .bind(now_ms)
+        .bind(queued_turn_id)
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn remove_dispatching_thread_queued_turn(
         &self,
         thread_id: ThreadId,
+        turn_id: &str,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
 DELETE FROM thread_queued_turns
 WHERE thread_id = ?
   AND state = 'dispatching'
+  AND dispatch_turn_id = ?
             "#,
         )
         .bind(thread_id.to_string())
+        .bind(turn_id)
         .execute(self.pool.as_ref())
         .await?;
 
@@ -534,6 +565,48 @@ mod tests {
                 .await
                 .expect("claim next")
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_claim_clears_only_for_its_submitted_turn() {
+        let (runtime, thread_id) = runtime_with_thread().await;
+        let queued_turn = runtime
+            .append_thread_queued_turn(thread_id, br#"{"threadId":"t","input":[]}"#)
+            .await
+            .expect("append queued turn");
+        runtime
+            .claim_head_thread_queued_turn(thread_id)
+            .await
+            .expect("claim queued turn")
+            .expect("claimed row");
+
+        assert!(
+            !runtime
+                .remove_dispatching_thread_queued_turn(thread_id, "regular-turn")
+                .await
+                .expect("unmatched turn must not clear claim")
+        );
+        assert!(
+            runtime
+                .set_dispatching_thread_queued_turn_turn_id(
+                    &queued_turn.queued_turn_id,
+                    "queued-turn",
+                )
+                .await
+                .expect("record submitted queued turn id")
+        );
+        assert!(
+            !runtime
+                .remove_dispatching_thread_queued_turn(thread_id, "regular-turn")
+                .await
+                .expect("different started turn must not clear claim")
+        );
+        assert!(
+            runtime
+                .remove_dispatching_thread_queued_turn(thread_id, "queued-turn")
+                .await
+                .expect("matching queued turn clears claim")
         );
     }
 }

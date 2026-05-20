@@ -335,9 +335,12 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
-                    if matches!(&event.msg, EventMsg::TurnStarted(_)) {
+                    if let EventMsg::TurnStarted(payload) = &event.msg {
                         thread_queue_processor
-                            .complete_dispatch_after_turn_started(conversation_id)
+                            .complete_dispatch_after_turn_started(
+                                conversation_id,
+                                payload.turn_id.as_str(),
+                            )
                             .await;
                     }
                     if matches!(
