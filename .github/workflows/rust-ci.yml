@@ -72,6 +72,8 @@ jobs:
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Rust benchmark smoke test
+        run: ../scripts/smoke-test-rust-benches.sh
 
   cargo_shear:
     name: cargo shear
