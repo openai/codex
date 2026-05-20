@@ -187,6 +187,60 @@ pub(crate) async fn resolve_server_request_on_thread_listener(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::ApprovalsReviewer;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::SandboxPolicy;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn note_thread_settings_reports_only_effective_changes() {
+        let mut state = ThreadState::default();
+        let initial = thread_settings("mock-model");
+        let updated = thread_settings("mock-model-2");
+
+        let results = vec![
+            state.note_thread_settings(initial.clone()),
+            state.note_thread_settings(initial),
+            state.note_thread_settings(updated.clone()),
+            state.note_thread_settings(updated),
+        ];
+
+        assert_eq!(results, vec![true, false, true, false]);
+    }
+
+    fn thread_settings(model: &str) -> ThreadSettings {
+        ThreadSettings {
+            cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: None,
+            model: model.to_string(),
+            model_provider: "mock_provider".to_string(),
+            service_tier: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: model.to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+            personality: None,
+        }
+    }
+}
+
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
