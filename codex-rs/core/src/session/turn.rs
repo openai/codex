@@ -720,7 +720,7 @@ impl AutoCompactTurnLimiter {
                 turn_context,
                 EventMsg::Error(ErrorEvent {
                     message: format!(
-                        "Codex stopped after {MAX_AUTO_COMPACTIONS_PER_TURN} automatic compactions in this turn because the context remained too large. Queued input for this turn was not processed; start a new thread or reduce earlier history before retrying."
+                        "Codex stopped after {MAX_AUTO_COMPACTIONS_PER_TURN} automatic compactions in this turn because the context remained too large. Start a new thread or reduce earlier history before retrying."
                     ),
                     codex_error_info: Some(CodexErrorInfo::ContextWindowExceeded),
                 }),
