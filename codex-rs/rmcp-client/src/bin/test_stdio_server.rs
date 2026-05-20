@@ -70,6 +70,7 @@ impl TestToolServer {
             Self::echo_dash_tool(),
             Self::cwd_tool(),
             Self::sync_tool(),
+            Self::sync_mutable_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
             sandbox_meta_tool,
@@ -166,6 +167,16 @@ impl TestToolServer {
     }
 
     fn sync_tool() -> Tool {
+        let mut tool = Self::build_sync_tool("sync");
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn sync_mutable_tool() -> Tool {
+        Self::build_sync_tool("sync_mutable")
+    }
+
+    fn build_sync_tool(name: &'static str) -> Tool {
         #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
@@ -188,7 +199,7 @@ impl TestToolServer {
         .expect("sync tool schema should deserialize");
 
         let mut tool = Tool::new(
-            Cow::Borrowed("sync"),
+            Cow::Borrowed(name),
             Cow::Borrowed(
                 "Synchronize concurrent test calls and optionally delay before or after the barrier.",
             ),
@@ -205,7 +216,6 @@ impl TestToolServer {
         }))
         .expect("sync tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
-        tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }
 
@@ -549,6 +559,10 @@ impl ServerHandler for TestToolServer {
             }
             "sync" => {
                 let args = Self::parse_call_args::<SyncArgs>(&request, "sync")?;
+                Self::sync_result(args).await
+            }
+            "sync_mutable" => {
+                let args = Self::parse_call_args::<SyncArgs>(&request, "sync_mutable")?;
                 Self::sync_result(args).await
             }
             other => Err(McpError::invalid_params(
