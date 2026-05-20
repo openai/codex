@@ -73,12 +73,14 @@ async fn apply_role_to_config_inner(
     }
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
+    let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
 
     *config = reload::build_next_config(
         config,
         role_layer_toml,
         preserve_current_profile,
         preserve_current_provider,
+        preserve_current_service_tier,
     )
     .await?;
     Ok(())
@@ -157,6 +159,7 @@ mod reload {
         role_layer_toml: TomlValue,
         preserve_current_profile: bool,
         preserve_current_provider: bool,
+        preserve_current_service_tier: bool,
     ) -> anyhow::Result<Config> {
         let active_profile_name = preserve_current_profile
             .then_some(config.active_profile.as_deref())
@@ -171,7 +174,11 @@ mod reload {
         let mut next_config = Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             merged_config,
-            reload_overrides(config, preserve_current_provider),
+            reload_overrides(
+                config,
+                preserve_current_provider,
+                preserve_current_service_tier,
+            ),
             config.codex_home.clone(),
             config_layer_stack,
         )
@@ -261,10 +268,15 @@ mod reload {
         ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, role_layer_toml)
     }
 
-    fn reload_overrides(config: &Config, preserve_current_provider: bool) -> ConfigOverrides {
+    fn reload_overrides(
+        config: &Config,
+        preserve_current_provider: bool,
+        preserve_current_service_tier: bool,
+    ) -> ConfigOverrides {
         ConfigOverrides {
             cwd: Some(config.cwd.to_path_buf()),
             model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
+            service_tier: preserve_current_service_tier.then(|| config.service_tier.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             ..Default::default()
@@ -323,8 +335,11 @@ pub(crate) mod spawn_tool_spec {
                     let reasoning_effort = role_toml
                         .get("model_reasoning_effort")
                         .and_then(TomlValue::as_str);
+                    let service_tier = role_toml
+                        .get("service_tier")
+                        .and_then(TomlValue::as_str);
 
-                    match (model, reasoning_effort) {
+                    let model_and_reasoning_note = match (model, reasoning_effort) {
                         (Some(model), Some(reasoning_effort)) => format!(
                             "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
                         ),
@@ -339,7 +354,15 @@ pub(crate) mod spawn_tool_spec {
                             )
                         }
                         (None, None) => String::new(),
-                    }
+                    };
+                    let service_tier_note = service_tier
+                        .map(|service_tier| {
+                            format!(
+                                "\n- This role's service tier is set to `{service_tier}`. If it is supported by the resolved model, it takes precedence over a valid spawn request service tier."
+                            )
+                        })
+                        .unwrap_or_default();
+                    format!("{model_and_reasoning_note}{service_tier_note}")
                 })
                 .unwrap_or_default();
             format!("{name}: {{\n{description}{locked_settings_note}\n}}")

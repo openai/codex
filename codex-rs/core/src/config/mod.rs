@@ -2031,7 +2031,7 @@ fn apply_managed_filesystem_constraints(
                 path: codex_protocol::permissions::FileSystemPath::GlobPattern {
                     pattern: deny_read.as_str().to_string(),
                 },
-                access: codex_protocol::permissions::FileSystemAccessMode::None,
+                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             }
         } else {
             let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
@@ -2039,7 +2039,7 @@ fn apply_managed_filesystem_constraints(
             };
             codex_protocol::permissions::FileSystemSandboxEntry {
                 path: codex_protocol::permissions::FileSystemPath::Path { path },
-                access: codex_protocol::permissions::FileSystemAccessMode::None,
+                access: codex_protocol::permissions::FileSystemAccessMode::Deny,
             }
         };
         if !file_system_sandbox_policy
@@ -2426,6 +2426,7 @@ impl Config {
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
+            computer_use: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
@@ -2437,14 +2438,17 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions =
-            AgentsMdManager::load_global_instructions(LOCAL_FS.as_ref(), Some(&codex_home))
-                .await
-                .map(|loaded| loaded.contents);
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
+        let user_instructions = AgentsMdManager::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&codex_home),
+            &mut startup_warnings,
+        )
+        .await
+        .map(|loaded| loaded.contents);
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {

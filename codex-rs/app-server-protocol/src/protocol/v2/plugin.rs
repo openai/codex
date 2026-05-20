@@ -144,6 +144,9 @@ pub enum PluginListMarketplaceKind {
     #[serde(rename = "local")]
     #[ts(rename = "local")]
     Local,
+    #[serde(rename = "vertical")]
+    #[ts(rename = "vertical")]
+    Vertical,
     #[serde(rename = "workspace-directory")]
     #[ts(rename = "workspace-directory")]
     WorkspaceDirectory,

@@ -30,7 +30,7 @@ impl Handler {
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("wait_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent")
     }
 
     fn spec(&self) -> Option<ToolSpec> {

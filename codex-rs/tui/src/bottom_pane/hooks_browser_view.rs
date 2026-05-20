@@ -736,6 +736,7 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
         HookEventName::Stop => "Stop",
     }
 }
@@ -749,6 +750,7 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PostCompact => "After context compaction",
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
+        HookEventName::SubagentStart => "When a subagent is created",
         HookEventName::Stop => "Right before Codex ends its turn",
     }
 }

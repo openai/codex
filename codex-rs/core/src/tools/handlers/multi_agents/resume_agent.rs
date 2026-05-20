@@ -10,7 +10,7 @@ pub(crate) struct Handler;
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("resume_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "resume_agent")
     }
 
     fn spec(&self) -> Option<ToolSpec> {

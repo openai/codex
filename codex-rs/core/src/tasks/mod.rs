@@ -348,8 +348,8 @@ impl Session {
             debug_assert!(turn.tasks.is_empty());
             Arc::clone(&turn.turn_state)
         };
-        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
-        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
+        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
+        self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);

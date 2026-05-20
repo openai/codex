@@ -126,7 +126,7 @@ impl FileSystemPermissions {
             match entry.access {
                 FileSystemAccessMode::Read => read.push(path.clone()),
                 FileSystemAccessMode::Write => write.push(path.clone()),
-                FileSystemAccessMode::None => return None,
+                FileSystemAccessMode::Deny => return None,
             }
         }
 
@@ -1314,6 +1314,9 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    EncryptedContent {
+        encrypted_content: String,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1337,7 +1340,8 @@ pub fn function_call_output_content_items_to_text(
                 Some(text.as_str())
             }
             FunctionCallOutputContentItem::InputText { .. }
-            | FunctionCallOutputContentItem::InputImage { .. } => None,
+            | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -1788,7 +1792,7 @@ mod tests {
                 path: FileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             }]);
         file_system_sandbox_policy.glob_scan_max_depth = Some(2);
 
@@ -2063,6 +2067,9 @@ mod tests {
                 image_url: "data:image/png;base64,AAA".to_string(),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
         ];
 
         let text = function_call_output_content_items_to_text(&content_items);
@@ -2271,6 +2278,35 @@ mod tests {
     }
 
     #[test]
+    fn serializes_encrypted_function_output_content_as_array() -> Result<()> {
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: "enc_opaque".into(),
+                },
+            ]),
+        };
+
+        let json = serde_json::to_value(&item)?;
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call1",
+                "output": [
+                    {
+                        "type": "encrypted_content",
+                        "encrypted_content": "enc_opaque",
+                    }
+                ],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn preserves_existing_image_data_urls() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({
@@ -2382,6 +2418,30 @@ mod tests {
                 detail: None,
             },
         ];
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(expected_items.clone())
+        );
+        assert_eq!(
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&expected_items)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_encrypted_array_payload_into_items() -> Result<()> {
+        let json = r#"[
+            {"type": "encrypted_content", "encrypted_content": "enc_opaque"}
+        ]"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+        let expected_items = vec![FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".into(),
+        }];
+
+        assert_eq!(payload.success, None);
         assert_eq!(
             payload.body,
             FunctionCallOutputBody::ContentItems(expected_items.clone())

@@ -281,7 +281,7 @@ fn shell_request_escalation_execution_is_explicit() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::from_absolute_path("/tmp/secret").unwrap(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let network_sandbox_policy = NetworkSandboxPolicy::Restricted;

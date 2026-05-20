@@ -229,8 +229,13 @@ pub struct ThreadStartResponse {
 /// 2. By history: instantiate the thread from memory and resume it.
 /// 3. By path: load the thread from disk by path and resume it.
 ///
-/// The precedence is: history > path > thread_id.
-/// If using history or path, the thread_id param will be ignored.
+/// For non-running threads, the precedence is: history > non-empty path > thread_id.
+/// If using history or a non-empty path for a non-running thread, the thread_id
+/// param will be ignored.
+///
+/// If thread_id identifies a running thread, app-server rejoins that thread and
+/// treats a non-empty path as a consistency check against the active rollout path.
+/// Empty string path values are treated as absent.
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
@@ -244,8 +249,14 @@ pub struct ThreadResumeParams {
     pub history: Option<Vec<ResponseItem>>,
 
     /// [UNSTABLE] Specify the rollout path to resume from.
-    /// If specified, the thread_id param will be ignored.
+    /// If specified for a non-running thread, the thread_id param will be ignored.
+    /// If thread_id identifies a running thread, the path must match the active
+    /// rollout path.
     #[experimental("thread/resume.path")]
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 
@@ -346,7 +357,8 @@ pub struct ThreadResumeResponse {
 /// 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
 /// 2. By path: load the thread from disk by path and fork it into a new thread.
 ///
-/// If using path, the thread_id param will be ignored.
+/// If using a non-empty path, the thread_id param will be ignored.
+/// Empty string path values are treated as absent.
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
@@ -355,6 +367,10 @@ pub struct ThreadForkParams {
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 

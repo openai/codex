@@ -45,9 +45,12 @@ pub async fn build_prompt_input(
         Arc::clone(&auth_manager),
         SessionSource::Exec,
         Arc::new(
-            EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
-                .await
-                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+            EnvironmentManager::from_codex_home(
+                config.codex_home.clone(),
+                Some(local_runtime_paths),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         empty_extension_registry(),
         /*analytics_events_client*/ None,

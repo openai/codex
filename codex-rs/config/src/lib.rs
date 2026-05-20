@@ -39,6 +39,7 @@ pub use config_requirements::AppRequirementToml;
 pub use config_requirements::AppToolRequirementToml;
 pub use config_requirements::AppToolsRequirementsToml;
 pub use config_requirements::AppsRequirementsToml;
+pub use config_requirements::ComputerUseRequirementsToml;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;
 pub use config_requirements::ConfigRequirementsWithSources;

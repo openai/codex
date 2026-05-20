@@ -328,13 +328,14 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .await;
 
     assert_eq!(
-        response,
+        response.response,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
             meta: None,
         })
     );
+    assert!(!response.sent);
     assert!(rx.try_recv().is_err());
 }
 
@@ -530,7 +531,9 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
-            source: codex_hooks::SessionStartSource::Startup,
+            target: codex_hooks::StartHookTarget::SessionStart {
+                source: codex_hooks::SessionStartSource::Startup,
+            },
         }),
     )
 }
@@ -1296,7 +1299,9 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1401,7 +1406,9 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1902,6 +1909,108 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         .drain(..)
         .collect::<Vec<_>>();
     assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
+    struct SessionTurnStartMarker;
+    struct ThreadTurnStartMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTurnStart {
+        turn_id: String,
+        collaboration_mode: CollaborationMode,
+        token_usage_at_turn_start: TokenUsage,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TurnStartRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTurnStart>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::TurnLifecycleContributor for TurnStartRecorder {
+        async fn on_turn_start(&self, input: codex_extension_api::TurnStartInput<'_>) {
+            self.records
+                .lock()
+                .expect("turn start records lock")
+                .push(RecordedTurnStart {
+                    turn_id: input.turn_id.to_string(),
+                    collaboration_mode: input.collaboration_mode.clone(),
+                    token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
+                    saw_session_store: input
+                        .session_store
+                        .get::<SessionTurnStartMarker>()
+                        .is_some(),
+                    saw_thread_store: input.thread_store.get::<ThreadTurnStartMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.turn_lifecycle_contributor(Arc::new(TurnStartRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTurnStartMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTurnStartMarker);
+
+    let token_usage_at_turn_start = TokenUsage {
+        input_tokens: 120,
+        cached_input_tokens: 15,
+        output_tokens: 40,
+        reasoning_output_tokens: 9,
+        total_tokens: 169,
+    };
+    session
+        .state
+        .lock()
+        .await
+        .set_token_info(Some(TokenUsageInfo {
+            total_token_usage: token_usage_at_turn_start.clone(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: turn_context.model_context_window(),
+        }));
+
+    let turn_context = Arc::new(turn_context);
+    let session = Arc::new(session);
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let actual = records
+        .lock()
+        .expect("turn start records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        vec![RecordedTurnStart {
+            turn_id: turn_context.sub_id.clone(),
+            collaboration_mode: turn_context.collaboration_mode.clone(),
+            token_usage_at_turn_start,
+            saw_session_store: true,
+            saw_thread_store: true,
+        }],
+        actual
+    );
 }
 
 #[tokio::test]
@@ -3522,7 +3631,7 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
         },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     };
     let mut existing_file_system_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
@@ -7137,7 +7246,7 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
         path: FileSystemPath::GlobPattern {
             pattern: format!("{cwd_display}/**/*.env"),
         },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     });
     policy
 }
@@ -8629,7 +8738,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .thread_goals()
         .update_thread_goal(
             sess.conversation_id,
-            codex_state::ThreadGoalUpdate {
+            codex_state::GoalUpdate {
                 objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
