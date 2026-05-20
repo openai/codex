@@ -1,9 +1,17 @@
 use super::*;
 
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_config::permissions_toml::NetworkDomainPermissionToml;
+use codex_config::permissions_toml::NetworkDomainPermissionsToml;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 #[test]
 fn higher_precedence_profile_network_overlays_domain_entries() {
@@ -168,6 +176,256 @@ dangerously_allow_all_unix_sockets = true
     apply_network_constraints(network, &mut constraints);
 
     assert_eq!(constraints.dangerously_allow_all_unix_sockets, Some(true));
+}
+
+#[test]
+fn selected_network_from_tables_ignores_builtin_profile_without_permissions_table() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = ":workspace"
+"#,
+    )
+    .expect("built-in profile config should parse");
+
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("built-in profile config should deserialize"),
+    )
+    .expect("built-in profile selection should not require permissions tables");
+
+    assert_eq!(network, None);
+}
+
+#[test]
+fn selected_network_from_tables_rejects_unknown_builtin_profile_without_permissions_table() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = ":unknown"
+"#,
+    )
+    .expect("unknown built-in config should parse");
+
+    let err = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("unknown built-in config should deserialize"),
+    )
+    .expect_err("unknown built-in profile should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "default_permissions refers to unknown built-in profile `:unknown`"
+    );
+}
+
+#[test]
+fn selected_network_from_tables_resolves_builtin_workspace_parent() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace]
+extends = ":workspace"
+
+[permissions.workspace.network]
+enabled = true
+
+[permissions.workspace.network.domains]
+"child.example.com" = "allow"
+"#,
+    )
+    .expect("workspace extension config should parse");
+
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("workspace extension config should deserialize"),
+    )
+    .expect("workspace extension should resolve")
+    .expect("workspace extension should expose child network config");
+
+    assert_eq!(
+        network,
+        NetworkToml {
+            enabled: Some(true),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([(
+                    "child.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn selected_network_from_tables_resolves_permission_profile_inheritance() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.base.network]
+enabled = true
+dangerously_allow_all_unix_sockets = true
+
+[permissions.base.network.domains]
+"base.example.com" = "allow"
+"shared.example.com" = "deny"
+
+[permissions.workspace]
+extends = "base"
+
+[permissions.workspace.network]
+allow_local_binding = true
+
+[permissions.workspace.network.domains]
+"child.example.com" = "allow"
+"shared.example.com" = "allow"
+"#,
+    )
+    .expect("permissions profiles should parse");
+
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("permissions profiles should deserialize"),
+    )
+    .expect("permissions profiles should select a network table")
+    .expect("network table should be present");
+
+    assert_eq!(
+        network,
+        NetworkToml {
+            enabled: Some(true),
+            dangerously_allow_all_unix_sockets: Some(true),
+            allow_local_binding: Some(true),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([
+                    (
+                        "base.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "child.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "shared.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                ]),
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn config_from_layers_resolves_inherited_profiles_across_layers() {
+    let lower_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            [permissions.base.network.domains]
+            "base.example.com" = "allow"
+        }
+        .into(),
+    );
+    let higher_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            default_permissions = "workspace"
+
+            [permissions.workspace]
+            extends = "base"
+
+            [permissions.workspace.network.domains]
+            "child.example.com" = "allow"
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let config =
+        config_from_layers(&layers, &Policy::empty()).expect("inherited profiles should load");
+
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec![
+            "base.example.com".to_string(),
+            "child.example.com".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn config_from_layers_uses_only_the_final_selected_profile_network() {
+    let lower_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            default_permissions = "workspace"
+
+            [permissions.workspace.network.domains]
+            "lower.example.com" = "allow"
+        }
+        .into(),
+    );
+    let higher_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            default_permissions = ":workspace"
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let config = config_from_layers(&layers, &Policy::empty())
+        .expect("final built-in profile selection should load");
+
+    assert_eq!(config.network.allowed_domains(), None);
+    assert_eq!(config.network.denied_domains(), None);
+}
+
+#[test]
+fn trusted_constraints_use_only_the_final_selected_profile_network() {
+    let lower_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::System {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/system.toml"))
+                .expect("system config path should be absolute"),
+        },
+        toml::toml! {
+            default_permissions = "workspace"
+
+            [permissions.workspace.network.domains]
+            "managed.example.com" = "allow"
+        }
+        .into(),
+    );
+    let higher_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/managed.toml"))
+                .expect("managed config path should be absolute"),
+        },
+        toml::toml! {
+            default_permissions = ":workspace"
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let constraints = network_constraints_from_trusted_layers(&layers)
+        .expect("final built-in trusted selection should load");
+
+    assert_eq!(constraints.allowed_domains, None);
+    assert_eq!(constraints.denied_domains, None);
 }
 
 #[test]
