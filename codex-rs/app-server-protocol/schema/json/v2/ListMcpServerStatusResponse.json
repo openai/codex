@@ -10,13 +10,50 @@
       ],
       "type": "string"
     },
+    "McpServerRuntimePlacement": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "orchestrator"
+              ],
+              "title": "OrchestratorMcpServerRuntimePlacementType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OrchestratorMcpServerRuntimePlacement",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "environmentId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "environment"
+              ],
+              "title": "EnvironmentMcpServerRuntimePlacementType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "environmentId",
+            "type"
+          ],
+          "title": "EnvironmentMcpServerRuntimePlacement",
+          "type": "object"
+        }
+      ]
+    },
     "McpServerStatus": {
       "properties": {
         "authStatus": {
           "$ref": "#/definitions/McpAuthStatus"
-        },
-        "environmentId": {
-          "type": "string"
         },
         "name": {
           "type": "string"
@@ -33,6 +70,9 @@
           },
           "type": "array"
         },
+        "runtimePlacement": {
+          "$ref": "#/definitions/McpServerRuntimePlacement"
+        },
         "tools": {
           "additionalProperties": {
             "$ref": "#/definitions/Tool"
@@ -42,10 +82,10 @@
       },
       "required": [
         "authStatus",
-        "environmentId",
         "name",
         "resourceTemplates",
         "resources",
+        "runtimePlacement",
         "tools"
       ],
       "type": "object"

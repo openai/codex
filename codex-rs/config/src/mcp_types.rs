@@ -356,10 +356,13 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             return Err("invalid transport".to_string());
         };
 
+        let environment_id =
+            environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
+        validate_remote_stdio_cwd(&transport, &environment_id)?;
+
         Ok(Self {
             transport,
-            environment_id: environment_id
-                .unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string()),
+            environment_id,
             startup_timeout_sec,
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),
@@ -390,6 +393,30 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
 const fn default_enabled() -> bool {
     true
+}
+
+fn validate_remote_stdio_cwd(
+    transport: &McpServerTransportConfig,
+    environment_id: &str,
+) -> Result<(), String> {
+    if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        return Ok(());
+    }
+    let McpServerTransportConfig::Stdio { cwd, .. } = transport else {
+        return Ok(());
+    };
+    let Some(cwd) = cwd else {
+        return Err(format!(
+            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
+        ));
+    };
+    if cwd.is_absolute() {
+        return Ok(());
+    }
+    Err(format!(
+        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{}`",
+        cwd.display()
+    ))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

@@ -55,7 +55,19 @@ pub struct McpServerStatus {
     pub resources: Vec<McpResource>,
     pub resource_templates: Vec<McpResourceTemplate>,
     pub auth_status: McpAuthStatus,
-    pub environment_id: String,
+    pub runtime_placement: McpServerRuntimePlacement,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(rename_all = "camelCase", tag = "type", export_to = "v2/")]
+pub enum McpServerRuntimePlacement {
+    Orchestrator,
+    Environment {
+        #[serde(rename = "environmentId")]
+        #[ts(rename = "environmentId")]
+        environment_id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

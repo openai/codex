@@ -53,15 +53,71 @@ fn deserialize_stdio_command_server_config_with_args() {
 
 #[test]
 fn deserialize_legacy_mcp_environment_alias() {
-    let cfg: McpServerConfig = toml::from_str(
+    let cwd = std::env::temp_dir();
+    let cfg: McpServerConfig = toml::from_str(&format!(
         r#"
             command = "echo"
             experimental_environment = "remote"
-        "#,
-    )
+            cwd = {cwd:?}
+        "#
+    ))
     .expect("should deserialize legacy MCP environment alias");
 
     assert_eq!(cfg.environment_id, "remote");
+}
+
+#[test]
+fn deserialize_remote_stdio_server_requires_absolute_cwd() {
+    let missing_cwd = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+        "#,
+    )
+    .expect_err("remote stdio MCP should require cwd");
+    assert!(
+        missing_cwd
+            .to_string()
+            .contains("remote stdio MCP servers require an absolute cwd"),
+        "unexpected error: {missing_cwd}"
+    );
+
+    let relative_cwd = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+            cwd = "relative"
+        "#,
+    )
+    .expect_err("remote stdio MCP should require absolute cwd");
+    assert!(
+        relative_cwd.to_string().contains("got `relative`"),
+        "unexpected error: {relative_cwd}"
+    );
+}
+
+#[test]
+fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
+    let cwd = std::env::temp_dir();
+    let cfg: McpServerConfig = toml::from_str(&format!(
+        r#"
+            command = "echo"
+            environment_id = "remote"
+            cwd = {cwd:?}
+        "#
+    ))
+    .expect("remote stdio MCP should accept absolute cwd");
+
+    assert_eq!(
+        cfg.transport,
+        McpServerTransportConfig::Stdio {
+            command: "echo".to_string(),
+            args: vec![],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: Some(cwd),
+        }
+    );
 }
 
 #[test]

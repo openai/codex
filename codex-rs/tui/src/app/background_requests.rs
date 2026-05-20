@@ -1053,7 +1053,8 @@ mod tests {
                 resources: Vec::new(),
                 resource_templates: Vec::new(),
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-                environment_id: "local".to_string(),
+                runtime_placement:
+                    codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator,
             },
             McpServerStatus {
                 name: "disabled".to_string(),
@@ -1061,7 +1062,8 @@ mod tests {
                 resources: Vec::new(),
                 resource_templates: Vec::new(),
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-                environment_id: "local".to_string(),
+                runtime_placement:
+                    codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator,
             },
         ];
 

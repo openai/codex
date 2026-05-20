@@ -206,9 +206,8 @@ impl McpRequestProcessor {
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless status path has no turn cwd or turn-selected
-        // environment. Use config cwd as the stdio fallback and the shared
-        // environment registry only for explicit MCP env ids; an omitted MCP
-        // env id still means local.
+        // environment. Use config cwd only as the local stdio fallback; named
+        // environment stdio MCPs must declare their own absolute cwd.
         let runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
@@ -275,16 +274,21 @@ impl McpRequestProcessor {
             resources,
             resource_templates,
             auth_statuses,
-            environment_ids,
+            runtime_placements,
         } = snapshot;
-        let environment_ids = config
+        let runtime_placements = config
             .mcp_servers
             .iter()
-            .map(|(name, config)| (name.clone(), config.environment_id.clone()))
-            .chain(environment_ids)
+            .map(|(name, config)| {
+                (
+                    name.clone(),
+                    codex_mcp::McpServerRuntimePlacement::from_config(config),
+                )
+            })
+            .chain(runtime_placements)
             .collect::<HashMap<_, _>>();
 
-        let mut server_names: Vec<String> = environment_ids
+        let mut server_names: Vec<String> = runtime_placements
             .keys()
             .cloned()
             .chain(auth_statuses.keys().cloned())
@@ -325,10 +329,12 @@ impl McpRequestProcessor {
                     .cloned()
                     .unwrap_or(CoreMcpAuthStatus::Unsupported)
                     .into(),
-                environment_id: environment_ids
-                    .get(name)
-                    .cloned()
-                    .expect("listed MCP server should have an environment id"),
+                runtime_placement: app_server_runtime_placement(
+                    runtime_placements
+                        .get(name)
+                        .cloned()
+                        .expect("listed MCP server should have a runtime placement"),
+                ),
             })
             .collect();
 
@@ -371,9 +377,8 @@ impl McpRequestProcessor {
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
-        // environment. Use config cwd as the stdio fallback and the shared
-        // environment registry only for explicit MCP env ids; an omitted MCP
-        // env id still means local.
+        // environment. Use config cwd only as the local stdio fallback; named
+        // environment stdio MCPs must declare their own absolute cwd.
         let runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
@@ -430,6 +435,19 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
+    }
+}
+
+fn app_server_runtime_placement(
+    placement: codex_mcp::McpServerRuntimePlacement,
+) -> codex_app_server_protocol::McpServerRuntimePlacement {
+    match placement {
+        codex_mcp::McpServerRuntimePlacement::Orchestrator => {
+            codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator
+        }
+        codex_mcp::McpServerRuntimePlacement::Environment { environment_id } => {
+            codex_app_server_protocol::McpServerRuntimePlacement::Environment { environment_id }
+        }
     }
 }
 

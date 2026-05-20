@@ -31,30 +31,48 @@ pub struct SandboxState {
     pub use_legacy_landlock: bool,
 }
 
-/// Resolved environment placement for one MCP server startup.
-#[derive(Clone)]
-pub struct ResolvedMcpEnvironment {
-    environment: Option<Arc<Environment>>,
+/// Effective runtime placement for one MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerRuntimePlacement {
+    /// The orchestrator owns the transport directly.
+    Orchestrator,
+    /// The selected named environment owns the transport.
+    Environment { environment_id: String },
 }
 
-impl ResolvedMcpEnvironment {
-    pub(crate) fn environment(&self) -> Option<Arc<Environment>> {
-        self.environment.as_ref().map(Arc::clone)
+impl McpServerRuntimePlacement {
+    pub fn from_config(config: &codex_config::McpServerConfig) -> Self {
+        if config.is_local_environment() {
+            Self::Orchestrator
+        } else {
+            Self::Environment {
+                environment_id: config.environment_id.clone(),
+            }
+        }
     }
+}
 
+/// Resolved runtime handle for one MCP server startup.
+#[derive(Clone)]
+pub(crate) enum ResolvedMcpServerRuntime {
+    Orchestrator,
+    Environment(Arc<Environment>),
+}
+
+impl ResolvedMcpServerRuntime {
     pub(crate) fn http_client(&self) -> Arc<dyn HttpClient> {
-        self.environment.as_ref().map_or_else(
-            || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
-            |environment| environment.get_http_client(),
-        )
+        match self {
+            Self::Orchestrator => Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+            Self::Environment(environment) => environment.get_http_client(),
+        }
     }
 }
 
 /// Runtime context used when resolving per-server MCP environment placement.
 ///
 /// `McpConfig` describes what servers exist. This value carries the canonical
-/// environment registry plus the fallback cwd used when a stdio server omits
-/// its own working directory.
+/// environment registry plus the local stdio fallback cwd used when a local
+/// stdio server omits its own working directory.
 #[derive(Clone)]
 pub struct McpRuntimeContext {
     environment_manager: Arc<EnvironmentManager>,
@@ -73,39 +91,60 @@ impl McpRuntimeContext {
         self.fallback_cwd.clone()
     }
 
-    pub(crate) fn resolve_server_environment(
+    pub(crate) fn resolve_server_runtime(
         &self,
         server_name: &str,
         config: &codex_config::McpServerConfig,
-    ) -> Result<ResolvedMcpEnvironment, String> {
-        // MCP config parsing materializes an omitted environment id as `local`,
-        // so runtime resolution always starts from one explicit effective id.
-        let environment_id = config.environment_id.clone();
-        let is_local_environment = config.is_local_environment();
-        let environment = if is_local_environment {
-            self.environment_manager.try_local_environment()
-        } else {
-            self.environment_manager.get_environment(&environment_id)
-        };
-        if environment.is_none() {
-            if is_local_environment
-                && matches!(
-                    config.transport,
-                    codex_config::McpServerTransportConfig::Stdio { .. }
-                )
-            {
-                return Err(format!(
-                    "local stdio MCP server `{server_name}` requires a local environment"
-                ));
+    ) -> Result<ResolvedMcpServerRuntime, String> {
+        match McpServerRuntimePlacement::from_config(config) {
+            McpServerRuntimePlacement::Orchestrator => {
+                if self.environment_manager.try_local_environment().is_none()
+                    && matches!(
+                        config.transport,
+                        codex_config::McpServerTransportConfig::Stdio { .. }
+                    )
+                {
+                    return Err(format!(
+                        "local stdio MCP server `{server_name}` requires a local environment"
+                    ));
+                }
+                Ok(ResolvedMcpServerRuntime::Orchestrator)
             }
-            if !is_local_environment {
-                return Err(format!(
-                    "MCP server `{server_name}` references unknown environment id `{environment_id}`"
-                ));
+            McpServerRuntimePlacement::Environment { environment_id } => {
+                let environment = self
+                    .environment_manager
+                    .get_environment(&environment_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "MCP server `{server_name}` references unknown environment id `{environment_id}`"
+                        )
+                    })?;
+                ensure_remote_stdio_cwd(server_name, config)?;
+                Ok(ResolvedMcpServerRuntime::Environment(environment))
             }
         }
-        Ok(ResolvedMcpEnvironment { environment })
     }
+}
+
+fn ensure_remote_stdio_cwd(
+    server_name: &str,
+    config: &codex_config::McpServerConfig,
+) -> Result<(), String> {
+    let codex_config::McpServerTransportConfig::Stdio { cwd, .. } = &config.transport else {
+        return Ok(());
+    };
+    let Some(cwd) = cwd else {
+        return Err(format!(
+            "remote stdio MCP server `{server_name}` requires an absolute cwd"
+        ));
+    };
+    if cwd.is_absolute() {
+        return Ok(());
+    }
+    Err(format!(
+        "remote stdio MCP server `{server_name}` requires an absolute cwd, got `{}`",
+        cwd.display()
+    ))
 }
 
 pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
@@ -173,7 +212,7 @@ mod tests {
         );
 
         let error = match runtime_context
-            .resolve_server_environment("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
+            .resolve_server_runtime("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
         {
             Ok(_) => panic!("local stdio MCP should require a local environment"),
             Err(error) => error,
@@ -191,10 +230,13 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let resolved_environment = runtime_context
-            .resolve_server_environment("http", &http_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
+        let resolved_runtime = runtime_context
+            .resolve_server_runtime("http", &http_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
             .expect("local HTTP MCP should resolve");
-        assert!(resolved_environment.environment().is_none());
+        assert!(matches!(
+            resolved_runtime,
+            ResolvedMcpServerRuntime::Orchestrator
+        ));
     }
 
     #[test]
@@ -204,11 +246,10 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let error =
-            match runtime_context.resolve_server_environment("stdio", &stdio_server("remote")) {
-                Ok(_) => panic!("unknown MCP environment should fail"),
-                Err(error) => error,
-            };
+        let error = match runtime_context.resolve_server_runtime("stdio", &stdio_server("remote")) {
+            Ok(_) => panic!("unknown MCP environment should fail"),
+            Err(error) => error,
+        };
         assert_eq!(
             error,
             "MCP server `stdio` references unknown environment id `remote`"
@@ -228,12 +269,20 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        for resolved_environment in [
-            runtime_context.resolve_server_environment("stdio", &stdio_server("remote")),
-            runtime_context.resolve_server_environment("http", &http_server("remote")),
+        let mut remote_stdio = stdio_server("remote");
+        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
+            unreachable!("stdio helper should build stdio transport");
+        };
+        *cwd = Some(std::env::temp_dir());
+        for resolved_runtime in [
+            runtime_context.resolve_server_runtime("stdio", &remote_stdio),
+            runtime_context.resolve_server_runtime("http", &http_server("remote")),
         ] {
-            let resolved_environment = resolved_environment.expect("remote MCP should resolve");
-            assert!(resolved_environment.environment().is_some());
+            let resolved_runtime = resolved_runtime.expect("remote MCP should resolve");
+            assert!(matches!(
+                resolved_runtime,
+                ResolvedMcpServerRuntime::Environment(_)
+            ));
         }
     }
 
@@ -244,9 +293,40 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let resolved_environment = runtime_context
-            .resolve_server_environment("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
+        let resolved_runtime = runtime_context
+            .resolve_server_runtime("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
             .expect("local stdio MCP should resolve");
-        assert!(resolved_environment.environment().is_some());
+        assert!(matches!(
+            resolved_runtime,
+            ResolvedMcpServerRuntime::Orchestrator
+        ));
+    }
+
+    #[tokio::test]
+    async fn remote_stdio_requires_absolute_cwd() {
+        let runtime_context = McpRuntimeContext::new(
+            Arc::new(
+                EnvironmentManager::create_for_tests(
+                    Some("ws://127.0.0.1:8765".to_string()),
+                    /*local_runtime_paths*/ None,
+                )
+                .await,
+            ),
+            PathBuf::from("/tmp"),
+        );
+        let mut remote_stdio = stdio_server("remote");
+        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
+            unreachable!("stdio helper should build stdio transport");
+        };
+        *cwd = Some(PathBuf::from("relative"));
+
+        let error = match runtime_context.resolve_server_runtime("stdio", &remote_stdio) {
+            Ok(_) => panic!("remote stdio MCP should require absolute cwd"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "remote stdio MCP server `stdio` requires an absolute cwd, got `relative`"
+        );
     }
 }

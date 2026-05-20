@@ -150,7 +150,7 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
             resources: Vec::new(),
             resource_templates: Vec::new(),
             auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-            environment_id: "local".to_string(),
+            runtime_placement: codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator,
         }]),
         McpServerStatusDetail::ToolsAndAuthOnly,
     );
