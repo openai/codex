@@ -358,7 +358,9 @@ impl ToolOutput for ExecCommandToolOutput {
             return None;
         }
 
-        Some(JsonValue::String(self.truncated_output()))
+        Some(JsonValue::String(
+            self.truncated_output(self.model_output_max_tokens()),
+        ))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -383,7 +385,7 @@ impl ToolOutput for ExecCommandToolOutput {
             session_id: self.process_id,
             original_token_count: self.original_token_count,
             output: match self.max_output_tokens {
-                Some(_) => self.truncated_output(),
+                Some(max_tokens) => self.truncated_output(max_tokens),
                 None => String::from_utf8_lossy(&self.raw_output).to_string(),
             },
         };
@@ -395,10 +397,12 @@ impl ToolOutput for ExecCommandToolOutput {
 }
 
 impl ExecCommandToolOutput {
-    pub(crate) fn truncated_output(&self) -> String {
+    fn model_output_max_tokens(&self) -> usize {
+        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+    }
+
+    pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let max_tokens =
-            resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget());
         formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
     }
 
@@ -425,7 +429,7 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output());
+        sections.push(self.truncated_output(self.model_output_max_tokens()));
 
         sections.join("\n")
     }

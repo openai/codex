@@ -47,7 +47,7 @@ use wiremock::MockServer;
 const CODE_MODE_EXEC_LONG_OUTPUT_COMMAND: &str =
     "printf '0123456789012345678901234567890123456789'";
 const CODE_MODE_EXEC_RAW_OUTPUT_LEN: usize = 50_000;
-const CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS: usize = 20_000;
+const CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS: usize = 20_000;
 const CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT: usize = 50;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -716,12 +716,59 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    let code = format!(
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}}}
+const result = await tools.exec_command({{
+  cmd: {command:?},
+  max_output_tokens: {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}
+}});
+text(result.output);
+"#
+    );
+
+    let output = code_mode_exec_output_text(&code).await?;
+    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    let code = format!(
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}}}
+const result = await tools.exec_command({{
+  cmd: {command:?},
+  max_output_tokens: {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}
+}});
+text(result.output);
+"#
+    );
+
+    let output = code_mode_exec_output_text_with_config(&code, |config| {
+        config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
+    })
+    .await?;
+    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
     let code = format!(
-        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS}}}
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}}}
 const result = await tools.exec_command({{
   cmd: {command:?}
 }});
@@ -742,7 +789,7 @@ async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() 
 
     let command = code_mode_exec_repeated_output_command(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
     let code = format!(
-        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_OUTER_MAX_OUTPUT_TOKENS}}}
+        r#"// @exec: {{"max_output_tokens": {CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS}}}
 const result = await tools.exec_command({{
   cmd: {command:?}
 }});

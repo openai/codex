@@ -263,7 +263,9 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
     )
     .await?;
     assert!(
-        out_2.truncated_output().contains("codex"),
+        out_2
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("codex"),
         "expected environment variable output"
     );
 
@@ -304,7 +306,9 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         "short command should not report a process id if it exits quickly"
     );
     assert!(
-        !out_2.truncated_output().contains("codex"),
+        !out_2
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("codex"),
         "short command should run in a fresh shell"
     );
 
@@ -316,7 +320,9 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
     )
     .await?;
     assert!(
-        out_3.truncated_output().contains("codex"),
+        out_3
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("codex"),
         "session should preserve state"
     );
 
@@ -353,7 +359,9 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
     )
     .await?;
     assert!(
-        !out_2.truncated_output().contains(TEST_VAR_VALUE),
+        !out_2
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains(TEST_VAR_VALUE),
         "timeout too short should yield incomplete output"
     );
 
@@ -362,7 +370,9 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
     let out_3 = write_stdin(&session, process_id, "", /*yield_time_ms*/ 100).await?;
 
     assert!(
-        out_3.truncated_output().contains(TEST_VAR_VALUE),
+        out_3
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains(TEST_VAR_VALUE),
         "subsequent poll should retrieve output"
     );
 
@@ -397,7 +407,9 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
         "pause should block the unified exec yield timeout"
     );
     assert!(
-        response.truncated_output().contains("unified-exec-done"),
+        response
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("unified-exec-done"),
         "exec_command should wait for output after the pause lifts"
     );
     assert!(
@@ -423,7 +435,11 @@ async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
     .await?;
 
     assert!(result.process_id.is_some());
-    assert!(result.truncated_output().contains("codex"));
+    assert!(
+        result
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("codex")
+    );
 
     Ok(())
 }
@@ -445,7 +461,11 @@ async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
         result.process_id.is_some(),
         "completed command should report a process id"
     );
-    assert!(result.truncated_output().contains("codex"));
+    assert!(
+        result
+            .truncated_output(DEFAULT_MAX_OUTPUT_TOKENS)
+            .contains("codex")
+    );
 
     assert!(
         session
