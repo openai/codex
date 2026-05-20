@@ -18,14 +18,12 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::goals::GoalRuntimeEvent;
-use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_stop_hooks;
-use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
@@ -38,6 +36,7 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -78,7 +77,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -174,17 +172,10 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    let additional_contexts = if input.is_empty() {
-        Vec::new()
-    } else {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
-        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
-            &sess,
-            &turn_context,
-            UserMessageItem::new(&input).message(),
-        )
-        .await;
+    if !input.is_empty() {
+        let initial_turn_input = TurnInput::UserInput(input.clone());
+        let user_prompt_submit_outcome =
+            inspect_pending_input(&sess, &turn_context, &initial_turn_input).await;
         if user_prompt_submit_outcome.should_stop {
             record_additional_contexts(
                 &sess,
@@ -194,13 +185,17 @@ pub(crate) async fn run_turn(
             .await;
             return None;
         }
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
-        user_prompt_submit_outcome.additional_contexts
-    };
+        record_pending_input(
+            &sess,
+            &turn_context,
+            initial_turn_input,
+            user_prompt_submit_outcome.additional_contexts,
+        )
+        .await;
+    }
+
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: turn_context.model_info.slug.clone(),
         realtime_active: Some(turn_context.realtime_active),
@@ -252,45 +247,26 @@ pub(crate) async fn run_turn(
         };
 
         let mut blocked_pending_input = false;
-        let mut blocked_pending_input_contexts = Vec::new();
-        let mut requeued_pending_input = false;
-        let mut accepted_pending_input = Vec::new();
-        if !pending_input.is_empty() {
-            let mut pending_input_iter = pending_input.into_iter();
-            while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push(*pending_input);
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
-                        if !remaining_pending_input.is_empty() {
-                            let _ = sess
-                                .input_queue
-                                .prepend_pending_input(&sess.active_turn, remaining_pending_input)
-                                .await;
-                            requeued_pending_input = true;
-                        }
-                        blocked_pending_input_contexts = additional_contexts;
-                        blocked_pending_input = true;
-                        break;
-                    }
-                }
+        let mut accepted_pending_input = false;
+        for pending_input_item in pending_input {
+            let hook_outcome =
+                inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
+            if hook_outcome.should_stop {
+                blocked_pending_input = true;
+                record_additional_contexts(&sess, &turn_context, hook_outcome.additional_contexts)
+                    .await;
+            } else {
+                accepted_pending_input = true;
+                record_pending_input(
+                    &sess,
+                    &turn_context,
+                    pending_input_item,
+                    hook_outcome.additional_contexts,
+                )
+                .await;
             }
         }
-
-        let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for pending_input in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input).await;
-        }
-        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
-
-        if blocked_pending_input && !has_accepted_pending_input {
-            if requeued_pending_input {
-                continue;
-            }
+        if blocked_pending_input && !accepted_pending_input {
             break;
         }
 

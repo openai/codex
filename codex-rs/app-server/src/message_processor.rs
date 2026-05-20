@@ -301,6 +301,7 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let environment_manager_for_requests = Arc::clone(&environment_manager);
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -355,8 +356,12 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
+            Arc::clone(&environment_manager_for_requests),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
+        let process_exec_processor = ProcessExecRequestProcessor::new(
+            outgoing.clone(),
+            Arc::clone(&environment_manager_for_requests),
+        );
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -443,7 +448,6 @@ impl MessageProcessor {
                     Some(on_effective_plugins_changed),
                 );
         }
-        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
@@ -462,11 +466,8 @@ impl MessageProcessor {
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
-            thread_manager
-                .environment_manager()
-                .local_environment()
-                .get_filesystem(),
-            fs_watch_manager,
+            Arc::clone(&environment_manager_for_requests),
+            FsWatchManager::new(outgoing.clone()),
         );
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),
@@ -1147,6 +1148,9 @@ impl MessageProcessor {
                 self.catalog_processor
                     .experimental_feature_list(params)
                     .await
+            }
+            ClientRequest::PermissionProfileList { params, .. } => {
+                self.catalog_processor.permission_profile_list(params).await
             }
             ClientRequest::CollaborationModeList { params, .. } => {
                 self.catalog_processor.collaboration_mode_list(params).await

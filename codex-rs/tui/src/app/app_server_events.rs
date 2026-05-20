@@ -6,6 +6,7 @@ use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::app_event::ConnectorsSnapshot;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
@@ -104,6 +105,15 @@ impl App {
                 self.chat_widget.refresh_plugin_mentions();
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
+                return;
+            }
+            ServerNotification::AppListUpdated(notification) => {
+                self.chat_widget.on_connectors_loaded(
+                    Ok(ConnectorsSnapshot {
+                        connectors: notification.data.clone(),
+                    }),
+                    /*is_final*/ false,
+                );
                 return;
             }
             _ => {}

@@ -208,6 +208,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 &plugin.name,
                 release_version,
                 plugin.release.bundle_download_url.as_deref(),
+                plugin.release.app_manifest.clone(),
             ) {
                 Ok(bundle) => bundle,
                 Err(err) => {
@@ -511,7 +512,7 @@ mod tests {
             &installed_plugin_names_by_marketplace,
         )
         .expect("cleanup after install guard is dropped");
-        assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert_eq!(removed, vec!["linear@openai-curated-remote".to_string()]);
         assert!(!cached_manifest.exists());
     }
 

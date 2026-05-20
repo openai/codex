@@ -220,6 +220,18 @@ jobs:
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
+      - name: Build Codex package archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for bundle in primary app-server; do
+            bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+              --target "${{ matrix.target }}" \
+              --bundle "$bundle" \
+              --entrypoint-dir "target/${{ matrix.target }}/release" \
+              --archive-dir "dist/${{ matrix.target }}"
+          done
+
       - name: Build Python runtime wheel
         shell: bash
         run: |

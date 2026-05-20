@@ -149,10 +149,11 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
+    thread_params_mode: ThreadParamsMode,
 }
 
-#[derive(Clone, Copy)]
-enum ThreadParamsMode {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadParamsMode {
     Embedded,
     Remote,
 }
@@ -182,11 +183,12 @@ pub(crate) enum TurnPermissionsOverride {
 }
 
 impl AppServerSession {
-    pub(crate) fn new(client: AppServerClient) -> Self {
+    pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
         Self {
             client,
             next_request_id: 1,
             remote_cwd_override: None,
+            thread_params_mode,
         }
     }
 
@@ -199,8 +201,8 @@ impl AppServerSession {
         self.remote_cwd_override.as_deref()
     }
 
-    pub(crate) fn is_remote(&self) -> bool {
-        matches!(self.client, AppServerClient::Remote(_))
+    pub(crate) fn uses_remote_workspace(&self) -> bool {
+        matches!(self.thread_params_mode, ThreadParamsMode::Remote)
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
@@ -426,10 +428,7 @@ impl AppServerSession {
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
-        match &self.client {
-            AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
-            AppServerClient::Remote(_) => ThreadParamsMode::Remote,
-        }
+        self.thread_params_mode
     }
 
     async fn fork_parent_title_from_app_server(
@@ -1588,10 +1587,19 @@ async fn thread_session_state_from_thread_response(
 pub(crate) fn app_server_rate_limit_snapshots(
     response: GetAccountRateLimitsResponse,
 ) -> Vec<RateLimitSnapshot> {
-    let mut snapshots = Vec::new();
-    snapshots.push(response.rate_limits);
+    let primary_limit_id = response.rate_limits.limit_id.clone();
+    let mut snapshots = vec![response.rate_limits];
     if let Some(by_limit_id) = response.rate_limits_by_limit_id {
-        snapshots.extend(by_limit_id.into_values());
+        snapshots.extend(by_limit_id.into_iter().filter_map(|(limit_id, snapshot)| {
+            if primary_limit_id.as_deref().is_some_and(|primary_limit_id| {
+                primary_limit_id == limit_id
+                    || Some(primary_limit_id) == snapshot.limit_id.as_deref()
+            }) {
+                None
+            } else {
+                Some(snapshot)
+            }
+        }));
     }
     snapshots
 }
@@ -1629,6 +1637,43 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {
+        RateLimitSnapshot {
+            limit_id: Some(limit_id.to_string()),
+            limit_name: None,
+            primary: Some(codex_app_server_protocol::RateLimitWindow {
+                used_percent: 0,
+                window_duration_mins: Some(10_080),
+                resets_at: None,
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        }
+    }
+
+    #[test]
+    fn app_server_rate_limit_snapshots_deduplicates_top_level_limit_from_map() {
+        let response = GetAccountRateLimitsResponse {
+            rate_limits: rate_limit_snapshot("codex"),
+            rate_limits_by_limit_id: Some(HashMap::from([
+                ("codex".to_string(), rate_limit_snapshot("codex")),
+                ("other".to_string(), rate_limit_snapshot("other")),
+            ])),
+        };
+
+        let snapshots = app_server_rate_limit_snapshots(response);
+
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.limit_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("codex"), Some("other")]
+        );
     }
 
     #[tokio::test]

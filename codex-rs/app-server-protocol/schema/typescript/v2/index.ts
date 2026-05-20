@@ -62,6 +62,7 @@ export type { CommandExecutionRequestApprovalResponse } from "./CommandExecution
 export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { CommandMigration } from "./CommandMigration";
+export type { ComputerUseRequirements } from "./ComputerUseRequirements";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
 export type { ConfigEdit } from "./ConfigEdit";
@@ -255,6 +256,9 @@ export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
 export type { PermissionGrantScope } from "./PermissionGrantScope";
+export type { PermissionProfileListParams } from "./PermissionProfileListParams";
+export type { PermissionProfileListResponse } from "./PermissionProfileListResponse";
+export type { PermissionProfileSummary } from "./PermissionProfileSummary";
 export type { PermissionsRequestApprovalParams } from "./PermissionsRequestApprovalParams";
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
