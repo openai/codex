@@ -190,10 +190,13 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let cwd = setup_refresh_spawn_cwd(request.codex_home);
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -221,6 +224,10 @@ fn run_setup_refresh_inner(
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
     Ok(())
+}
+
+fn setup_refresh_spawn_cwd(codex_home: &Path) -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1435,6 +1442,22 @@ mod tests {
             .into_iter()
             .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn setup_refresh_spawn_cwd_prefers_current_dir_when_available() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let original_cwd = std::env::current_dir().expect("original current dir");
+        std::env::set_current_dir(tmp.path()).expect("set temp current dir");
+
+        let selected = super::setup_refresh_spawn_cwd(&codex_home);
+
+        std::env::set_current_dir(original_cwd).expect("restore current dir");
+        assert_eq!(
+            dunce::canonicalize(tmp.path()).expect("canonical temp current dir"),
+            dunce::canonicalize(selected).expect("canonical selected cwd")
         );
     }
 
