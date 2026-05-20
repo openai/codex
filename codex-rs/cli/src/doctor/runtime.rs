@@ -3,7 +3,7 @@
 //! Runtime diagnostics answer provenance questions that are hard to infer from
 //! user reports: which binary is running, which install channel it resembles,
 //! which platform it targets, and whether the search command comes from bundled
-//! standalone resources or from PATH.
+//! standalone package files or from PATH.
 
 use std::env;
 use std::process::Command;
@@ -49,9 +49,10 @@ pub(super) fn runtime_check() -> DoctorCheck {
 
 /// Verifies that the search command selected by the install context is usable.
 ///
-/// Standalone installs should point at a bundled ripgrep binary, while local or
-/// package-managed installs usually resolve rg from PATH. A warning here means
-/// features that depend on file search may degrade even when the CLI launches.
+/// Standalone package installs should point at a bundled ripgrep binary, while
+/// local or package-managed installs usually resolve rg from PATH. A warning
+/// here means features that depend on file search may degrade even when the CLI
+/// launches.
 pub(super) fn search_check() -> DoctorCheck {
     let current_exe = env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());
@@ -109,7 +110,7 @@ pub(super) fn search_check() -> DoctorCheck {
     };
     let mut check = DoctorCheck::new("runtime.search", "search", status, summary).details(details);
     if status != CheckStatus::Ok {
-        check = check.remediation("Install ripgrep or repair the bundled standalone resources.");
+        check = check.remediation("Install ripgrep or repair the bundled Codex package.");
     }
     check
 }
@@ -125,13 +126,29 @@ fn install_method_name(context: &InstallContext) -> &'static str {
 }
 
 fn search_provider(context: &InstallContext) -> &'static str {
-    match context {
-        InstallContext::Standalone {
-            resources_dir: Some(resources_dir),
-            ..
-        } if context.rg_command().starts_with(resources_dir) => "bundled",
-        _ => "system",
+    let rg_command = context.rg_command();
+    if let InstallContext::Standalone {
+        package_layout: Some(package_layout),
+        ..
+    } = context
+        && package_layout
+            .path_dir
+            .as_ref()
+            .is_some_and(|path_dir| rg_command.starts_with(path_dir))
+    {
+        return "bundled";
     }
+
+    if let InstallContext::Standalone {
+        resources_dir: Some(resources_dir),
+        ..
+    } = context
+        && rg_command.starts_with(resources_dir)
+    {
+        return "bundled";
+    }
+
+    "system"
 }
 
 fn build_commit() -> &'static str {

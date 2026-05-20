@@ -1,7 +1,11 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+const BIN_DIRNAME: &str = "bin";
+const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
+const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
 const RESOURCES_DIRNAME: &str = "codex-resources";
 const STANDALONE_PACKAGES_DIRNAME: &str = "standalone";
@@ -14,14 +18,31 @@ pub enum StandalonePlatform {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodexPackageLayout {
+    /// The package root that contains the metadata file and layout directories.
+    pub package_dir: PathBuf,
+    /// Directory containing the Codex entrypoint executable.
+    pub bin_dir: PathBuf,
+    /// Directory containing managed helper binaries and data files, when present.
+    pub resources_dir: Option<PathBuf>,
+    /// Directory containing executables that should be preferred over PATH, when present.
+    pub path_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallContext {
     Standalone {
-        /// The managed standalone release directory, for example
+        /// The managed standalone release directory. Legacy installs use paths
+        /// such as
         /// `~/.codex/packages/standalone/releases/0.111.0-x86_64-unknown-linux-musl`.
+        /// Package-layout installs use the package root that contains `bin/`,
+        /// `codex-resources/`, and `codex-path/`.
         release_dir: PathBuf,
-        /// The bundled resource directory that sits next to the executable when
-        /// this install ships managed dependencies.
+        /// The bundled resource directory for managed dependencies.
         resources_dir: Option<PathBuf>,
+        /// The canonical package layout when the executable is running from a
+        /// package directory.
+        package_layout: Option<CodexPackageLayout>,
         /// The platform of the standalone release, either `Unix` or `Windows`.
         platform: StandalonePlatform,
     },
@@ -103,6 +124,17 @@ impl InstallContext {
     pub fn rg_command(&self) -> PathBuf {
         match self {
             Self::Standalone {
+                package_layout: Some(package_layout),
+                ..
+            } => package_layout
+                .path_dir
+                .as_ref()
+                .and_then(|path_dir| {
+                    let bundled_rg = path_dir.join(default_rg_command());
+                    bundled_rg.exists().then_some(bundled_rg)
+                })
+                .unwrap_or_else(default_rg_command),
+            Self::Standalone {
                 resources_dir: Some(resources_dir),
                 ..
             } => {
@@ -129,6 +161,10 @@ fn standalone_install_context(
     exe_path: &Path,
     codex_home: Option<&Path>,
 ) -> Option<InstallContext> {
+    if let Some(package_context) = standalone_package_install_context(exe_path) {
+        return Some(package_context);
+    }
+
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
     let canonical_codex_home = std::fs::canonicalize(codex_home?).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
@@ -144,6 +180,35 @@ fn standalone_install_context(
     Some(InstallContext::Standalone {
         release_dir,
         resources_dir: resources_dir.is_dir().then_some(resources_dir),
+        package_layout: None,
+        platform: standalone_platform(),
+    })
+}
+
+fn standalone_package_install_context(exe_path: &Path) -> Option<InstallContext> {
+    let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
+    let bin_dir = canonical_exe.parent()?;
+    if bin_dir.file_name() != Some(OsStr::new(BIN_DIRNAME)) {
+        return None;
+    }
+
+    let package_dir = bin_dir.parent()?.to_path_buf();
+    if !package_dir.join(PACKAGE_METADATA_FILENAME).is_file() {
+        return None;
+    }
+
+    let resources_dir = existing_dir(package_dir.join(RESOURCES_DIRNAME));
+    let path_dir = existing_dir(package_dir.join(PATH_DIRNAME));
+    let package_layout = CodexPackageLayout {
+        package_dir: package_dir.clone(),
+        bin_dir: bin_dir.to_path_buf(),
+        resources_dir: resources_dir.clone(),
+        path_dir,
+    };
+    Some(InstallContext::Standalone {
+        release_dir: package_dir,
+        resources_dir,
+        package_layout: Some(package_layout),
         platform: standalone_platform(),
     })
 }
@@ -154,6 +219,10 @@ fn standalone_platform() -> StandalonePlatform {
     } else {
         StandalonePlatform::Unix
     }
+}
+
+fn existing_dir(path: PathBuf) -> Option<PathBuf> {
+    path.is_dir().then_some(path)
 }
 
 fn default_rg_command() -> PathBuf {
@@ -196,6 +265,7 @@ mod tests {
             InstallContext::Standalone {
                 release_dir: canonical_release_dir,
                 resources_dir: Some(canonical_resources_dir),
+                package_layout: None,
                 platform: standalone_platform(),
             }
         );
@@ -218,6 +288,73 @@ mod tests {
             /*managed_by_npm*/ false,
             /*managed_by_bun*/ false,
             /*codex_home*/ Some(codex_home.path()),
+        );
+        assert_eq!(context.rg_command(), default_rg_command());
+        Ok(())
+    }
+
+    #[test]
+    fn detects_standalone_package_layout() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(BIN_DIRNAME);
+        let resources_dir = package_dir.path().join(RESOURCES_DIRNAME);
+        let path_dir = package_dir.path().join(PATH_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&resources_dir)?;
+        fs::create_dir_all(&path_dir)?;
+        fs::write(package_dir.path().join(PACKAGE_METADATA_FILENAME), "{}")?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+        fs::write(path_dir.join(default_rg_command()), "")?;
+        let canonical_package_dir = package_dir.path().canonicalize()?;
+        let canonical_bin_dir = bin_dir.canonicalize()?;
+        let canonical_resources_dir = resources_dir.canonicalize()?;
+        let canonical_path_dir = path_dir.canonicalize()?;
+        let package_layout = CodexPackageLayout {
+            package_dir: canonical_package_dir.clone(),
+            bin_dir: canonical_bin_dir,
+            resources_dir: Some(canonical_resources_dir.clone()),
+            path_dir: Some(canonical_path_dir.clone()),
+        };
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
+        );
+        assert_eq!(
+            context,
+            InstallContext::Standalone {
+                release_dir: canonical_package_dir,
+                resources_dir: Some(canonical_resources_dir),
+                package_layout: Some(package_layout),
+                platform: standalone_platform(),
+            }
+        );
+        assert_eq!(
+            context.rg_command(),
+            canonical_path_dir.join(default_rg_command())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_package_rg_falls_back_when_codex_path_is_missing() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(BIN_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::write(package_dir.path().join(PACKAGE_METADATA_FILENAME), "{}")?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ false,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
         );
         assert_eq!(context.rg_command(), default_rg_command());
         Ok(())
