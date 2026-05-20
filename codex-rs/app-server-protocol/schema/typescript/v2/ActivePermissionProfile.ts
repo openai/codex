@@ -9,7 +9,7 @@ export type ActivePermissionProfile = {
  */
 id: string,
 /**
- * Parent profile identifier once permissions profiles support
- * inheritance. This is currently always `null`.
+ * Parent profile identifier from the selected permissions profile's
+ * `extends` setting, when present.
  */
 extends: string | null, };

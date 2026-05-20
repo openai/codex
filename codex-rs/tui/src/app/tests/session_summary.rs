@@ -57,13 +57,13 @@ async fn session_summary_includes_resume_hint_for_persisted_rollout() {
         Some("Token usage: total=12 input=10 output=2".to_string())
     );
     assert_eq!(
-        summary.resume_command,
+        summary.resume_hint,
         Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
     );
 }
 
 #[tokio::test]
-async fn session_summary_uses_id_even_when_thread_has_name() {
+async fn session_summary_names_picker_item_when_thread_has_name() {
     let usage = TokenUsage {
         input_tokens: 10,
         output_tokens: 2,
@@ -83,7 +83,10 @@ async fn session_summary_uses_id_even_when_thread_has_name() {
     )
     .expect("summary");
     assert_eq!(
-        summary.resume_command,
-        Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        summary.resume_hint,
+        Some(
+            "codex resume, then select my-session (123e4567-e89b-12d3-a456-426614174000)"
+                .to_string()
+        )
     );
 }

@@ -117,7 +117,7 @@ fn write_plugin_with_skill(
 fn write_cached_remote_plugin_with_skill(
     codex_home: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
-    let plugin_root = codex_home.join("plugins/cache/chatgpt-global/linear/local");
+    let plugin_root = codex_home.join("plugins/cache/openai-curated-remote/linear/local");
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
@@ -614,6 +614,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             model_provider: None,
             service_tier: None,
             cwd: None,
+            runtime_workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,

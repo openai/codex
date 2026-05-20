@@ -81,6 +81,7 @@ fn rollout_items_from_messages(messages: &[ConversationMessage]) -> Vec<RolloutI
                         images: None,
                         local_images: Vec::new(),
                         text_elements: Vec::new(),
+                        ..Default::default()
                     },
                 )));
                 current_turn = Some((turn_id, None));

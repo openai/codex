@@ -9,6 +9,7 @@ use ts_rs::TS;
 #[ts(export_to = "v2/")]
 pub struct RemoteControlStatusChangedNotification {
     pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
     pub installation_id: String,
     pub environment_id: Option<String>,
 }
@@ -18,6 +19,7 @@ pub struct RemoteControlStatusChangedNotification {
 #[ts(export_to = "v2/")]
 pub struct RemoteControlEnableResponse {
     pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
     pub installation_id: String,
     pub environment_id: Option<String>,
 }
@@ -27,6 +29,17 @@ pub struct RemoteControlEnableResponse {
 #[ts(export_to = "v2/")]
 pub struct RemoteControlDisableResponse {
     pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
+    pub installation_id: String,
+    pub environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlStatusReadResponse {
+    pub status: RemoteControlConnectionStatus,
+    pub server_name: String,
     pub installation_id: String,
     pub environment_id: Option<String>,
 }
@@ -45,11 +58,13 @@ impl From<RemoteControlStatusChangedNotification> for RemoteControlEnableRespons
     fn from(notification: RemoteControlStatusChangedNotification) -> Self {
         let RemoteControlStatusChangedNotification {
             status,
+            server_name,
             installation_id,
             environment_id,
         } = notification;
         Self {
             status,
+            server_name,
             installation_id,
             environment_id,
         }
@@ -60,11 +75,13 @@ impl From<RemoteControlStatusChangedNotification> for RemoteControlDisableRespon
     fn from(notification: RemoteControlStatusChangedNotification) -> Self {
         let RemoteControlStatusChangedNotification {
             status,
+            server_name,
             installation_id,
             environment_id,
         } = notification;
         Self {
             status,
+            server_name,
             installation_id,
             environment_id,
         }

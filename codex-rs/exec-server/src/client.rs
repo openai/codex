@@ -162,7 +162,7 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
-    // Once the transport closes, every executor operation should fail quickly
+    // Once the transport closes, every environment operation should fail quickly
     // with the same canonical message. This client never reconnects, so the
     // latch only moves from unset to set once.
     disconnected: OnceLock<String>,
@@ -261,18 +261,18 @@ pub enum ExecServerError {
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
-    #[error("executor registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
-    ExecutorRegistryHttp {
+    #[error("environment registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
+    EnvironmentRegistryHttp {
         status: reqwest::StatusCode,
         code: Option<String>,
         message: String,
     },
-    #[error("executor registry configuration error: {0}")]
-    ExecutorRegistryConfig(String),
-    #[error("executor registry authentication error: {0}")]
-    ExecutorRegistryAuth(String),
-    #[error("executor registry request failed: {0}")]
-    ExecutorRegistryRequest(#[from] reqwest::Error),
+    #[error("environment registry configuration error: {0}")]
+    EnvironmentRegistryConfig(String),
+    #[error("environment registry authentication error: {0}")]
+    EnvironmentRegistryAuth(String),
+    #[error("environment registry request failed: {0}")]
+    EnvironmentRegistryRequest(#[from] reqwest::Error),
 }
 
 impl ExecServerClient {
@@ -495,7 +495,7 @@ impl ExecServerClient {
     {
         // Reject new work before allocating a JSON-RPC request id. MCP tool
         // calls, process writes, and fs operations all pass through here, so
-        // this is the shared low-level failure path after executor disconnect.
+        // this is the shared low-level failure path after environment disconnect.
         if let Some(error) = self.inner.disconnected_error() {
             return Err(error);
         }
@@ -720,7 +720,7 @@ impl Inner {
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        // Do not register a process session that can never receive executor
+        // Do not register a process session that can never receive environment
         // notifications. Without this check, remote MCP startup could create a
         // dead session and wait for process output that will never arrive.
         if let Some(error) = self.disconnected_error() {
@@ -795,7 +795,7 @@ async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     for (_, session) in sessions {
         // Sessions synthesize a closed read response and emit a pushed Failed
         // event. That covers both polling consumers and streaming consumers
-        // such as executor-backed MCP stdio.
+        // such as environment-backed MCP stdio.
         session.set_failure(message.clone()).await;
     }
 }

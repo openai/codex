@@ -6,7 +6,6 @@ use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
-use gethostname::gethostname;
 use std::io;
 use std::io::ErrorKind;
 use tracing::info;
@@ -195,11 +194,11 @@ pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
+    server_name: &str,
 ) -> io::Result<RemoteControlEnrollment> {
     let enroll_url = &remote_control_target.enroll_url;
-    let server_name = gethostname().to_string_lossy().trim().to_string();
     let request = EnrollRemoteServerRequest {
-        name: server_name.clone(),
+        name: server_name.to_string(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
@@ -255,7 +254,7 @@ pub(super) async fn enroll_remote_control_server(
         account_id: auth.account_id.clone(),
         environment_id: enrollment.environment_id,
         server_id: enrollment.server_id,
-        server_name,
+        server_name: server_name.to_string(),
     })
 }
 
@@ -464,6 +463,7 @@ mod tests {
                 account_id: "account_id".to_string(),
             },
             "11111111-1111-4111-8111-111111111111",
+            "test-server",
         )
         .await
         .expect_err("invalid response should fail to parse");

@@ -14,6 +14,7 @@ use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 use codex_state::ThreadMetadataBuilder;
+use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::git_info_from_parts;
@@ -51,8 +52,15 @@ pub(super) async fn update_thread_metadata(
     }
 
     let needs_rollout_compat = needs_rollout_compatibility_update(&patch);
-    let updated =
-        apply_metadata_update(store, thread_id, patch.clone(), params.include_archived).await?;
+    let require_sqlite_write = sqlite_write_failure_should_block(&patch);
+    let updated = apply_metadata_update(
+        store,
+        thread_id,
+        patch.clone(),
+        params.include_archived,
+        require_sqlite_write,
+    )
+    .await?;
     if !needs_rollout_compat {
         return Ok(updated);
     }
@@ -169,6 +177,7 @@ async fn apply_metadata_update(
     thread_id: ThreadId,
     patch: ThreadMetadataPatch,
     include_archived: bool,
+    require_sqlite_write: bool,
 ) -> ThreadStoreResult<StoredThread> {
     let live_rollout_path = live_writer::rollout_path(store, thread_id).await.ok();
     let mut rollout_path = patch.rollout_path.clone().or(live_rollout_path);
@@ -316,9 +325,19 @@ async fn apply_metadata_update(
     };
     match (state_db.is_some(), sqlite_write_result) {
         (true, Ok(())) => {}
-        (true, Err(err)) => return Err(err),
+        (true, Err(err)) if require_sqlite_write || !sqlite_write_error_is_best_effort(&err) => {
+            return Err(err);
+        }
+        (true, Err(err)) => {
+            warn!("state db update_thread_metadata failed for {thread_id}: {err}");
+        }
         (false, Ok(())) => {}
-        (false, Err(err)) => return Err(err),
+        (false, Err(err)) if require_sqlite_write || !sqlite_write_error_is_best_effort(&err) => {
+            return Err(err);
+        }
+        (false, Err(err)) => {
+            warn!("state db update_thread_metadata failed for {thread_id}: {err}");
+        }
     }
 
     read_thread::read_thread(
@@ -340,6 +359,19 @@ fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
         return false;
     }
     !has_observed_metadata_facts(patch)
+}
+
+fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
+    // Before live metadata sync moved above the rollout writer, SQLite sync failures for
+    // transcript-derived metadata, thread names, and memory-mode indexing were log-only. Keep that
+    // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
+    // look broken. Explicit git-only updates still require SQLite because partial git patches need
+    // the existing SQLite value to preserve unspecified fields.
+    patch.git_info.is_some() && !has_observed_metadata_facts(patch)
+}
+
+fn sqlite_write_error_is_best_effort(err: &ThreadStoreError) -> bool {
+    matches!(err, ThreadStoreError::Internal { .. })
 }
 
 fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
@@ -1134,6 +1166,46 @@ mod tests {
             .await
             .expect("thread memory mode should be readable");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn sqlite_failures_are_best_effort_for_legacy_rollout_compat_updates() {
+        assert!(!sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            name: Some(Some("User chosen name".to_string())),
+            ..Default::default()
+        }));
+        assert!(!sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            memory_mode: Some(ThreadMemoryMode::Disabled),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn sqlite_failures_are_best_effort_for_observed_metadata_updates() {
+        assert!(!sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            updated_at: Some(Utc::now()),
+            ..Default::default()
+        }));
+        assert!(!sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            preview: Some("Observed preview".to_string()),
+            git_info: Some(GitInfoPatch {
+                branch: Some(Some("main".to_string())),
+                ..Default::default()
+            }),
+            memory_mode: Some(ThreadMemoryMode::Enabled),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn sqlite_failures_still_block_for_explicit_git_only_updates() {
+        assert!(sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            git_info: Some(GitInfoPatch {
+                branch: Some(Some("main".to_string())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
     }
 
     #[tokio::test]

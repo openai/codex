@@ -3,16 +3,17 @@ use std::sync::Arc;
 
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionToolExecutor;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_tools::ToolOutput;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -134,8 +135,10 @@ async fn read_tool_reads_memory_file() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::READ_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -176,8 +179,10 @@ async fn search_tool_accepts_multiple_queries() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -244,8 +249,10 @@ async fn search_tool_accepts_windowed_all_match_mode() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -290,20 +297,25 @@ async fn search_tool_rejects_legacy_single_query() {
         .to_string(),
     };
 
-    let err = tool
+    let result = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload,
         })
-        .await
-        .expect_err("legacy query field should be rejected");
+        .await;
+    let err = match result {
+        Ok(_) => panic!("legacy query field should be rejected"),
+        Err(err) => err,
+    };
 
     assert!(err.to_string().contains("unknown field"));
     assert!(err.to_string().contains("query"));
 }
 
-fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ExtensionToolExecutor> {
+fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ToolExecutor<ToolCall>> {
     let expected_tool_name = memory_tool_name(tool_name);
     crate::tools::memory_tools(LocalMemoriesBackend::from_memory_root(memory_root))
         .into_iter()

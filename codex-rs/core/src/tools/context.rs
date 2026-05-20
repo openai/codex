@@ -28,6 +28,13 @@ use tokio_util::sync::CancellationToken;
 pub use codex_tools::ToolOutput;
 pub use codex_tools::ToolPayload;
 
+pub(crate) fn boxed_tool_output<T>(output: T) -> Box<dyn ToolOutput>
+where
+    T: ToolOutput + 'static,
+{
+    Box::new(output)
+}
+
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +96,10 @@ impl ToolOutput for McpToolOutput {
         serde_json::to_value(&self.result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(self.tool_input.clone())
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -300,6 +311,7 @@ pub struct ExecCommandToolOutput {
     pub wall_time: Duration,
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
+    pub truncation_policy: TruncationPolicy,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
@@ -327,12 +339,28 @@ impl ToolOutput for ExecCommandToolOutput {
         )
     }
 
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        if self.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            self.event_call_id.clone()
+        }
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        self.hook_command
+            .as_ref()
+            .map(|command| serde_json::json!({ "command": command }))
+    }
+
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         if self.process_id.is_some() || self.hook_command.is_none() {
             return None;
         }
 
-        Some(JsonValue::String(self.truncated_output()))
+        Some(JsonValue::String(
+            self.truncated_output(self.model_output_max_tokens()),
+        ))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -356,7 +384,10 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: self.truncated_output(),
+            output: match self.max_output_tokens {
+                Some(max_tokens) => self.truncated_output(max_tokens),
+                None => String::from_utf8_lossy(&self.raw_output).to_string(),
+            },
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
@@ -366,9 +397,12 @@ impl ToolOutput for ExecCommandToolOutput {
 }
 
 impl ExecCommandToolOutput {
-    pub(crate) fn truncated_output(&self) -> String {
+    fn model_output_max_tokens(&self) -> usize {
+        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+    }
+
+    pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let max_tokens = resolve_max_tokens(self.max_output_tokens);
         formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
     }
 
@@ -395,7 +429,7 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output());
+        sections.push(self.truncated_output(self.model_output_max_tokens()));
 
         sections.join("\n")
     }

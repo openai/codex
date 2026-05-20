@@ -105,24 +105,41 @@ impl App {
         true
     }
 
-    pub(super) fn try_set_permission_profile_on_config(
+    pub(super) fn try_set_builtin_active_permission_profile_on_config(
         &mut self,
         config: &mut Config,
-        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
         user_message_prefix: &str,
         log_message: &str,
-    ) -> bool {
+    ) -> Option<PermissionProfile> {
+        let Some(permission_profile) =
+            builtin_permission_profile_for_active_permission_profile(&active_permission_profile)
+        else {
+            tracing::warn!(
+                id = %active_permission_profile.id,
+                "{log_message}: unsupported active permission profile"
+            );
+            self.chat_widget.add_error_message(format!(
+                "{user_message_prefix}: unsupported active permission profile `{}`",
+                active_permission_profile.id
+            ));
+            return None;
+        };
+
         if let Err(err) = config
             .permissions
-            .set_permission_profile(permission_profile)
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                permission_profile.clone(),
+                active_permission_profile,
+            ))
         {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
                 .add_error_message(format!("{user_message_prefix}: {err}"));
-            return false;
+            return None;
         }
 
-        true
+        Some(permission_profile)
     }
 
     pub(super) async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
@@ -149,6 +166,7 @@ impl App {
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut permission_profile_override = None;
+        let mut active_permission_profile_override = None;
         let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
         // Auto-Review owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
@@ -240,14 +258,16 @@ impl App {
                 ) {
                     continue;
                 }
-                if !self.try_set_permission_profile_on_config(
-                    &mut feature_config,
-                    auto_review_preset.permission_profile.clone(),
-                    "Failed to enable Auto-review",
-                    "failed to set auto-review permission profile on staged config",
-                ) {
+                let Some(permission_profile) = self
+                    .try_set_builtin_active_permission_profile_on_config(
+                        &mut feature_config,
+                        auto_review_preset.active_permission_profile.clone(),
+                        "Failed to enable Auto-review",
+                        "failed to set auto-review permission profile on staged config",
+                    )
+                else {
                     continue;
-                }
+                };
                 feature_edits.extend([
                     ConfigEdit::SetPath {
                         segments: scoped_segments("approval_policy"),
@@ -259,7 +279,9 @@ impl App {
                     },
                 ]);
                 approval_policy_override = Some(auto_review_preset.approval_policy);
-                permission_profile_override = Some(auto_review_preset.permission_profile.clone());
+                permission_profile_override = Some(permission_profile);
+                active_permission_profile_override =
+                    Some(auto_review_preset.active_permission_profile.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -301,11 +323,16 @@ impl App {
         }
         let permission_profile_override_value = permission_profile_override
             .is_some()
-            .then(|| self.config.permissions.permission_profile().get().clone());
+            .then(|| self.config.permissions.permission_profile().clone());
         if let Some(permission_profile) = permission_profile_override_value.as_ref()
             && let Err(err) = self
                 .chat_widget
-                .set_permission_profile(permission_profile.clone())
+                .set_permission_profile_from_session_snapshot(
+                    PermissionProfileSnapshot::from_session_snapshot(
+                        permission_profile.clone(),
+                        active_permission_profile_override.clone(),
+                    ),
+                )
         {
             tracing::error!(
                 error = %err,
@@ -333,7 +360,7 @@ impl App {
                 /*cwd*/ None,
                 approval_policy_override,
                 approvals_reviewer_override,
-                permission_profile_override,
+                active_permission_profile_override,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -360,7 +387,7 @@ impl App {
                         /*cwd*/ None,
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
-                        /*permission_profile*/ None,
+                        /*active_permission_profile*/ None,
                         #[cfg(target_os = "windows")]
                         Some(windows_sandbox_level),
                         /*model*/ None,
@@ -562,6 +589,7 @@ mod tests {
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
+    use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
@@ -661,8 +689,11 @@ mod tests {
                 permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,
                 cwd: next_cwd.clone().abs(),
+                runtime_workspace_roots: Vec::new(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
+                collaboration_mode: None,
+                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),

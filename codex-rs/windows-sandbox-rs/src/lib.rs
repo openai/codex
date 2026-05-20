@@ -38,6 +38,8 @@ mod policy;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
+mod resolved_permissions;
+#[cfg(target_os = "windows")]
 mod token;
 #[cfg(target_os = "windows")]
 mod wfp;
@@ -153,6 +155,8 @@ pub use ipc_framed::ExitPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::FramedMessage;
 #[cfg(target_os = "windows")]
+pub use ipc_framed::IPC_PROTOCOL_VERSION;
+#[cfg(target_os = "windows")]
 pub use ipc_framed::Message;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::OutputPayload;
@@ -194,6 +198,10 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::WindowsSandboxTokenMode;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::token_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
@@ -279,7 +287,6 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::acl::revoke_ace;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::policy::SandboxPolicy;
@@ -292,7 +299,6 @@ mod windows_impl {
     use super::spawn_prep::prepare_legacy_session_security;
     use super::spawn_prep::prepare_legacy_spawn_context;
     use super::spawn_prep::root_capability_sids;
-    use super::token::LocalSid;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
@@ -424,8 +430,7 @@ mod windows_impl {
         );
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
         allow_null_device_for_workspace_write(is_workspace_write);
-        let persist_aces = is_workspace_write;
-        let guards = apply_legacy_session_acl_rules(
+        apply_legacy_session_acl_rules(
             &policy,
             sandbox_policy_cwd,
             codex_home,
@@ -438,7 +443,6 @@ mod windows_impl {
                 readonly_sid_str: security.readonly_sid_str.as_deref(),
                 write_root_sids: &security.write_root_sids,
             },
-            persist_aces,
         )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
@@ -463,13 +467,6 @@ mod windows_impl {
                     CloseHandle(out_w);
                     CloseHandle(err_r);
                     CloseHandle(err_w);
-                    if !persist_aces {
-                        for (p, sid_str) in &guards {
-                            if let Ok(sid) = LocalSid::from_string(sid_str) {
-                                revoke_ace(p, sid.as_ptr());
-                            }
-                        }
-                    }
                     CloseHandle(security.h_token);
                 }
                 return Err(err);
@@ -570,15 +567,6 @@ mod windows_impl {
             log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
         }
 
-        if !persist_aces {
-            unsafe {
-                for (p, sid_str) in guards {
-                    if let Ok(sid) = LocalSid::from_string(&sid_str) {
-                        revoke_ace(&p, sid.as_ptr());
-                    }
-                }
-            }
-        }
         Ok(CaptureResult {
             exit_code,
             stdout,
@@ -609,7 +597,7 @@ mod windows_impl {
             codex_home,
         );
         let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
-        let _guards = apply_legacy_session_acl_rules(
+        apply_legacy_session_acl_rules(
             sandbox_policy,
             sandbox_policy_cwd,
             codex_home,
@@ -622,7 +610,6 @@ mod windows_impl {
                 readonly_sid_str: None,
                 write_root_sids: &write_root_sids,
             },
-            /*persist_aces*/ true,
         )?;
 
         Ok(())

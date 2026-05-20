@@ -86,17 +86,34 @@ use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
+use crate::schema::SubagentStartCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SessionStartCommandOutputWire = parse_json(stdout)?;
-    let additional_context = wire
-        .hook_specific_output
-        .and_then(|output| output.additional_context);
-    Some(SessionStartOutput {
-        universal: UniversalOutput::from(wire.universal),
+    Some(session_start_output(
+        wire.universal,
+        wire.hook_specific_output,
+    ))
+}
+
+pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
+    let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
+    Some(session_start_output(
+        wire.universal,
+        wire.hook_specific_output,
+    ))
+}
+
+fn session_start_output(
+    universal: HookUniversalOutputWire,
+    hook_specific_output: Option<crate::schema::SessionStartHookSpecificOutputWire>,
+) -> SessionStartOutput {
+    let additional_context = hook_specific_output.and_then(|output| output.additional_context);
+    SessionStartOutput {
+        universal: UniversalOutput::from(universal),
         additional_context,
-    })
+    }
 }
 
 pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
