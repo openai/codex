@@ -16,8 +16,8 @@ use crate::logging::log_note;
 use crate::sandbox_bin_dir;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
-const BIN_DIRNAME: &str = "bin";
-const RESOURCES_DIRNAME: &str = "codex-resources";
+pub(crate) const BIN_DIRNAME: &str = "bin";
+pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
@@ -52,7 +52,7 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = source_path_for_exe(&exe, kind.file_name())
+        && let Some(candidate) = bundled_executable_path_for_exe(&exe, kind.file_name())
     {
         return candidate;
     }
@@ -179,7 +179,7 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+    bundled_executable_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
         anyhow!(
             "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
             exe.display()
@@ -187,7 +187,7 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     })
 }
 
-fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
+pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
     let dir = exe.parent()?;
     let direct_candidate = dir.join(file_name);
     if direct_candidate.is_file() {
@@ -361,13 +361,13 @@ mod tests {
     use super::DEV_BUILD_VERSION_SENTINEL;
     use super::HelperExecutable;
     use super::RESOURCES_DIRNAME;
+    use super::bundled_executable_path_for_exe;
     use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
     use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
-    use super::source_path_for_exe;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -469,8 +469,9 @@ mod tests {
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
-        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
-            .expect("helper path");
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
 
         assert_eq!(resolved, helper);
     }
@@ -488,8 +489,9 @@ mod tests {
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
-        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
-            .expect("helper path");
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
 
         assert_eq!(resolved, helper);
     }
@@ -510,8 +512,9 @@ mod tests {
         fs::write(&package_helper, b"package runner").expect("write package helper");
         fs::write(&bin_helper, b"bin runner").expect("write bin helper");
 
-        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
-            .expect("helper path");
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
 
         assert_eq!(resolved, package_helper);
     }
@@ -529,8 +532,9 @@ mod tests {
         fs::write(&sibling_helper, b"sibling runner").expect("write sibling helper");
         fs::write(&resource_helper, b"resource runner").expect("write resource helper");
 
-        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
-            .expect("helper path");
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
     }
