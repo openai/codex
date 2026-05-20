@@ -9,6 +9,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::QueuedTurnStatus;
 use codex_app_server_protocol::RequestId;
@@ -30,10 +31,14 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn idle_queue_add_dispatches_serialized_turn_and_drains_visible_queue() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("queued done")?];
+    let responses = vec![
+        create_final_assistant_message_sse_response("queued done")?,
+        create_final_assistant_message_sse_response("second queued done")?,
+    ];
     let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
     write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
@@ -95,6 +100,8 @@ async fn idle_queue_add_dispatches_serialized_turn_and_drains_visible_queue() ->
             "thread/queue/list",
             Some(serde_json::to_value(ThreadQueueListParams {
                 thread_id: thread.id.clone(),
+                cursor: None,
+                limit: None,
             })?),
         )
         .await?;
@@ -103,17 +110,82 @@ async fn idle_queue_add_dispatches_serialized_turn_and_drains_visible_queue() ->
         mcp.read_stream_until_response_message(RequestId::Integer(list_request_id)),
     )
     .await??;
-    let ThreadQueueListResponse { queued_turns } = to_response(list_response)?;
-    assert!(queued_turns.is_empty());
+    let ThreadQueueListResponse { data, next_cursor } = to_response(list_response)?;
+    assert!(data.is_empty());
+    assert_eq!(next_cursor, None);
+
+    queue_turn(&mut mcp, &thread.id, "second queued serialized input").await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
 
     let requests = server
         .received_requests()
         .await
         .expect("failed to fetch received requests");
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert!(
         String::from_utf8_lossy(&requests[0].body).contains("queued serialized input"),
         "queued turn payload should reach the model request after state round-trip"
+    );
+    assert!(
+        String::from_utf8_lossy(&requests[1].body).contains("second queued serialized input"),
+        "a later queued turn should still drain after a fast terminal dispatch"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn queue_add_rejects_ephemeral_threads() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("unused")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+
+    let add_request_id = mcp
+        .send_raw_request(
+            "thread/queue/add",
+            Some(serde_json::to_value(ThreadQueueAddParams {
+                thread_id: thread.id.clone(),
+                turn_start_params: text_turn(&thread.id, "ephemeral queued turn"),
+            })?),
+        )
+        .await?;
+    let add_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(add_request_id)),
+    )
+    .await??;
+
+    assert_eq!(add_error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        add_error.error.message,
+        format!(
+            "ephemeral thread does not support queued turns: {}",
+            thread.id
+        )
     );
 
     Ok(())
@@ -166,6 +238,26 @@ async fn busy_thread_queue_rows_support_list_reorder_and_delete_before_drain() -
         list_queue_ids(&mut mcp, &thread.id).await?,
         vec![first.clone(), second.clone()]
     );
+    let first_page = list_queue_page(&mut mcp, &thread.id, None, Some(1)).await?;
+    assert_eq!(
+        first_page
+            .data
+            .into_iter()
+            .map(|queued_turn| queued_turn.id)
+            .collect::<Vec<_>>(),
+        vec![first.clone()]
+    );
+    let second_page =
+        list_queue_page(&mut mcp, &thread.id, first_page.next_cursor, Some(1)).await?;
+    assert_eq!(
+        second_page
+            .data
+            .into_iter()
+            .map(|queued_turn| queued_turn.id)
+            .collect::<Vec<_>>(),
+        vec![second.clone()]
+    );
+    assert_eq!(second_page.next_cursor, None);
 
     let reorder_request_id = mcp
         .send_raw_request(
@@ -335,11 +427,23 @@ async fn queue_turn(mcp: &mut McpProcess, thread_id: &str, text: &str) -> Result
 }
 
 async fn list_queue_ids(mcp: &mut McpProcess, thread_id: &str) -> Result<Vec<String>> {
+    let ThreadQueueListResponse { data, .. } = list_queue_page(mcp, thread_id, None, None).await?;
+    Ok(data.into_iter().map(|queued_turn| queued_turn.id).collect())
+}
+
+async fn list_queue_page(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+    cursor: Option<String>,
+    limit: Option<u32>,
+) -> Result<ThreadQueueListResponse> {
     let request_id = mcp
         .send_raw_request(
             "thread/queue/list",
             Some(serde_json::to_value(ThreadQueueListParams {
                 thread_id: thread_id.to_string(),
+                cursor,
+                limit,
             })?),
         )
         .await?;
@@ -348,11 +452,7 @@ async fn list_queue_ids(mcp: &mut McpProcess, thread_id: &str) -> Result<Vec<Str
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadQueueListResponse { queued_turns } = to_response(response)?;
-    Ok(queued_turns
-        .into_iter()
-        .map(|queued_turn| queued_turn.id)
-        .collect())
+    to_response(response)
 }
 
 async fn delete_queue_turn(

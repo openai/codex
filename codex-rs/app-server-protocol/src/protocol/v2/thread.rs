@@ -714,13 +714,18 @@ pub struct ThreadQueueAddResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadQueueListParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadQueueListResponse {
-    pub queued_turns: Vec<QueuedTurn>,
+    pub data: Vec<QueuedTurn>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

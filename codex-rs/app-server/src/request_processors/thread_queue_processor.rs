@@ -1,5 +1,7 @@
 use super::*;
 
+const THREAD_QUEUE_LIST_DEFAULT_LIMIT: usize = 25;
+
 #[derive(Clone)]
 pub(crate) struct ThreadQueueRequestProcessor {
     thread_manager: Arc<ThreadManager>,
@@ -43,8 +45,15 @@ impl ThreadQueueRequestProcessor {
                 "`threadId` must match `turnStartParams.threadId`",
             ));
         }
-        if self.thread_manager.get_thread(thread_id).await.is_err() {
-            return Err(invalid_request(format!("thread not found: {thread_id}")));
+        let thread = self
+            .thread_manager
+            .get_thread(thread_id)
+            .await
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+        if thread.config_snapshot().await.ephemeral {
+            return Err(invalid_request(format!(
+                "ephemeral thread does not support queued turns: {thread_id}"
+            )));
         }
         TurnRequestProcessor::validate_v2_input_limit(&params.turn_start_params.input)?;
         let payload = serde_json::to_vec(&params.turn_start_params).map_err(|err| {
@@ -74,8 +83,29 @@ impl ThreadQueueRequestProcessor {
         params: ThreadQueueListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let thread_id = parse_queue_thread_id(params.thread_id.as_str())?;
-        let queued_turns = self.list_visible_queued_turns(thread_id).await?;
-        Ok(Some(ThreadQueueListResponse { queued_turns }.into()))
+        let start = match params.cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            None => 0,
+        };
+        let limit = params
+            .limit
+            .unwrap_or(THREAD_QUEUE_LIST_DEFAULT_LIMIT as u32)
+            .max(1) as usize;
+        let records = self
+            .state_db()?
+            .list_visible_thread_queued_turns_page(thread_id, start, limit.saturating_add(1))
+            .await
+            .map_err(|err| internal_error(format!("failed to read queued turns: {err}")))?;
+        let has_next_page = records.len() > limit;
+        let data = records
+            .into_iter()
+            .take(limit)
+            .map(queued_turn_from_state)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = has_next_page.then(|| start.saturating_add(limit).to_string());
+        Ok(Some(ThreadQueueListResponse { data, next_cursor }.into()))
     }
 
     pub(crate) async fn thread_queue_delete(
@@ -248,12 +278,14 @@ impl ThreadQueueRequestProcessor {
                     }
                 }
                 let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-                if thread_state
-                    .lock()
-                    .await
-                    .active_turn_snapshot()
-                    .is_some_and(|turn| turn.id == turn_id)
-                {
+                let should_complete_dispatch = {
+                    let thread_state = thread_state.lock().await;
+                    thread_state
+                        .active_turn_snapshot()
+                        .is_some_and(|turn| turn.id == turn_id)
+                        || thread_state.last_terminal_turn_id.as_deref() == Some(turn_id.as_str())
+                };
+                if should_complete_dispatch {
                     self.complete_dispatch_after_turn_started(thread_id, turn_id.as_str())
                         .await;
                 }

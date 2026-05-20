@@ -65,6 +65,16 @@ RETURNING
         &self,
         thread_id: ThreadId,
     ) -> anyhow::Result<Vec<crate::ThreadQueuedTurn>> {
+        self.list_visible_thread_queued_turns_page(thread_id, 0, i64::MAX as usize)
+            .await
+    }
+
+    pub async fn list_visible_thread_queued_turns_page(
+        &self,
+        thread_id: ThreadId,
+        offset: usize,
+        limit: usize,
+    ) -> anyhow::Result<Vec<crate::ThreadQueuedTurn>> {
         let rows = sqlx::query(
             r#"
 SELECT
@@ -84,9 +94,13 @@ FROM thread_queued_turns
 WHERE thread_id = ?
   AND state IN ('pending', 'failed')
 ORDER BY queue_order ASC
+LIMIT ?
+OFFSET ?
             "#,
         )
         .bind(thread_id.to_string())
+        .bind(i64::try_from(limit)?)
+        .bind(i64::try_from(offset)?)
         .fetch_all(self.pool.as_ref())
         .await?;
 

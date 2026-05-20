@@ -13159,15 +13159,11 @@
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
           },
           "permissions": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/PermissionProfileSelectionParams"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Select a named permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`. Use bounded `modifications` for supported turn adjustments instead of replacing the full permissions profile."
+            "description": "Select a named permissions profile id for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "personality": {
             "anyOf": [
@@ -13187,6 +13183,16 @@
             "description": "Optional turn-scoped Responses API client metadata.",
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "runtimeWorkspaceRoots": {
+            "description": "Replace the thread's runtime workspace roots for this turn and subsequent turns. Relative paths are resolved against the effective cwd for the turn.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
