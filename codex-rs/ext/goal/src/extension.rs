@@ -5,7 +5,6 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::NoopExtensionEventSink;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
@@ -19,14 +18,12 @@ use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
-use crate::tool::CreateGoalRequest;
 use crate::tool::GoalToolExecutor;
 
 #[derive(Clone, Debug)]
@@ -42,7 +39,7 @@ impl GoalExtensionConfig {
 
 #[derive(Clone)]
 pub struct GoalExtension<C> {
-    backend: Arc<dyn GoalToolBackend>,
+    state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
@@ -54,70 +51,17 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 }
 
 impl<C> GoalExtension<C> {
-    pub fn new(
-        backend: Arc<dyn GoalToolBackend>,
-        goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
-    ) -> Self {
-        Self::new_with_event_sink(backend, Arc::new(NoopExtensionEventSink), goals_enabled)
-    }
-
-    pub fn new_with_event_sink(
-        backend: Arc<dyn GoalToolBackend>,
+    pub(crate) fn new_with_event_sink(
+        state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
-            backend,
+            state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
             goals_enabled: Arc::new(goals_enabled),
         }
     }
-
-    pub fn without_backend(goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static) -> Self {
-        Self::new(Arc::new(NoGoalToolBackend), goals_enabled)
-    }
-}
-
-#[async_trait]
-pub trait GoalToolBackend: Send + Sync {
-    async fn get_goal(&self, thread_id: ThreadId) -> Result<Option<ThreadGoal>, String>;
-
-    async fn create_goal(
-        &self,
-        thread_id: ThreadId,
-        request: CreateGoalRequest,
-    ) -> Result<ThreadGoal, String>;
-
-    async fn complete_goal(&self, thread_id: ThreadId) -> Result<ThreadGoal, String>;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoGoalToolBackend;
-
-#[async_trait]
-impl GoalToolBackend for NoGoalToolBackend {
-    async fn get_goal(&self, _thread_id: ThreadId) -> Result<Option<ThreadGoal>, String> {
-        Err(missing_backend_message())
-    }
-
-    async fn create_goal(
-        &self,
-        _thread_id: ThreadId,
-        _request: CreateGoalRequest,
-    ) -> Result<ThreadGoal, String> {
-        Err(missing_backend_message())
-    }
-
-    async fn complete_goal(&self, _thread_id: ThreadId) -> Result<ThreadGoal, String> {
-        Err(missing_backend_message())
-    }
-}
-
-fn missing_backend_message() -> String {
-    // TODO: replace this fallback with a host-provided goal backend once
-    // ToolContributor invocations can reach thread-scoped goal persistence and
-    // the current turn context.
-    "goal tools are not connected to host goal persistence yet".to_string()
 }
 
 #[async_trait]
@@ -270,41 +214,32 @@ where
         vec![
             Arc::new(GoalToolExecutor::get(
                 thread_id,
-                Arc::clone(&self.backend),
+                Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
             )),
             Arc::new(GoalToolExecutor::create(
                 thread_id,
-                Arc::clone(&self.backend),
+                Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
             )),
             Arc::new(GoalToolExecutor::update(
                 thread_id,
-                Arc::clone(&self.backend),
+                Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
             )),
         ]
     }
 }
 
-pub fn install<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
-) where
-    C: Send + Sync + 'static,
-{
-    install_with_backend(registry, Arc::new(NoGoalToolBackend), goals_enabled);
-}
-
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
-    backend: Arc<dyn GoalToolBackend>,
+    state_dbs: Arc<codex_state::StateRuntime>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
 {
     let extension = Arc::new(GoalExtension::new_with_event_sink(
-        backend,
+        state_dbs,
         registry.event_sink(),
         goals_enabled,
     ));
