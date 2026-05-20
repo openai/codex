@@ -300,6 +300,39 @@ def validate_contentful_cma_token(check: Check) -> Result:
     return classify_http_auth(check, status_code, "Contentful CMA accepted GET /spaces?limit=1")
 
 
+def validate_smartling_credentials(check: Check) -> Result:
+    values, failure = require_inputs(check, ("user_identifier", "user_secret"))
+    if failure:
+        return failure
+    status_code, _ = http_json(
+        "https://api.smartling.com/auth-api/v2/authenticate",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+        body=json.dumps(
+            {
+                "userIdentifier": values["user_identifier"],
+                "userSecret": values["user_secret"],
+            }
+        ).encode(),
+    )
+    return classify_http_auth(
+        check,
+        status_code,
+        "Smartling accepted the credentials for token authentication",
+    )
+
+
+def validate_statsig_console_key(check: Check) -> Result:
+    values, failure = require_inputs(check, ("token",))
+    if failure:
+        return failure
+    status_code, _ = http_json(
+        str(check.options["url"]),
+        headers={"STATSIG-API-KEY": values["token"]},
+    )
+    return classify_http_auth(check, status_code, "Statsig Console accepted a read-only GET")
+
+
 def validate_ssh_private_key(check: Check) -> Result:
     if not command_exists("ssh-keygen"):
         return result(check, "needs_tool", "ssh-keygen is not available")
@@ -349,6 +382,56 @@ def validate_pkcs12(check: Check) -> Result:
         )
     return result(
         check, "invalid", "openssl could not parse the PKCS#12 bundle with the supplied password"
+    )
+
+
+def validate_pkcs12_link(check: Check) -> Result:
+    if not command_exists("openssl"):
+        return result(check, "needs_tool", "openssl is not available")
+    values, failure = require_inputs(check, ("certificate_link", "password"))
+    if failure:
+        return failure
+    link = values["certificate_link"]
+    try:
+        if link.startswith(("https://", "http://")):
+            with urllib.request.urlopen(link, timeout=20) as response:
+                certificate_bytes = response.read()
+        else:
+            certificate_bytes = secret_bytes(
+                link, str(check.options.get("encoding", "base64_or_raw"))
+            )
+    except Exception:
+        return result(
+            check,
+            "invalid",
+            "certificate link could not be fetched or materialized as PKCS#12 bytes",
+        )
+    password_env = check.inputs["password"]
+    with tempfile.TemporaryDirectory(prefix="secret-validator-p12-link-") as tmpdir:
+        certificate_path = Path(tmpdir) / "certificate.p12"
+        certificate_path.write_bytes(certificate_bytes)
+        certificate_path.chmod(0o600)
+        completed = run_command(
+            [
+                "openssl",
+                "pkcs12",
+                "-in",
+                str(certificate_path),
+                "-noout",
+                "-passin",
+                f"env:{password_env}",
+            ]
+        )
+    if completed.returncode == 0:
+        return result(
+            check,
+            "valid",
+            "openssl parsed PKCS#12 bytes materialized from the certificate link",
+        )
+    return result(
+        check,
+        "invalid",
+        "openssl could not parse PKCS#12 bytes materialized from the certificate link",
     )
 
 
@@ -524,8 +607,11 @@ VALIDATORS: dict[str, Callable[[Check], Result]] = {
     "buildkite_token": validate_buildkite_token,
     "github_token": validate_github_token,
     "contentful_cma_token": validate_contentful_cma_token,
+    "smartling_credentials": validate_smartling_credentials,
+    "statsig_console_key": validate_statsig_console_key,
     "ssh_private_key_parse": validate_ssh_private_key,
     "pkcs12_parse": validate_pkcs12,
+    "pkcs12_link_parse": validate_pkcs12_link,
     "pem_private_key_parse": validate_pem_private_key,
     "apple_notary_history": validate_apple_notary_history,
     "github_app_private_key": validate_github_app_private_key,
