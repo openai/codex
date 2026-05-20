@@ -119,6 +119,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -1006,14 +1007,13 @@ impl AppServerSession {
 
 pub(crate) async fn start_thread_with_request_handle(
     request_handle: AppServerRequestHandle,
-    request_id: String,
     config: Config,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
 ) -> Result<AppServerStartedThread> {
     let response: ThreadStartResponse = request_handle
         .request_typed(ClientRequest::ThreadStart {
-            request_id: RequestId::String(request_id),
+            request_id: RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4())),
             params: thread_start_params_from_config(
                 &config,
                 thread_params_mode,

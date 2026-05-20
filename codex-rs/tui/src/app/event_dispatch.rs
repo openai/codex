@@ -23,8 +23,8 @@ impl App {
                 )
                 .await;
             }
-            AppEvent::StartupThreadStarted { request_id, result } => {
-                self.handle_startup_thread_started(app_server, request_id, result)
+            AppEvent::StartupThreadStarted { result } => {
+                self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
             AppEvent::ClearUi => {

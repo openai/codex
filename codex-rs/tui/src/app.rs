@@ -543,7 +543,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
-    pending_startup_thread_start_request_id: Option<String>,
+    pending_startup_thread_start: bool,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
@@ -579,7 +579,6 @@ async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -
 fn spawn_startup_thread_start(
     app_server: &AppServerSession,
     config: Config,
-    request_id: String,
     app_event_tx: AppEventSender,
 ) {
     let request_handle = app_server.request_handle();
@@ -588,14 +587,13 @@ fn spawn_startup_thread_start(
     tokio::spawn(async move {
         let result = crate::app_server_session::start_thread_with_request_handle(
             request_handle,
-            request_id.clone(),
             config,
             thread_params_mode,
             remote_cwd_override,
         )
         .await
         .map_err(|err| format!("{err:#}"));
-        app_event_tx.send(AppEvent::StartupThreadStarted { request_id, result });
+        app_event_tx.send(AppEvent::StartupThreadStarted { result });
     });
 }
 
@@ -802,19 +800,13 @@ impl App {
                 &initial_images,
             );
         let thread_and_widget_started_at = Instant::now();
-        let mut pending_startup_thread_start_request_id = None;
+        let pending_startup_thread_start = matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let startup_thread_start_request_id =
-                    format!("startup-thread-start-{}", Uuid::new_v4());
-                pending_startup_thread_start_request_id =
-                    Some(startup_thread_start_request_id.clone());
-                spawn_startup_thread_start(
-                    &app_server,
-                    config.clone(),
-                    startup_thread_start_request_id,
-                    app_event_tx.clone(),
-                );
+                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
                 // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
@@ -992,7 +984,7 @@ See the Codex keymap documentation for supported actions and examples."
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            pending_startup_thread_start_request_id,
+            pending_startup_thread_start,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
