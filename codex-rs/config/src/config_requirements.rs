@@ -441,7 +441,8 @@ pub struct FilesystemRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionsRequirementsToml {
     pub filesystem: Option<FilesystemRequirementsToml>,
-    // `filesystem` stays reserved for requirements-level filesystem constraints.
+    // For legacy reasons, `filesystem` stays reserved for requirements-level
+    // filesystem constraints and cannot name a profile.
     #[serde(default, flatten)]
     pub profiles: BTreeMap<String, PermissionProfileToml>,
 }
