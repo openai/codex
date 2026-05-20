@@ -49,6 +49,8 @@ const CODE_MODE_EXEC_LONG_OUTPUT_COMMAND: &str =
 const CODE_MODE_EXEC_RAW_OUTPUT_LEN: usize = 50_000;
 const CODE_MODE_EXEC_LARGE_MAX_OUTPUT_TOKENS: usize = 20_000;
 const CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT: usize = 50;
+const CODE_MODE_EXEC_TRUNCATED_OUTPUT: &str =
+    "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789";
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
@@ -192,28 +194,49 @@ async fn run_code_mode_turn_with_config(
     Ok((test, second_mock))
 }
 
-async fn code_mode_exec_output_text(code: &str) -> Result<String> {
-    code_mode_exec_output_text_with_config(code, |_| {}).await
+async fn code_mode_exec_output_items(code: &str) -> Result<Vec<Value>> {
+    code_mode_exec_output_items_with_config(code, |_| {}).await
 }
 
-async fn code_mode_exec_output_text_with_config(
+async fn code_mode_exec_output_items_with_config(
     code: &str,
     configure: impl FnOnce(&mut Config) + Send + 'static,
-) -> Result<String> {
+) -> Result<Vec<Value>> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) =
         run_code_mode_turn_with_config(&server, "use exec_command from code mode", code, configure)
             .await?;
 
     let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    assert_eq!(items.len(), 2);
-    Ok(text_item(&items, /*index*/ 1).to_string())
+    Ok(custom_tool_output_items(&req, "call-1"))
 }
 
-async fn assert_code_mode_exec_output_snapshot(snapshot_name: &str, code: &str) -> Result<()> {
-    let output = code_mode_exec_output_text(code).await?;
-    insta::assert_snapshot!(snapshot_name, output);
+fn assert_code_mode_exec_output_items(items: &[Value], expected_output: &str) {
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(items, /*index*/ 0),
+    );
+    assert_eq!(text_item(items, /*index*/ 1), expected_output);
+}
+
+async fn assert_code_mode_exec_output_text(code: &str, expected_output: &str) -> Result<()> {
+    let items = code_mode_exec_output_items(code).await?;
+    assert_code_mode_exec_output_items(&items, expected_output);
+
+    Ok(())
+}
+
+async fn assert_code_mode_exec_output_text_with_config(
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+    expected_output: &str,
+) -> Result<()> {
+    let items = code_mode_exec_output_items_with_config(code, configure).await?;
+    assert_code_mode_exec_output_items(&items, expected_output);
 
     Ok(())
 }
@@ -692,7 +715,7 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_command_explicit_max_output_tokens_truncates_snapshot() -> Result<()> {
+async fn code_mode_exec_command_explicit_max_output_tokens_truncates() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let code = format!(
@@ -705,11 +728,7 @@ text(result.output);
 "#
     );
 
-    assert_code_mode_exec_output_snapshot(
-        "code_mode_exec_command_explicit_max_output_tokens_truncates",
-        &code,
-    )
-    .await?;
+    assert_code_mode_exec_output_text(&code, CODE_MODE_EXEC_TRUNCATED_OUTPUT).await?;
 
     Ok(())
 }
@@ -730,8 +749,8 @@ text(result.output);
 "#
     );
 
-    let output = code_mode_exec_output_text(&code).await?;
-    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    let expected_output = "x".repeat(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    assert_code_mode_exec_output_text(&code, &expected_output).await?;
 
     Ok(())
 }
@@ -752,11 +771,15 @@ text(result.output);
 "#
     );
 
-    let output = code_mode_exec_output_text_with_config(&code, |config| {
-        config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
-    })
+    let expected_output = "x".repeat(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    assert_code_mode_exec_output_text_with_config(
+        &code,
+        |config| {
+            config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
+        },
+        &expected_output,
+    )
     .await?;
-    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
 
     Ok(())
 }
@@ -776,8 +799,8 @@ text(result.output);
 "#
     );
 
-    let output = code_mode_exec_output_text(&code).await?;
-    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    let expected_output = "x".repeat(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    assert_code_mode_exec_output_text(&code, &expected_output).await?;
 
     Ok(())
 }
@@ -797,18 +820,22 @@ text(result.output);
 "#
     );
 
-    let output = code_mode_exec_output_text_with_config(&code, |config| {
-        config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
-    })
+    let expected_output = "x".repeat(CODE_MODE_EXEC_RAW_OUTPUT_LEN);
+    assert_code_mode_exec_output_text_with_config(
+        &code,
+        |config| {
+            config.tool_output_token_limit = Some(CODE_MODE_EXEC_SMALL_TOOL_OUTPUT_LIMIT);
+        },
+        &expected_output,
+    )
     .await?;
-    assert_eq!(output.len(), CODE_MODE_EXEC_RAW_OUTPUT_LEN);
 
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_explicit_max_output_tokens_truncates_snapshot() -> Result<()> {
+async fn code_mode_exec_explicit_max_output_tokens_truncates() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let code = format!(
@@ -820,11 +847,7 @@ text(result.output);
 "#
     );
 
-    assert_code_mode_exec_output_snapshot(
-        "code_mode_exec_explicit_max_output_tokens_truncates",
-        &code,
-    )
-    .await?;
+    assert_code_mode_exec_output_text(&code, CODE_MODE_EXEC_TRUNCATED_OUTPUT).await?;
 
     Ok(())
 }
