@@ -1240,7 +1240,7 @@ impl PluginsManager {
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Some(plugin_id) = plugin_id.as_ref()
-                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
                             local_version = manifest.version.clone();

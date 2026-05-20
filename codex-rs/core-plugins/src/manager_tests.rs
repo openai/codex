@@ -1599,7 +1599,7 @@ enabled = false
                     id: "enabled-plugin@debug".to_string(),
                     name: "enabled-plugin".to_string(),
                     local_version: None,
-                    installed_version: None,
+                    installed_version: Some("local".to_string()),
                     source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                             .unwrap(),
@@ -1618,7 +1618,7 @@ enabled = false
                     id: "disabled-plugin@debug".to_string(),
                     name: "disabled-plugin".to_string(),
                     local_version: None,
-                    installed_version: None,
+                    installed_version: Some("local".to_string()),
                     source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/disabled-plugin"),)
                             .unwrap(),
@@ -2173,7 +2173,7 @@ enabled = true
             id: "toolkit@debug".to_string(),
             name: "toolkit".to_string(),
             local_version: None,
-            installed_version: None,
+            installed_version: Some("local".to_string()),
             source: MarketplacePluginSource::Git {
                 url: missing_remote_repo_url,
                 path: Some("plugins/toolkit".to_string()),
