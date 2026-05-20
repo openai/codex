@@ -304,13 +304,33 @@ impl App {
         // Persist first so the live session does not diverge from disk if the
         // config edit fails. Runtime/UI state is patched below only after the
         // durable config update succeeds.
-        if let Err(err) =
-            crate::config_update::write_config_batch(app_server.request_handle(), config_edits)
-                .await
+        let write_response = match crate::config_update::write_config_batch(
+            app_server.request_handle(),
+            config_edits,
+        )
+        .await
         {
-            tracing::error!(error = %err, "failed to persist feature flags");
-            self.chat_widget
-                .add_error_message(format!("Failed to update experimental features: {err}"));
+            Ok(response) => response,
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist feature flags");
+                self.chat_widget
+                    .add_error_message(format!("Failed to update experimental features: {err}"));
+                return;
+            }
+        };
+        if write_response.status == WriteStatus::OkOverridden {
+            let message = write_response
+                .overridden_metadata
+                .as_ref()
+                .map(|metadata| metadata.message.as_str())
+                .unwrap_or("the effective config is overridden by a higher-priority layer");
+            tracing::warn!(
+                message,
+                "feature flag config write was overridden by effective config"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Experimental feature changes were saved but not applied: {message}"
+            ));
             return;
         }
 
@@ -434,12 +454,33 @@ impl App {
             generate_memories,
         );
 
-        if let Err(err) =
-            crate::config_update::write_config_batch(app_server.request_handle(), edits).await
+        let write_response = match crate::config_update::write_config_batch(
+            app_server.request_handle(),
+            edits,
+        )
+        .await
         {
-            tracing::error!(error = %err, "failed to persist memory settings");
-            self.chat_widget
-                .add_error_message(format!("Failed to save memory settings: {err}"));
+            Ok(response) => response,
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist memory settings");
+                self.chat_widget
+                    .add_error_message(format!("Failed to save memory settings: {err}"));
+                return false;
+            }
+        };
+        if write_response.status == WriteStatus::OkOverridden {
+            let message = write_response
+                .overridden_metadata
+                .as_ref()
+                .map(|metadata| metadata.message.as_str())
+                .unwrap_or("the effective config is overridden by a higher-priority layer");
+            tracing::warn!(
+                message,
+                "memory settings config write was overridden by effective config"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Memory setting changes were saved but not applied: {message}"
+            ));
             return false;
         }
 

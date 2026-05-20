@@ -1096,7 +1096,7 @@ impl App {
                     )
                     .await
                     {
-                        Ok(()) => {
+                        Ok(_) => {
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
                                 self.config
@@ -1201,7 +1201,7 @@ impl App {
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let effort_label = effort
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
@@ -1282,7 +1282,7 @@ impl App {
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let label = Self::personality_label(personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
@@ -1325,7 +1325,7 @@ impl App {
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let mut message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
                         } else {

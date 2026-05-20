@@ -157,9 +157,9 @@ pub(crate) fn build_memory_settings_edits(
 pub(crate) async fn write_config_batch(
     request_handle: AppServerRequestHandle,
     edits: Vec<ConfigEdit>,
-) -> Result<()> {
+) -> Result<ConfigWriteResponse> {
     let request_id = RequestId::String(format!("tui-config-write-{}", Uuid::new_v4()));
-    let _: ConfigWriteResponse = request_handle
+    request_handle
         .request_typed(ClientRequest::ConfigBatchWrite {
             request_id,
             params: ConfigBatchWriteParams {
@@ -170,8 +170,7 @@ pub(crate) async fn write_config_batch(
             },
         })
         .await
-        .wrap_err("config/batchWrite failed in TUI")?;
-    Ok(())
+        .wrap_err("config/batchWrite failed in TUI")
 }
 
 pub(crate) async fn write_skill_enabled(
