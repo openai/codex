@@ -166,8 +166,13 @@ fn observe_auth_response_headers<T>(
 ) where
     T: ResponseHeaders,
 {
-    if let Ok(response) = response {
-        auth.observe_response_headers(request_url, response.headers());
+    match response {
+        Ok(response) => auth.observe_response_headers(request_url, response.headers()),
+        Err(TransportError::Http {
+            headers: Some(headers),
+            ..
+        }) => auth.observe_response_headers(request_url, headers),
+        Err(_) => {}
     }
 }
 
@@ -184,5 +189,61 @@ impl ResponseHeaders for Response {
 impl ResponseHeaders for StreamResponse {
     fn headers(&self) -> &HeaderMap {
         &self.headers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct RecordingAuthProvider {
+        observed_headers: StdMutex<Vec<HeaderMap>>,
+    }
+
+    impl crate::auth::AuthProvider for RecordingAuthProvider {
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+        fn observe_response_headers(&self, _request_url: &str, headers: &HeaderMap) {
+            self.observed_headers
+                .lock()
+                .expect("recording auth lock should not be poisoned")
+                .push(headers.clone());
+        }
+    }
+
+    #[test]
+    fn observe_auth_response_headers_retains_http_error_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-oai-is-update",
+            http::HeaderValue::from_static("ois1.rotated.nonce.ciphertext"),
+        );
+        let response: Result<Response, TransportError> = Err(TransportError::Http {
+            status: http::StatusCode::BAD_REQUEST,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: Some(headers),
+            body: None,
+        });
+        let auth = RecordingAuthProvider::default();
+
+        observe_auth_response_headers(
+            &auth,
+            "https://chatgpt.com/backend-api/codex/responses",
+            &response,
+        );
+
+        let observed_headers = auth
+            .observed_headers
+            .lock()
+            .expect("recording auth lock should not be poisoned");
+        assert_eq!(observed_headers.len(), 1);
+        assert_eq!(
+            observed_headers[0]
+                .get("x-oai-is-update")
+                .and_then(|value| value.to_str().ok()),
+            Some("ois1.rotated.nonce.ciphertext")
+        );
     }
 }
