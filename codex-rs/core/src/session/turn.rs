@@ -999,6 +999,7 @@ async fn run_sampling_request(
             && websocket_auth_recovery_retries == 0
         {
             websocket_auth_recovery_retries += 1;
+            client_session.reset_websocket_session();
             continue;
         }
 

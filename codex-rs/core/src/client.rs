@@ -1556,6 +1556,7 @@ impl ModelClientSession {
                                     && is_websocket_auth_recovery_retry(&err) =>
                             {
                                 retried_after_auth_recovery = true;
+                                self.reset_websocket_session();
                                 retry_after_auth_recovery = true;
                                 break;
                             }

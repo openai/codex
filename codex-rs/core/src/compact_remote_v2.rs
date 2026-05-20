@@ -310,6 +310,7 @@ async fn run_remote_compaction_request_v2(
                     && websocket_auth_recovery_retries == 0 =>
             {
                 websocket_auth_recovery_retries += 1;
+                client_session.reset_websocket_session();
             }
             result => return result,
         }

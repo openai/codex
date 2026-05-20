@@ -1559,18 +1559,32 @@ async fn responses_websocket_revoked_managed_auth_retries_reloaded_auth() {
             "message": "revoked"
         }
     });
-    let server = start_websocket_server(vec![
-        vec![
-            vec![
-                ev_response_created("resp-prewarm"),
-                ev_completed("resp-prewarm"),
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![
+                vec![
+                    ev_response_created("resp-prewarm"),
+                    ev_completed("resp-prewarm"),
+                ],
+                vec![revoked_token_error],
+                vec![
+                    ev_response_created("resp-stale-reuse"),
+                    ev_completed("resp-stale-reuse"),
+                ],
             ],
-            vec![revoked_token_error],
-        ],
-        vec![vec![
-            ev_response_created("resp-retry"),
-            ev_completed("resp-retry"),
-        ]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: false,
+        },
+        WebSocketConnectionConfig {
+            requests: vec![vec![
+                ev_response_created("resp-retry"),
+                ev_completed("resp-retry"),
+            ]],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: true,
+        },
     ])
     .await;
 

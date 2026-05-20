@@ -241,6 +241,7 @@ async fn run_compact_task_inner_impl(
                     && websocket_auth_recovery_retries == 0 =>
             {
                 websocket_auth_recovery_retries += 1;
+                client_session.reset_websocket_session();
                 continue;
             }
             Err(e) => {
