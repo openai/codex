@@ -19,6 +19,7 @@ use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
 use crate::policy::SandboxPolicy;
 use crate::policy::parse_policy;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::setup::effective_write_roots_for_setup;
@@ -73,7 +74,7 @@ pub(crate) struct LegacyAclSids<'a> {
 }
 
 pub(crate) fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
-    !policy.has_full_network_access()
+    ResolvedWindowsSandboxPermissions::from_legacy_policy(policy).should_apply_network_block()
 }
 
 fn prepare_spawn_context_common(
