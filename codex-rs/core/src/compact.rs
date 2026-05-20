@@ -22,8 +22,6 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
-use codex_features::Feature;
-use codex_features::Features;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -66,14 +64,6 @@ pub(crate) enum InitialContextInjection {
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.supports_remote_compaction()
-}
-
-pub(crate) fn should_use_remote_compact_task_v2(
-    provider: &ModelProviderInfo,
-    features: &Features,
-) -> bool {
-    should_use_remote_compact_task(provider)
-        && (provider.is_openai() || features.enabled(Feature::RemoteCompactionV2))
 }
 
 pub(crate) async fn run_inline_auto_compact_task(

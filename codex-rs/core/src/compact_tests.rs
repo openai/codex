@@ -1,6 +1,4 @@
 use super::*;
-use codex_features::Feature;
-use codex_features::Features;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -240,44 +238,6 @@ fn should_use_remote_compact_task_for_azure_provider() {
     };
 
     assert!(should_use_remote_compact_task(&provider));
-}
-
-#[test]
-fn should_use_remote_compact_task_v2_defaults_for_openai_provider() {
-    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-    let features = Features::with_defaults();
-
-    assert!(should_use_remote_compact_task_v2(&provider, &features));
-}
-
-#[test]
-fn should_use_remote_compact_task_v2_stays_feature_gated_for_azure_provider() {
-    let provider = ModelProviderInfo {
-        name: "Azure".into(),
-        base_url: Some("https://example.com/openai".into()),
-        env_key: Some("AZURE_OPENAI_API_KEY".into()),
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        auth: None,
-        aws: None,
-        wire_api: WireApi::Responses,
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: None,
-        stream_max_retries: None,
-        stream_idle_timeout_ms: None,
-        websocket_connect_timeout_ms: None,
-        requires_openai_auth: false,
-        supports_websockets: false,
-    };
-    let mut features = Features::with_defaults();
-
-    assert!(!should_use_remote_compact_task_v2(&provider, &features));
-
-    features.enable(Feature::RemoteCompactionV2);
-
-    assert!(should_use_remote_compact_task_v2(&provider, &features));
 }
 
 #[tokio::test]

@@ -33,7 +33,10 @@ impl SessionTask for CompactTask {
                 /*inc*/ 1,
                 &[("type", "remote")],
             );
-            if crate::compact::should_use_remote_compact_task_v2(ctx.provider.info(), &ctx.features)
+            if ctx.provider.info().is_openai()
+                || ctx
+                    .features
+                    .enabled(codex_features::Feature::RemoteCompactionV2)
             {
                 crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
             } else {
