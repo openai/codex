@@ -3305,7 +3305,8 @@ impl Config {
             &mut startup_warnings,
         )?;
         if permission_profile_was_constrained
-            && original_permission_profile == PermissionProfile::Disabled
+            && sandbox_mode_requirement_for_permission_profile(&original_permission_profile)
+                == SandboxModeRequirement::DangerFullAccess
             && constrained_permission_profile.get() == &PermissionProfile::read_only()
             && constrained_approval_policy.value() == AskForApproval::Never
         {
