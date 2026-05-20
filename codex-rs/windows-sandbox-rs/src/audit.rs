@@ -8,7 +8,8 @@ use crate::logging::debug_log;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
-use crate::setup::effective_write_roots_for_setup;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
 use crate::token::world_sid;
 use anyhow::Result;
@@ -259,11 +260,18 @@ pub fn apply_capability_denies_for_world_writable(
     let cap_path = cap_sid_file(codex_home);
     let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
-    let (active_sids, workspace_roots): (Vec<LocalSid>, Vec<PathBuf>) = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { .. } => {
-            let roots = effective_write_roots_for_setup(
-                sandbox_policy,
-                cwd,
+    if matches!(
+        sandbox_policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
+        return Ok(());
+    }
+    let permissions =
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(sandbox_policy, cwd);
+    let (active_sids, workspace_roots): (Vec<LocalSid>, Vec<PathBuf>) =
+        if permissions.uses_write_capabilities_for_cwd(cwd, env_map) {
+            let roots = effective_write_roots_for_permissions(
+                &permissions,
                 cwd,
                 env_map,
                 codex_home,
@@ -277,14 +285,9 @@ pub fn apply_capability_denies_for_world_writable(
                 })
                 .collect::<Result<Vec<_>>>()?;
             (active_sids, roots)
-        }
-        SandboxPolicy::ReadOnly { .. } => {
+        } else {
             (vec![LocalSid::from_string(&caps.readonly)?], Vec::new())
-        }
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            return Ok(());
-        }
-    };
+        };
     for path in flagged {
         if workspace_roots
             .iter()
