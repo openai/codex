@@ -3467,7 +3467,7 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
 }
 
 #[tokio::test]
-async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
+async fn pre_tool_use_blocks_plan_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -3499,10 +3499,11 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     )
     .await;
 
+    let reason = "blocked update plan";
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
             if let Err(error) =
-                write_pre_tool_use_hook(home, /*matcher*/ None, "json_deny", "should not fire")
+                write_pre_tool_use_hook(home, /*matcher*/ None, "json_deny", reason)
             {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
@@ -3520,15 +3521,16 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
         .and_then(Value::as_str)
         .expect("update plan output string");
     assert!(
-        !output.contains("should not fire"),
-        "non-shell tool output should not be blocked by PreToolUse",
+        output.contains(&format!("Tool call blocked by PreToolUse hook: {reason}")),
+        "blocked plan output should surface the hook reason",
     );
 
-    let hook_log_path = test.codex_home_path().join("pre_tool_use_hook_log.jsonl");
-    assert!(
-        !hook_log_path.exists(),
-        "plan tool should not trigger pre tool use hooks",
-    );
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "update_plan");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"], args);
 
     Ok(())
 }
@@ -4139,7 +4141,7 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
 }
 
 #[tokio::test]
-async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
+async fn post_tool_use_block_decision_replaces_plan_tool_output_with_reason() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -4171,14 +4173,12 @@ async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     )
     .await;
 
+    let reason = "plan output blocked by post hook";
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_post_tool_use_hook(
-                home,
-                /*matcher*/ None,
-                "decision_block",
-                "should not fire",
-            ) {
+            if let Err(error) =
+                write_post_tool_use_hook(home, /*matcher*/ None, "decision_block", reason)
+            {
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
@@ -4194,15 +4194,17 @@ async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .expect("update plan output string");
-    assert!(
-        !output.contains("should not fire"),
-        "non-shell tool output should not be affected by PostToolUse",
-    );
+    assert_eq!(output, reason);
 
-    let hook_log_path = test.codex_home_path().join("post_tool_use_hook_log.jsonl");
-    assert!(
-        !hook_log_path.exists(),
-        "plan tool should not trigger post tool use hooks",
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PostToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "update_plan");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"], args);
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("Plan updated".to_string())
     );
 
     Ok(())
