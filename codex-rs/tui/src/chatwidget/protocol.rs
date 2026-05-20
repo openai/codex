@@ -249,6 +249,10 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        // User-message dedupe only suppresses the app-server echo of a prompt
+        // this TUI already rendered locally. Once that turn ends, another
+        // client can submit the same text and it still needs its own user cell.
+        self.last_rendered_user_message_display = None;
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
