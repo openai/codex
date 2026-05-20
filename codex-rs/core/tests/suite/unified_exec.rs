@@ -809,6 +809,8 @@ async fn unified_exec_network_denial_emits_failed_background_end_event() -> Resu
     let call_id = "uexec-network-denied";
     let args = json!({
         "cmd": "python3 -c \"import os, socket, time, urllib.parse; time.sleep(0.3); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024); time.sleep(5)\"",
+        "shell": "sh",
+        "login": false,
         "yield_time_ms": 50,
     });
     let response_mock =
@@ -852,6 +854,8 @@ async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Res
     let call_id = "uexec-short-network-denied";
     let args = json!({
         "cmd": "python3 -c \"import os, socket, urllib.parse; proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-short-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-short-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024)\"",
+        "shell": "sh",
+        "login": false,
         "yield_time_ms": 1000,
     });
     let response_mock =
