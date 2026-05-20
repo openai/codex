@@ -41,8 +41,10 @@ pub fn token_mode_for_permission_profile(
     cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Result<WindowsSandboxTokenMode> {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::try_from_permission_profile(permission_profile)?;
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+        permission_profile,
+        cwd,
+    )?;
     if permissions.file_system.has_full_disk_write_access() {
         anyhow::bail!(
             "permission profile requests full-disk filesystem writes, which cannot be enforced by the Windows sandbox"
@@ -80,6 +82,19 @@ impl ResolvedWindowsSandboxPermissions {
             file_system,
             network,
         })
+    }
+
+    /// Resolves a managed permission profile and binds symbolic `:workspace_roots`
+    /// entries to the permission root supplied by the caller.
+    pub fn try_from_permission_profile_for_cwd(
+        permission_profile: &PermissionProfile,
+        cwd: &Path,
+    ) -> Result<Self> {
+        let mut permissions = Self::try_from_permission_profile(permission_profile)?;
+        permissions.file_system = permissions
+            .file_system
+            .materialize_project_roots_with_cwd(cwd);
+        Ok(permissions)
     }
 
     pub(crate) fn should_apply_network_block(&self) -> bool {
@@ -256,6 +271,43 @@ mod tests {
         assert_eq!(
             roots,
             vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
+        );
+    }
+
+    #[test]
+    fn permission_profile_workspace_root_stays_bound_to_profile_cwd() {
+        let tmp = TempDir::new().expect("tempdir");
+        let profile_cwd = tmp.path().join("workspace");
+        let command_cwd = profile_cwd.join("subdir");
+        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                }],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+            &permission_profile,
+            &profile_cwd,
+        )
+        .expect("managed permission profile");
+
+        let roots = permissions
+            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            roots,
+            vec![dunce::canonicalize(&profile_cwd).expect("canonical profile cwd")]
         );
     }
 
