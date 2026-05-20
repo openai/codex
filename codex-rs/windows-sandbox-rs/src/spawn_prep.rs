@@ -44,7 +44,6 @@ pub(crate) struct SpawnContext {
     pub(crate) policy: SandboxPolicy,
     pub(crate) permissions: ResolvedWindowsSandboxPermissions,
     pub(crate) current_dir: PathBuf,
-    pub(crate) sandbox_base: PathBuf,
     pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) uses_write_capabilities: bool,
 }
@@ -121,7 +120,6 @@ fn prepare_spawn_context_common(
         policy,
         permissions,
         current_dir: cwd.to_path_buf(),
-        sandbox_base,
         logs_base_dir,
         uses_write_capabilities,
     })
