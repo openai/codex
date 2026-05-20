@@ -1,6 +1,7 @@
 use super::*;
 
 const THREAD_QUEUE_LIST_DEFAULT_LIMIT: usize = 25;
+const THREAD_QUEUE_LIST_MAX_LIMIT: usize = 100;
 
 #[derive(Clone)]
 pub(crate) struct ThreadQueueRequestProcessor {
@@ -92,7 +93,7 @@ impl ThreadQueueRequestProcessor {
         let limit = params
             .limit
             .unwrap_or(THREAD_QUEUE_LIST_DEFAULT_LIMIT as u32)
-            .max(1) as usize;
+            .clamp(1, THREAD_QUEUE_LIST_MAX_LIMIT as u32) as usize;
         let records = self
             .state_db()?
             .list_visible_thread_queued_turns_page(thread_id, start, limit.saturating_add(1))
@@ -225,8 +226,16 @@ impl ThreadQueueRequestProcessor {
             return;
         }
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        if thread_state.lock().await.active_turn_snapshot().is_some() {
-            return;
+        {
+            let thread_state = thread_state.lock().await;
+            if thread_state.active_turn_snapshot().is_some()
+                || !matches!(
+                    thread_state.pending_turn_starts,
+                    crate::thread_state::PendingTurnStarts::None
+                )
+            {
+                return;
+            }
         }
         let record = match state_db.claim_head_thread_queued_turn(thread_id).await {
             Ok(Some(record)) => record,

@@ -377,6 +377,21 @@ impl TurnRequestProcessor {
                 self.request_trace_context(&request_id).await,
             )
             .await?;
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        {
+            let mut thread_state = thread_state.lock().await;
+            match &mut thread_state.pending_turn_starts {
+                crate::thread_state::PendingTurnStarts::None => {
+                    thread_state.pending_turn_starts =
+                        crate::thread_state::PendingTurnStarts::WaitingForLifecycle {
+                            turn_ids: HashSet::from([response.turn.id.clone()]),
+                        };
+                }
+                crate::thread_state::PendingTurnStarts::WaitingForLifecycle { turn_ids } => {
+                    turn_ids.insert(response.turn.id.clone());
+                }
+            }
+        }
         self.outgoing
             .record_request_turn_id(&request_id, &response.turn.id)
             .await;

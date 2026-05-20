@@ -147,7 +147,7 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
-- `thread/queue/add` — experimental; persist a future `turn/start` request for a loaded thread. The queue stores the original `TurnStartParams`, dispatches the oldest pending row once the thread is idle, and emits `thread/queue/changed`.
+- `thread/queue/add` — experimental; persist a future `turn/start` request for a loaded thread. The queue stores the original `TurnStartParams`, dispatches the oldest pending row once the thread is idle unless an older failed row blocks FIFO order, and emits `thread/queue/changed`.
 - `thread/queue/list` — experimental; page through the visible queued turns for a thread with cursor/limit pagination. Pending and failed rows are visible; the short-lived dispatch claim is internal.
 - `thread/queue/delete` — experimental; remove a visible queued turn by id.
 - `thread/queue/reorder` — experimental; replace the visible queue order by queued-turn id.

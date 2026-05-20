@@ -296,10 +296,14 @@ pub(super) async fn ensure_listener_task_running(
                     // Track the event before emitting any typed translations
                     // so thread-local state such as raw event opt-in stays
                     // synchronized with the conversation.
-                    let raw_events_enabled = {
+                    let (raw_events_enabled, pending_turn_starts_cleared) = {
                         let mut thread_state = thread_state.lock().await;
-                        thread_state.track_current_turn_event(&event.id, &event.msg);
-                        thread_state.experimental_raw_events
+                        let pending_turn_starts_cleared =
+                            thread_state.track_current_turn_event(&event.id, &event.msg);
+                        (
+                            thread_state.experimental_raw_events,
+                            pending_turn_starts_cleared,
+                        )
                     };
                     let subscribed_connection_ids = thread_state_manager
                         .subscribed_connection_ids(conversation_id)
@@ -347,6 +351,13 @@ pub(super) async fn ensure_listener_task_running(
                         &event.msg,
                         EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
                     ) {
+                        thread_queue_processor
+                            .drain_thread_queue_after_terminal_turn(conversation_id)
+                            .await;
+                    }
+                    if pending_turn_starts_cleared
+                        && matches!(&event.msg, EventMsg::Error(_))
+                    {
                         thread_queue_processor
                             .drain_thread_queue_after_terminal_turn(conversation_id)
                             .await;

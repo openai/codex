@@ -25,6 +25,15 @@ use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
+#[derive(Default)]
+pub(crate) enum PendingTurnStarts {
+    #[default]
+    None,
+    WaitingForLifecycle {
+        turn_ids: HashSet<String>,
+    },
+}
+
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) history_items: Vec<RolloutItem>,
@@ -71,6 +80,7 @@ pub(crate) struct TurnSummary {
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
+    pub(crate) pending_turn_starts: PendingTurnStarts,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) last_terminal_turn_id: Option<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
@@ -112,6 +122,7 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_command_tx = None;
+        self.pending_turn_starts = PendingTurnStarts::None;
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
@@ -131,17 +142,38 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
-    pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
+    pub(crate) fn track_current_turn_event(
+        &mut self,
+        event_turn_id: &str,
+        event: &EventMsg,
+    ) -> bool {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
         }
         self.current_turn_history.handle_event(event);
+        let pending_turn_start_resolved = matches!(
+            event,
+            EventMsg::TurnStarted(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::Error(_)
+        );
+        let pending_turn_starts_cleared = match &mut self.pending_turn_starts {
+            PendingTurnStarts::None => false,
+            PendingTurnStarts::WaitingForLifecycle { turn_ids } => {
+                pending_turn_start_resolved && turn_ids.remove(event_turn_id) && turn_ids.is_empty()
+            }
+        };
+        if pending_turn_starts_cleared {
+            self.pending_turn_starts = PendingTurnStarts::None;
+        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
         }
+        pending_turn_starts_cleared
     }
 }
 
