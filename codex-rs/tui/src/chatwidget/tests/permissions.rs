@@ -225,6 +225,92 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
 #[cfg(target_os = "windows")]
 #[tokio::test]
+async fn startup_windows_sandbox_prompt_blocks_disallowed_unelevated_fallback() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, /*enabled*/ false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, /*enabled*/ false);
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            windows: Some(codex_config::WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("test config layer stack");
+
+    chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Your organization requires the default Codex agent sandbox"),
+        "expected required sandbox prompt copy: {popup}"
+    );
+    assert!(
+        !popup.contains("Use non-admin sandbox"),
+        "expected required sandbox prompt to hide non-admin fallback: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn windows_sandbox_required_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            windows: Some(codex_config::WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("test config layer stack");
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_enable_prompt(preset);
+
+    assert_chatwidget_snapshot!(
+        "windows_sandbox_required_enable_prompt",
+        render_bottom_popup(&chat, /*width*/ 120)
+    );
+}
+
+#[tokio::test]
+async fn windows_sandbox_required_fallback_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            windows: Some(codex_config::WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("test config layer stack");
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_fallback_prompt(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!("windows_sandbox_required_fallback_prompt", popup);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
 async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

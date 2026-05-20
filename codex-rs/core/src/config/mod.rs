@@ -2426,6 +2426,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
             permission_profile: mut constrained_permission_profile,
+            windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             computer_use: _,
@@ -2548,7 +2549,26 @@ impl Config {
             &mut startup_warnings,
         )?;
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
-        let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
+        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
+        let selected_windows_sandbox_mode = configured_windows_sandbox_mode.or_else(|| {
+            match WindowsSandboxLevel::from_features(&features) {
+                WindowsSandboxLevel::Elevated => Some(WindowsSandboxModeToml::Elevated),
+                WindowsSandboxLevel::RestrictedToken => Some(WindowsSandboxModeToml::Unelevated),
+                WindowsSandboxLevel::Disabled => None,
+            }
+        });
+        apply_requirement_constrained_value(
+            "windows.sandbox",
+            selected_windows_sandbox_mode,
+            &mut constrained_windows_sandbox_mode,
+            &mut startup_warnings,
+        )?;
+        let effective_windows_sandbox_mode = *constrained_windows_sandbox_mode.get();
+        let windows_sandbox_mode = if constrained_windows_sandbox_mode.source.is_some() {
+            effective_windows_sandbox_mode
+        } else {
+            configured_windows_sandbox_mode
+        };
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
         let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
@@ -2607,10 +2627,10 @@ impl Config {
             ));
         }
 
-        let windows_sandbox_level = match windows_sandbox_mode {
+        let windows_sandbox_level = match effective_windows_sandbox_mode {
             Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-            None => WindowsSandboxLevel::from_features(&features),
+            None => WindowsSandboxLevel::Disabled,
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;

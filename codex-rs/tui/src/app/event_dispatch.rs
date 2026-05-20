@@ -1093,6 +1093,23 @@ impl App {
                     }
                     let profile = self.active_profile.as_deref();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
+                    let selected_mode = if elevated_enabled {
+                        codex_config::types::WindowsSandboxModeToml::Elevated
+                    } else {
+                        codex_config::types::WindowsSandboxModeToml::Unelevated
+                    };
+                    if !self.chat_widget.windows_sandbox_mode_allowed(selected_mode) {
+                        tracing::warn!(
+                            ?selected_mode,
+                            "refusing to persist Windows sandbox mode disallowed by requirements"
+                        );
+                        self.chat_widget.add_info_message(
+                            "That Windows sandbox option is disallowed by requirements."
+                                .to_string(),
+                            /*hint*/ None,
+                        );
+                        return Ok(AppRunControl::Continue);
+                    }
                     let builder = ConfigEditsBuilder::for_config(&self.config)
                         .with_profile(profile)
                         .set_windows_sandbox_mode(if elevated_enabled {

@@ -8901,6 +8901,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         allow_managed_hooks_only: None,
         computer_use: None,
+        windows: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -9685,6 +9686,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_web_search_modes: None,
         allow_managed_hooks_only: None,
         computer_use: None,
+        windows: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -9708,6 +9710,47 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
     assert_eq!(
         config.legacy_sandbox_policy(),
         SandboxPolicy::new_read_only_policy()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn windows_sandbox_mode_falls_back_when_disallowed_by_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[windows]
+sandbox = "unelevated"
+"#,
+    )?;
+
+    let requirements = codex_config::ConfigRequirementsToml {
+        windows: Some(codex_config::WindowsRequirementsToml {
+            allowed_sandbox_implementations: Some(vec![
+                codex_config::types::WindowsSandboxModeToml::Elevated,
+            ]),
+        }),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.windows_sandbox_mode,
+        Some(codex_config::types::WindowsSandboxModeToml::Elevated)
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning
+            .contains("Configured value for `windows.sandbox` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
     );
     Ok(())
 }

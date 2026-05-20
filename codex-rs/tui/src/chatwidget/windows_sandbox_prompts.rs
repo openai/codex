@@ -3,6 +3,17 @@
 use super::*;
 
 impl ChatWidget {
+    #[cfg(any(target_os = "windows", test))]
+    pub(crate) fn windows_sandbox_mode_allowed(&self, mode: WindowsSandboxModeToml) -> bool {
+        self.config
+            .config_layer_stack
+            .requirements_toml()
+            .windows
+            .as_ref()
+            .and_then(|windows| windows.allowed_sandbox_implementations.as_ref())
+            .is_none_or(|implementations| implementations.contains(&mode))
+    }
+
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -172,7 +183,7 @@ impl ChatWidget {
     ) {
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
@@ -229,11 +240,20 @@ impl ChatWidget {
             &[],
         );
 
+        let allow_unelevated =
+            self.windows_sandbox_mode_allowed(WindowsSandboxModeToml::Unelevated);
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
-            Paragraph::new(vec![
-                line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
-            ])
+            Paragraph::new(if allow_unelevated {
+                vec![
+                    line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
+                ]
+            } else {
+                vec![
+                    line!["Your organization requires the default Codex agent sandbox to continue. Set it up to protect your files and control network access."],
+                    line!["Learn more <https://developers.openai.com/codex/windows>"],
+                ]
+            })
             .wrap(Wrap { trim: false }),
         ));
 
@@ -241,24 +261,25 @@ impl ChatWidget {
         let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
         let quit_otel = self.session_telemetry.clone();
-        let items = vec![
-            SelectionItem {
-                name: "Set up default sandbox (requires Administrator permissions)".to_string(),
-                description: None,
-                actions: vec![Box::new(move |tx| {
-                    accept_otel.counter(
-                        "codex.windows_sandbox.elevated_prompt_accept",
-                        /*inc*/ 1,
-                        &[],
-                    );
-                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                        preset: preset.clone(),
-                    });
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
+        let retry_preset = preset.clone();
+        let mut items = vec![SelectionItem {
+            name: "Set up default sandbox (requires Administrator permissions)".to_string(),
+            description: None,
+            actions: vec![Box::new(move |tx| {
+                accept_otel.counter(
+                    "codex.windows_sandbox.elevated_prompt_accept",
+                    /*inc*/ 1,
+                    &[],
+                );
+                tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                    preset: preset.clone(),
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        if allow_unelevated {
+            items.push(SelectionItem {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
@@ -273,47 +294,62 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
-            },
-            SelectionItem {
-                name: "Quit".to_string(),
-                description: None,
-                actions: vec![Box::new(move |tx| {
-                    quit_otel.counter(
-                        "codex.windows_sandbox.elevated_prompt_quit",
-                        /*inc*/ 1,
-                        &[],
-                    );
-                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
+            });
+        }
+        items.push(SelectionItem {
+            name: "Quit".to_string(),
+            description: None,
+            actions: vec![Box::new(move |tx| {
+                quit_otel.counter(
+                    "codex.windows_sandbox.elevated_prompt_quit",
+                    /*inc*/ 1,
+                    &[],
+                );
+                tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(header),
+            on_cancel: (!allow_unelevated).then(|| {
+                Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                        preset: retry_preset.clone(),
+                    });
+                }) as _
+            }),
             ..Default::default()
         });
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(test)))]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
+        let allow_unelevated =
+            self.windows_sandbox_mode_allowed(WindowsSandboxModeToml::Unelevated);
         let mut lines = Vec::new();
         lines.push(line![
             "Couldn't set up your sandbox with Administrator permissions".bold()
         ]);
         lines.push(line![""]);
-        lines.push(line![
-            "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected."
-        ]);
+        if allow_unelevated {
+            lines.push(line![
+                "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected."
+            ]);
+        } else {
+            lines.push(line![
+                "Your organization requires the default sandbox before Codex can continue."
+            ]);
+        }
         lines.push(line![
             "Learn more <https://developers.openai.com/codex/windows>"
         ]);
@@ -323,29 +359,30 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
+        let retry_preset = elevated_preset.clone();
         let quit_otel = self.session_telemetry.clone();
-        let items = vec![
-            SelectionItem {
-                name: "Try setting up admin sandbox again".to_string(),
-                description: None,
-                actions: vec![Box::new({
-                    let otel = self.session_telemetry.clone();
-                    let preset = elevated_preset;
-                    move |tx| {
-                        otel.counter(
-                            "codex.windows_sandbox.fallback_retry_elevated",
-                            /*inc*/ 1,
-                            &[],
-                        );
-                        tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                            preset: preset.clone(),
-                        });
-                    }
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
+        let mut items = vec![SelectionItem {
+            name: "Try setting up admin sandbox again".to_string(),
+            description: None,
+            actions: vec![Box::new({
+                let otel = self.session_telemetry.clone();
+                let preset = elevated_preset;
+                move |tx| {
+                    otel.counter(
+                        "codex.windows_sandbox.fallback_retry_elevated",
+                        /*inc*/ 1,
+                        &[],
+                    );
+                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                        preset: preset.clone(),
+                    });
+                }
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        if allow_unelevated {
+            items.push(SelectionItem {
                 name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
@@ -364,39 +401,59 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
-            },
-            SelectionItem {
-                name: "Quit".to_string(),
-                description: None,
-                actions: vec![Box::new(move |tx| {
-                    quit_otel.counter(
-                        "codex.windows_sandbox.fallback_prompt_quit",
-                        /*inc*/ 1,
-                        &[],
-                    );
-                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
+            });
+        }
+        items.push(SelectionItem {
+            name: "Quit".to_string(),
+            description: None,
+            actions: vec![Box::new(move |tx| {
+                quit_otel.counter(
+                    "codex.windows_sandbox.fallback_prompt_quit",
+                    /*inc*/ 1,
+                    &[],
+                );
+                tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(header),
+            on_cancel: (!allow_unelevated).then(|| {
+                Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
+                        preset: retry_preset.clone(),
+                    });
+                }) as _
+            }),
             ..Default::default()
         });
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(test)))]
     pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        let setup_is_required = windows_sandbox_level == WindowsSandboxLevel::Disabled
+            || (windows_sandbox_level == WindowsSandboxLevel::Elevated
+                && self
+                    .config
+                    .config_layer_stack
+                    .requirements_toml()
+                    .windows
+                    .as_ref()
+                    .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
+                && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+                    self.config.codex_home.as_path(),
+                ));
         if show_now
-            && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
+            && setup_is_required
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")

@@ -257,7 +257,7 @@ fn queued_message_edit_hint_binding(
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::RateLimitRefreshOrigin;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::auto_review_denials;

@@ -701,6 +701,7 @@ mod tests {
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             allow_managed_hooks_only: Some(true),
             computer_use: None,
+            windows: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -916,6 +917,7 @@ approval_policy = "never"
             allowed_web_search_modes: Some(Vec::new()),
             allow_managed_hooks_only: None,
             computer_use: None,
+            windows: None,
             guardian_policy_config: None,
             feature_requirements: None,
             hooks: None,

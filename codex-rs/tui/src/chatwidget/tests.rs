@@ -123,7 +123,6 @@ pub(super) use codex_config::ConfigLayerStack;
 pub(super) use codex_config::RequirementSource;
 pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
-#[cfg(target_os = "windows")]
 pub(super) use codex_config::types::WindowsSandboxModeToml;
 pub(super) use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 pub(super) use codex_core_skills::model::SkillMetadata;

@@ -1664,9 +1664,33 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
+    #[cfg(target_os = "windows")]
+    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    #[cfg(target_os = "windows")]
+    let required_elevated_sandbox_needs_setup = windows_sandbox_level
+        == WindowsSandboxLevel::Elevated
+        && config
+            .config_layer_stack
+            .requirements_toml()
+            .windows
+            .as_ref()
+            .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
+        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+            config.codex_home.as_path(),
+        );
     let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+        && ((trust_decision_was_made
+            && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled)
+            || {
+                #[cfg(target_os = "windows")]
+                {
+                    required_elevated_sandbox_needs_setup
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    false
+                }
+            });
 
     let Cli {
         prompt,
