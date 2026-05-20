@@ -76,6 +76,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
         input_modalities: vec![InputModality::Text, InputModality::Image],
         used_fallback_model_metadata: false,
         supports_search_tool: true,
+        auto_review_model_override: None,
     }
 }
 
@@ -117,6 +118,7 @@ fn bedrock_oss_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
     }
 }
 

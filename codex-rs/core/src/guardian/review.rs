@@ -660,9 +660,13 @@ pub(super) async fn run_guardian_review_session(
         }
     };
     let preferred_model_id = turn.provider.approval_review_preferred_model();
-    let preferred_model = available_models
-        .iter()
-        .find(|preset| preset.model == preferred_model_id);
+    let preferred_model = if turn.model_info.auto_review_model_override == Some(true) {
+        None
+    } else {
+        available_models
+            .iter()
+            .find(|preset| preset.model == preferred_model_id)
+    };
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
