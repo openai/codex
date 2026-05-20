@@ -2,7 +2,6 @@ use crate::acl::add_allow_ace;
 use crate::acl::add_deny_write_ace;
 use crate::acl::allow_null_device;
 use crate::allow::AllowDenyPaths;
-use crate::allow::compute_allow_paths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::workspace_write_cap_sid_for_root;
@@ -283,8 +282,7 @@ pub(crate) fn allow_null_device_for_workspace_write(is_workspace_write: bool) {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_legacy_session_acl_rules(
-    policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    permissions: &ResolvedWindowsSandboxPermissions,
     codex_home: &Path,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
@@ -293,7 +291,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
     acl_sids: LegacyAclSids<'_>,
 ) -> Result<()> {
     let AllowDenyPaths { allow, mut deny } =
-        compute_allow_paths(policy, sandbox_policy_cwd, current_dir, env_map);
+        compute_allow_paths_for_permissions(permissions, current_dir, env_map);
     unsafe {
         for path in additional_deny_write_paths {
             // Explicit carveouts must exist before the command starts so the
@@ -417,8 +415,7 @@ pub(crate) fn prepare_elevated_spawn_context(
         write_roots_override
     };
     let sandbox_creds = require_logon_sandbox_creds(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         cwd,
         env_map,
         codex_home,

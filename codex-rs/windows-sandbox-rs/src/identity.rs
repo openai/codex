@@ -1,6 +1,5 @@
 use crate::dpapi;
 use crate::logging::debug_log;
-use crate::policy::SandboxPolicy;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::setup::SandboxNetworkIdentity;
 use crate::setup::SandboxUserRecord;
@@ -132,8 +131,7 @@ fn select_identity(
 
 #[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permissions: &ResolvedWindowsSandboxPermissions,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
@@ -144,16 +142,14 @@ pub fn require_logon_sandbox_creds(
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
         .map(<[PathBuf]>::to_vec)
-        .unwrap_or_else(|| gather_read_roots(command_cwd, policy, codex_home));
+        .unwrap_or_else(|| gather_read_roots(command_cwd, permissions, env_map, codex_home));
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
-        .unwrap_or_else(|| gather_write_roots_for_permissions(&permissions, command_cwd, env_map));
-    let network_identity = SandboxNetworkIdentity::from_permissions(&permissions, proxy_enforced);
+        .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
+    let network_identity = SandboxNetworkIdentity::from_permissions(permissions, proxy_enforced);
     let desired_offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
@@ -194,8 +190,7 @@ pub fn require_logon_sandbox_creds(
         }
         run_elevated_setup(
             crate::setup::SandboxSetupRequest {
-                policy,
-                policy_cwd,
+                permissions,
                 command_cwd,
                 env_map,
                 codex_home,
@@ -214,8 +209,7 @@ pub fn require_logon_sandbox_creds(
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
     run_setup_refresh_with_overrides(
         crate::setup::SandboxSetupRequest {
-            policy,
-            policy_cwd,
+            permissions,
             command_cwd,
             env_map,
             codex_home,

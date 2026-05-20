@@ -318,8 +318,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
     apply_legacy_session_acl_rules(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         codex_home,
         &common.current_dir,
         &env_map,
