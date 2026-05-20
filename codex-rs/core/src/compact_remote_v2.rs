@@ -27,16 +27,25 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_utils_output_truncation::truncate_text;
 use futures::StreamExt;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+// Mirror the current /responses/compact retained-message default while the
+// server-side path remains the reference implementation.
+const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
+const RETAINED_MESSAGE_CHAR_BUDGET: usize = RETAINED_MESSAGE_TOKEN_BUDGET * 4;
+const MIN_RETAINED_MESSAGE_CHAR_BUDGET: usize = 1;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -343,11 +352,13 @@ fn build_v2_compacted_history(
     prompt_input: &[ResponseItem],
     compaction_output: ResponseItem,
 ) -> Vec<ResponseItem> {
-    let mut retained = prompt_input
+    let retained = prompt_input
         .iter()
         .filter(|item| is_retained_for_remote_compaction_v2(item))
         .cloned()
         .collect::<Vec<_>>();
+    let mut retained =
+        truncate_retained_items_for_remote_compaction(retained, RETAINED_MESSAGE_CHAR_BUDGET);
     retained.push(compaction_output);
     retained
 }
@@ -358,6 +369,80 @@ fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
     };
 
     matches!(role.as_str(), "user" | "developer" | "system")
+}
+
+fn truncate_retained_items_for_remote_compaction(
+    items: Vec<ResponseItem>,
+    max_chars: usize,
+) -> Vec<ResponseItem> {
+    if max_chars == 0 {
+        return items;
+    }
+
+    let mut remaining = max_chars;
+    let mut truncated_reversed = Vec::with_capacity(items.len());
+    for item in items.into_iter().rev() {
+        let ResponseItem::Message { content, .. } = &item else {
+            truncated_reversed.push(item);
+            continue;
+        };
+        let text_chars = content
+            .iter()
+            .map(|content| match content {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.chars().count()
+                }
+                ContentItem::InputImage { .. } => 0,
+            })
+            .sum::<usize>();
+        let message_char_cost = text_chars.max(MIN_RETAINED_MESSAGE_CHAR_BUDGET);
+        if remaining == 0 {
+            continue;
+        }
+        if remaining >= message_char_cost {
+            truncated_reversed.push(item);
+            remaining = remaining.saturating_sub(message_char_cost);
+        } else {
+            let ResponseItem::Message {
+                id,
+                role,
+                content,
+                phase,
+            } = item
+            else {
+                unreachable!("retained messages were matched above");
+            };
+            let mut message_remaining = remaining;
+            let mut truncated_content = Vec::with_capacity(content.len());
+            for mut content_item in content {
+                match &mut content_item {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        if message_remaining == 0 {
+                            continue;
+                        }
+                        let text_chars = text.chars().count();
+                        if text_chars <= message_remaining {
+                            message_remaining = message_remaining.saturating_sub(text_chars);
+                        } else {
+                            *text = truncate_text(text, TruncationPolicy::Bytes(message_remaining));
+                            message_remaining = 0;
+                        }
+                        truncated_content.push(content_item);
+                    }
+                    ContentItem::InputImage { .. } => truncated_content.push(content_item),
+                }
+            }
+            truncated_reversed.push(ResponseItem::Message {
+                id,
+                role,
+                content: truncated_content,
+                phase,
+            });
+            remaining = 0;
+        }
+    }
+    truncated_reversed.reverse();
+    truncated_reversed
 }
 
 #[cfg(test)]
@@ -427,6 +512,71 @@ mod tests {
                 message("user", "user", /*phase*/ None),
                 output,
             ]
+        );
+    }
+
+    #[test]
+    fn retained_history_truncation_keeps_newest_messages_first() {
+        let retained = vec![
+            message("user", "old-old", /*phase*/ None),
+            message("user", "middle1234", /*phase*/ None),
+            message("user", "new", /*phase*/ None),
+        ];
+
+        let truncated =
+            truncate_retained_items_for_remote_compaction(retained, /*max_chars*/ 12);
+
+        assert_eq!(
+            truncated,
+            vec![
+                message("user", "midd…1 chars truncated…e1234", /*phase*/ None),
+                message("user", "new", /*phase*/ None),
+            ]
+        );
+    }
+
+    #[test]
+    fn retained_history_truncation_preserves_images_and_truncates_later_text_parts() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "abcdef".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                    detail: None,
+                },
+                ContentItem::OutputText {
+                    text: "uvwxyz".to_string(),
+                },
+            ],
+            phase: None,
+        };
+
+        let truncated =
+            truncate_retained_items_for_remote_compaction(vec![item], /*max_chars*/ 8);
+
+        assert_eq!(
+            truncated,
+            vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "abcdef".to_string(),
+                    },
+                    ContentItem::InputImage {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                        detail: None,
+                    },
+                    ContentItem::OutputText {
+                        text: "u…4 chars truncated…z".to_string(),
+                    },
+                ],
+                phase: None,
+            }]
         );
     }
 
