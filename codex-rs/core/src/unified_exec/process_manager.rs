@@ -901,8 +901,8 @@ impl UnifiedExecProcessManager {
                 .and_then(|overrides| overrides.write_roots_override.clone());
             let spawned = match request.windows_sandbox_level {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
-                        policy_json.as_str(),
+                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
+                        &request.permission_profile,
                         request.windows_sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         request.command.clone(),
