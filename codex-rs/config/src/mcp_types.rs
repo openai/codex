@@ -229,7 +229,7 @@ pub struct RawMcpServerConfig {
     pub bearer_token_env_var: Option<String>,
 
     // shared
-    #[serde(default)]
+    #[serde(default, alias = "experimental_environment")]
     pub environment_id: Option<String>,
     #[serde(default)]
     pub startup_timeout_sec: Option<f64>,

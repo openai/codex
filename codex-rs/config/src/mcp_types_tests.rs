@@ -52,6 +52,19 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
+fn deserialize_legacy_mcp_environment_alias() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            experimental_environment = "remote"
+        "#,
+    )
+    .expect("should deserialize legacy MCP environment alias");
+
+    assert_eq!(cfg.environment_id, "remote");
+}
+
+#[test]
 fn deserialize_stdio_command_server_config_with_arg_with_args_and_env() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
