@@ -748,8 +748,7 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.state.thread_id.to_string());
-        let service_tier =
-            service_tier.filter(|service_tier| model_info.supports_service_tier(service_tier));
+        let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),

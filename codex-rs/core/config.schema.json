@@ -686,7 +686,7 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+          "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
           "type": "string"
         },
         "tools": {
@@ -4783,7 +4783,7 @@
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
     "service_tier": {
-      "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+      "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
       "type": "string"
     },
     "shell_environment_policy": {
