@@ -2634,6 +2634,7 @@ impl Config {
                 Some(PermissionConfigSyntax::Legacy)
             )
             && effective_permission_selection.selected_profile_id.is_none()
+            && !effective_permission_selection.requirements_force_profile_selection
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -3815,13 +3816,9 @@ fn resolve_default_permissions<'a>(
     let mut default_permissions = default_permissions_override
         .or(configured_default_permissions)
         .or(requirements_toml.default_permissions.as_deref());
-    if default_permissions.is_none() {
-        default_permissions = allowed_permissions
-            .and_then(|allowed_permissions| allowed_permissions.first())
-            .map(String::as_str);
-    }
     if let (Some(selected_permissions), Some(allowed_permissions)) =
         (default_permissions, allowed_permissions)
+        && !is_builtin_permission_profile_name(selected_permissions)
         && !allowed_permissions
             .iter()
             .any(|allowed_permission| allowed_permission == selected_permissions)
@@ -3889,6 +3886,7 @@ fn validate_required_permission_profile_catalog(
     }
 
     if let Some(default_permissions) = requirements_toml.default_permissions.as_deref()
+        && !is_builtin_permission_profile_name(default_permissions)
         && !allowed_permissions
             .iter()
             .any(|profile_id| profile_id == default_permissions)
