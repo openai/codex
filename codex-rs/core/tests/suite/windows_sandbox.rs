@@ -93,7 +93,22 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
     for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
         let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
         let file_name = Path::new(helper_name).with_extension("exe");
-        std::fs::copy(helper, resources_dir.join(file_name))?;
+        let destination = resources_dir.join(file_name);
+        if let Err(err) = std::fs::copy(&helper, &destination) {
+            // A sandbox helper can briefly remain alive after the sandboxed
+            // command exits. Bazel may retry the test while that process still
+            // has the staged executable open, so keep the already-staged copy.
+            if err.kind() == std::io::ErrorKind::PermissionDenied && destination.exists() {
+                continue;
+            }
+            return Err(err).with_context(|| {
+                format!(
+                    "stage Windows sandbox helper {} at {}",
+                    helper.display(),
+                    destination.display()
+                )
+            });
+        }
     }
     Ok(())
 }

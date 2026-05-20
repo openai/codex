@@ -179,10 +179,13 @@ pub fn run_elevated_setup(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> anyhow::Result<()> {
+    let permissions =
+        codex_windows_sandbox::ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(
+            policy, policy_cwd,
+        );
     codex_windows_sandbox::run_elevated_setup(
         codex_windows_sandbox::SandboxSetupRequest {
-            policy,
-            policy_cwd,
+            permissions: &permissions,
             command_cwd,
             env_map,
             codex_home,

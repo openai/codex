@@ -108,6 +108,8 @@ pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
+pub use audit::apply_world_writable_scan_and_denies_for_permissions;
+#[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
@@ -198,6 +200,8 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
@@ -291,6 +295,7 @@ mod windows_impl {
     use super::logging::log_success;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
+    use super::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
     use super::spawn_prep::SpawnPrepOptions;
@@ -412,6 +417,7 @@ mod windows_impl {
             },
         )?;
         let policy = common.policy;
+        let permissions = common.permissions;
         let current_dir = common.current_dir;
         let logs_base_dir = common.logs_base_dir.as_deref();
         let uses_write_capabilities = common.uses_write_capabilities;
@@ -435,8 +441,7 @@ mod windows_impl {
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
         allow_null_device_for_workspace_write(uses_write_capabilities);
         apply_legacy_session_acl_rules(
-            &policy,
-            sandbox_policy_cwd,
+            &permissions,
             codex_home,
             &current_dir,
             &env_map,
@@ -602,8 +607,10 @@ mod windows_impl {
         );
         let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
         apply_legacy_session_acl_rules(
-            sandbox_policy,
-            sandbox_policy_cwd,
+            &ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(
+                sandbox_policy,
+                sandbox_policy_cwd,
+            ),
             codex_home,
             &current_dir,
             env_map,
