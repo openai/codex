@@ -205,9 +205,10 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Status listing has no turn cwd. Use config cwd as the stdio fallback
-        // and the shared environment registry for explicit MCP env ids; an
-        // omitted MCP env id still means local.
+        // This threadless status path has no turn cwd or turn-selected
+        // environment. Use config cwd as the stdio fallback and the shared
+        // environment registry only for explicit MCP env ids; an omitted MCP
+        // env id still means local.
         let runtime_context = McpRuntimeContext::new(
             Arc::clone(&environment_manager),
             config.cwd.to_path_buf(),
@@ -371,9 +372,10 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        // Resource reads without a thread have no turn cwd. Use config cwd as
-        // the stdio fallback and the shared environment registry for explicit
-        // MCP env ids; an omitted MCP env id still means local.
+        // This threadless resource-read path has no turn cwd or turn-selected
+        // environment. Use config cwd as the stdio fallback and the shared
+        // environment registry only for explicit MCP env ids; an omitted MCP
+        // env id still means local.
         let runtime_context = McpRuntimeContext::new(
             Arc::clone(&environment_manager),
             config.cwd.to_path_buf(),
