@@ -33,6 +33,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -179,6 +180,11 @@ pub(crate) enum AppEvent {
 
     /// Start a new session.
     NewSession,
+
+    /// Result of the fresh startup thread that is attached after the input UI is live.
+    StartupThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
@@ -352,6 +358,11 @@ pub(crate) enum AppEvent {
 
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
+        force_refetch: bool,
+    },
+
+    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    FetchConnectorsList {
         force_refetch: bool,
     },
 

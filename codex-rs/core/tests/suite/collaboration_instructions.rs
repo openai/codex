@@ -49,13 +49,6 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn developer_message_count(input: &[Value]) -> usize {
-    input
-        .iter()
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
-        .count()
-}
-
 fn collab_xml(text: &str) -> String {
     format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
 }
@@ -92,7 +85,6 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
-    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
     assert!(
         dev_texts
@@ -790,7 +782,6 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
-    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml("");
     assert_eq!(count_messages_containing(&dev_texts, &collab_text), 0);

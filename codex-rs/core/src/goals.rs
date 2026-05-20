@@ -7,6 +7,7 @@
 use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
@@ -23,6 +24,7 @@ use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_RESUMED_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -457,7 +459,7 @@ impl Session {
 
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
         )
         .await?;
@@ -474,7 +476,7 @@ impl Session {
                     .thread_goals()
                     .update_thread_goal(
                         self.conversation_id,
-                        codex_state::ThreadGoalUpdate {
+                        codex_state::GoalUpdate {
                             objective: Some(objective.to_string()),
                             status: status.map(state_goal_status_from_protocol),
                             token_budget,
@@ -514,7 +516,7 @@ impl Session {
                 .thread_goals()
                 .update_thread_goal(
                     self.conversation_id,
-                    codex_state::ThreadGoalUpdate {
+                    codex_state::GoalUpdate {
                         objective: None,
                         status,
                         token_budget,
@@ -530,6 +532,14 @@ impl Session {
                 })?
         };
 
+        if objective.is_some() {
+            set_thread_preview_from_goal_objective(
+                &state_db,
+                self.conversation_id,
+                goal.objective.as_str(),
+            )
+            .await;
+        }
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let previous_status_for_goal = if replacing_goal {
@@ -591,7 +601,7 @@ impl Session {
         let state_db = self.require_state_db_for_thread_goals().await?;
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
         )
         .await?;
@@ -611,6 +621,12 @@ impl Session {
                 )
             })?;
 
+        set_thread_preview_from_goal_objective(
+            &state_db,
+            self.conversation_id,
+            goal.objective.as_str(),
+        )
+        .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
@@ -1012,7 +1028,7 @@ impl Session {
                 self.conversation_id,
                 time_delta_seconds,
                 token_delta,
-                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+                codex_state::GoalAccountingMode::ActiveOnly,
                 expected_goal_id.as_deref(),
             )
             .await?;
@@ -1023,7 +1039,7 @@ impl Session {
                 .is_some_and(|goal_id| reported_goal_id.as_deref() == Some(goal_id))
         };
         let goal = match outcome {
-            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+            codex_state::GoalAccountingOutcome::Updated(goal) => {
                 let clear_active_goal = match goal.status {
                     codex_state::ThreadGoalStatus::Active => false,
                     codex_state::ThreadGoalStatus::BudgetLimited => {
@@ -1056,7 +1072,7 @@ impl Session {
                 }
                 goal
             }
-            codex_state::ThreadGoalAccountingOutcome::Unchanged(_) => return Ok(()),
+            codex_state::GoalAccountingOutcome::Unchanged(_) => return Ok(()),
         };
         let should_steer_budget_limit =
             matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
@@ -1103,7 +1119,7 @@ impl Session {
         };
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Suppress,
         )
         .await?;
@@ -1113,7 +1129,7 @@ impl Session {
     async fn account_thread_goal_wall_clock_usage(
         &self,
         state_db: &StateDbHandle,
-        mode: codex_state::ThreadGoalAccountingMode,
+        mode: codex_state::GoalAccountingMode,
         terminal_metric_emission: TerminalMetricEmission,
     ) -> anyhow::Result<Option<ThreadGoal>> {
         let _accounting_permit = self.goal_runtime.accounting_permit().await?;
@@ -1142,7 +1158,7 @@ impl Session {
             )
             .await?
         {
-            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+            codex_state::GoalAccountingOutcome::Updated(goal) => {
                 if matches!(terminal_metric_emission, TerminalMetricEmission::Emit) {
                     self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
                 }
@@ -1155,7 +1171,7 @@ impl Session {
                 let goal = protocol_goal_from_state(goal);
                 Ok(Some(goal))
             }
-            codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
+            codex_state::GoalAccountingOutcome::Unchanged(goal) => {
                 {
                     let mut accounting = self.goal_runtime.accounting.lock().await;
                     accounting.wall_clock.reset_baseline();
@@ -1332,7 +1348,14 @@ impl Session {
             return;
         }
         self.input_queue
-            .extend_pending_input_for_turn_state(turn_state.as_ref(), candidate.items)
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                candidate
+                    .items
+                    .into_iter()
+                    .map(TurnInput::ResponseInputItem)
+                    .collect(),
+            )
             .await;
 
         let turn_context = self
@@ -1508,6 +1531,21 @@ impl Session {
     }
 }
 
+async fn set_thread_preview_from_goal_objective(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    objective: &str,
+) {
+    if let Err(err) = state_db
+        .set_thread_preview_if_empty(thread_id, objective)
+        .await
+    {
+        tracing::warn!(
+            "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+        );
+    }
+}
+
 fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
     mode == ModeKind::Plan
 }
@@ -1596,7 +1634,7 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
 fn goal_context_input_item(prompt: String) -> ResponseInputItem {
     let context = GoalContext { prompt };
     ResponseInputItem::Message {
-        role: <GoalContext as ContextualUserFragment>::ROLE.to_string(),
+        role: GoalContext::role().to_string(),
         content: vec![ContentItem::InputText {
             text: context.render(),
         }],

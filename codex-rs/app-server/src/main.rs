@@ -17,6 +17,7 @@ const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH"
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 #[derive(Debug, Parser)]
+#[command(version)]
 struct AppServerArgs {
     /// Transport endpoint URL. Supported values: `stdio://` (default),
     /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.

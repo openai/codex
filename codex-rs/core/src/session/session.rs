@@ -1,6 +1,7 @@
 use super::input_queue::InputQueue;
 use super::*;
 use crate::goals::GoalRuntimeState;
+use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
@@ -405,6 +406,29 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
+async fn warm_plugins_and_skills_for_session_init(
+    config: Arc<Config>,
+    environment_manager: Arc<EnvironmentManager>,
+    plugins_manager: Arc<PluginsManager>,
+    skills_manager: Arc<SkillsManager>,
+    environments: Vec<TurnEnvironmentSelection>,
+) -> Vec<SkillError> {
+    let fs = crate::environment_selection::resolve_environment_selections(
+        environment_manager.as_ref(),
+        &environments,
+    )
+    .ok()
+    .and_then(|resolved| resolved.primary_filesystem());
+    let plugins_input = config.plugins_config_input();
+    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
+    skills_manager
+        .skills_for_config(&skills_input, fs)
+        .await
+        .errors
+}
+
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -578,9 +602,38 @@ impl Session {
             otel.name = "session_init.auth_mcp",
         ));
 
+        let plugin_and_skill_warmup_fut = warm_plugins_and_skills_for_session_init(
+            Arc::clone(&config),
+            Arc::clone(&environment_manager),
+            Arc::clone(&plugins_manager),
+            Arc::clone(&skills_manager),
+            session_configuration.environments.clone(),
+        )
+        .instrument(info_span!(
+            "session_init.plugin_skill_warmup",
+            otel.name = "session_init.plugin_skill_warmup",
+        ));
+
         // Join all independent futures.
-        let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
-            tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
+        let (
+            thread_persistence_result,
+            state_db_ctx,
+            (auth, mcp_servers, auth_statuses),
+            plugin_skill_errors,
+        ) = tokio::join!(
+            thread_persistence_fut,
+            state_db_fut,
+            auth_and_mcp_fut,
+            plugin_and_skill_warmup_fut
+        );
+
+        for err in &plugin_skill_errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
+        }
 
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
@@ -1050,14 +1103,13 @@ impl Session {
             .cloned();
             let mcp_runtime_environment = match turn_environment {
                 Some(turn_environment) => McpRuntimeEnvironment::new(
-                    Arc::clone(&turn_environment.environment),
+                    Some(Arc::clone(&turn_environment.environment)),
+                    sess.services.environment_manager.try_local_environment(),
                     turn_environment.cwd.to_path_buf(),
                 ),
                 None => McpRuntimeEnvironment::new(
-                    sess.services
-                        .environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
+                    sess.services.environment_manager.default_or_local_environment(),
+                    sess.services.environment_manager.try_local_environment(),
                     session_configuration.cwd.to_path_buf(),
                 ),
             };

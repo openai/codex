@@ -10,7 +10,7 @@ pub(crate) struct Handler;
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("resume_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "resume_agent")
     }
 
     fn spec(&self) -> Option<ToolSpec> {
@@ -135,6 +135,13 @@ async fn handle_resume_agent(
 }
 
 impl CoreToolRuntime for Handler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "resume_agent resume reopen closed agent subagent thread id target",
+            self.spec()?,
+        )
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

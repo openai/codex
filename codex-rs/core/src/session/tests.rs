@@ -22,7 +22,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
 
 use codex_features::Feature;
-use codex_features::Features;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
@@ -55,6 +54,7 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
+use crate::goals::CreateGoalRequest;
 use crate::goals::ExternalGoalPreviousStatus;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
@@ -328,13 +328,14 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .await;
 
     assert_eq!(
-        response,
+        response.response,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
             meta: None,
         })
     );
+    assert!(!response.sent);
     assert!(rx.try_recv().is_err());
 }
 
@@ -530,14 +531,16 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
-            source: codex_hooks::SessionStartSource::Startup,
+            target: codex_hooks::StartHookTarget::SessionStart {
+                source: codex_hooks::SessionStartSource::Startup,
+            },
         }),
     )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
+    let router = Arc::new(ToolRouter::from_turn_context(
+        &turn_context,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
@@ -1296,7 +1299,9 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1401,7 +1406,9 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
-        source: codex_hooks::SessionStartSource::Startup,
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
@@ -1495,74 +1502,6 @@ disabled_tools = [
             ToolSuggestDisabledTool::plugin("slack@openai-curated"),
         ]
     );
-}
-
-#[test]
-fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
-    let connectors = vec![
-        make_connector("one", "Foo Bar"),
-        make_connector("two", "Foo-Bar"),
-    ];
-    let input = vec![user_message("use $foo-bar")];
-    let explicitly_enabled_connectors = HashSet::new();
-    let skill_name_counts_lower = HashMap::new();
-
-    let selected = filter_connectors_for_input(
-        &connectors,
-        &input,
-        &explicitly_enabled_connectors,
-        &skill_name_counts_lower,
-    );
-
-    assert_eq!(selected, Vec::new());
-}
-
-#[test]
-fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
-    let connectors = vec![make_connector("one", "Todoist")];
-    let input = vec![user_message("use $todoist")];
-    let explicitly_enabled_connectors = HashSet::new();
-    let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
-
-    let selected = filter_connectors_for_input(
-        &connectors,
-        &input,
-        &explicitly_enabled_connectors,
-        &skill_name_counts_lower,
-    );
-
-    assert_eq!(selected, Vec::new());
-}
-
-#[test]
-fn filter_connectors_for_input_skips_disabled_connectors() {
-    let mut connector = make_connector("calendar", "Calendar");
-    connector.is_enabled = false;
-    let input = vec![user_message("use $calendar")];
-    let explicitly_enabled_connectors = HashSet::new();
-    let selected = filter_connectors_for_input(
-        &[connector],
-        &input,
-        &explicitly_enabled_connectors,
-        &HashMap::new(),
-    );
-
-    assert_eq!(selected, Vec::new());
-}
-
-#[test]
-fn filter_connectors_for_input_skips_plugin_mentions() {
-    let connectors = vec![make_connector("figma", "Figma")];
-    let input = vec![user_message("use [@figma](plugin://figma@openai-curated)")];
-    let explicitly_enabled_connectors = HashSet::new();
-    let selected = filter_connectors_for_input(
-        &connectors,
-        &input,
-        &explicitly_enabled_connectors,
-        &HashMap::new(),
-    );
-
-    assert_eq!(selected, Vec::new());
 }
 
 #[test]
@@ -1970,6 +1909,105 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         .drain(..)
         .collect::<Vec<_>>();
     assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
+    struct SessionTurnStartMarker;
+    struct ThreadTurnStartMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTurnStart {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
+        turn_id: String,
+        collaboration_mode: CollaborationMode,
+        token_usage_at_turn_start: TokenUsage,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TurnStartRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTurnStart>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::TurnLifecycleContributor for TurnStartRecorder {
+        async fn on_turn_start(&self, input: codex_extension_api::TurnStartInput<'_>) {
+            self.records
+                .lock()
+                .expect("turn start records lock")
+                .push(RecordedTurnStart {
+                    session_level_id: input.session_store.level_id().to_string(),
+                    thread_level_id: input.thread_store.level_id().to_string(),
+                    turn_level_id: input.turn_store.level_id().to_string(),
+                    turn_id: input.turn_id.to_string(),
+                    collaboration_mode: input.collaboration_mode.clone(),
+                    token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
+                    saw_session_store: input
+                        .session_store
+                        .get::<SessionTurnStartMarker>()
+                        .is_some(),
+                    saw_thread_store: input.thread_store.get::<ThreadTurnStartMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.turn_lifecycle_contributor(Arc::new(TurnStartRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTurnStartMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTurnStartMarker);
+
+    let token_usage_at_turn_start = TokenUsage {
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        output_tokens: 25,
+        reasoning_output_tokens: 5,
+        total_tokens: 130,
+    };
+    set_total_token_usage(&session, token_usage_at_turn_start.clone()).await;
+
+    let expected = RecordedTurnStart {
+        session_level_id: session.session_id().to_string(),
+        thread_level_id: session.conversation_id.to_string(),
+        turn_level_id: turn_context.sub_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
+        collaboration_mode: turn_context.collaboration_mode.clone(),
+        token_usage_at_turn_start,
+        saw_session_store: true,
+        saw_thread_store: true,
+    };
+
+    let sess = Arc::new(session);
+    sess.spawn_task(
+        Arc::new(turn_context),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let actual = records
+        .lock()
+        .expect("turn start records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(vec![expected], actual);
 }
 
 #[tokio::test]
@@ -3590,7 +3628,7 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
         },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     };
     let mut existing_file_system_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
@@ -6814,40 +6852,6 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
 }
 
 #[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_use_effective_enabled_feature_state() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
-    let mut effective_features = Features::with_defaults();
-    effective_features.enable(Feature::MultiAgentV2);
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = effective_features.into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(
-        hint_texts,
-        vec![
-            "Root guidance.".to_string(),
-            "Subagent guidance.".to_string()
-        ]
-    );
-}
-
-#[tokio::test]
-async fn configured_multi_agent_v2_usage_hint_texts_omit_effectively_disabled_feature() {
-    let (mut session, _turn_context) =
-        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
-    Arc::get_mut(&mut session)
-        .expect("session should not be shared")
-        .features = Features::with_defaults().into();
-
-    let hint_texts = session.configured_multi_agent_v2_usage_hint_texts().await;
-
-    assert_eq!(hint_texts, Vec::<String>::new());
-}
-
-#[tokio::test]
 async fn build_initial_context_omits_default_image_save_location_with_image_history() {
     let (session, turn_context) = make_session_and_context().await;
     session
@@ -7239,7 +7243,7 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
         path: FileSystemPath::GlobPattern {
             pattern: format!("{cwd_display}/**/*.env"),
         },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     });
     policy
 }
@@ -7826,15 +7830,21 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     while rx.try_recv().is_ok() {}
 
-    sess.inject_response_items(vec![ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "late pending input".to_string(),
-        }],
-        phase: None,
-    }])
+    let text_element = codex_protocol::user_input::TextElement::new(
+        codex_protocol::user_input::ByteRange { start: 5, end: 12 },
+        Some("pending marker".to_string()),
+    );
+    let pending_user_input = vec![UserInput::Text {
+        text: "late pending input".to_string(),
+        text_elements: vec![text_element.clone()],
+    }];
+    sess.steer_input(
+        pending_user_input.clone(),
+        Some(&tc.sub_id),
+        /*responsesapi_client_metadata*/ None,
+    )
     .await
-    .expect("inject pending input into active turn");
+    .expect("steer pending input into active turn");
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
@@ -7868,10 +7878,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         EventMsg::ItemStarted(ItemStartedEvent {
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if content == vec![UserInput::Text {
-            text: "late pending input".to_string(),
-            text_elements: Vec::new(),
-        }]
+        }) if content == pending_user_input
     ));
 
     let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -7883,10 +7890,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if content == vec![UserInput::Text {
-            text: "late pending input".to_string(),
-            text_elements: Vec::new(),
-        }]
+        }) if content == pending_user_input
     ));
 
     let fourth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -7903,7 +7907,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             ..
         }) if message == "late pending input"
             && images == Some(Vec::new())
-            && text_elements.is_empty()
+            && text_elements == vec![text_element]
             && local_images.is_empty()
     ));
 
@@ -8057,69 +8061,6 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-
-    let blocked = ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "blocked queued prompt".to_string(),
-        }],
-        phase: None,
-    };
-    let later = ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "later queued prompt".to_string(),
-        }],
-        phase: None,
-    };
-    let newer = ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "newer queued prompt".to_string(),
-        }],
-        phase: None,
-    };
-
-    sess.inject_response_items(vec![blocked.clone(), later.clone()])
-        .await
-        .expect("inject initial pending input into active turn");
-
-    let drained = sess.input_queue.get_pending_input(&sess.active_turn).await;
-    assert_eq!(drained, vec![blocked, later.clone()]);
-
-    sess.inject_response_items(vec![newer.clone()])
-        .await
-        .expect("inject newer pending input into active turn");
-
-    let mut drained_iter = drained.into_iter();
-    let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.input_queue
-        .prepend_pending_input(&sess.active_turn, drained_iter.collect())
-        .await
-        .expect("requeue later pending input at the front of the queue");
-
-    assert_eq!(
-        sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![later, newer]
-    );
-}
-
-#[tokio::test]
 async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
@@ -8146,7 +8087,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![queued_item]
+        vec![TurnInput::ResponseInputItem(queued_item)]
     );
 }
 
@@ -8191,7 +8132,10 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         Arc::clone(&active_turn.turn_state)
     };
     sess.input_queue
-        .extend_pending_input_for_turn_state(turn_state.as_ref(), vec![pending_item.clone()])
+        .extend_pending_input_for_turn_state(
+            turn_state.as_ref(),
+            vec![TurnInput::ResponseInputItem(pending_item.clone())],
+        )
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
@@ -8201,7 +8145,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
         sess.input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
             .await,
-        vec![pending_item]
+        vec![TurnInput::ResponseInputItem(pending_item)]
     );
 }
 
@@ -8519,6 +8463,66 @@ async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHand
 }
 
 #[tokio::test]
+async fn create_thread_goal_fills_empty_thread_preview() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    assert!(page.items.is_empty());
+
+    sess.create_thread_goal(
+        tc.as_ref(),
+        CreateGoalRequest {
+            objective: "Keep improving the benchmark".to_string(),
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    let page = state_db
+        .list_threads(
+            /*page_size*/ 10,
+            codex_state::ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources: &[],
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: codex_state::SortKey::UpdatedAt,
+                sort_direction: codex_state::SortDirection::Desc,
+                search_term: None,
+            },
+        )
+        .await?;
+    let ids = page
+        .items
+        .iter()
+        .map(|thread| thread.id)
+        .collect::<Vec<_>>();
+    assert_eq!(vec![sess.conversation_id], ids);
+    assert_eq!(
+        Some("Keep improving the benchmark"),
+        page.items[0].preview.as_deref()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
     let (sess, tc, rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -8565,7 +8569,9 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     .await?;
 
     let pending_input = sess.input_queue.get_pending_input(&sess.active_turn).await;
-    let [ResponseInputItem::Message { role, content, .. }] = pending_input.as_slice() else {
+    let [TurnInput::ResponseInputItem(ResponseInputItem::Message { role, content, .. })] =
+        pending_input.as_slice()
+    else {
         panic!("expected one budget-limit steering message, got {pending_input:#?}");
     };
     assert_eq!("user", role);
@@ -8713,7 +8719,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .thread_goals()
         .update_thread_goal(
             sess.conversation_id,
-            codex_state::ThreadGoalUpdate {
+            codex_state::GoalUpdate {
                 objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
                 token_budget: None,
@@ -8790,7 +8796,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
         pending_input.iter().any(|item| {
             matches!(
                 item,
-                ResponseInputItem::Message { role, content, .. }
+                TurnInput::ResponseInputItem(ResponseInputItem::Message { role, content, .. })
                     if role == "user"
                         && content.iter().any(|content| matches!(
                             content,
@@ -9013,7 +9019,9 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![communication.to_response_input_item()],
+        vec![TurnInput::ResponseInputItem(
+            communication.to_response_input_item()
+        )],
     );
 }
 
@@ -9093,11 +9101,11 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![
-            ResponseInputItem::from(vec![UserInput::Text {
+            TurnInput::UserInput(vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }]),
-            communication.to_response_input_item(),
+            TurnInput::ResponseInputItem(communication.to_response_input_item()),
         ],
     );
 }
@@ -9146,11 +9154,11 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![
-            ResponseInputItem::from(vec![UserInput::Text {
+            TurnInput::UserInput(vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }]),
-            communication.to_response_input_item(),
+            TurnInput::ResponseInputItem(communication.to_response_input_item()),
         ],
     );
 }
@@ -9205,7 +9213,9 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     assert!(output.tool_future.is_some());
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![communication.to_response_input_item()],
+        vec![TurnInput::ResponseInputItem(
+            communication.to_response_input_item()
+        )],
     );
 }
 
@@ -9301,8 +9311,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .await
     };
     let deferred_mcp_tools = Some(tools.clone());
-    let router = ToolRouter::from_config(
-        &turn_context.tools_config,
+    let router = ToolRouter::from_turn_context(
+        &turn_context,
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
@@ -9870,9 +9880,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
     let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
-    let command = session
-        .user_shell()
-        .derive_exec_args(command_script, turn_context.tools_config.allow_login_shell);
+    let command = session.user_shell().derive_exec_args(
+        command_script,
+        turn_context.config.permissions.allow_login_shell,
+    );
     let exec_approval_requirement = session
         .services
         .exec_policy

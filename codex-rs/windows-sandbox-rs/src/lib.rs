@@ -38,6 +38,8 @@ mod policy;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
+mod resolved_permissions;
+#[cfg(target_os = "windows")]
 mod token;
 #[cfg(target_os = "windows")]
 mod wfp;
@@ -153,6 +155,8 @@ pub use ipc_framed::ExitPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::FramedMessage;
 #[cfg(target_os = "windows")]
+pub use ipc_framed::IPC_PROTOCOL_VERSION;
+#[cfg(target_os = "windows")]
 pub use ipc_framed::Message;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::OutputPayload;
@@ -194,6 +198,10 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::WindowsSandboxTokenMode;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::token_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]

@@ -12,6 +12,7 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -42,6 +43,7 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -395,14 +397,9 @@ pub(crate) fn gather_write_roots(
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // Always include the command CWD for workspace-write.
-    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        roots.push(command_cwd.to_path_buf());
-    }
     let AllowDenyPaths { allow, .. } =
         compute_allow_paths(policy, policy_cwd, command_cwd, env_map);
-    roots.extend(allow);
+    let roots: Vec<PathBuf> = allow.into_iter().collect();
     let mut dedup: HashSet<PathBuf> = HashSet::new();
     let mut out: Vec<PathBuf> = Vec::new();
     for r in canonical_existing(&roots) {
@@ -584,24 +581,15 @@ fn quote_arg(arg: &str) -> String {
 
 fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
+        return setup_exe;
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from(SETUP_EXE_FILENAME)
+}
+
+fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
+    bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
 }
 
 fn report_helper_failure(
@@ -966,12 +954,15 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::find_setup_exe_for_current_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use crate::helper_materialization::BIN_DIRNAME;
+    use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1003,6 +994,24 @@ mod tests {
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
         );
+    }
+
+    #[test]
+    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&setup_exe, b"setup").expect("write setup");
+
+        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
+
+        assert_eq!(resolved, setup_exe);
     }
 
     #[test]

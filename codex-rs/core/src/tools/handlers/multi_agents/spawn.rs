@@ -25,7 +25,7 @@ impl Handler {
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("spawn_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "spawn_agent")
     }
 
     fn spec(&self) -> Option<ToolSpec> {
@@ -83,6 +83,9 @@ async fn handle_spawn_agent(
         .await;
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    if let Some(service_tier) = args.service_tier.as_ref() {
+        config.service_tier = Some(service_tier.clone());
+    }
     if args.fork_context {
         reject_full_fork_spawn_overrides(role_name, args.model.as_deref(), args.reasoning_effort)?;
     } else {
@@ -200,6 +203,13 @@ async fn handle_spawn_agent(
 }
 
 impl CoreToolRuntime for Handler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "spawn_agent spawn agent subagent sub-agent delegate delegation parallel work worker explorer no-apps fork model reasoning",
+            self.spec()?,
+        )
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

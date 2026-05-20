@@ -69,6 +69,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_network_proxy::NetworkMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -734,12 +735,16 @@ fn config_toml_deserializes_permission_profiles() {
     let toml = r#"
 default_permissions = "workspace"
 
+[permissions.workspace]
+description = "Day-to-day workspace access."
+
 [permissions.workspace.workspace_roots]
 "~/code/openai" = true
 "~/code/ignored" = false
 
 [permissions.workspace.filesystem]
 ":minimal" = "read"
+"/tmp/secret.env" = "deny"
 
 [permissions.workspace.filesystem.":workspace_roots"]
 "." = "write"
@@ -750,6 +755,7 @@ enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
+mode = "full"
 
 [permissions.workspace.network.domains]
 "openai.com" = "allow"
@@ -764,6 +770,7 @@ allow_upstream_proxy = false
             entries: BTreeMap::from([(
                 "workspace".to_string(),
                 PermissionProfileToml {
+                    description: Some("Day-to-day workspace access.".to_string()),
                     workspace_roots: Some(WorkspaceRootsToml {
                         entries: BTreeMap::from([
                             ("~/code/ignored".to_string(), false),
@@ -776,6 +783,10 @@ allow_upstream_proxy = false
                             (
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                "/tmp/secret.env".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Deny),
                             ),
                             (
                                 ":workspace_roots".to_string(),
@@ -795,7 +806,7 @@ allow_upstream_proxy = false
                         allow_upstream_proxy: Some(false),
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,
-                        mode: None,
+                        mode: Some(NetworkMode::Full),
                         domains: Some(NetworkDomainPermissionsToml {
                             entries: BTreeMap::from([(
                                 "openai.com".to_string(),
@@ -825,6 +836,7 @@ async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -979,6 +991,7 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
                     entries: BTreeMap::from([(
                         "workspace".to_string(),
                         PermissionProfileToml {
+                            description: None,
                             workspace_roots: None,
                             filesystem: Some(FilesystemPermissionsToml {
                                 glob_scan_max_depth: None,
@@ -1130,6 +1143,7 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1233,6 +1247,7 @@ enabled = false
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1282,6 +1297,7 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1329,6 +1345,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             entries: BTreeMap::from([(
                 "workspace".to_string(),
                 PermissionProfileToml {
+                    description: None,
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
@@ -1633,6 +1650,7 @@ async fn permission_profile_override_preserves_configured_network_policy_without
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1693,6 +1711,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: Some(2),
@@ -1700,7 +1719,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                                 ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
-                                    ("**/*.env".to_string(), FileSystemAccessMode::None),
+                                    ("**/*.env".to_string(), FileSystemAccessMode::Deny),
                                 ])),
                             )]),
                         }),
@@ -1739,7 +1758,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                     path: FileSystemPath::GlobPattern {
                         pattern: expected_pattern,
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 })
         );
     }
@@ -1772,6 +1791,7 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -1822,6 +1842,8 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
     )
     .await?;
 
+    assert!(config.explicit_permission_profile_mode);
+    assert!(config.custom_permission_profile_ids.is_empty());
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -1897,6 +1919,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
                 entries: BTreeMap::from([(
                     "dev".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: Some(WorkspaceRootsToml {
                             entries: BTreeMap::from([(
                                 profile_root.to_string_lossy().into_owned(),
@@ -2355,6 +2378,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2377,6 +2401,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     )
     .await?;
 
+    assert_eq!(
+        config.custom_permission_profile_ids,
+        vec!["workspace".to_string()]
+    );
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
@@ -2412,6 +2440,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2473,6 +2502,7 @@ async fn load_workspace_permission_profile(
 #[tokio::test]
 async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
+        description: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2517,6 +2547,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
 async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
+        description: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2554,6 +2585,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 #[tokio::test]
 async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
+        description: None,
         workspace_roots: None,
         filesystem: None,
         network: None,
@@ -2583,6 +2615,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 #[tokio::test]
 async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
+        description: None,
         workspace_roots: None,
         filesystem: Some(FilesystemPermissionsToml {
             glob_scan_max_depth: None,
@@ -2619,6 +2652,7 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -2666,6 +2700,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                 entries: BTreeMap::from([(
                     "workspace".to_string(),
                     PermissionProfileToml {
+                        description: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -7705,6 +7740,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
+            model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
             service_tier: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
@@ -7721,6 +7757,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_mode: None,
                 windows_sandbox_private_desktop: true,
             },
+            explicit_permission_profile_mode: false,
+            custom_permission_profile_ids: Vec::new(),
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
@@ -8156,6 +8194,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai-custom".to_string(),
         model_provider: fixture.openai_custom_provider.clone(),
@@ -8172,6 +8211,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8321,6 +8362,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
@@ -8337,6 +8379,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8471,6 +8515,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,
         service_tier: None,
         model_provider_id: "openai".to_string(),
         model_provider: fixture.openai_provider.clone(),
@@ -8487,6 +8532,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_mode: None,
             windows_sandbox_private_desktop: true,
         },
+        explicit_permission_profile_mode: false,
+        custom_permission_profile_ids: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
@@ -8613,6 +8660,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         allow_managed_hooks_only: None,
+        computer_use: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -9396,6 +9444,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
         allow_managed_hooks_only: None,
+        computer_use: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,

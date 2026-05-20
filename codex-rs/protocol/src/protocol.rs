@@ -1337,6 +1337,7 @@ pub enum HookEventName {
     PostCompact,
     SessionStart,
     UserPromptSubmit,
+    SubagentStart,
     Stop,
 }
 
@@ -4217,7 +4218,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: blocked },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             },
         ]);
 
@@ -4274,7 +4275,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: secret },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             },
         ]);
 
@@ -5173,7 +5174,7 @@ mod tests {
                     path: FileSystemPath::GlobPattern {
                         pattern: "/tmp/private/**/*.txt".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ])),
             model: "gpt-5".to_string(),
@@ -5201,7 +5202,7 @@ mod tests {
                         "type": "glob_pattern",
                         "pattern": "/tmp/private/**/*.txt"
                     },
-                    "access": "none"
+                    "access": "deny"
                 }]
             })
         );
