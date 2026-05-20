@@ -89,7 +89,6 @@ impl std::error::Error for ConfigLoadError {
 #[derive(Clone, Copy)]
 pub(crate) enum ConfigDiagnosticSource<'a> {
     Path(&'a Path),
-    #[cfg(any(target_os = "macos", test))]
     DisplayName(&'a str),
 }
 
@@ -97,7 +96,6 @@ impl ConfigDiagnosticSource<'_> {
     pub(crate) fn to_path_buf(self) -> PathBuf {
         match self {
             ConfigDiagnosticSource::Path(path) => path.to_path_buf(),
-            #[cfg(any(target_os = "macos", test))]
             ConfigDiagnosticSource::DisplayName(name) => PathBuf::from(name),
         }
     }
@@ -201,6 +199,27 @@ where
     I: IntoIterator<Item = &'a ConfigLayerEntry>,
 {
     for layer in layers {
+        if let Some(contents) = layer.raw_toml() {
+            let source_name = display_name_for_layer(layer, config_toml_file);
+            let Some(base_dir) = layer.raw_toml_base_dir() else {
+                tracing::debug!(
+                    "Skipping raw TOML diagnostics for {source_name} because it has no base directory"
+                );
+                continue;
+            };
+            // Match the base directory used when the raw non-file layer was
+            // parsed into the runtime layer so diagnostics resolve relative
+            // path fields with the same semantics.
+            let _absolute_path_base = AbsolutePathBufGuard::new(base_dir.as_path());
+            if let Some(error) = config_error_from_typed_toml_for_source::<T>(
+                ConfigDiagnosticSource::DisplayName(&source_name),
+                contents,
+            ) {
+                return Some(error);
+            }
+            continue;
+        }
+
         let Some(path) = config_path_for_layer(layer, config_toml_file) else {
             continue;
         };
@@ -235,8 +254,29 @@ fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Op
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }
+        | ConfigLayerSource::EnterpriseManaged { .. }
         | ConfigLayerSource::SessionFlags
         | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
+    }
+}
+
+fn display_name_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> String {
+    match &layer.name {
+        ConfigLayerSource::EnterpriseManaged { id, name } => {
+            format!("enterprise-managed config {name} ({id})")
+        }
+        ConfigLayerSource::Mdm { domain, key } => format!("managed policy {domain}:{key}"),
+        ConfigLayerSource::SessionFlags => "session flags".to_string(),
+        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
+            "legacy managed configuration from MDM".to_string()
+        }
+        ConfigLayerSource::System { file }
+        | ConfigLayerSource::User { file, .. }
+        | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.display().to_string(),
+        ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
+            .join(config_toml_file)
+            .display()
+            .to_string(),
     }
 }
 

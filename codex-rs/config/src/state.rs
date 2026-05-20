@@ -97,10 +97,16 @@ impl LoaderOverrides {
 pub struct ConfigLayerEntry {
     pub name: ConfigLayerSource,
     pub config: TomlValue,
-    pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
+    raw_toml: Option<RawTomlLayer>,
     hooks_config_folder_override: Option<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RawTomlLayer {
+    contents: String,
+    base_dir: AbsolutePathBuf,
 }
 
 impl ConfigLayerEntry {
@@ -109,21 +115,29 @@ impl ConfigLayerEntry {
         Self {
             name,
             config,
-            raw_toml: None,
             version,
             disabled_reason: None,
+            raw_toml: None,
             hooks_config_folder_override: None,
         }
     }
 
-    pub fn new_with_raw_toml(name: ConfigLayerSource, config: TomlValue, raw_toml: String) -> Self {
+    pub fn new_with_raw_toml(
+        name: ConfigLayerSource,
+        config: TomlValue,
+        raw_toml: String,
+        raw_toml_base_dir: AbsolutePathBuf,
+    ) -> Self {
         let version = version_for_toml(&config);
         Self {
             name,
             config,
-            raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
+            raw_toml: Some(RawTomlLayer {
+                contents: raw_toml,
+                base_dir: raw_toml_base_dir,
+            }),
             hooks_config_folder_override: None,
         }
     }
@@ -137,9 +151,9 @@ impl ConfigLayerEntry {
         Self {
             name,
             config,
-            raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
+            raw_toml: None,
             hooks_config_folder_override: None,
         }
     }
@@ -149,7 +163,13 @@ impl ConfigLayerEntry {
     }
 
     pub fn raw_toml(&self) -> Option<&str> {
-        self.raw_toml.as_deref()
+        self.raw_toml
+            .as_ref()
+            .map(|raw_toml| raw_toml.contents.as_str())
+    }
+
+    pub fn raw_toml_base_dir(&self) -> Option<&AbsolutePathBuf> {
+        self.raw_toml.as_ref().map(|raw_toml| &raw_toml.base_dir)
     }
 
     pub(crate) fn with_hooks_config_folder_override(
@@ -181,6 +201,7 @@ impl ConfigLayerEntry {
         match &self.name {
             ConfigLayerSource::Mdm { .. } => None,
             ConfigLayerSource::System { file } => file.parent(),
+            ConfigLayerSource::EnterpriseManaged { .. } => None,
             ConfigLayerSource::User { file, .. } => file.parent(),
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
