@@ -519,6 +519,45 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
+      - name: Build Codex package archive
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+
+          case "$BUNDLE" in
+            primary)
+              variant="codex"
+              entrypoint="codex"
+              archive_stem="codex-package"
+              ;;
+            app-server)
+              variant="codex-app-server"
+              entrypoint="codex-app-server"
+              archive_stem="codex-app-server-package"
+              ;;
+            *)
+              echo "No Codex package variant for bundle: $BUNDLE"
+              exit 1
+              ;;
+          esac
+
+          package_dir="${RUNNER_TEMP}/${archive_stem}-${TARGET}"
+          archive_path="dist/${TARGET}/${archive_stem}-${TARGET}.tar.gz"
+          rm -rf "$package_dir"
+
+          ../scripts/build_codex_package.py \
+            --target "$TARGET" \
+            --variant "$variant" \
+            --entrypoint-bin "target/${TARGET}/release/${entrypoint}" \
+            --cargo-profile release \
+            --package-dir "$package_dir" \
+            --archive-output "$archive_path" \
+            --force
+
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
         shell: bash
@@ -1079,6 +1118,11 @@ jobs:
           # If included in files: dist/**, release upload races on duplicate
           # asset names and can fail with 404s.
           find dist -type f -name 'cargo-timing.html' -delete
+          # Keep package-builder sidecar archives as workflow artifacts only
+          # until distribution channels are ready to consume them.
+          find dist -type f \
+            \( -name 'codex-package-*' -o -name 'codex-app-server-package-*' \) \
+            -delete
           find dist -type d -empty -delete
 
           ls -R dist/
