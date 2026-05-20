@@ -1762,8 +1762,13 @@ impl Session {
             return;
         }
 
-        self.forward_child_status_to_parent(None, parent_thread_id, &child_agent_path, status)
-            .await;
+        self.forward_child_status_to_parent(
+            /*turn_context*/ None,
+            parent_thread_id,
+            &child_agent_path,
+            status,
+        )
+        .await;
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
