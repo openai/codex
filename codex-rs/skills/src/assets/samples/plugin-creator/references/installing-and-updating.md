@@ -27,7 +27,7 @@ python3 scripts/update_plugin_cachebuster.py \
 ```
 
 Prefer the default helper behavior here. If you omit `--cachebuster`, the helper uses a UTC
-timestamp down to seconds, which is the recommended path for routine local iteration.
+`yyyyMMddHHmmss` timestamp, which is the recommended path for routine local iteration.
 
 Only use a manual cachebuster override when the user explicitly asks for one or when a workflow
 outside Codex depends on a specific token:

@@ -24,7 +24,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("plugin_path", help="Path to the plugin root directory")
     parser.add_argument(
         "--cachebuster",
-        help="Optional cachebuster token to embed in the plugin version",
+        help=(
+            "Optional cachebuster token to embed in the plugin version. "
+            "Defaults to a UTC yyyyMMddHHmmss timestamp."
+        ),
     )
     return parser.parse_args()
 

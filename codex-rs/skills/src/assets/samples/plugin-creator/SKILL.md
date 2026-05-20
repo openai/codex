@@ -75,7 +75,8 @@ reference instead of hand-editing marketplace files:
 python3 scripts/update_plugin_cachebuster.py <plugin-path>
 ```
 
-Prefer the helper default cachebuster unless the user explicitly asks for a specific override.
+Prefer the helper default cachebuster unless the user explicitly asks for a specific override. The
+default is a UTC `yyyyMMddHHmmss` timestamp.
 See `references/installing-and-updating.md` for the expected cachebuster and reinstall flow while iterating on an existing local plugin.
 
 ## What this skill creates
