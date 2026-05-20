@@ -99,54 +99,57 @@ pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> bool {
-    let Some(session_start_source) = sess.take_pending_session_start_source().await else {
-        return false;
-    };
-
-    // Pending session-start hooks are reused to dispatch thread-spawn subagent
-    // starts. Other subagent sessions are internal/system work and do not run
-    // start hooks.
-    let target = match &turn_context.session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
-            if matches!(
-                session_start_source,
-                codex_hooks::SessionStartSource::Startup
-            ) =>
-        {
-            let agent_type = agent_role
-                .clone()
-                .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
-            StartHookTarget::SubagentStart {
-                turn_id: turn_context.sub_id.clone(),
-                agent_id: sess.thread_id().to_string(),
-                agent_type,
+    while let Some(session_start_source) = sess.take_pending_session_start_source().await {
+        // Pending session-start hooks are reused to dispatch thread-spawn subagent
+        // starts. Other subagent sessions are internal/system work and do not run
+        // start hooks.
+        let target = match &turn_context.session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
+                if matches!(
+                    session_start_source,
+                    codex_hooks::SessionStartSource::Startup
+                ) =>
+            {
+                let agent_type = agent_role
+                    .clone()
+                    .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
+                StartHookTarget::SubagentStart {
+                    turn_id: turn_context.sub_id.clone(),
+                    agent_id: sess.thread_id().to_string(),
+                    agent_type,
+                }
             }
+            SessionSource::SubAgent(_) => return false,
+            _ => StartHookTarget::SessionStart {
+                source: session_start_source,
+            },
+        };
+        let request = codex_hooks::SessionStartRequest {
+            session_id: sess.session_id().into(),
+            #[allow(deprecated)]
+            cwd: turn_context.cwd.clone(),
+            transcript_path: sess.hook_transcript_path().await,
+            model: turn_context.model_info.slug.clone(),
+            permission_mode: hook_permission_mode(turn_context),
+            target,
+        };
+        let hooks = sess.hooks();
+        let preview_runs = hooks.preview_session_start(&request);
+        if run_context_injecting_hook(
+            sess,
+            turn_context,
+            preview_runs,
+            hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
+        )
+        .await
+        .record_additional_contexts(sess, turn_context)
+        .await
+        {
+            return true;
         }
-        SessionSource::SubAgent(_) => return false,
-        _ => StartHookTarget::SessionStart {
-            source: session_start_source,
-        },
-    };
-    let request = codex_hooks::SessionStartRequest {
-        session_id: sess.session_id().into(),
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.clone(),
-        transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
-        target,
-    };
-    let hooks = sess.hooks();
-    let preview_runs = hooks.preview_session_start(&request);
-    run_context_injecting_hook(
-        sess,
-        turn_context,
-        preview_runs,
-        hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
-    )
-    .await
-    .record_additional_contexts(sess, turn_context)
-    .await
+    }
+
+    false
 }
 
 /// Runs matching `PreToolUse` hooks before a tool executes.

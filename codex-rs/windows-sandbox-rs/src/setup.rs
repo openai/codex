@@ -3,7 +3,6 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -13,6 +12,7 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -40,11 +40,10 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
-const BIN_DIRNAME: &str = "bin";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
-const RESOURCES_DIRNAME: &str = "codex-resources";
+const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -586,34 +585,11 @@ fn find_setup_exe() -> PathBuf {
     {
         return setup_exe;
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from(SETUP_EXE_FILENAME)
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
-    let dir = exe.parent()?;
-    let candidate = dir.join("codex-windows-sandbox-setup.exe");
-    if candidate.is_file() {
-        return Some(candidate);
-    }
-
-    if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
-        && let Some(package_dir) = dir.parent()
-    {
-        let package_resource_candidate = package_dir
-            .join(RESOURCES_DIRNAME)
-            .join("codex-windows-sandbox-setup.exe");
-        if package_resource_candidate.is_file() {
-            return Some(package_resource_candidate);
-        }
-    }
-
-    // Older standalone installs keep Windows helper binaries under
-    // `codex-resources/` next to `codex.exe`, so elevation still probes that
-    // sibling folder before falling back to PATH.
-    let resource_candidate = dir
-        .join(RESOURCES_DIRNAME)
-        .join("codex-windows-sandbox-setup.exe");
-    resource_candidate.is_file().then_some(resource_candidate)
+    bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
 }
 
 fn report_helper_failure(
@@ -976,8 +952,6 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::BIN_DIRNAME;
-    use super::RESOURCES_DIRNAME;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
     use super::find_setup_exe_for_current_exe;
@@ -987,6 +961,8 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use crate::helper_materialization::BIN_DIRNAME;
+    use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;

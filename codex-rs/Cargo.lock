@@ -2321,6 +2321,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "hmac",
  "pretty_assertions",
  "serde",

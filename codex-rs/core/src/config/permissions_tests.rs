@@ -68,6 +68,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                     "workspace".to_string(),
                     PermissionProfileToml {
                         description: None,
+                        extends: None,
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
@@ -240,6 +241,157 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
 }
 
 #[test]
+fn permissions_profiles_resolve_extends_parent_first_with_child_overrides() {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[base]
+description = "Base profile"
+
+[base.filesystem]
+glob_scan_max_depth = 1
+"/tmp/base" = "read"
+"/tmp/shared" = "read"
+
+[base.filesystem.":project_roots"]
+"**/*.env" = "deny"
+docs = "read"
+
+[base.network]
+enabled = true
+
+[base.network.domains]
+"base.example.com" = "allow"
+"SHARED.EXAMPLE.COM." = "deny"
+
+[base.network.unix_sockets]
+"/tmp/base.sock" = "allow"
+
+[child]
+extends = "base"
+
+[child.filesystem]
+glob_scan_max_depth = 3
+"/tmp/shared" = "write"
+
+[child.filesystem.":project_roots"]
+docs = "write"
+src = "read"
+
+[child.network]
+enabled = false
+allow_local_binding = true
+
+[child.network.domains]
+"child.example.com" = "allow"
+"shared.example.com" = "allow"
+
+[child.network.unix_sockets]
+"/tmp/child.sock" = "allow"
+"#,
+    )
+    .expect("permissions should deserialize");
+
+    let resolved = permissions
+        .resolve_profile("child", |_| None)
+        .expect("child profile should resolve");
+    let expected_profile = toml::from_str::<PermissionProfileToml>(
+        r#"
+extends = "base"
+
+[filesystem]
+glob_scan_max_depth = 3
+"/tmp/base" = "read"
+"/tmp/shared" = "write"
+
+[filesystem.":project_roots"]
+"**/*.env" = "deny"
+docs = "write"
+src = "read"
+
+[network]
+enabled = false
+allow_local_binding = true
+
+[network.domains]
+"base.example.com" = "allow"
+"child.example.com" = "allow"
+"shared.example.com" = "allow"
+
+[network.unix_sockets]
+"/tmp/base.sock" = "allow"
+"/tmp/child.sock" = "allow"
+"#,
+    )
+    .expect("expected profile should deserialize");
+
+    assert_eq!(resolved.profile, expected_profile);
+    assert_eq!(resolved.inherited_profile_names, vec!["base".to_string()]);
+}
+
+#[test]
+fn permissions_profiles_reject_undefined_extends_parent() {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[child]
+extends = "base"
+"#,
+    )
+    .expect("permissions should deserialize");
+
+    let err = permissions
+        .resolve_profile("child", |_| None)
+        .expect_err("missing parent should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "permissions profile `child` extends undefined profile `base`"
+    );
+}
+
+#[test]
+fn permissions_profiles_reject_unsupported_builtin_extends_parent() {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[child]
+extends = ":danger-full-access"
+"#,
+    )
+    .expect("permissions should deserialize");
+
+    let err = permissions
+        .resolve_profile("child", |_| None)
+        .expect_err("unsupported built-in parent should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "permissions profile `child` cannot extend unsupported built-in profile `:danger-full-access`"
+    );
+}
+
+#[test]
+fn permissions_profiles_reject_extends_cycles() {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[alpha]
+extends = "beta"
+
+[beta]
+extends = "alpha"
+"#,
+    )
+    .expect("permissions should deserialize");
+
+    let err = permissions
+        .resolve_profile("alpha", |_| None)
+        .expect_err("cycle should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "permissions profile inheritance cycle detected: alpha -> beta -> alpha"
+    );
+}
+
+#[test]
 fn profile_network_proxy_config_keeps_proxy_disabled_for_bare_network_access() {
     let config = network_proxy_config_from_profile_network(Some(&NetworkToml {
         enabled: Some(true),
@@ -287,6 +439,7 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
                 "workspace".to_string(),
                 PermissionProfileToml {
                     description: None,
+                    extends: None,
                     workspace_roots: Some(WorkspaceRootsToml {
                         entries: BTreeMap::from([
                             ("backend".to_string(), true),
@@ -397,6 +550,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                 "workspace".to_string(),
                 PermissionProfileToml {
                     description: None,
+                    extends: None,
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,

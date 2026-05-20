@@ -1,5 +1,6 @@
 use crate::key_aliases::normalize_key_aliases;
 use crate::key_aliases::normalized_with_key_aliases;
+use codex_network_proxy::normalize_host;
 use toml::Value as TomlValue;
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
@@ -14,6 +15,10 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         normalize_key_aliases(path, base_table);
         let mut overlay_table = overlay_table.clone();
         normalize_key_aliases(path, &mut overlay_table);
+        if is_permission_network_domains_path(path) {
+            normalize_network_domain_keys(base_table);
+            normalize_network_domain_keys(&mut overlay_table);
+        }
 
         for (key, value) in overlay_table {
             path.push(key.clone());
@@ -26,6 +31,21 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         }
     } else {
         *base = normalized_with_key_aliases(overlay, path);
+    }
+}
+
+fn is_permission_network_domains_path(path: &[String]) -> bool {
+    matches!(
+        path,
+        [permissions, _, network, domains]
+            if permissions == "permissions" && network == "network" && domains == "domains"
+    )
+}
+
+fn normalize_network_domain_keys(table: &mut toml::map::Map<String, TomlValue>) {
+    let entries = std::mem::take(table);
+    for (pattern, value) in entries {
+        table.insert(normalize_host(&pattern), value);
     }
 }
 

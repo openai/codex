@@ -1,5 +1,8 @@
+use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -25,6 +28,33 @@ pub(crate) struct WindowsWritableRoot {
     pub(crate) read_only_subpaths: Vec<PathBuf>,
 }
 
+/// Restricted-token family needed to enforce a Windows permission profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsSandboxTokenMode {
+    ReadOnlyCapability,
+    WritableRootsCapability,
+}
+
+/// Chooses the restricted-token family needed for a managed permission profile.
+pub fn token_mode_for_permission_profile(
+    permission_profile: &PermissionProfile,
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+) -> Result<WindowsSandboxTokenMode> {
+    let permissions =
+        ResolvedWindowsSandboxPermissions::try_from_permission_profile(permission_profile)?;
+    if permissions.file_system.has_full_disk_write_access() {
+        anyhow::bail!(
+            "permission profile requests full-disk filesystem writes, which cannot be enforced by the Windows sandbox"
+        );
+    }
+    if permissions.writable_roots_for_cwd(cwd, env_map).is_empty() {
+        Ok(WindowsSandboxTokenMode::ReadOnlyCapability)
+    } else {
+        Ok(WindowsSandboxTokenMode::WritableRootsCapability)
+    }
+}
+
 impl ResolvedWindowsSandboxPermissions {
     pub(crate) fn from_legacy_policy(policy: &SandboxPolicy) -> Self {
         Self {
@@ -38,6 +68,26 @@ impl ResolvedWindowsSandboxPermissions {
             file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd),
             network: NetworkSandboxPolicy::from(policy),
         }
+    }
+
+    pub(crate) fn try_from_permission_profile(
+        permission_profile: &PermissionProfile,
+    ) -> Result<Self> {
+        if !matches!(permission_profile, PermissionProfile::Managed { .. }) {
+            anyhow::bail!(
+                "only managed permission profiles can be enforced by the Windows sandbox"
+            );
+        }
+        let (file_system, network) = permission_profile.to_runtime_permissions();
+        if !matches!(file_system.kind, FileSystemSandboxKind::Restricted) {
+            anyhow::bail!(
+                "only restricted managed filesystem permissions can be enforced by the Windows sandbox"
+            );
+        }
+        Ok(Self {
+            file_system,
+            network,
+        })
     }
 
     pub(crate) fn should_apply_network_block(&self) -> bool {
@@ -113,4 +163,136 @@ fn windows_temp_env_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
         })
         .filter(|path| path.is_absolute())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::models::ManagedFileSystemPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn permission_profile_workspace_write_uses_windows_temp_env_vars() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        let temp_dir = tmp.path().join("temp");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let mut env_map = HashMap::new();
+        env_map.insert("TEMP".to_string(), temp_dir.to_string_lossy().to_string());
+        env_map.insert("TMP".to_string(), temp_dir.to_string_lossy().to_string());
+
+        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+            &PermissionProfile::workspace_write(),
+        )
+        .expect("managed permission profile");
+        let roots = permissions
+            .writable_roots_for_cwd(&cwd, &env_map)
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<std::collections::HashSet<_>>();
+
+        let expected_roots = [
+            temp_dir,
+            dunce::canonicalize(&cwd).expect("canonicalize cwd"),
+        ]
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(expected_roots, roots);
+    }
+
+    #[test]
+    fn token_mode_for_profile_without_writable_roots_uses_readonly_capability() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+
+        let token_mode = token_mode_for_permission_profile(
+            &PermissionProfile::read_only(),
+            &cwd,
+            &HashMap::new(),
+        )
+        .expect("token mode");
+
+        assert_eq!(WindowsSandboxTokenMode::ReadOnlyCapability, token_mode);
+    }
+
+    #[test]
+    fn token_mode_for_profile_with_writable_roots_uses_write_capabilities() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+
+        let token_mode = token_mode_for_permission_profile(
+            &PermissionProfile::workspace_write(),
+            &cwd,
+            &HashMap::new(),
+        )
+        .expect("token mode");
+
+        assert_eq!(WindowsSandboxTokenMode::WritableRootsCapability, token_mode);
+    }
+
+    #[test]
+    fn permission_profile_rejects_disabled_profiles() {
+        let err = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+            &PermissionProfile::Disabled,
+        )
+        .expect_err("disabled profile should not resolve for sandbox enforcement");
+
+        assert!(
+            err.to_string()
+                .contains("only managed permission profiles can be enforced")
+        );
+    }
+
+    #[test]
+    fn permission_profile_rejects_unrestricted_managed_filesystem() {
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Restricted,
+        };
+
+        let err =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile(&permission_profile)
+                .expect_err("unrestricted profile should not resolve for sandbox enforcement");
+
+        assert!(
+            err.to_string()
+                .contains("only restricted managed filesystem permissions can be enforced")
+        );
+    }
+
+    #[test]
+    fn token_mode_rejects_full_disk_write_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Write,
+                }],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+
+        let err = token_mode_for_permission_profile(&permission_profile, &cwd, &HashMap::new())
+            .expect_err("full disk writes should not resolve to a token mode");
+
+        assert!(
+            err.to_string()
+                .contains("full-disk filesystem writes, which cannot be enforced")
+        );
+    }
 }
