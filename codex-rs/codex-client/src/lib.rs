@@ -1,5 +1,6 @@
 mod chatgpt_cloudflare_cookies;
 mod chatgpt_hosts;
+mod chatgpt_redirects;
 mod custom_ca;
 mod default_client;
 mod error;
@@ -11,6 +12,8 @@ mod transport;
 
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
 pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
+pub use crate::chatgpt_hosts::is_allowed_chatgpt_request_url;
+pub use crate::chatgpt_redirects::with_chatgpt_redirect_protection;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///

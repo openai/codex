@@ -106,6 +106,7 @@ mod tests {
                 access_token,
                 refresh_token: "refresh-token".to_string(),
                 account_id: Some("workspace-1".to_string()),
+                integrity_state: None,
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,

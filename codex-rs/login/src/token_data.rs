@@ -22,6 +22,9 @@ pub struct TokenData {
     pub refresh_token: String,
 
     pub account_id: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity_state: Option<String>,
 }
 
 /// Flat subset of useful claims in id_token from auth.json.

@@ -283,8 +283,8 @@ pub async fn delete_remote_plugin_share(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/{remote_plugin_id}");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.delete(&url), auth)?;
-    send_and_expect_status(request, &url, &[StatusCode::NO_CONTENT]).await?;
+    let request = authenticated_request(client.delete(&url), &url, auth)?;
+    send_and_expect_status(request, &url, auth, &[StatusCode::NO_CONTENT]).await?;
     if let Err(err) = local_paths::remove_plugin_share_local_path(codex_home, remote_plugin_id) {
         warn!(
             remote_plugin_id = %remote_plugin_id,
@@ -316,13 +316,14 @@ pub async fn update_remote_plugin_share_targets(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{remote_plugin_id}/shares");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.put(&url), auth)?.json(
+    let request = authenticated_request(client.put(&url), &url, auth)?.json(
         &RemotePluginShareUpdateTargetsRequest {
             discoverability,
             targets,
         },
     );
-    let response: RemotePluginShareUpdateTargetsResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginShareUpdateTargetsResponse =
+        send_and_decode(request, &url, auth).await?;
     Ok(RemotePluginShareUpdateTargetsResult {
         principals: response.principals,
         discoverability: response.discoverability,
@@ -382,12 +383,12 @@ async fn get_created_workspace_plugins_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/created");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), &url, auth)?;
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 async fn create_workspace_plugin_upload(
@@ -400,7 +401,7 @@ async fn create_workspace_plugin_upload(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/upload-url");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?.json(
+    let request = authenticated_request(client.post(&url), &url, auth)?.json(
         &RemoteWorkspacePluginUploadUrlRequest {
             filename,
             mime_type: "application/gzip",
@@ -408,7 +409,7 @@ async fn create_workspace_plugin_upload(
             plugin_id: remote_plugin_id,
         },
     );
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 async fn put_workspace_plugin_upload(
@@ -454,8 +455,8 @@ async fn finalize_workspace_plugin_upload(
         format!("{base_url}/public/plugins/workspace")
     };
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?.json(&body);
-    send_and_decode(request, &url).await
+    let request = authenticated_request(client.post(&url), &url, auth)?.json(&body);
+    send_and_decode(request, &url, auth).await
 }
 
 fn archive_filename(plugin_path: &Path) -> Result<String, RemotePluginCatalogError> {
@@ -614,6 +615,7 @@ impl std::error::Error for ArchiveSizeLimitExceeded {}
 async fn send_and_expect_status(
     request: RequestBuilder,
     url_for_error: &str,
+    auth: &CodexAuth,
     expected_statuses: &[StatusCode],
 ) -> Result<(), RemotePluginCatalogError> {
     let response = request
@@ -623,6 +625,8 @@ async fn send_and_expect_status(
             url: url_for_error.to_string(),
             source,
         })?;
+    codex_model_provider::auth_provider_from_auth(auth)
+        .observe_response_headers(url_for_error, response.headers());
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !expected_statuses.contains(&status) {

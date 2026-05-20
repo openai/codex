@@ -154,6 +154,7 @@ pub fn write_chatgpt_auth(
         access_token: fixture.access_token,
         refresh_token: fixture.refresh_token,
         account_id: fixture.account_id,
+        integrity_state: None,
     };
 
     let last_refresh = fixture.last_refresh.unwrap_or_else(|| Some(Utc::now()));

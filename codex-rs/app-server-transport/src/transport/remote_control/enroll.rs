@@ -206,7 +206,8 @@ pub(super) async fn enroll_remote_control_server(
     };
     let client = build_reqwest_client();
     let mut auth_headers = HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    auth.auth_provider
+        .add_auth_headers_for_url(enroll_url, &mut auth_headers);
     let http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
@@ -220,6 +221,8 @@ pub(super) async fn enroll_remote_control_server(
             "failed to enroll remote control server at `{enroll_url}`: {err}"
         ))
     })?;
+    auth.auth_provider
+        .observe_response_headers(enroll_url, response.headers());
     let headers = response.headers().clone();
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {

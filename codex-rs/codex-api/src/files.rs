@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_redirect_protection;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
@@ -141,6 +142,7 @@ pub async fn upload_local_file(
             url: create_url.clone(),
             source,
         })?;
+    auth.observe_response_headers(&create_url, create_response.headers());
     let create_status = create_response.status();
     let create_body = create_response.text().await.unwrap_or_default();
     if !create_status.is_success() {
@@ -199,6 +201,7 @@ pub async fn upload_local_file(
                 url: finalize_url.clone(),
                 source,
             })?;
+        auth.observe_response_headers(&finalize_url, finalize_response.headers());
         let finalize_status = finalize_response.status();
         let finalize_body = finalize_response.text().await.unwrap_or_default();
         if !finalize_status.is_success() {
@@ -257,7 +260,7 @@ fn authorized_request(
     url: &str,
 ) -> reqwest::RequestBuilder {
     let mut headers = http::HeaderMap::new();
-    auth.add_auth_headers(&mut headers);
+    auth.add_auth_headers_for_url(url, &mut headers);
 
     let client = build_reqwest_client();
     client
@@ -267,9 +270,20 @@ fn authorized_request(
 }
 
 fn build_reqwest_client() -> reqwest::Client {
-    build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(|error| {
+    build_reqwest_client_with_custom_ca(
+        with_chatgpt_redirect_protection(reqwest::Client::builder()),
+    )
+    .unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build OpenAI file upload client");
-        reqwest::Client::new()
+        with_chatgpt_redirect_protection(reqwest::Client::builder())
+            .build()
+            .unwrap_or_else(|fallback_error| {
+                tracing::warn!(
+                    error = %fallback_error,
+                    "failed to build fallback OpenAI file upload client"
+                );
+                reqwest::Client::new()
+            })
     })
 }
 

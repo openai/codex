@@ -8,6 +8,7 @@ use anyhow::Result;
 use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
+use codex_client::with_chatgpt_redirect_protection;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -154,8 +155,8 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
-            reqwest::Client::builder(),
+        let http = build_reqwest_client_with_custom_ca(with_chatgpt_redirect_protection(
+            with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder()),
         ))?;
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
@@ -202,14 +203,14 @@ impl Client {
         self
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self, url: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
         if let Some(ua) = &self.user_agent {
             h.insert(USER_AGENT, ua.clone());
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
-        self.auth_provider.add_auth_headers(&mut h);
+        self.auth_provider.add_auth_headers_for_url(url, &mut h);
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(acc)
@@ -231,6 +232,8 @@ impl Client {
         url: &str,
     ) -> Result<(String, String)> {
         let res = req.send().await?;
+        self.auth_provider
+            .observe_response_headers(url, res.headers());
         let status = res.status();
         let ct = res
             .headers()
@@ -252,6 +255,8 @@ impl Client {
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
         let res = req.send().await.map_err(anyhow::Error::from)?;
+        self.auth_provider
+            .observe_response_headers(url, res.headers());
         let status = res.status();
         let content_type = res
             .headers()
@@ -295,7 +300,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url).headers(self.headers(&url));
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
@@ -309,7 +314,7 @@ impl Client {
         let req = self
             .http
             .post(&url)
-            .headers(self.headers())
+            .headers(self.headers(&url))
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&SendAddCreditsNudgeEmailRequest { credit_type });
         self.exec_request_detailed(req, "POST", &url).await?;
@@ -327,7 +332,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/list", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url).headers(self.headers(&url));
         let req = if let Some(lim) = limit {
             req.query(&[("limit", lim)])
         } else {
@@ -365,7 +370,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/{}", self.base_url, task_id),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/{}", self.base_url, task_id),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url).headers(self.headers(&url));
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let parsed: CodeTaskDetailsResponse = self.decode_json(&url, &ct, &body)?;
         Ok((parsed, body, ct))
@@ -386,7 +391,7 @@ impl Client {
                 self.base_url, task_id, turn_id
             ),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url).headers(self.headers(&url));
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
@@ -402,7 +407,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url).headers(self.headers(&url));
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
@@ -418,7 +423,7 @@ impl Client {
         let req = self
             .http
             .post(&url)
-            .headers(self.headers())
+            .headers(self.headers(&url))
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&request_body);
         let (body, ct) = self.exec_request(req, "POST", &url).await?;

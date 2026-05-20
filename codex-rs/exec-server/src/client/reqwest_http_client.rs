@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_redirect_protection;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -56,7 +57,7 @@ impl ReqwestHttpClient {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
         };
-        build_reqwest_client_with_custom_ca(builder)
+        build_reqwest_client_with_custom_ca(with_chatgpt_redirect_protection(builder))
             .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
     }
 }

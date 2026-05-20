@@ -108,15 +108,17 @@ pub async fn list_remote_skills(
     }
 
     let client = build_reqwest_client();
+    let auth_provider = codex_model_provider::auth_provider_from_auth(auth);
     let request = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
         .query(&query_params)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
+        .headers(auth_provider.to_auth_headers_for_url(&url));
     let response = request
         .send()
         .await
         .with_context(|| format!("Failed to send request to {url}"))?;
+    auth_provider.observe_response_headers(&url, response.headers());
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
@@ -147,17 +149,19 @@ pub async fn export_remote_skill(
     let auth = ensure_codex_backend_auth(auth)?;
 
     let client = build_reqwest_client();
+    let auth_provider = codex_model_provider::auth_provider_from_auth(auth);
     let base_url = chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
     let request = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
+        .headers(auth_provider.to_auth_headers_for_url(&url));
 
     let response = request
         .send()
         .await
         .with_context(|| format!("Failed to send download request to {url}"))?;
+    auth_provider.observe_response_headers(&url, response.headers());
 
     let status = response.status();
     let body = response.bytes().await.context("Failed to read download")?;

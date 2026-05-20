@@ -813,8 +813,8 @@ pub async fn fetch_remote_plugin_skill_detail(
 
     let url = remote_plugin_skill_detail_url(config, plugin_id, skill_name)?;
     let client = build_reqwest_client();
-    let request = authenticated_request(client.get(&url), auth)?;
-    let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
+    let request = authenticated_request(client.get(&url), &url, auth)?;
+    let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url, auth).await?;
     if response.plugin_id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -915,8 +915,8 @@ pub async fn install_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
-    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
+    let request = authenticated_request(client.post(&url), &url, auth)?;
+    let response: RemotePluginMutationResponse = send_and_decode(request, &url, auth).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -951,8 +951,8 @@ pub async fn uninstall_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
-    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
+    let request = authenticated_request(client.post(&url), &url, auth)?;
+    let response: RemotePluginMutationResponse = send_and_decode(request, &url, auth).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -1313,7 +1313,7 @@ async fn get_remote_plugin_list_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/list");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), &url, auth)?;
     request = request.query(&[("scope", scope.api_value())]);
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(collection) = collection {
@@ -1322,7 +1322,7 @@ async fn get_remote_plugin_list_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 async fn get_remote_shared_workspace_plugins_page(
@@ -1333,12 +1333,12 @@ async fn get_remote_shared_workspace_plugins_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/shared");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), &url, auth)?;
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 async fn get_remote_plugin_installed_page(
@@ -1351,7 +1351,7 @@ async fn get_remote_plugin_installed_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/installed");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), &url, auth)?;
     request = request.query(&[("scope", scope.api_value())]);
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
@@ -1359,7 +1359,7 @@ async fn get_remote_plugin_installed_page(
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 async fn fetch_plugin_detail(
@@ -1371,11 +1371,11 @@ async fn fetch_plugin_detail(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(client.get(&url), &url, auth)?;
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
-    send_and_decode(request, &url).await
+    send_and_decode(request, &url, auth).await
 }
 
 fn remote_plugin_skill_detail_url(
@@ -1411,16 +1411,18 @@ fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth, RemotePlu
 
 fn authenticated_request(
     request: RequestBuilder,
+    url: &str,
     auth: &CodexAuth,
 ) -> Result<RequestBuilder, RemotePluginCatalogError> {
     Ok(request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()))
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers_for_url(url)))
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(
     request: RequestBuilder,
     url: &str,
+    auth: &CodexAuth,
 ) -> Result<T, RemotePluginCatalogError> {
     let response = request
         .send()
@@ -1429,6 +1431,8 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
             url: url.to_string(),
             source,
         })?;
+    codex_model_provider::auth_provider_from_auth(auth)
+        .observe_response_headers(url, response.headers());
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {

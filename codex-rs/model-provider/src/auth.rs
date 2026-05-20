@@ -12,6 +12,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 
 use crate::bearer_auth_provider::BearerAuthProvider;
+use crate::bearer_auth_provider::ChatgptBearerAuthProvider;
 
 #[derive(Clone, Debug)]
 struct AgentIdentityAuthProvider {
@@ -109,12 +110,20 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
         CodexAuth::AgentIdentity(auth) => {
             Arc::new(AgentIdentityAuthProvider { auth: auth.clone() })
         }
-        CodexAuth::ApiKey(_) | CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
-            Arc::new(BearerAuthProvider {
-                token: auth.get_token().ok(),
-                account_id: auth.get_account_id(),
-                is_fedramp_account: auth.is_fedramp_account(),
-            })
+        CodexAuth::ApiKey(_) => Arc::new(BearerAuthProvider {
+            token: auth.get_token().ok(),
+            account_id: auth.get_account_id(),
+            is_fedramp_account: auth.is_fedramp_account(),
+        }),
+        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            Arc::new(ChatgptBearerAuthProvider::new(
+                BearerAuthProvider {
+                    token: auth.get_token().ok(),
+                    account_id: auth.get_account_id(),
+                    is_fedramp_account: auth.is_fedramp_account(),
+                },
+                auth.clone(),
+            ))
         }
     }
 }

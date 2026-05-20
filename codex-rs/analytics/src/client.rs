@@ -439,19 +439,23 @@ async fn send_track_events_request(auth: &CodexAuth, url: &str, events: Vec<Trac
     }
 
     let payload = TrackEventsRequest { events };
+    let auth_provider = codex_model_provider::auth_provider_from_auth(auth);
 
     let response = create_client()
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
+        .headers(auth_provider.to_auth_headers_for_url(url))
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .await;
 
     match response {
-        Ok(response) if response.status().is_success() => {}
+        Ok(response) if response.status().is_success() => {
+            auth_provider.observe_response_headers(url, response.headers());
+        }
         Ok(response) => {
+            auth_provider.observe_response_headers(url, response.headers());
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             tracing::warn!("events failed with status {status}: {body}");

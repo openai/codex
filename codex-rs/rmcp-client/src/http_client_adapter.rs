@@ -26,6 +26,7 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
@@ -82,7 +83,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(uri.as_ref(), &mut headers);
         insert_header(
             &mut headers,
             ACCEPT,
@@ -127,6 +128,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             .await
             .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
+        self.observe_auth_response_headers(uri.as_ref(), &response.headers);
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
@@ -179,7 +181,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(uri.as_ref(), &mut headers);
         if let Some(auth_token) = auth_token {
             insert_header(
                 &mut headers,
@@ -209,6 +211,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             .await
             .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
+        self.observe_auth_response_headers(uri.as_ref(), &response.headers);
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Ok(());
@@ -232,7 +235,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         StreamableHttpError<Self::Error>,
     > {
         let mut headers = self.default_headers.clone();
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(uri.as_ref(), &mut headers);
         insert_header(
             &mut headers,
             ACCEPT,
@@ -276,6 +279,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             .await
             .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
+        self.observe_auth_response_headers(uri.as_ref(), &response.headers);
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
@@ -308,11 +312,30 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 }
 
 impl StreamableHttpClientAdapter {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, request_url: &str, headers: &mut HeaderMap) {
         if let Some(auth_provider) = &self.auth_provider {
-            headers.extend(auth_provider.to_auth_headers());
+            headers.extend(auth_provider.to_auth_headers_for_url(request_url));
         }
     }
+
+    fn observe_auth_response_headers(&self, request_url: &str, headers: &[HttpHeader]) {
+        if let Some(auth_provider) = &self.auth_provider {
+            auth_provider
+                .observe_response_headers(request_url, &response_header_map_for_auth(headers));
+        }
+    }
+}
+
+fn response_header_map_for_auth(headers: &[HttpHeader]) -> HeaderMap {
+    let mut header_map = HeaderMap::new();
+    for header in headers {
+        if let Ok(name) = HeaderName::from_bytes(header.name.as_bytes())
+            && let Ok(value) = HeaderValue::from_bytes(header.value.as_bytes())
+        {
+            header_map.append(name, value);
+        }
+    }
+    header_map
 }
 
 fn body_preview(body: impl Into<String>) -> String {

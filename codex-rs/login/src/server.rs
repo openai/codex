@@ -30,6 +30,8 @@ use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
+use crate::integrity_state::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+use crate::integrity_state::normalize_integrity_state_envelope;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -361,6 +363,7 @@ async fn process_request(
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
+                        tokens.integrity_state.clone(),
                         opts.cli_auth_credentials_store_mode,
                     )
                     .await
@@ -606,6 +609,7 @@ pub(crate) struct ExchangedTokens {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
+    pub integrity_state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -723,6 +727,8 @@ pub(crate) async fn exchange_code_for_tokens(
         id_token: String,
         access_token: String,
         refresh_token: String,
+        #[serde(default, rename = "oai_is")]
+        integrity_state: Option<String>,
     }
 
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
@@ -775,12 +781,19 @@ pub(crate) async fn exchange_code_for_tokens(
         )));
     }
 
+    let integrity_state_from_header = normalize_integrity_state_envelope(
+        resp.headers()
+            .get(INTEGRITY_STATE_UPDATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok()),
+    );
     let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     info!(%status, "oauth token exchange succeeded");
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
+        integrity_state: integrity_state_from_header
+            .or_else(|| normalize_integrity_state_envelope(tokens.integrity_state.as_deref())),
     })
 }
 
@@ -792,6 +805,7 @@ pub(crate) async fn persist_tokens_async(
     id_token: String,
     access_token: String,
     refresh_token: String,
+    integrity_state: Option<String>,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
@@ -809,6 +823,7 @@ pub(crate) async fn persist_tokens_async(
             access_token,
             refresh_token,
             account_id: None,
+            integrity_state,
         };
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
@@ -1226,6 +1241,7 @@ mod tests {
             jwt_for_account("new-account"),
             "new-access".to_string(),
             "new-refresh".to_string(),
+            /*integrity_state*/ None,
             AuthCredentialsStoreMode::File,
         )
         .await?;
@@ -1240,6 +1256,7 @@ mod tests {
                 access_token: "new-access".to_string(),
                 refresh_token: "new-refresh".to_string(),
                 account_id: Some("new-account".to_string()),
+                integrity_state: None,
             }
         );
 
@@ -1286,6 +1303,7 @@ mod tests {
             jwt_for_account("new-account"),
             "new-access".to_string(),
             "shared-refresh".to_string(),
+            /*integrity_state*/ None,
             AuthCredentialsStoreMode::File,
         )
         .await?;
@@ -1308,6 +1326,7 @@ mod tests {
                 access_token: access_token.to_string(),
                 refresh_token: refresh_token.to_string(),
                 account_id: Some(account_id.to_string()),
+                integrity_state: None,
             }),
             last_refresh: None,
             agent_identity: None,

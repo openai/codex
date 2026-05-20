@@ -1,4 +1,6 @@
+use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_redirect_protection;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
@@ -25,6 +27,7 @@ pub struct AutodetectSelection {
 pub async fn autodetect_environment_id(
     base_url: &str,
     headers: &HeaderMap,
+    auth_provider: Option<&SharedAuthProvider>,
     desired_label: Option<String>,
 ) -> anyhow::Result<AutodetectSelection> {
     // 1) Try repo-specific environments based on local git origins (GitHub only, like VSCode)
@@ -45,7 +48,7 @@ pub async fn autodetect_environment_id(
                 )
             };
             crate::append_error_log(format!("env: GET {url}"));
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(&url, headers, auth_provider).await {
                 Ok(mut list) => {
                     crate::append_error_log(format!(
                         "env: by-repo returned {} env(s) for {owner}/{repo}",
@@ -74,8 +77,14 @@ pub async fn autodetect_environment_id(
     };
     crate::append_error_log(format!("env: GET {list_url}"));
     // Fetch and log the full environments JSON for debugging
-    let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let res = http.get(&list_url).headers(headers.clone()).send().await?;
+    let http = build_reqwest_client_with_custom_ca(with_chatgpt_redirect_protection(
+        reqwest::Client::builder(),
+    ))?;
+    let request_headers = request_headers(&list_url, headers, auth_provider);
+    let res = http.get(&list_url).headers(request_headers).send().await?;
+    if let Some(auth_provider) = auth_provider {
+        auth_provider.observe_response_headers(&list_url, res.headers());
+    }
     let status = res.status();
     let ct = res
         .headers()
@@ -147,9 +156,16 @@ fn pick_environment_row(
 async fn get_json<T: serde::de::DeserializeOwned>(
     url: &str,
     headers: &HeaderMap,
+    auth_provider: Option<&SharedAuthProvider>,
 ) -> anyhow::Result<T> {
-    let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let res = http.get(url).headers(headers.clone()).send().await?;
+    let http = build_reqwest_client_with_custom_ca(with_chatgpt_redirect_protection(
+        reqwest::Client::builder(),
+    ))?;
+    let request_headers = request_headers(url, headers, auth_provider);
+    let res = http.get(url).headers(request_headers).send().await?;
+    if let Some(auth_provider) = auth_provider {
+        auth_provider.observe_response_headers(url, res.headers());
+    }
     let status = res.status();
     let ct = res
         .headers()
@@ -166,6 +182,18 @@ async fn get_json<T: serde::de::DeserializeOwned>(
         anyhow::anyhow!("Decode error for {url}: {e}; content-type={ct}; body={body}")
     })?;
     Ok(parsed)
+}
+
+fn request_headers(
+    url: &str,
+    headers: &HeaderMap,
+    auth_provider: Option<&SharedAuthProvider>,
+) -> HeaderMap {
+    let mut headers = headers.clone();
+    if let Some(auth_provider) = auth_provider {
+        headers.extend(auth_provider.to_auth_headers_for_url(url));
+    }
+    headers
 }
 
 fn get_git_origins() -> Vec<String> {
@@ -256,6 +284,7 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
 pub async fn list_environments(
     base_url: &str,
     headers: &HeaderMap,
+    auth_provider: Option<&SharedAuthProvider>,
 ) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
     let mut map: HashMap<String, crate::app::EnvironmentRow> = HashMap::new();
 
@@ -274,7 +303,7 @@ pub async fn list_environments(
                     base_url, "github", owner, repo
                 )
             };
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(&url, headers, auth_provider).await {
                 Ok(list) => {
                     info!("env_tui: by-repo {}:{} -> {} envs", owner, repo, list.len());
                     for e in list {
@@ -312,7 +341,7 @@ pub async fn list_environments(
     } else {
         format!("{base_url}/api/codex/environments")
     };
-    match get_json::<Vec<CodeEnvironment>>(&list_url, headers).await {
+    match get_json::<Vec<CodeEnvironment>>(&list_url, headers, auth_provider).await {
         Ok(list) => {
             info!("env_tui: global list -> {} envs", list.len());
             for e in list {

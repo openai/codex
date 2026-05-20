@@ -1,3 +1,12 @@
+use async_trait::async_trait;
+use codex_api::ResponsesApiRequest;
+use codex_api::ResponsesClient as ApiResponsesClient;
+use codex_api::ResponsesOptions;
+use codex_client::HttpTransport;
+use codex_client::Request;
+use codex_client::Response;
+use codex_client::StreamResponse;
+use codex_client::TransportError;
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
@@ -12,6 +21,10 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
+use codex_login::integrity_state::INTEGRITY_STATE_HEADER_NAME;
+use codex_login::integrity_state::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+use codex_model_provider::auth_provider_from_auth;
+use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -69,11 +82,15 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
 use toml::toml;
 use uuid::Uuid;
@@ -1064,6 +1081,114 @@ async fn chatgpt_auth_sends_correct_request() {
         request_body["include"][0].as_str().unwrap(),
         "reasoning.encrypted_content"
     );
+}
+
+#[derive(Clone, Default)]
+struct IntegrityRotationTransport {
+    request_headers: Arc<Mutex<Vec<HeaderMap>>>,
+}
+
+impl IntegrityRotationTransport {
+    fn request_headers(&self) -> Vec<HeaderMap> {
+        self.request_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[async_trait]
+impl HttpTransport for IntegrityRotationTransport {
+    async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
+        Err(TransportError::Build(
+            "integrity rotation transport only supports streams".to_string(),
+        ))
+    }
+
+    async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
+        let request_index = {
+            let mut request_headers = self
+                .request_headers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            request_headers.push(req.headers);
+            request_headers.len()
+        };
+
+        let mut headers = HeaderMap::new();
+        if request_index == 1 {
+            headers.insert(
+                INTEGRITY_STATE_UPDATE_HEADER_NAME,
+                HeaderValue::from_static("ois1.rotated.nonce.ciphertext"),
+            );
+        }
+        let bytes: codex_client::ByteStream = futures::stream::empty().boxed();
+
+        Ok(StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes,
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chatgpt_integrity_state_rotates_across_agent_responses_requests() -> anyhow::Result<()> {
+    const INITIAL_STATE: &str = "ois1.initial.nonce.ciphertext";
+    const ROTATED_STATE: &str = "ois1.rotated.nonce.ciphertext";
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_tokens_for_testing();
+    assert!(
+        auth.update_integrity_state(INITIAL_STATE)
+            .expect("initial integrity state should persist")
+    );
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some(CHATGPT_CODEX_BASE_URL.to_string()))
+            .to_api_provider(Some(auth.auth_mode()))?;
+    let transport = IntegrityRotationTransport::default();
+    let client =
+        ApiResponsesClient::new(transport.clone(), provider, auth_provider_from_auth(&auth));
+    let request = ResponsesApiRequest {
+        model: "gpt-test".into(),
+        instructions: "Say hi".into(),
+        input: Vec::new(),
+        tools: Vec::new(),
+        tool_choice: "auto".into(),
+        parallel_tool_calls: false,
+        reasoning: None,
+        store: false,
+        stream: true,
+        include: Vec::new(),
+        service_tier: None,
+        prompt_cache_key: None,
+        text: None,
+        client_metadata: None,
+    };
+
+    let _initial_stream = client
+        .stream_request(request.clone(), ResponsesOptions::default())
+        .await?;
+    let _rotated_stream = client
+        .stream_request(request, ResponsesOptions::default())
+        .await?;
+
+    let request_headers = transport.request_headers();
+    assert_eq!(request_headers.len(), 2);
+    assert_eq!(
+        request_headers[0]
+            .get(INTEGRITY_STATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok()),
+        Some(INITIAL_STATE)
+    );
+    assert_eq!(
+        request_headers[1]
+            .get(INTEGRITY_STATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok()),
+        Some(ROTATED_STATE)
+    );
+    assert_eq!(auth.integrity_state().as_deref(), Some(ROTATED_STATE));
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -377,13 +377,23 @@ impl ResponsesWebsocketClient {
             .provider
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        let request_url = ws_url.to_string();
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers);
+        self.auth
+            .add_auth_headers_for_url(&request_url, &mut headers);
 
-        let (stream, _status, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+        let (
+            stream,
+            _status,
+            server_reasoning_included,
+            models_etag,
+            server_model,
+            response_headers,
+        ) = connect_websocket(ws_url, headers, turn_state.clone()).await?;
+        self.auth
+            .observe_response_headers(&request_url, &response_headers);
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
@@ -411,13 +421,17 @@ impl ResponsesWebsocketClient {
             .provider
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        let request_url = ws_url.to_string();
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers);
+        self.auth
+            .add_auth_headers_for_url(&request_url, &mut headers);
 
-        let (mut stream, status, reasoning_included, models_etag, server_model) =
+        let (mut stream, status, reasoning_included, models_etag, server_model, response_headers) =
             connect_websocket(ws_url.clone(), headers, /*turn_state*/ None).await?;
+        self.auth
+            .observe_response_headers(&request_url, &response_headers);
         let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
             .await
             .ok()
@@ -472,7 +486,17 @@ async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
-) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
+) -> Result<
+    (
+        WsStream,
+        StatusCode,
+        bool,
+        Option<String>,
+        Option<String>,
+        HeaderMap,
+    ),
+    ApiError,
+> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
@@ -499,10 +523,7 @@ async fn connect_websocket(
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
-            info!(
-                "successfully connected to websocket: {url}, headers: {:?}",
-                response.headers()
-            );
+            info!("successfully connected to websocket: {url}");
             (stream, response)
         }
         Err(err) => {
@@ -536,6 +557,7 @@ async fn connect_websocket(
         reasoning_included,
         models_etag,
         server_model,
+        response.headers().clone(),
     ))
 }
 

@@ -9,6 +9,7 @@ use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
+use codex_client::with_chatgpt_redirect_protection;
 use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
@@ -199,19 +200,21 @@ pub fn create_client() -> CodexHttpClient {
 /// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
 /// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
 /// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
-/// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
+/// a custom-CA or builder failure is logged and falls back to a plain client build.
 pub fn build_reqwest_client() -> reqwest::Client {
     try_build_reqwest_client().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
-        with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
-            .build()
-            .unwrap_or_else(|fallback_error| {
-                tracing::warn!(
-                    error = %fallback_error,
-                    "failed to build fallback reqwest client with ChatGPT Cloudflare cookie store"
-                );
-                reqwest::Client::new()
-            })
+        with_chatgpt_redirect_protection(with_chatgpt_cloudflare_cookie_store(
+            reqwest::Client::builder(),
+        ))
+        .build()
+        .unwrap_or_else(|fallback_error| {
+            tracing::warn!(
+                error = %fallback_error,
+                "failed to build fallback reqwest client with ChatGPT Cloudflare cookie store"
+            );
+            reqwest::Client::new()
+        })
     })
 }
 
@@ -224,7 +227,7 @@ pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransp
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
-    builder = with_chatgpt_cloudflare_cookie_store(builder);
+    builder = with_chatgpt_redirect_protection(with_chatgpt_cloudflare_cookie_store(builder));
 
     build_reqwest_client_with_custom_ca(builder)
 }

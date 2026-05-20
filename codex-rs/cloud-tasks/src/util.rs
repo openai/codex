@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
+use codex_api::SharedAuthProvider;
 use reqwest::header::HeaderMap;
 
 use codex_core::config::Config;
@@ -55,9 +56,16 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthM
     )
 }
 
-/// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
-/// and optional `ChatGPT-Account-Id`.
-pub async fn build_chatgpt_headers() -> HeaderMap {
+/// Build the static request headers plus an auth provider for ChatGPT-backed requests.
+///
+/// Callers add provider headers per request URL so rotating state does not get
+/// captured in a long-lived header map.
+pub struct ChatgptRequestAuth {
+    pub headers: HeaderMap,
+    pub auth_provider: Option<SharedAuthProvider>,
+}
+
+pub async fn build_chatgpt_request_auth() -> ChatgptRequestAuth {
     use reqwest::header::HeaderValue;
     use reqwest::header::USER_AGENT;
 
@@ -68,13 +76,18 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
+    let mut auth_provider = None;
     if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
         && let Some(auth) = am.auth().await
         && auth.uses_codex_backend()
     {
-        headers.extend(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers());
+        let provider = codex_model_provider::auth_provider_from_auth(&auth);
+        auth_provider = Some(provider);
     }
-    headers
+    ChatgptRequestAuth {
+        headers,
+        auth_provider,
+    }
 }
 
 /// Construct a browser-friendly task URL for the given backend base URL.

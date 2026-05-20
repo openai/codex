@@ -33,6 +33,8 @@ use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
+use crate::integrity_state::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+use crate::integrity_state::normalize_integrity_state_envelope;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
@@ -335,6 +337,28 @@ impl CodexAuth {
         }
     }
 
+    /// Returns the valid opaque integrity-state envelope for ChatGPT requests, when available.
+    pub fn integrity_state(&self) -> Option<String> {
+        let tokens = self.get_current_token_data()?;
+        normalize_integrity_state_envelope(tokens.integrity_state.as_deref())
+    }
+
+    /// Stores a rotated ChatGPT integrity-state envelope when the update is well formed.
+    ///
+    /// Managed ChatGPT auth persists updates into the configured auth store. Externally managed
+    /// token snapshots retain updates for the current process only.
+    pub fn update_integrity_state(&self, value: &str) -> std::io::Result<bool> {
+        let Some(value) = normalize_integrity_state_envelope(Some(value)) else {
+            return Ok(false);
+        };
+
+        match self {
+            Self::Chatgpt(auth) => auth.update_integrity_state(&value),
+            Self::ChatgptAuthTokens(auth) => Ok(auth.update_integrity_state(&value)),
+            Self::ApiKey(_) | Self::AgentIdentity(_) => Ok(false),
+        }
+    }
+
     /// Returns `None` if Codex backend auth does not expose an account id.
     pub fn get_account_id(&self) -> Option<String> {
         match self {
@@ -410,24 +434,7 @@ impl CodexAuth {
 
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
-        let auth_dot_json = AuthDotJson {
-            auth_mode: Some(ApiAuthMode::Chatgpt),
-            openai_api_key: None,
-            tokens: Some(TokenData {
-                id_token: Default::default(),
-                access_token: "Access Token".to_string(),
-                refresh_token: "test".to_string(),
-                account_id: Some("account_id".to_string()),
-            }),
-            last_refresh: Some(Utc::now()),
-            agent_identity: None,
-        };
-
-        let client = create_client();
-        let state = ChatgptAuthState {
-            auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
-            client,
-        };
+        let state = create_dummy_chatgpt_auth_state(ApiAuthMode::Chatgpt);
         let dummy_auth_id = NEXT_DUMMY_AUTH_ID.fetch_add(1, Ordering::Relaxed);
         let storage = create_auth_storage(
             PathBuf::from(format!("dummy-chatgpt-auth-{dummy_auth_id}")),
@@ -436,10 +443,39 @@ impl CodexAuth {
         Self::Chatgpt(ChatgptAuth { state, storage })
     }
 
+    /// Consider this private to integration tests.
+    pub fn create_dummy_chatgpt_auth_tokens_for_testing() -> Self {
+        Self::ChatgptAuthTokens(ChatgptAuthTokens {
+            state: create_dummy_chatgpt_auth_state(ApiAuthMode::ChatgptAuthTokens),
+        })
+    }
+
     pub fn from_api_key(api_key: &str) -> Self {
         Self::ApiKey(ApiKeyAuth {
             api_key: api_key.to_owned(),
         })
+    }
+}
+
+fn create_dummy_chatgpt_auth_state(auth_mode: ApiAuthMode) -> ChatgptAuthState {
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(auth_mode),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: Default::default(),
+            access_token: "Access Token".to_string(),
+            refresh_token: "test".to_string(),
+            account_id: Some("account_id".to_string()),
+            integrity_state: None,
+        }),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+    };
+
+    let client = create_client();
+    ChatgptAuthState {
+        auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
+        client,
     }
 }
 
@@ -460,6 +496,67 @@ impl ChatgptAuth {
     fn client(&self) -> &CodexHttpClient {
         &self.state.client
     }
+
+    fn update_integrity_state(&self, value: &str) -> std::io::Result<bool> {
+        let Some(current_auth_json) = self.current_auth_json() else {
+            return Ok(false);
+        };
+        let mut auth_dot_json = match self.storage.load()? {
+            Some(auth_dot_json) => {
+                if !auth_dot_json_eq_ignoring_integrity_state(
+                    Some(auth_dot_json.clone()),
+                    Some(current_auth_json),
+                ) {
+                    return Ok(false);
+                }
+                auth_dot_json
+            }
+            None => return Ok(false),
+        };
+        if !set_integrity_state(&mut auth_dot_json, value) {
+            return Ok(false);
+        }
+
+        self.storage.save(&auth_dot_json)?;
+        self.state.update_integrity_state(value);
+        Ok(true)
+    }
+}
+
+impl ChatgptAuthTokens {
+    fn update_integrity_state(&self, value: &str) -> bool {
+        self.state.update_integrity_state(value)
+    }
+}
+
+impl ChatgptAuthState {
+    fn update_integrity_state(&self, value: &str) -> bool {
+        #[expect(clippy::unwrap_used)]
+        let mut guard = self.auth_dot_json.lock().unwrap();
+        guard
+            .as_mut()
+            .is_some_and(|auth_dot_json| set_integrity_state(auth_dot_json, value))
+    }
+}
+
+fn set_integrity_state(auth_dot_json: &mut AuthDotJson, value: &str) -> bool {
+    let Some(tokens) = auth_dot_json.tokens.as_mut() else {
+        return false;
+    };
+    tokens.integrity_state = Some(value.to_string());
+    true
+}
+
+fn auth_dot_json_eq_ignoring_integrity_state(
+    mut left: Option<AuthDotJson>,
+    mut right: Option<AuthDotJson>,
+) -> bool {
+    for auth_dot_json in [&mut left, &mut right].into_iter().flatten() {
+        if let Some(tokens) = auth_dot_json.tokens.as_mut() {
+            tokens.integrity_state = None;
+        }
+    }
+    left == right
 }
 
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
@@ -790,6 +887,7 @@ fn persist_tokens(
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
+    integrity_state: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
     let mut auth_dot_json = storage
         .load()?
@@ -804,6 +902,9 @@ fn persist_tokens(
     }
     if let Some(refresh_token) = refresh_token {
         tokens.refresh_token = refresh_token;
+    }
+    if let Some(integrity_state) = normalize_integrity_state_envelope(integrity_state.as_deref()) {
+        tokens.integrity_state = Some(integrity_state);
     }
     auth_dot_json.last_refresh = Some(Utc::now());
     storage.save(&auth_dot_json)?;
@@ -835,10 +936,19 @@ async fn request_chatgpt_token_refresh(
 
     let status = response.status();
     if status.is_success() {
-        let refresh_response = response
+        let integrity_state_from_header = normalize_integrity_state_envelope(
+            response
+                .headers()
+                .get(INTEGRITY_STATE_UPDATE_HEADER_NAME)
+                .and_then(|value| value.to_str().ok()),
+        );
+        let mut refresh_response = response
             .json::<RefreshResponse>()
             .await
             .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
+        refresh_response.integrity_state = integrity_state_from_header.or_else(|| {
+            normalize_integrity_state_envelope(refresh_response.integrity_state.as_deref())
+        });
         Ok(refresh_response)
     } else {
         let body = response.text().await.unwrap_or_default();
@@ -922,6 +1032,8 @@ struct RefreshResponse {
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
+    #[serde(default, rename = "oai_is")]
+    integrity_state: Option<String>,
 }
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
@@ -953,6 +1065,7 @@ impl AuthDotJson {
             access_token: external.access_token.clone(),
             refresh_token: String::new(),
             account_id: Some(chatgpt_metadata.account_id.clone()),
+            integrity_state: None,
         };
 
         Ok(Self {
@@ -1473,7 +1586,10 @@ impl AuthManager {
                 (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
                 (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
                 | (ApiAuthMode::ChatgptAuthTokens, ApiAuthMode::ChatgptAuthTokens) => {
-                    a.get_current_auth_json() == b.get_current_auth_json()
+                    auth_dot_json_eq_ignoring_integrity_state(
+                        a.get_current_auth_json(),
+                        b.get_current_auth_json(),
+                    )
                 }
                 (ApiAuthMode::AgentIdentity, ApiAuthMode::AgentIdentity) => match (a, b) {
                     (CodexAuth::AgentIdentity(a), CodexAuth::AgentIdentity(b)) => {
@@ -1822,13 +1938,12 @@ impl AuthManager {
             )));
         };
         let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
-        let previous_account_id = self
-            .auth_cached()
-            .as_ref()
-            .and_then(CodexAuth::get_account_id);
+        let previous_auth = self.auth_cached();
+        let previous_account_id = previous_auth.as_ref().and_then(CodexAuth::get_account_id);
+        let previous_integrity_state = previous_auth.as_ref().and_then(CodexAuth::integrity_state);
         let context = ExternalAuthRefreshContext {
             reason,
-            previous_account_id,
+            previous_account_id: previous_account_id.clone(),
         };
 
         let refreshed = external_auth
@@ -1853,8 +1968,13 @@ impl AuthManager {
                 ),
             )));
         }
-        let auth_dot_json =
+        let mut auth_dot_json =
             AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
+        if previous_account_id.as_deref() == Some(chatgpt_metadata.account_id.as_str())
+            && let Some(integrity_state) = previous_integrity_state.as_deref()
+        {
+            let _ = set_integrity_state(&mut auth_dot_json, integrity_state);
+        }
         save_auth(
             &self.codex_home,
             &auth_dot_json,
@@ -1879,6 +1999,7 @@ impl AuthManager {
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,
+            refresh_response.integrity_state,
         )
         .map_err(RefreshTokenError::from)?;
         self.reload().await;

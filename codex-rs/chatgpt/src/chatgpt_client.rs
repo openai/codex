@@ -46,9 +46,10 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         path.trim_start_matches('/')
     );
 
+    let auth_provider = codex_model_provider::auth_provider_from_auth(&auth);
     let mut request = client
         .get(&url)
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+        .headers(auth_provider.to_auth_headers_for_url(&url))
         .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
         .header("Content-Type", "application/json");
 
@@ -57,6 +58,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     }
 
     let response = request.send().await.context("Failed to send request")?;
+    auth_provider.observe_response_headers(&url, response.headers());
 
     if response.status().is_success() {
         let result: T = response

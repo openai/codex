@@ -48,6 +48,7 @@ async fn refresh_without_id_token() {
         /*id_token*/ None,
         Some("new-access-token".to_string()),
         Some("new-refresh-token".to_string()),
+        /*integrity_state*/ None,
     )
     .expect("update_tokens should succeed");
 
@@ -242,6 +243,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                 access_token: "test-access-token".to_string(),
                 refresh_token: "test-refresh-token".to_string(),
                 account_id: None,
+                integrity_state: None,
             }),
             last_refresh: Some(last_refresh),
             agent_identity: None,
@@ -388,6 +390,272 @@ fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
         err.to_string(),
         "external auth tokens are missing ChatGPT metadata"
     );
+}
+
+struct RefreshingChatgptExternalAuth {
+    refreshed: ExternalAuthTokens,
+}
+
+#[async_trait::async_trait]
+impl ExternalAuth for RefreshingChatgptExternalAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::Chatgpt
+    }
+
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        Ok(self.refreshed.clone())
+    }
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn external_chatgpt_refresh_preserves_integrity_state() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let first_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("first JWT should serialize");
+    let refreshed_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("refreshed JWT should serialize");
+    super::login_with_chatgpt_auth_tokens(
+        codex_home.path(),
+        &first_token,
+        WORKSPACE_ID_ALLOWED,
+        Some("pro"),
+    )
+    .expect("external ChatGPT auth should seed");
+
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let auth = manager.auth_cached().expect("external auth should load");
+    assert!(
+        auth.update_integrity_state("ois1.cached.nonce.ciphertext")
+            .expect("cached integrity state should update")
+    );
+    manager.set_external_auth(Arc::new(RefreshingChatgptExternalAuth {
+        refreshed: ExternalAuthTokens::chatgpt(
+            refreshed_token,
+            WORKSPACE_ID_ALLOWED,
+            Some("pro".to_string()),
+        ),
+    }));
+
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("external ChatGPT auth should refresh");
+
+    assert_eq!(
+        manager
+            .auth_cached()
+            .and_then(|auth| auth.integrity_state()),
+        Some("ois1.cached.nonce.ciphertext".to_string())
+    );
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn external_chatgpt_refresh_clears_integrity_state_for_account_changes() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let first_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("first JWT should serialize");
+    let refreshed_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_SECOND_ALLOWED.to_string()),
+    })
+    .expect("refreshed JWT should serialize");
+    super::login_with_chatgpt_auth_tokens(
+        codex_home.path(),
+        &first_token,
+        WORKSPACE_ID_ALLOWED,
+        Some("pro"),
+    )
+    .expect("external ChatGPT auth should seed");
+
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let auth = manager.auth_cached().expect("external auth should load");
+    assert!(
+        auth.update_integrity_state("ois1.cached.nonce.ciphertext")
+            .expect("cached integrity state should update")
+    );
+    manager.set_external_auth(Arc::new(RefreshingChatgptExternalAuth {
+        refreshed: ExternalAuthTokens::chatgpt(
+            refreshed_token,
+            WORKSPACE_ID_SECOND_ALLOWED,
+            Some("pro".to_string()),
+        ),
+    }));
+
+    manager
+        .refresh_token_from_authority()
+        .await
+        .expect("external ChatGPT auth should refresh");
+
+    let refreshed = manager.auth_cached().expect("refreshed auth should load");
+    assert_eq!(
+        refreshed.get_account_id().as_deref(),
+        Some(WORKSPACE_ID_SECOND_ALLOWED)
+    );
+    assert_eq!(refreshed.integrity_state(), None);
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn managed_integrity_rotation_does_not_overwrite_a_new_login() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("initial auth should serialize");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("initial auth should load")
+    .expect("initial auth should exist");
+
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_SECOND_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("replacement auth should serialize");
+
+    assert!(
+        !auth
+            .update_integrity_state("ois1.stale.nonce.ciphertext")
+            .expect("stale rotation should be ignored")
+    );
+
+    let stored = FileAuthStorage::new(codex_home.path().to_path_buf())
+        .try_read_auth_json(&get_auth_file(codex_home.path()))
+        .expect("replacement auth should remain readable");
+    let stored_tokens = stored.tokens.expect("replacement auth should keep tokens");
+    assert_eq!(
+        stored_tokens.id_token.chatgpt_account_id.as_deref(),
+        Some(WORKSPACE_ID_SECOND_ALLOWED)
+    );
+    assert_eq!(stored_tokens.integrity_state, None);
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn managed_integrity_rotation_does_not_recreate_logged_out_auth() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("auth should serialize");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("auth should load")
+    .expect("auth should exist");
+
+    assert!(
+        logout(codex_home.path(), AuthCredentialsStoreMode::File)
+            .expect("logout should delete auth")
+    );
+    assert!(
+        !auth
+            .update_integrity_state("ois1.logged-out.nonce.ciphertext")
+            .expect("logged-out rotation should be ignored")
+    );
+    assert!(!get_auth_file(codex_home.path()).exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn refresh_comparison_ignores_integrity_only_auth_changes() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("auth should serialize");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("auth should load")
+    .expect("auth should exist");
+    let mut rotated_auth_dot_json = auth
+        .get_current_auth_json()
+        .expect("current auth JSON should exist");
+    assert!(set_integrity_state(
+        &mut rotated_auth_dot_json,
+        "ois1.rotated.nonce.ciphertext"
+    ));
+    let rotated_auth = CodexAuth::from_auth_dot_json(
+        codex_home.path(),
+        rotated_auth_dot_json,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("rotated auth should parse");
+
+    assert!(AuthManager::auths_equal_for_refresh(
+        Some(&auth),
+        Some(&rotated_auth)
+    ));
 }
 
 #[tokio::test]

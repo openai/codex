@@ -101,8 +101,11 @@ impl<T: HttpTransport> EndpointSession<T> {
                 let auth = self.auth.clone();
                 let transport = &self.transport;
                 async move {
+                    let request_url = req.url.clone();
                     let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
-                    transport.execute(req).await
+                    let response = transport.execute(req).await;
+                    observe_auth_response_headers(auth.as_ref(), &request_url, &response);
+                    response
                 }
             },
         )
@@ -142,13 +145,45 @@ impl<T: HttpTransport> EndpointSession<T> {
                 let auth = self.auth.clone();
                 let transport = &self.transport;
                 async move {
+                    let request_url = req.url.clone();
                     let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
-                    transport.stream(req).await
+                    let response = transport.stream(req).await;
+                    observe_auth_response_headers(auth.as_ref(), &request_url, &response);
+                    response
                 }
             },
         )
         .await?;
 
         Ok(stream)
+    }
+}
+
+fn observe_auth_response_headers<T>(
+    auth: &dyn crate::auth::AuthProvider,
+    request_url: &str,
+    response: &Result<T, TransportError>,
+) where
+    T: ResponseHeaders,
+{
+    match response {
+        Ok(response) => auth.observe_response_headers(request_url, response.headers()),
+        Err(_) => {}
+    }
+}
+
+trait ResponseHeaders {
+    fn headers(&self) -> &HeaderMap;
+}
+
+impl ResponseHeaders for Response {
+    fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+}
+
+impl ResponseHeaders for StreamResponse {
+    fn headers(&self) -> &HeaderMap {
+        &self.headers
     }
 }

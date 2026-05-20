@@ -952,7 +952,8 @@ fn build_remote_control_websocket_request(
         REMOTE_CONTROL_PROTOCOL_VERSION,
     )?;
     let mut auth_headers = tungstenite::http::HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    auth.auth_provider
+        .add_auth_headers_for_url(websocket_url, &mut auth_headers);
     headers.extend(auth_headers);
     set_remote_control_header(headers, REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)?;
     set_remote_control_header(
@@ -1142,8 +1143,18 @@ pub(super) async fn connect_remote_control_websocket(
     )?;
 
     match connect_async(request).await {
-        Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
+        Ok((websocket_stream, response)) => {
+            auth.auth_provider
+                .observe_response_headers(&remote_control_target.websocket_url, response.headers());
+            Ok((websocket_stream, response.map(|_| ())))
+        }
         Err(err) => {
+            if let tungstenite::Error::Http(response) = &err {
+                auth.auth_provider.observe_response_headers(
+                    &remote_control_target.websocket_url,
+                    response.headers(),
+                );
+            }
             match &err {
                 tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
                     info!(
@@ -1339,6 +1350,7 @@ mod tests {
                 access_token: access_token.to_string(),
                 refresh_token: "refresh-token".to_string(),
                 account_id: Some("account_id".to_string()),
+                integrity_state: None,
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,

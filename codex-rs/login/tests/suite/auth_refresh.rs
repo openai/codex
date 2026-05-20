@@ -9,6 +9,7 @@ use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
+use codex_login::integrity_state::INTEGRITY_STATE_UPDATE_HEADER_NAME;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
@@ -29,6 +30,8 @@ use wiremock::matchers::path;
 
 const INITIAL_ACCESS_TOKEN: &str = "initial-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
+const ROTATED_INTEGRITY_STATE: &str = "ois1.header.nonce.ciphertext";
+const BODY_INTEGRITY_STATE: &str = "ois1.body.nonce.ciphertext";
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
@@ -89,6 +92,63 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .get_token_data()
         .context("token data should be cached")?;
     assert_eq!(cached, refreshed_tokens);
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn refresh_token_prefers_integrity_state_response_header() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(INTEGRITY_STATE_UPDATE_HEADER_NAME, ROTATED_INTEGRITY_STATE)
+                .set_body_json(json!({
+                    "access_token": "new-access-token",
+                    "refresh_token": "new-refresh-token",
+                    "oai_is": BODY_INTEGRITY_STATE
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+        agent_identity: None,
+    })
+    .await?;
+
+    ctx.auth_manager
+        .refresh_token_from_authority()
+        .await
+        .context("refresh should succeed")?;
+
+    let stored = ctx.load_auth()?;
+    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
+    assert_eq!(
+        tokens.integrity_state.as_deref(),
+        Some(ROTATED_INTEGRITY_STATE)
+    );
+    let cached_auth = ctx
+        .auth_manager
+        .auth()
+        .await
+        .context("auth should be cached")?;
+    assert_eq!(
+        cached_auth.integrity_state().as_deref(),
+        Some(ROTATED_INTEGRITY_STATE)
+    );
 
     server.verify().await;
     Ok(())
@@ -1088,5 +1148,6 @@ fn build_tokens(access_token: &str, refresh_token: &str) -> TokenData {
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
         account_id: Some("account-id".to_string()),
+        integrity_state: None,
     }
 }
