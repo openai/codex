@@ -433,9 +433,49 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilesystemRequirementsToml {
     pub deny_read: Option<Vec<FilesystemDenyReadPattern>>,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemRequirementsToml {
+    deny_read: Option<Vec<FilesystemDenyReadPattern>>,
+    description: Option<serde::de::IgnoredAny>,
+    extends: Option<serde::de::IgnoredAny>,
+    workspace_roots: Option<serde::de::IgnoredAny>,
+    filesystem: Option<serde::de::IgnoredAny>,
+    network: Option<serde::de::IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for FilesystemRequirementsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawFilesystemRequirementsToml::deserialize(deserializer)?;
+        let RawFilesystemRequirementsToml {
+            deny_read,
+            description,
+            extends,
+            workspace_roots,
+            filesystem,
+            network,
+        } = raw;
+
+        if description.is_some()
+            || extends.is_some()
+            || workspace_roots.is_some()
+            || filesystem.is_some()
+            || network.is_some()
+        {
+            return Err(D::Error::custom(
+                "`permissions.filesystem` is reserved for requirements-level filesystem constraints and cannot define a profile",
+            ));
+        }
+
+        Ok(Self { deny_read })
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1424,6 +1464,24 @@ mod tests {
         );
         assert!(!requirements.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn filesystem_requirements_table_cannot_define_a_permission_profile() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [permissions.filesystem]
+                extends = ":workspace"
+            "#,
+        )
+        .expect_err("filesystem requirements cannot define a permission profile");
+
+        assert!(
+            err.to_string().contains(
+                "`permissions.filesystem` is reserved for requirements-level filesystem constraints and cannot define a profile"
+            ),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
