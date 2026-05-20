@@ -4,7 +4,7 @@ use super::*;
 pub(crate) struct ThreadQueueRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
-    state_db: StateDbHandle,
+    state_db: Option<StateDbHandle>,
     thread_state_manager: ThreadStateManager,
     turn_processor: TurnRequestProcessor,
 }
@@ -13,7 +13,7 @@ impl ThreadQueueRequestProcessor {
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
-        state_db: StateDbHandle,
+        state_db: Option<StateDbHandle>,
         thread_state_manager: ThreadStateManager,
         turn_processor: TurnRequestProcessor,
     ) -> Self {
@@ -24,6 +24,12 @@ impl ThreadQueueRequestProcessor {
             thread_state_manager,
             turn_processor,
         }
+    }
+
+    fn state_db(&self) -> Result<&StateDbHandle, JSONRPCErrorError> {
+        self.state_db
+            .as_ref()
+            .ok_or_else(|| internal_error("queued turns require the app-server state db"))
     }
 
     pub(crate) async fn thread_queue_add(
@@ -45,7 +51,7 @@ impl ThreadQueueRequestProcessor {
             internal_error(format!("failed to serialize queued turn payload: {err}"))
         })?;
         let record = self
-            .state_db
+            .state_db()?
             .append_thread_queued_turn(thread_id, payload.as_slice())
             .await
             .map_err(|err| internal_error(format!("failed to add queued turn: {err}")))?;
@@ -79,7 +85,7 @@ impl ThreadQueueRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let thread_id = parse_queue_thread_id(params.thread_id.as_str())?;
         let deleted = self
-            .state_db
+            .state_db()?
             .delete_thread_queued_turn(thread_id, params.queued_turn_id.as_str())
             .await
             .map_err(|err| internal_error(format!("failed to delete queued turn: {err}")))?;
@@ -100,7 +106,7 @@ impl ThreadQueueRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let thread_id = parse_queue_thread_id(params.thread_id.as_str())?;
         let records = self
-            .state_db
+            .state_db()?
             .reorder_thread_queued_turns(thread_id, params.queued_turn_ids.as_slice())
             .await
             .map_err(|err| invalid_request(format!("failed to reorder queued turns: {err}")))?;
@@ -123,6 +129,9 @@ impl ThreadQueueRequestProcessor {
     }
 
     pub(crate) async fn recover_resume_queue_snapshot_and_drain(&self, thread_id: ThreadId) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
         let failure = turn_error("queued turn dispatch was interrupted while app-server restarted");
         let failure_json = match serde_json::to_vec(&failure) {
             Ok(failure_json) => failure_json,
@@ -131,8 +140,7 @@ impl ThreadQueueRequestProcessor {
                 return;
             }
         };
-        match self
-            .state_db
+        match state_db
             .recover_dispatching_thread_queued_turns(thread_id, failure_json.as_slice())
             .await
         {
@@ -160,8 +168,10 @@ impl ThreadQueueRequestProcessor {
         thread_id: ThreadId,
         turn_id: &str,
     ) {
-        match self
-            .state_db
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
+        match state_db
             .remove_dispatching_thread_queued_turn(thread_id, turn_id)
             .await
         {
@@ -175,6 +185,9 @@ impl ThreadQueueRequestProcessor {
     }
 
     async fn drain_thread_queue_if_idle(&self, thread_id: ThreadId) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
         let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
             return;
         };
@@ -185,7 +198,7 @@ impl ThreadQueueRequestProcessor {
         if thread_state.lock().await.active_turn_snapshot().is_some() {
             return;
         }
-        let record = match self.state_db.claim_head_thread_queued_turn(thread_id).await {
+        let record = match state_db.claim_head_thread_queued_turn(thread_id).await {
             Ok(Some(record)) => record,
             Ok(None) => return,
             Err(err) => {
@@ -211,8 +224,7 @@ impl ThreadQueueRequestProcessor {
         match self.turn_processor.queued_turn_start(params).await {
             Ok(response) => {
                 let turn_id = response.turn.id;
-                match self
-                    .state_db
+                match state_db
                     .set_dispatching_thread_queued_turn_turn_id(
                         record.queued_turn_id.as_str(),
                         turn_id.as_str(),
@@ -261,6 +273,9 @@ impl ThreadQueueRequestProcessor {
     }
 
     async fn fail_dispatch(&self, thread_id: ThreadId, queued_turn_id: &str, error: TurnError) {
+        let Some(state_db) = self.state_db.as_ref() else {
+            return;
+        };
         let failure_json = match serde_json::to_vec(&error) {
             Ok(failure_json) => failure_json,
             Err(err) => {
@@ -268,8 +283,7 @@ impl ThreadQueueRequestProcessor {
                 return;
             }
         };
-        match self
-            .state_db
+        match state_db
             .mark_thread_queued_turn_failed(queued_turn_id, failure_json.as_slice())
             .await
         {
@@ -313,7 +327,7 @@ impl ThreadQueueRequestProcessor {
         &self,
         thread_id: ThreadId,
     ) -> Result<Vec<QueuedTurn>, JSONRPCErrorError> {
-        self.state_db
+        self.state_db()?
             .list_visible_thread_queued_turns(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to read queued turns: {err}")))?

@@ -291,6 +291,7 @@ async fn initialize_experimental(mcp: &mut McpProcess) -> Result<()> {
             Some(InitializeCapabilities {
                 experimental_api: true,
                 opt_out_notification_methods: None,
+                request_attestation: false,
             }),
         ),
     )

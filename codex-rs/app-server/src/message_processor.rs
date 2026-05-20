@@ -444,7 +444,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             thread_queue_processor.clone(),
-            Some(state_db.clone()),
+            state_db,
             Arc::clone(&skills_watcher),
         );
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
