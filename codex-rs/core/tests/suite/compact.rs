@@ -13,6 +13,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -1488,6 +1489,119 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // test 3: the number of requests should be 7
     assert_eq!(requests_payloads.len(), 7);
+}
+
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_stops_after_per_turn_limit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let token_count_used = 270_000;
+    let token_count_used_after_compaction = 80_000;
+    let sampling_response = |idx: usize| {
+        let reasoning = ev_reasoning_item(
+            &format!("limit-reasoning-{idx}"),
+            &[&format!("step {idx}")],
+            &[],
+        );
+        sse(vec![
+            reasoning,
+            ev_shell_command_call(
+                &format!("limit-shell-{idx}"),
+                &format!("echo auto-compact-limit-{idx}"),
+            ),
+            ev_completed_with_tokens(&format!("limit-response-{idx}"), token_count_used),
+        ])
+    };
+    let compact_response = |idx: usize| {
+        sse(vec![
+            ev_assistant_message(
+                &format!("limit-compact-message-{idx}"),
+                &format!("AUTO_LIMIT_SUMMARY_{idx}"),
+            ),
+            ev_completed_with_tokens(
+                &format!("limit-compact-response-{idx}"),
+                token_count_used_after_compaction,
+            ),
+        ])
+    };
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sampling_response(1),
+            compact_response(1),
+            sampling_response(2),
+            compact_response(2),
+            sampling_response(3),
+            compact_response(3),
+            sampling_response(4),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200_000);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "trigger repeated auto compaction".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submit user input");
+
+    let error = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err)
+            if err
+                .message
+                .contains("Codex stopped after 3 automatic compactions in this turn") =>
+        {
+            Some(err.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(
+        error.codex_error_info,
+        Some(CodexErrorInfo::ContextWindowExceeded)
+    );
+
+    let requests = request_log.requests();
+    let compaction_requests = requests
+        .iter()
+        .filter(|request| {
+            body_contains_text(&request.body_json().to_string(), SUMMARIZATION_PROMPT)
+        })
+        .count();
+    assert_eq!(
+        compaction_requests, 3,
+        "fourth automatic compaction should be blocked before dispatch"
+    );
+    assert_eq!(
+        requests.len(),
+        7,
+        "expected four sampling requests and three dispatched compaction requests"
+    );
 }
 
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.

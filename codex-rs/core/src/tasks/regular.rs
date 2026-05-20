@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::session::turn::AutoCompactTurnLimiter;
+use crate::session::turn::RunTurnResult;
 use crate::session::turn::run_turn;
 use crate::session::turn_context::TurnContext;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
@@ -69,17 +71,42 @@ impl SessionTask for RegularTask {
         };
         let mut next_input = input;
         let mut prewarmed_client_session = prewarmed_client_session;
+        let mut auto_compact_limiter = AutoCompactTurnLimiter::default();
         loop {
-            let last_agent_message = run_turn(
+            let turn_result = run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&ctx),
                 Arc::clone(&turn_extension_data),
+                &mut auto_compact_limiter,
                 next_input,
                 prewarmed_client_session.take(),
                 cancellation_token.child_token(),
             )
             .instrument(run_turn_span.clone())
             .await;
+            let (last_agent_message, can_restart_with_pending_input) = match turn_result {
+                RunTurnResult::Continue(last_agent_message) => (last_agent_message, true),
+                RunTurnResult::Terminal => {
+                    let turn_state = {
+                        let active_turn = sess.active_turn.lock().await;
+                        active_turn
+                            .as_ref()
+                            .map(|active_turn| Arc::clone(&active_turn.turn_state))
+                    };
+                    if let Some(turn_state) = turn_state {
+                        turn_state.lock().await.clear_pending_waiters();
+                        drop(
+                            sess.input_queue
+                                .take_pending_input_for_turn_state(turn_state.as_ref())
+                                .await,
+                        );
+                    }
+                    (None, false)
+                }
+            };
+            if !can_restart_with_pending_input {
+                return last_agent_message;
+            }
             if !sess.input_queue.has_pending_input(&sess.active_turn).await {
                 return last_agent_message;
             }
