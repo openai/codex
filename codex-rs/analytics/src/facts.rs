@@ -10,6 +10,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -76,6 +77,7 @@ pub struct TurnResolvedConfigFact {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub reasoning_summary: Option<ReasoningSummary>,
     pub service_tier: Option<ServiceTier>,
+    pub plan_type: Option<AccountPlanType>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_network_access: bool,

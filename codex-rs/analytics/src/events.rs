@@ -24,6 +24,7 @@ use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::SandboxPermissions;
@@ -784,6 +785,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) reasoning_effort: Option<String>,
     pub(crate) reasoning_summary: Option<String>,
     pub(crate) service_tier: String,
+    pub(crate) plan_type: Option<AccountPlanType>,
     pub(crate) approval_policy: String,
     pub(crate) approvals_reviewer: String,
     pub(crate) sandbox_network_access: bool,

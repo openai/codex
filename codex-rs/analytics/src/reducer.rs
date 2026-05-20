@@ -2437,6 +2437,7 @@ fn codex_turn_event_params(
         reasoning_effort,
         reasoning_summary,
         service_tier,
+        plan_type,
         approval_policy,
         approvals_reviewer,
         sandbox_network_access,
@@ -2467,6 +2468,7 @@ fn codex_turn_event_params(
         service_tier: service_tier
             .map(|value| value.to_string())
             .unwrap_or_else(|| "default".to_string()),
+        plan_type,
         approval_policy: approval_policy.to_string(),
         approvals_reviewer: approvals_reviewer.to_string(),
         sandbox_network_access,

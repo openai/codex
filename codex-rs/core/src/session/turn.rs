@@ -599,6 +599,12 @@ async fn track_turn_resolved_config_analytics(
         let mut state = sess.state.lock().await;
         state.take_next_turn_is_first()
     };
+    let plan_type = sess
+        .services
+        .auth_manager
+        .auth()
+        .await
+        .and_then(|auth| auth.account_plan_type());
     sess.services
         .analytics_events_client
         .track_turn_resolved_config(TurnResolvedConfigFact {
@@ -625,6 +631,7 @@ async fn track_turn_resolved_config_analytics(
                 .service_tier
                 .as_deref()
                 .and_then(ServiceTier::from_request_value),
+            plan_type,
             approval_policy: turn_context.approval_policy.value(),
             approvals_reviewer: turn_context.config.approvals_reviewer,
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),

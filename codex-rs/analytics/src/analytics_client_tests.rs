@@ -129,6 +129,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
@@ -371,6 +372,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         reasoning_effort: None,
         reasoning_summary: None,
         service_tier: None,
+        plan_type: Some(AccountPlanType::Pro),
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
         sandbox_network_access: true,
@@ -3197,6 +3199,7 @@ fn turn_event_serializes_expected_shape() {
             reasoning_effort: Some("high".to_string()),
             reasoning_summary: Some("detailed".to_string()),
             service_tier: "flex".to_string(),
+            plan_type: None,
             approval_policy: "on-request".to_string(),
             approvals_reviewer: "auto_review".to_string(),
             sandbox_network_access: true,
@@ -3258,6 +3261,7 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_effort": "high",
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
+                "plan_type": null,
                 "approval_policy": "on-request",
                 "approvals_reviewer": "auto_review",
                 "sandbox_network_access": true,
@@ -3572,6 +3576,7 @@ async fn turn_lifecycle_emits_turn_event() {
     );
     assert!(payload["event_params"].get("product_client_id").is_none());
     assert_eq!(payload["event_params"]["ephemeral"], json!(false));
+    assert_eq!(payload["event_params"]["plan_type"], json!("pro"));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));
