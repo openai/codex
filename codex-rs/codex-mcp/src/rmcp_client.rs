@@ -47,6 +47,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
+use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
 use futures::future::BoxFuture;
@@ -566,6 +567,7 @@ async fn make_rmcp_client(
     let resolved_environment = runtime_context
         .resolve_server_environment(server_name, &config)
         .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
+    let is_local_environment = config.is_local_environment();
     let McpServerConfig { transport, .. } = config;
 
     match transport {
@@ -583,19 +585,25 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let Some(environment) = resolved_environment.environment() else {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "MCP server `{server_name}` resolved without an execution environment"
-                )));
+            let launcher = if is_local_environment {
+                // TODO(starr): Unify local stdio MCP launch with
+                // `ExecutorStdioServerLauncher` once the executor-backed path
+                // preserves `LocalStdioServerLauncher` semantics.
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_context.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
+            } else {
+                let Some(environment) = resolved_environment.environment() else {
+                    return Err(StartupOutcomeError::from(anyhow!(
+                        "MCP server `{server_name}` resolved without an execution environment"
+                    )));
+                };
+                Arc::new(ExecutorStdioServerLauncher::new(
+                    environment.get_exec_backend(),
+                    runtime_context.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
             };
-            let launcher = Arc::new(ExecutorStdioServerLauncher::new(
-                environment.get_exec_backend(),
-                runtime_context.fallback_cwd(),
-            )) as Arc<dyn StdioServerLauncher>;
 
-            // `RmcpClient` always sees a launched MCP stdio server. The
-            // executor-backed launcher hides whether the selected environment
-            // owns a local or remote process backend.
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
