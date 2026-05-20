@@ -86,6 +86,7 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -350,6 +351,7 @@ impl MessageProcessor {
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
         let workspace_settings_cache =
             Arc::new(workspace_settings::WorkspaceSettingsCache::default());
+        let app_list_shutdown_token = CancellationToken::new();
         let account_processor = AccountRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -363,6 +365,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             Arc::clone(&workspace_settings_cache),
+            app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
             auth_manager.clone(),
@@ -529,6 +532,7 @@ impl MessageProcessor {
 
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
+        self.apps_processor.shutdown();
         self.skills_watcher.shutdown();
     }
 

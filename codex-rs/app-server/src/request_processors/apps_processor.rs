@@ -7,6 +7,7 @@ pub(crate) struct AppsRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    shutdown_token: CancellationToken,
 }
 
 impl AppsRequestProcessor {
@@ -16,6 +17,7 @@ impl AppsRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        shutdown_token: CancellationToken,
     ) -> Self {
         Self {
             auth_manager,
@@ -23,6 +25,7 @@ impl AppsRequestProcessor {
             outgoing,
             config_manager,
             workspace_settings_cache,
+            shutdown_token,
         }
     }
 
@@ -83,10 +86,18 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {}
+                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+            }
         });
         Ok(None)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.shutdown_token.cancel();
     }
 
     async fn apps_list_task(
