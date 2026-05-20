@@ -3,7 +3,6 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-#[cfg(not(debug_assertions))]
 use codex_core::RolloutRecorder;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -27,10 +26,8 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-#[cfg(not(debug_assertions))]
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
-#[cfg(not(debug_assertions))]
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
@@ -68,9 +65,7 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
-#[cfg(not(debug_assertions))]
 use wiremock::ResponseTemplate;
-#[cfg(not(debug_assertions))]
 use wiremock::matchers::body_string_contains;
 
 const VIEW_IMAGE_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1454,7 +1449,6 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     Ok(())
 }
 
-#[cfg(not(debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rolls_back_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));

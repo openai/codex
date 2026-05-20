@@ -412,7 +412,7 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                error_or_panic(
+                error!(
                     "Invalid image detected; rolling back the current turn to prevent poisoning",
                 );
                 let rollback_succeeded = match apply_thread_rollback(
