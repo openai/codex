@@ -111,6 +111,11 @@ pub struct SetupErrorReport {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeferredElevatedSetup {
+    pub reason: String,
+}
+
 #[derive(Debug)]
 pub struct SetupFailure {
     pub code: SetupErrorCode,
@@ -154,8 +159,23 @@ pub fn setup_error_path(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox").join("setup_error.json")
 }
 
+pub fn deferred_elevated_setup_path(codex_home: &Path) -> PathBuf {
+    codex_home
+        .join(".sandbox")
+        .join("deferred_elevated_setup.json")
+}
+
 pub fn clear_setup_error_report(codex_home: &Path) -> Result<()> {
     let path = setup_error_path(codex_home);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("remove {}", path.display())),
+    }
+}
+
+pub fn clear_deferred_elevated_setup(codex_home: &Path) -> Result<()> {
+    let path = deferred_elevated_setup_path(codex_home);
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
@@ -173,6 +193,19 @@ pub fn write_setup_error_report(codex_home: &Path, report: &SetupErrorReport) ->
     Ok(())
 }
 
+pub fn write_deferred_elevated_setup(
+    codex_home: &Path,
+    deferred: &DeferredElevatedSetup,
+) -> Result<()> {
+    let sandbox_dir = codex_home.join(".sandbox");
+    fs::create_dir_all(&sandbox_dir)
+        .with_context(|| format!("create sandbox dir {}", sandbox_dir.display()))?;
+    let path = deferred_elevated_setup_path(codex_home);
+    let json = serde_json::to_vec_pretty(deferred)?;
+    fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
 pub fn read_setup_error_report(codex_home: &Path) -> Result<Option<SetupErrorReport>> {
     let path = setup_error_path(codex_home);
     let bytes = match fs::read(&path) {
@@ -183,6 +216,18 @@ pub fn read_setup_error_report(codex_home: &Path) -> Result<Option<SetupErrorRep
     let report = serde_json::from_slice::<SetupErrorReport>(&bytes)
         .with_context(|| format!("parse {}", path.display()))?;
     Ok(Some(report))
+}
+
+pub fn read_deferred_elevated_setup(codex_home: &Path) -> Result<Option<DeferredElevatedSetup>> {
+    let path = deferred_elevated_setup_path(codex_home);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
+    };
+    let deferred = serde_json::from_slice::<DeferredElevatedSetup>(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(deferred))
 }
 
 /// Sanitize a setup error message for use as a metric tag.
@@ -251,8 +296,13 @@ fn redact_username_segments(value: &str, usernames: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::DeferredElevatedSetup;
+    use super::clear_deferred_elevated_setup;
+    use super::read_deferred_elevated_setup;
     use super::redact_username_segments;
+    use super::write_deferred_elevated_setup;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     #[test]
     fn sanitize_tag_value_redacts_username_segments() {
@@ -279,5 +329,39 @@ mod tests {
         let msg = "C:\\Users\\Alice\\a and C:\\Users\\Alice\\b";
         let redacted = redact_username_segments(msg, &usernames);
         assert_eq!(redacted, "C:\\Users\\<user>\\a and C:\\Users\\<user>\\b");
+    }
+
+    #[test]
+    fn deferred_elevated_setup_round_trips() {
+        let temp = tempdir().expect("tempdir");
+        let deferred = DeferredElevatedSetup {
+            reason: "sandbox setup marker missing or incompatible".to_string(),
+        };
+
+        write_deferred_elevated_setup(temp.path(), &deferred).expect("write deferred setup");
+
+        assert_eq!(
+            read_deferred_elevated_setup(temp.path()).expect("read deferred setup"),
+            Some(deferred)
+        );
+    }
+
+    #[test]
+    fn clear_deferred_elevated_setup_removes_file() {
+        let temp = tempdir().expect("tempdir");
+        write_deferred_elevated_setup(
+            temp.path(),
+            &DeferredElevatedSetup {
+                reason: "offline firewall settings changed".to_string(),
+            },
+        )
+        .expect("write deferred setup");
+
+        clear_deferred_elevated_setup(temp.path()).expect("clear deferred setup");
+
+        assert_eq!(
+            read_deferred_elevated_setup(temp.path()).expect("read deferred setup"),
+            None
+        );
     }
 }

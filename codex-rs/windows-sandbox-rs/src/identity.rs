@@ -1,5 +1,8 @@
+use crate::SetupErrorCode;
 use crate::dpapi;
+use crate::extract_setup_failure;
 use crate::logging::debug_log;
+use crate::logging::log_note;
 use crate::policy::SandboxPolicy;
 use crate::setup::SandboxNetworkIdentity;
 use crate::setup::SandboxUserRecord;
@@ -12,6 +15,10 @@ use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
+use crate::setup_error::DeferredElevatedSetup;
+use crate::setup_error::clear_deferred_elevated_setup;
+use crate::setup_error::read_deferred_elevated_setup;
+use crate::setup_error::write_deferred_elevated_setup;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -32,6 +39,26 @@ struct SandboxIdentity {
 pub struct SandboxCreds {
     pub username: String,
     pub password: String,
+}
+
+fn setup_deferred_for_reason(codex_home: &Path, reason: &str) -> Result<bool> {
+    let deferred = read_deferred_elevated_setup(codex_home)?;
+    Ok(deferred
+        .as_ref()
+        .is_some_and(|entry| entry.reason == reason))
+}
+
+fn reset_deferred_setup_if_reason_changed(
+    codex_home: &Path,
+    current_reason: Option<&str>,
+) -> Result<()> {
+    let Some(deferred) = read_deferred_elevated_setup(codex_home)? else {
+        return Ok(());
+    };
+    if current_reason.is_some_and(|reason| reason == deferred.reason) {
+        return Ok(());
+    }
+    clear_deferred_elevated_setup(codex_home)
 }
 
 /// Returns true when the on-disk setup artifacts exist and match the current
@@ -180,16 +207,27 @@ pub fn require_logon_sandbox_creds(
         }
     };
 
+    reset_deferred_setup_if_reason_changed(codex_home, setup_reason.as_deref())?;
+
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
-            crate::logging::log_note(
+            if setup_deferred_for_reason(codex_home, reason)? {
+                log_note(
+                    &format!("sandbox setup still deferred after previous cancellation: {reason}"),
+                    Some(&sandbox_dir),
+                );
+                return Err(anyhow!(
+                    "Windows sandbox setup requires elevation ({reason}), but the previous setup prompt was canceled; rerun setup with elevation or change the sandbox settings before retrying"
+                ));
+            }
+            log_note(
                 &format!("sandbox setup required: {reason}"),
                 Some(&sandbox_dir),
             );
         } else {
-            crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
+            log_note("sandbox setup required", Some(&sandbox_dir));
         }
-        run_elevated_setup(
+        let setup_result = run_elevated_setup(
             crate::setup::SandboxSetupRequest {
                 policy,
                 policy_cwd,
@@ -205,7 +243,32 @@ pub fn require_logon_sandbox_creds(
                 deny_read_paths: Some(deny_read_paths_override.to_vec()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
-        )?;
+        );
+        match setup_result {
+            Ok(()) => clear_deferred_elevated_setup(codex_home)?,
+            Err(err) => {
+                if extract_setup_failure(&err).is_some_and(|failure| {
+                    failure.code == SetupErrorCode::OrchestratorHelperLaunchCanceled
+                }) {
+                    let deferred_reason = setup_reason
+                        .clone()
+                        .unwrap_or_else(|| "sandbox setup required".to_string());
+                    write_deferred_elevated_setup(
+                        codex_home,
+                        &DeferredElevatedSetup {
+                            reason: deferred_reason.clone(),
+                        },
+                    )?;
+                    log_note(
+                        &format!(
+                            "sandbox setup deferred after canceled elevation prompt: {deferred_reason}"
+                        ),
+                        Some(&sandbox_dir),
+                    );
+                }
+                return Err(err);
+            }
+        }
         identity = select_identity(network_identity, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
