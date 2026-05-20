@@ -12,7 +12,6 @@ use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
-use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
@@ -27,7 +26,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_utils_output_truncation::TruncationPolicy;
+use codex_protocol::protocol::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -40,19 +39,14 @@ async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Re
     let tools = installed_tools(runtime.clone(), thread_id).await;
 
     let create_tool = tool_by_name(&tools, "create_goal");
-    let invocation = ToolCall {
-        turn_id: "turn-create-goal".to_string(),
-        call_id: "call-create-goal".to_string(),
-        tool_name: ToolName::plain("create_goal"),
-        truncation_policy: TruncationPolicy::Bytes(1024),
-        payload: ToolPayload::Function {
-            arguments: json!({
-                "objective": "ship goal extension backend",
-                "token_budget": 123,
-            })
-            .to_string(),
-        },
-    };
+    let invocation = tool_call(
+        "create_goal",
+        "call-create-goal",
+        json!({
+            "objective": "ship goal extension backend",
+            "token_budget": 123,
+        }),
+    );
     let output = create_tool.handle(invocation.clone()).await?;
     let result = output.code_mode_result(&invocation.payload);
     assert_eq!(
