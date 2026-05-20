@@ -74,14 +74,22 @@ pub(super) async fn search_threads(
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to search rollout contents: {err}"),
     })?;
+    if matching_paths.is_empty() {
+        return Ok(ThreadSearchPage {
+            items: Vec::new(),
+            next_cursor: None,
+        });
+    }
     let mut matching_items = Vec::new();
     let mut page_cursor = cursor;
     let scan_page_size = params.page_size.saturating_mul(8).clamp(256, 2048);
     let scan_params = ListThreadsParams {
         page_size: scan_page_size,
         search_term: None,
+        use_state_db_only: state_db.is_some(),
         ..params.clone()
     };
+    let mut remaining_paths = matching_paths;
 
     loop {
         let page = list_rollout_threads(
@@ -95,7 +103,7 @@ pub(super) async fn search_threads(
         )
         .await?;
         for item in page.items {
-            if !matching_paths.contains(item.path.as_path()) {
+            if !remaining_paths.remove(item.path.as_path()) {
                 continue;
             }
             let Some(snippet) =
@@ -113,7 +121,10 @@ pub(super) async fn search_threads(
             }
         }
         page_cursor = page.next_cursor;
-        if matching_items.len() > params.page_size || page_cursor.is_none() {
+        if matching_items.len() > params.page_size
+            || remaining_paths.is_empty()
+            || page_cursor.is_none()
+        {
             break;
         }
     }
