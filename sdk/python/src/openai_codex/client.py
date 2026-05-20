@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import subprocess
@@ -103,6 +101,29 @@ def _installed_codex_path() -> Path:
     return bundled_codex_path()
 
 
+def _installed_codex_path_dirs() -> tuple[Path, ...]:
+    try:
+        from codex_cli_bin import bundled_path_dir
+    except (ImportError, AttributeError):
+        return ()
+
+    path_dir = bundled_path_dir()
+    return (path_dir,) if path_dir is not None else ()
+
+
+def _prepend_path_dirs(env: dict[str, str], path_dirs: tuple[Path, ...]) -> None:
+    if not path_dirs:
+        return
+
+    path_sep = os.pathsep
+    existing_path = env.get("PATH", "")
+    path_dir_values = [str(path_dir) for path_dir in path_dirs]
+    existing_entries = [
+        entry for entry in existing_path.split(path_sep) if entry and entry not in path_dir_values
+    ]
+    env["PATH"] = path_sep.join([*path_dir_values, *existing_entries])
+
+
 @dataclass(frozen=True)
 class CodexBinResolverOps:
     installed_codex_path: Callable[[], Path]
@@ -174,10 +195,13 @@ class AppServerClient:
         if self._proc is not None:
             return
 
+        path_dirs: tuple[Path, ...] = ()
         if self.config.launch_args_override is not None:
             args = list(self.config.launch_args_override)
         else:
             codex_bin = _resolve_codex_bin(self.config)
+            if self.config.codex_bin is None:
+                path_dirs = _installed_codex_path_dirs()
             args = [str(codex_bin)]
             for kv in self.config.config_overrides:
                 args.extend(["--config", kv])
@@ -186,6 +210,7 @@ class AppServerClient:
         env = os.environ.copy()
         if self.config.env:
             env.update(self.config.env)
+        _prepend_path_dirs(env, path_dirs)
 
         self._proc = subprocess.Popen(
             args,
