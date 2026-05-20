@@ -24,7 +24,7 @@ on:
         default: all()
         type: string
       shard:
-        description: Full-CI shard to reproduce. Use 0 to run all four shards.
+        description: Full-CI shard to reproduce. Use 0 to run selected tests without sharding.
         required: true
         default: 0
         type: number

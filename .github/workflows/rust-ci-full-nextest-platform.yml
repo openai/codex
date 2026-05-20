@@ -312,7 +312,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   shard:
-    name: Tests shard ${{ matrix.shard }}/4
+    name: Tests ${{ matrix.shard == 0 && 'all selected tests' || format('shard {0}/4', matrix.shard) }}
     needs: archive
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
     timeout-minutes: 60
@@ -325,7 +325,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ inputs.selected_shard == 0 && fromJSON('[1,2,3,4]') || fromJSON(format('[{0}]', inputs.selected_shard)) }}
+        shard: ${{ inputs.selected_shard == 0 && fromJSON('[0]') || fromJSON(format('[{0}]', inputs.selected_shard)) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -416,9 +416,11 @@ jobs:
             --no-fail-fast
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
-            --partition "hash:${{ matrix.shard }}/4"
             --filterset "${NEXTEST_FILTERSET}"
           )
+          if [[ "${{ matrix.shard }}" != "0" ]]; then
+            nextest_args+=(--partition "hash:${{ matrix.shard }}/4")
+          fi
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
           fi
