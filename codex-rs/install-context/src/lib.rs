@@ -269,6 +269,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
 
+    const TEST_RESOURCE_NAME: &str = "codex-test-helper";
+
     #[test]
     fn detects_standalone_install_from_release_layout() -> std::io::Result<()> {
         let codex_home = tempfile::tempdir()?;
