@@ -26,7 +26,7 @@ pub enum ThreadGoalAccountingOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThreadGoalAccountingMode {
+pub enum GoalAccountingMode {
     ActiveStatusOnly,
     ActiveOnly,
     ActiveOrComplete,
@@ -387,7 +387,7 @@ WHERE thread_id = ?
         thread_id: ThreadId,
         time_delta_seconds: i64,
         token_delta: i64,
-        mode: ThreadGoalAccountingMode,
+        mode: GoalAccountingMode,
         expected_goal_id: Option<&str>,
     ) -> anyhow::Result<ThreadGoalAccountingOutcome> {
         let time_delta_seconds = time_delta_seconds.max(0);
@@ -400,20 +400,20 @@ WHERE thread_id = ?
 
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let status_filter = match mode {
-            ThreadGoalAccountingMode::ActiveStatusOnly => "status = 'active'",
-            ThreadGoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
-            ThreadGoalAccountingMode::ActiveOrComplete => {
+            GoalAccountingMode::ActiveStatusOnly => "status = 'active'",
+            GoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
+            GoalAccountingMode::ActiveOrComplete => {
                 "status IN ('active', 'budget_limited', 'complete')"
             }
-            ThreadGoalAccountingMode::ActiveOrStopped => {
+            GoalAccountingMode::ActiveOrStopped => {
                 "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')"
             }
         };
         let budget_limit_status_filter = match mode {
-            ThreadGoalAccountingMode::ActiveStatusOnly
-            | ThreadGoalAccountingMode::ActiveOnly
-            | ThreadGoalAccountingMode::ActiveOrComplete => "status = 'active'",
-            ThreadGoalAccountingMode::ActiveOrStopped => {
+            GoalAccountingMode::ActiveStatusOnly
+            | GoalAccountingMode::ActiveOnly
+            | GoalAccountingMode::ActiveOrComplete => "status = 'active'",
+            GoalAccountingMode::ActiveOrStopped => {
                 "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')"
             }
         };
@@ -802,7 +802,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 Some(original.goal_id.as_str()),
             )
             .await
@@ -840,7 +840,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 12,
                 /*token_delta*/ 30,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1062,7 +1062,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 7,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1080,7 +1080,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 3,
                 /*token_delta*/ 15,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1098,7 +1098,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1133,7 +1133,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveStatusOnly,
+                GoalAccountingMode::ActiveStatusOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1181,7 +1181,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 3,
                 /*token_delta*/ 25,
-                ThreadGoalAccountingMode::ActiveOrStopped,
+                GoalAccountingMode::ActiveOrStopped,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1215,7 +1215,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1262,7 +1262,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1313,7 +1313,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1360,7 +1360,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1413,7 +1413,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1431,7 +1431,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOrComplete,
+                GoalAccountingMode::ActiveOrComplete,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1480,7 +1480,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1498,7 +1498,7 @@ mod tests {
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOrStopped,
+                GoalAccountingMode::ActiveOrStopped,
                 /*expected_goal_id*/ None,
             )
             .await
@@ -1531,14 +1531,14 @@ mod tests {
             thread_id,
             /*time_delta_seconds*/ 4,
             /*token_delta*/ 40,
-            ThreadGoalAccountingMode::ActiveOnly,
+            GoalAccountingMode::ActiveOnly,
             /*expected_goal_id*/ None,
         );
         let second = runtime.thread_goals().account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 6,
             /*token_delta*/ 60,
-            ThreadGoalAccountingMode::ActiveOnly,
+            GoalAccountingMode::ActiveOnly,
             /*expected_goal_id*/ None,
         );
         let (first, second) = tokio::join!(first, second);

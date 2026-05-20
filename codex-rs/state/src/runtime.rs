@@ -67,7 +67,7 @@ mod test_support;
 mod threads;
 
 pub use goals::GoalStore;
-pub use goals::ThreadGoalAccountingMode;
+pub use goals::GoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
 pub use remote_control::RemoteControlEnrollmentRecord;

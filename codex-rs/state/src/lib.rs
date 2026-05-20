@@ -52,7 +52,7 @@ pub use runtime::GoalStore;
 pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::RuntimeDbPath;
 pub use runtime::ThreadFilterOptions;
-pub use runtime::ThreadGoalAccountingMode;
+pub use runtime::GoalAccountingMode;
 pub use runtime::ThreadGoalAccountingOutcome;
 pub use runtime::ThreadGoalUpdate;
 pub use runtime::goals_db_filename;
