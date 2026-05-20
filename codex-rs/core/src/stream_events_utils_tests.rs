@@ -13,7 +13,6 @@ use crate::tools::ToolRouter;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::AgentMessageContent;
@@ -168,43 +167,41 @@ struct TestTurnItemContributor;
 #[derive(Debug)]
 struct TurnItemContributorRan;
 
+#[async_trait::async_trait]
 impl TurnItemContributor for TestTurnItemContributor {
-    fn contribute<'a>(
-        &'a self,
-        _thread_store: &'a ExtensionData,
-        turn_store: &'a ExtensionData,
-        item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a> {
-        Box::pin(async move {
-            turn_store.insert(TurnItemContributorRan);
-            if let TurnItem::AgentMessage(agent_message) = item {
-                agent_message.memory_citation = Some(MemoryCitation {
-                    entries: Vec::new(),
-                    rollout_ids: Vec::new(),
-                });
-            }
-            Ok(())
-        })
+    async fn contribute(
+        &self,
+        _thread_store: &ExtensionData,
+        turn_store: &ExtensionData,
+        item: &mut TurnItem,
+    ) -> Result<(), String> {
+        turn_store.insert(TurnItemContributorRan);
+        if let TurnItem::AgentMessage(agent_message) = item {
+            agent_message.memory_citation = Some(MemoryCitation {
+                entries: Vec::new(),
+                rollout_ids: Vec::new(),
+            });
+        }
+        Ok(())
     }
 }
 
 struct RewriteAgentMessageContributor;
 
+#[async_trait::async_trait]
 impl TurnItemContributor for RewriteAgentMessageContributor {
-    fn contribute<'a>(
-        &'a self,
-        _thread_store: &'a ExtensionData,
-        _turn_store: &'a ExtensionData,
-        item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a> {
-        Box::pin(async move {
-            if let TurnItem::AgentMessage(agent_message) = item {
-                agent_message.content = vec![AgentMessageContent::Text {
-                    text: "contributed assistant text".to_string(),
-                }];
-            }
-            Ok(())
-        })
+    async fn contribute(
+        &self,
+        _thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
+        item: &mut TurnItem,
+    ) -> Result<(), String> {
+        if let TurnItem::AgentMessage(agent_message) = item {
+            agent_message.content = vec![AgentMessageContent::Text {
+                text: "contributed assistant text".to_string(),
+            }];
+        }
+        Ok(())
     }
 }
 

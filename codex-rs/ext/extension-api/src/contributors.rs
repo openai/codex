@@ -148,20 +148,17 @@ pub trait ApprovalReviewContributor: Send + Sync {
     ) -> Option<ApprovalReviewFuture<'a>>;
 }
 
-/// Future returned by one ordered turn-item contribution.
-pub type TurnItemContributionFuture<'a> =
-    std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
-
 /// Ordered post-processing contribution for one parsed turn item.
 ///
 /// Implementations may mutate the item before it is emitted and may use the
 /// explicitly exposed thread- and turn-lifetime stores when they need durable
 /// extension-private state.
+#[async_trait::async_trait]
 pub trait TurnItemContributor: Send + Sync {
-    fn contribute<'a>(
-        &'a self,
-        thread_store: &'a ExtensionData,
-        turn_store: &'a ExtensionData,
-        item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a>;
+    async fn contribute(
+        &self,
+        thread_store: &ExtensionData,
+        turn_store: &ExtensionData,
+        item: &mut TurnItem,
+    ) -> Result<(), String>;
 }
