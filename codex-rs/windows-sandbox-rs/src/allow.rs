@@ -1,4 +1,3 @@
-use crate::policy::SandboxPolicy;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use dunce::canonicalize;
 use std::collections::HashMap;
@@ -10,17 +9,6 @@ use std::path::PathBuf;
 pub struct AllowDenyPaths {
     pub allow: HashSet<PathBuf>,
     pub deny: HashSet<PathBuf>,
-}
-
-pub(crate) fn compute_allow_paths(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-) -> AllowDenyPaths {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
-    compute_allow_paths_for_permissions(&permissions, command_cwd, env_map)
 }
 
 pub(crate) fn compute_allow_paths_for_permissions(
@@ -60,6 +48,17 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::fs;
     use tempfile::TempDir;
+
+    fn compute_allow_paths(
+        policy: &SandboxPolicy,
+        policy_cwd: &Path,
+        command_cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> AllowDenyPaths {
+        let permissions =
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
+        compute_allow_paths_for_permissions(&permissions, command_cwd, env_map)
+    }
 
     #[test]
     fn includes_additional_writable_roots() {
