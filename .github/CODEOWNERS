@@ -5,5 +5,10 @@
 # MITM proxy ownership.
 /codex-rs/network-proxy/ @viyatb-oai @winston-openai
 
+# Linux sandbox ownership.
+/codex-rs/linux-sandbox/ @viyatb-oai
+/codex-rs/sandboxing/ @viyatb-oai
+/codex-rs/bwrap/ @viyatb-oai
+
 # Keep ownership changes reviewed by the same team.
 /.github/CODEOWNERS @openai/codex-core-agent-team
