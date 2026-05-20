@@ -200,7 +200,7 @@ async fn busy_thread_queue_rows_support_list_reorder_and_delete_before_drain() -
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "queue-blocker",
         )?,
@@ -238,7 +238,7 @@ async fn busy_thread_queue_rows_support_list_reorder_and_delete_before_drain() -
         list_queue_ids(&mut mcp, &thread.id).await?,
         vec![first.clone(), second.clone()]
     );
-    let first_page = list_queue_page(&mut mcp, &thread.id, None, Some(1)).await?;
+    let first_page = list_queue_page(&mut mcp, &thread.id, /*cursor*/ None, Some(1)).await?;
     assert_eq!(
         first_page
             .data
@@ -311,7 +311,7 @@ async fn queued_turns_stay_serial_after_the_first_dispatch_starts() -> Result<()
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "queued-serial-blocker",
         )?,
@@ -427,7 +427,8 @@ async fn queue_turn(mcp: &mut McpProcess, thread_id: &str, text: &str) -> Result
 }
 
 async fn list_queue_ids(mcp: &mut McpProcess, thread_id: &str) -> Result<Vec<String>> {
-    let ThreadQueueListResponse { data, .. } = list_queue_page(mcp, thread_id, None, None).await?;
+    let ThreadQueueListResponse { data, .. } =
+        list_queue_page(mcp, thread_id, /*cursor*/ None, /*limit*/ None).await?;
     Ok(data.into_iter().map(|queued_turn| queued_turn.id).collect())
 }
 
