@@ -155,7 +155,7 @@ const CYBER_POLICY_FALLBACK_MESSAGE: &str =
 const INVALID_VALUE_ERROR_CODE: &str = "invalid_value";
 const INVALID_IMAGE_ERROR_MESSAGE: &str =
     "The image data you provided does not represent a valid image";
-const EMPTY_BASE64_IMAGE_ERROR_MESSAGE: &str = "Expected a base64-encoded data URL with an image MIME type (e.g. 'data:image/png;base64,aW1nIGJ5dGVzIGhlcmU='), but got empty base64-encoded bytes.";
+const EMPTY_BASE64_IMAGE_ERROR_MESSAGE: &str = "Expected a base64-encoded data URL with an image MIME type, but got empty base64-encoded bytes.";
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
