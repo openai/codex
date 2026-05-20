@@ -2506,12 +2506,43 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        {
-            let mut state = self.state.lock().await;
-            state.record_items(items.iter(), turn_context.truncation_policy);
-        }
+        self.record_conversation_items_with_history_policy(
+            turn_context,
+            items,
+            turn_context.truncation_policy,
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_conversation_items_with_history_policy(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        history_truncation_policy: TruncationPolicy,
+    ) {
+        self.record_into_history_with_policy(items, history_truncation_policy)
+            .await;
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+    }
+
+    /// Append ResponseItems to the in-memory conversation history only.
+    pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) {
+        self.record_into_history_with_policy(items, turn_context.truncation_policy)
+            .await;
+    }
+
+    pub(crate) async fn record_into_history_with_policy(
+        &self,
+        items: &[ResponseItem],
+        history_truncation_policy: TruncationPolicy,
+    ) {
+        let mut state = self.state.lock().await;
+        state.record_items(items.iter(), history_truncation_policy);
     }
 
     async fn maybe_warn_on_server_model_mismatch(
