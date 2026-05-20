@@ -220,6 +220,9 @@ jobs:
               "$dest/${binary}-${{ matrix.target }}.exe"
           done
 
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
       - name: Build Codex package archives
         shell: bash
         run: |
@@ -273,9 +276,6 @@ jobs:
           name: python-runtime-wheel-${{ matrix.target }}
           path: python-runtime-dist/${{ matrix.target }}/*.whl
           if-no-files-found: error
-
-      - name: Install DotSlash
-        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
       - name: Compress artifacts
         shell: bash
