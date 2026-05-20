@@ -526,7 +526,9 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_subagent_lifecycle_hooks(home, &[], "worker") {
+            if let Err(error) =
+                write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
+            {
                 panic!("failed to write subagent hook fixture: {error}");
             }
         })
@@ -672,9 +674,11 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_subagent_lifecycle_hooks(home, &[SUBAGENT_STOP_CONTINUATION], "")
-            {
+            if let Err(error) = write_subagent_lifecycle_hooks(
+                home,
+                /*stop_prompts*/ &[SUBAGENT_STOP_CONTINUATION],
+                "",
+            ) {
                 panic!("failed to write subagent hook fixture: {error}");
             }
         })
