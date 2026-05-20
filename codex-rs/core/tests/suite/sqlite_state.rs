@@ -376,7 +376,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                     env_vars: Vec::new(),
                     cwd: None,
                 },
-                environment_id: None,
+                environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,

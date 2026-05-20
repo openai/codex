@@ -128,9 +128,8 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
-    /// Explicit environment id for where Codex should start this MCP server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub environment_id: Option<String>,
+    /// Effective environment id for where Codex should start this MCP server.
+    pub environment_id: String,
 
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
@@ -352,7 +351,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
-            environment_id,
+            environment_id: environment_id.unwrap_or_else(|| "local".to_string()),
             startup_timeout_sec,
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),

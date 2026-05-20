@@ -402,7 +402,7 @@ fn deserialize_ignores_unknown_server_fields() {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            environment_id: None,
+            environment_id: "local".to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,

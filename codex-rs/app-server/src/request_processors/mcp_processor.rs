@@ -209,10 +209,8 @@ impl McpRequestProcessor {
         // environment. Use config cwd as the stdio fallback and the shared
         // environment registry only for explicit MCP env ids; an omitted MCP
         // env id still means local.
-        let runtime_context = McpRuntimeContext::new(
-            Arc::clone(&environment_manager),
-            config.cwd.to_path_buf(),
-        );
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -376,10 +374,8 @@ impl McpRequestProcessor {
         // environment. Use config cwd as the stdio fallback and the shared
         // environment registry only for explicit MCP env ids; an omitted MCP
         // env id still means local.
-        let runtime_context = McpRuntimeContext::new(
-            Arc::clone(&environment_manager),
-            config.cwd.to_path_buf(),
-        );
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
         tokio::spawn(async move {

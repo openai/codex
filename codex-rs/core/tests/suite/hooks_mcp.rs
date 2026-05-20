@@ -182,7 +182,7 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            environment_id: None,
+            environment_id: "local".to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
