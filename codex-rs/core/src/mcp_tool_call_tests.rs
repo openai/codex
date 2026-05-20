@@ -1125,8 +1125,10 @@ async fn mcp_tool_call_item_includes_plugin_id() {
             tool: "echo".to_string(),
             arguments: None,
         },
-        /*mcp_app_resource_uri*/ None,
-        Some("sample@test".to_string()),
+        McpToolCallItemMetadata {
+            mcp_app_resource_uri: None,
+            plugin_id: Some("sample@test".to_string()),
+        },
     )
     .await;
 
