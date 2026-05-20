@@ -66,6 +66,7 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+pub use goals::GoalAccountingMode;
 pub use goals::GoalStore;
 pub use goals::GoalUpdate;
 pub use goals::ThreadGoalAccountingMode;
