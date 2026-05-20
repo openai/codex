@@ -3063,6 +3063,159 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mid_turn_compaction_context_window_exceeded_rolls_back_recorded_turn() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = context_window * 90 / 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", over_limit_tokens),
+    ]);
+    let auto_compact_failure = || {
+        sse_failed(
+            "compact-failed",
+            "context_length_exceeded",
+            CONTEXT_LIMIT_MESSAGE,
+        )
+    };
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_turn,
+            auto_compact_failure(),
+            auto_compact_failure(),
+            auto_compact_failure(),
+            auto_compact_failure(),
+            auto_compact_failure(),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_context_window = Some(context_window);
+        config.model_auto_compact_token_limit = Some(limit);
+    });
+    let initial = builder.build(&server).await.unwrap();
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    let mut saw_rollback = false;
+    let mut error_messages = Vec::new();
+    loop {
+        match wait_for_event(&initial.codex, |_| true).await {
+            EventMsg::Error(err) => error_messages.push(err.message),
+            EventMsg::ThreadRolledBack(rollback) => {
+                assert_eq!(rollback.num_turns, 1);
+                saw_rollback = true;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_rollback,
+        "expected automatic rollback after failed mid-turn compaction, got errors: {error_messages:?}"
+    );
+    assert!(
+        error_messages
+            .iter()
+            .any(|message| message.contains("was rolled back")),
+        "expected rollback recovery message, got {error_messages:?}"
+    );
+
+    let requests = request_log.requests();
+    let first_request = requests[0].body_json().to_string();
+    assert!(
+        first_request.contains(FUNCTION_CALL_LIMIT_MSG),
+        "initial request should include the user input that later gets rolled back"
+    );
+    let auto_compact_body = requests[1].body_json().to_string();
+    assert!(
+        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
+        "mid-turn auto compact request should include the summarization prompt"
+    );
+
+    let follow_up_prompt = "AFTER_ROLLBACK";
+    let follow_up_mock = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            std::str::from_utf8(&req.body).is_ok_and(|body| body.contains(follow_up_prompt))
+        },
+        sse(vec![
+            ev_assistant_message("m_after_rollback", FINAL_REPLY),
+            ev_completed("r_after_rollback"),
+        ]),
+    )
+    .await;
+    let resume_model_provider = non_openai_model_provider(&server);
+    let mut resume_builder = test_codex().with_config(move |config| {
+        config.model_provider = resume_model_provider;
+        set_test_compact_prompt(config);
+        config.model_context_window = Some(200_000);
+        config.model_auto_compact_token_limit = Some(180_000);
+    });
+    let resumed = resume_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+    resumed
+        .codex
+        .submit(disabled_permission_user_turn(
+            follow_up_prompt,
+            resumed.cwd.path().to_path_buf(),
+            resumed.session_configured.model.clone(),
+        ))
+        .await
+        .unwrap();
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let follow_up_requests = follow_up_mock.requests();
+    let follow_up_request = follow_up_requests
+        .iter()
+        .find(|request| request.body_json().to_string().contains(follow_up_prompt))
+        .unwrap_or_else(|| panic!("expected resumed request containing {follow_up_prompt}"))
+        .body_json()
+        .to_string();
+    assert!(
+        !follow_up_request.contains(FUNCTION_CALL_LIMIT_MSG),
+        "rolled-back user input should not be replayed after resume: {follow_up_request}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_clamps_config_limit_to_context_window() {
     skip_if_no_network!();
 
@@ -3855,12 +4008,16 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
         })
         .await
         .expect("submit second user");
-    let error_message = wait_for_event_match(&codex, |event| match event {
-        EventMsg::Error(err) => Some(err.message.clone()),
-        _ => None,
-    })
-    .await;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let mut error_message = None;
+    let mut saw_rollback = false;
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::Error(err) => error_message = Some(err.message),
+            EventMsg::ThreadRolledBack(_) => saw_rollback = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
     let requests = request_log.requests();
     assert!(
@@ -3879,6 +4036,11 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
         )
     );
 
+    let error_message = error_message.expect("expected context-window error");
+    assert!(
+        !saw_rollback,
+        "pre-turn compaction failure should not roll back incoming input that was not recorded"
+    );
     assert!(
         error_message.contains("ran out of room in the model's context window"),
         "expected context window exceeded message, got {error_message}"

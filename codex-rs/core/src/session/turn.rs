@@ -37,6 +37,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::handlers::apply_thread_rollback;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -87,6 +88,7 @@ use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
@@ -138,6 +140,7 @@ pub(crate) async fn run_turn(
 ) -> Option<String> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut initial_user_input_recorded = false;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -192,6 +195,7 @@ pub(crate) async fn run_turn(
             user_prompt_submit_outcome.additional_contexts,
         )
         .await;
+        initial_user_input_recorded = true;
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -337,6 +341,19 @@ pub(crate) async fn run_turn(
                     {
                         Ok(reset_client_session) => reset_client_session,
                         Err(err) => {
+                            if matches!(&err, CodexErr::ContextWindowExceeded) {
+                                match rollback_recorded_initial_turn_for_context_window(
+                                    &sess,
+                                    &turn_context,
+                                    initial_user_input_recorded,
+                                )
+                                .await
+                                {
+                                    ContextWindowRollbackResult::RolledBack => return None,
+                                    ContextWindowRollbackResult::NotAttempted
+                                    | ContextWindowRollbackResult::Failed => {}
+                                }
+                            }
                             if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
                                 && let Err(err) = sess
                                     .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
@@ -409,6 +426,32 @@ pub(crate) async fn run_turn(
                 // Aborted turn is reported via a different event.
                 break;
             }
+            Err(CodexErr::ContextWindowExceeded) => {
+                match rollback_recorded_initial_turn_for_context_window(
+                    &sess,
+                    &turn_context,
+                    initial_user_input_recorded,
+                )
+                .await
+                {
+                    ContextWindowRollbackResult::RolledBack => {}
+                    ContextWindowRollbackResult::NotAttempted => {
+                        let event = EventMsg::Error(
+                            CodexErr::ContextWindowExceeded
+                                .to_error_event(/*message_prefix*/ None),
+                        );
+                        sess.send_event(&turn_context, event).await;
+                    }
+                    ContextWindowRollbackResult::Failed => {
+                        let event = EventMsg::Error(
+                            CodexErr::ContextWindowExceeded
+                                .to_error_event(/*message_prefix*/ None),
+                        );
+                        sess.send_event(&turn_context, event).await;
+                    }
+                }
+                break;
+            }
             Err(CodexErr::InvalidImageRequest()) => {
                 {
                     let mut state = sess.state.lock().await;
@@ -448,6 +491,73 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+enum ContextWindowRollbackResult {
+    NotAttempted,
+    RolledBack,
+    Failed,
+}
+
+async fn rollback_recorded_initial_turn_for_context_window(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    initial_user_input_recorded: bool,
+) -> ContextWindowRollbackResult {
+    if !initial_user_input_recorded {
+        return ContextWindowRollbackResult::NotAttempted;
+    }
+
+    warn!(
+        turn_id = %turn_context.sub_id,
+        "context window exceeded after initial user input was recorded; rolling back current turn"
+    );
+    match apply_thread_rollback(sess, turn_context, /*num_turns*/ 1).await {
+        Ok((rollback_msg, flush_error)) => {
+            if let Some(err) = flush_error {
+                warn!(
+                    "rolled back context-window turn in memory, but failed to flush rollback marker: {err}"
+                );
+                sess.send_event(
+                    turn_context.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Rolled the thread back, but failed to save the rollback marker. Codex may retry this failure after resume. Error: {err}"
+                        ),
+                    }),
+                )
+                .await;
+            }
+            sess.deliver_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: rollback_msg,
+            })
+            .await;
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(ErrorEvent {
+                    message: "This turn exceeded the model context window and was rolled back. Split the message into smaller chunks, or save the content to a file and ask Codex to inspect it.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ContextWindowExceeded),
+                }),
+            )
+            .await;
+            ContextWindowRollbackResult::RolledBack
+        }
+        Err(err) => {
+            warn!("failed to rollback context-window turn: {err}");
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(ErrorEvent {
+                    message: format!(
+                        "This turn exceeded the model context window, but Codex could not roll it back automatically: {err}"
+                    ),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            )
+            .await;
+            ContextWindowRollbackResult::Failed
+        }
+    }
 }
 
 #[expect(

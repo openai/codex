@@ -25,7 +25,6 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -40,6 +39,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -2699,13 +2699,18 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config.model = Some("gpt-5.4".to_string());
-            config.model_context_window = Some(272_000);
-        })
-        .build(&server)
-        .await?;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.4".to_string());
+        config.model_context_window = Some(272_000);
+    });
+    let test = builder.build(&server).await?;
+    let codex = Arc::clone(&test.codex);
+    let home = Arc::clone(&test.home);
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     codex
         .submit(Op::UserInput {
@@ -2761,17 +2766,137 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         EFFECTIVE_CONTEXT_WINDOW
     );
 
+    let rollback_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+    assert!(
+        matches!(
+            rollback_event,
+            EventMsg::ThreadRolledBack(ref rollback) if rollback.num_turns == 1
+        ),
+        "expected automatic rollback after context window error; got {rollback_event:?}"
+    );
+
     let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
     assert!(
         matches!(
             error_event,
-            EventMsg::Error(ref err) if err.message == expected_context_window_message
+            EventMsg::Error(ref err)
+                if err.codex_error_info == Some(CodexErrorInfo::ContextWindowExceeded)
+                    && err.message.contains("was rolled back")
         ),
-        "expected context window error; got {error_event:?}"
+        "expected context window rollback error; got {error_event:?}"
     );
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let follow_up_prompt = "after rollback";
+    let follow_up_mock = mount_sse_once_match(
+        &server,
+        body_string_contains(follow_up_prompt),
+        sse(vec![
+            ev_response_created("resp_after_rollback"),
+            ev_completed("resp_after_rollback"),
+        ]),
+    )
+    .await;
+    let mut resume_builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.4".to_string());
+        config.model_context_window = Some(272_000);
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: follow_up_prompt.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let follow_up_request = follow_up_mock.single_request().body_json().to_string();
+    assert!(
+        !follow_up_request.contains("trigger context window"),
+        "rolled-back user input should not be replayed after resume: {follow_up_request}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_error_reports_rollback_failure_when_thread_is_not_persisted()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    mount_sse_once_match(
+        &server,
+        body_string_contains("trigger context window"),
+        sse_failed(
+            "resp_context_window",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.ephemeral = true;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_context_window = Some(272_000);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "trigger context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut saw_repair_failure = false;
+    let mut saw_context_window_error = false;
+    let mut saw_rollback = false;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(err)
+                if err.codex_error_info == Some(CodexErrorInfo::ThreadRollbackFailed) =>
+            {
+                saw_repair_failure = true;
+            }
+            EventMsg::Error(err)
+                if err.codex_error_info == Some(CodexErrorInfo::ContextWindowExceeded) =>
+            {
+                saw_context_window_error = true;
+            }
+            EventMsg::ThreadRolledBack(_) => saw_rollback = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_repair_failure,
+        "expected repair failure error when automatic rollback cannot load persisted history"
+    );
+    assert!(
+        saw_context_window_error,
+        "expected original context-window error after rollback failure"
+    );
+    assert!(
+        !saw_rollback,
+        "ephemeral thread should not emit a rollback marker"
+    );
 
     Ok(())
 }
