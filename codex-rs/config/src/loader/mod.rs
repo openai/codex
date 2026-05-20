@@ -906,6 +906,13 @@ fn project_ignored_config_keys_warning(
     )
 }
 
+fn malformed_disabled_project_config_warning(config_path: &Path, err: &toml::de::Error) -> String {
+    format!(
+        "Ignored malformed project-local config in {} because this project is not trusted: {err}",
+        config_path.display()
+    )
+}
+
 async fn project_trust_context(
     fs: &dyn ExecutorFileSystem,
     merged_config: &TomlValue,
@@ -1182,6 +1189,10 @@ async fn load_project_layers(
                                 ),
                             ));
                         }
+                        startup_warnings.push(malformed_disabled_project_config_warning(
+                            config_file.as_path(),
+                            &e,
+                        ));
                         layers.push(project_layer_entry(
                             &dot_codex_abs,
                             TomlValue::Table(toml::map::Map::new()),
@@ -1208,6 +1219,7 @@ async fn load_project_layers(
                     config,
                     hooks_config_folder_override.as_ref(),
                     decision.is_trusted(),
+                    &mut startup_warnings,
                 )
                 .await?;
                 if disabled_reason.is_none() && !ignored_project_config_keys.is_empty() {
@@ -1234,6 +1246,7 @@ async fn load_project_layers(
                         TomlValue::Table(toml::map::Map::new()),
                         hooks_config_folder_override.as_ref(),
                         decision.is_trusted(),
+                        &mut startup_warnings,
                     )
                     .await?;
                     layers.push(project_layer_entry(
@@ -1266,6 +1279,7 @@ async fn merge_root_checkout_project_hooks(
     mut config: TomlValue,
     hooks_config_folder_override: Option<&AbsolutePathBuf>,
     is_trusted: bool,
+    startup_warnings: &mut Vec<String>,
 ) -> io::Result<TomlValue> {
     let Some(hooks_config_folder) = hooks_config_folder_override else {
         return Ok(config);
@@ -1288,6 +1302,10 @@ async fn merge_root_checkout_project_hooks(
                             ),
                         ));
                     }
+                    startup_warnings.push(malformed_disabled_project_config_warning(
+                        hooks_config_file.as_path(),
+                        &err,
+                    ));
                     TomlValue::Table(toml::map::Map::new())
                 }
             };

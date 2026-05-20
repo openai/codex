@@ -1831,6 +1831,76 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
 }
 
 #[tokio::test]
+async fn malformed_linked_worktree_root_hooks_config_warns_when_project_is_disabled()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let root_dot_codex = repo_root.join(".codex");
+    let worktree_root = tmp.path().join("worktree");
+
+    tokio::fs::create_dir_all(&root_dot_codex).await?;
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    let root_config_path = root_dot_codex.join(CONFIG_TOML_FILE);
+    tokio::fs::write(
+        &root_config_path,
+        r#"[hooks
+"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Untrusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&worktree_root)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(
+        project_layers[0].disabled_reason.is_some(),
+        "expected malformed linked worktree root hooks config layer to be disabled"
+    );
+    assert_eq!(project_hook_command(project_layers[0]), None);
+    let warnings = layers
+        .startup_warnings()
+        .expect("expected malformed linked worktree root hooks config warning");
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].contains(&format!(
+            "Ignored malformed project-local config in {} because this project is not trusted:",
+            root_config_path.display()
+        )),
+        "warning should explain that malformed linked worktree hooks config was ignored"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn nested_project_root_markers_do_not_redirect_regular_repo_hooks() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let repo_root = tmp.path().join("repo");
@@ -2324,6 +2394,170 @@ profile = "ignored"
         Some(&TomlValue::String("user".to_string()))
     );
     assert_eq!(layers_unknown.startup_warnings(), Some(empty_warnings));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_project_config_warns_when_disabled_and_fails_when_trusted() -> std::io::Result<()>
+{
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let dot_codex = nested.join(".codex");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    let project_config_path = dot_codex.join(CONFIG_TOML_FILE);
+    tokio::fs::write(
+        &project_config_path,
+        r#"foo = "child
+"#,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+
+    let codex_home_untrusted = tmp.path().join("home_untrusted_malformed");
+    tokio::fs::create_dir_all(&codex_home_untrusted).await?;
+    make_config_for_test(
+        &codex_home_untrusted,
+        &project_root,
+        TrustLevel::Untrusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+    let untrusted_config_path = codex_home_untrusted.join(CONFIG_TOML_FILE);
+    let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
+    tokio::fs::write(
+        &untrusted_config_path,
+        format!(
+            r#"foo = "user"
+{untrusted_config_contents}"#
+        ),
+    )
+    .await?;
+
+    let layers_untrusted = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home_untrusted,
+        Some(cwd.clone()),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers_untrusted: Vec<_> = layers_untrusted
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers_untrusted.len(), 1);
+    assert!(
+        project_layers_untrusted[0].disabled_reason.is_some(),
+        "expected malformed untrusted project layer to be disabled"
+    );
+    assert_eq!(
+        project_layers_untrusted[0].config,
+        TomlValue::Table(toml::map::Map::new())
+    );
+    assert_eq!(
+        layers_untrusted.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+    let untrusted_warnings = layers_untrusted
+        .startup_warnings()
+        .expect("expected malformed project config warning");
+    assert_eq!(untrusted_warnings.len(), 1);
+    assert!(
+        untrusted_warnings[0].contains(&format!(
+            "Ignored malformed project-local config in {} because this project is not trusted:",
+            project_config_path.display()
+        )),
+        "warning should explain that malformed untrusted project config was ignored"
+    );
+
+    let codex_home_unknown = tmp.path().join("home_unknown_malformed");
+    tokio::fs::create_dir_all(&codex_home_unknown).await?;
+    tokio::fs::write(
+        codex_home_unknown.join(CONFIG_TOML_FILE),
+        r#"foo = "user"
+"#,
+    )
+    .await?;
+
+    let layers_unknown = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home_unknown,
+        Some(cwd.clone()),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let project_layers_unknown: Vec<_> = layers_unknown
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers_unknown.len(), 1);
+    assert!(
+        project_layers_unknown[0].disabled_reason.is_some(),
+        "expected malformed unknown-trust project layer to be disabled"
+    );
+    assert_eq!(
+        project_layers_unknown[0].config,
+        TomlValue::Table(toml::map::Map::new())
+    );
+    assert_eq!(
+        layers_unknown.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+    let unknown_warnings = layers_unknown
+        .startup_warnings()
+        .expect("expected malformed project config warning");
+    assert_eq!(unknown_warnings.len(), 1);
+    assert!(
+        unknown_warnings[0].contains(&format!(
+            "Ignored malformed project-local config in {} because this project is not trusted:",
+            project_config_path.display()
+        )),
+        "warning should explain that malformed unknown-trust project config was ignored"
+    );
+
+    let codex_home_trusted = tmp.path().join("home_trusted_malformed");
+    tokio::fs::create_dir_all(&codex_home_trusted).await?;
+    make_config_for_test(
+        &codex_home_trusted,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home_trusted,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await
+    .expect_err("trusted malformed project config should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("Error parsing project config file"),
+        "trusted project config parse errors should still fail loudly"
+    );
 
     Ok(())
 }
