@@ -1,12 +1,14 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
 use anyhow::Result;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -22,6 +24,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -595,6 +599,172 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(begin_event.source, ExecCommandSource::UnifiedExecStartup);
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_auto_review_override_uses_parent_model_for_guardian() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let model = "remote-auto-review-parent";
+    let mut remote_model = test_remote_model(model, ModelVisibility::List, /*priority*/ 1);
+    remote_model.auto_review_model_override = Some(true);
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let permissions_call_id = "auto-review-permissions-call";
+    let permissions_args = json!({
+        "reason": "exercise strict Guardian model selection",
+        "permissions": {
+            "network": {
+                "enabled": true,
+            },
+        },
+    });
+    let shell_call_id = "auto-review-shell-call";
+    let shell_args = json!({
+        "command": "/bin/echo auto-review model override",
+        "timeout_ms": 5_000,
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-1"),
+                ev_function_call(
+                    permissions_call_id,
+                    "request_permissions",
+                    &serde_json::to_string(&permissions_args)?,
+                ),
+                ev_completed("resp-parent-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-2"),
+                ev_function_call(
+                    shell_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&shell_args)?,
+                ),
+                ev_completed("resp-parent-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message(
+                    "msg-guardian",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "The command only exercises Guardian model selection.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-3"),
+                ev_assistant_message("msg-parent-3", "done"),
+                ev_completed("resp-parent-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some("gpt-5.4".to_string());
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .features
+                .enable(Feature::ExecPermissionApprovals)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("test config should allow feature update");
+        });
+    let TestCodex {
+        codex,
+        cwd,
+        config,
+        thread_manager,
+        ..
+    } = builder.build(&server).await?;
+
+    let models_manager = thread_manager.get_models_manager();
+    wait_for_model_available(&models_manager, model).await;
+    let model_info = models_manager
+        .get_model_info(model, &config.to_models_manager_config())
+        .await;
+    assert_eq!(model_info.auto_review_model_override, Some(true));
+
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            model: Some(model.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let cwd_path = cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd_path.as_path());
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run the Guardian model override check".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::OnRequest),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let permissions_request = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::RequestPermissions(permissions_request) = permissions_request else {
+        panic!("expected request_permissions before completion");
+    };
+    assert_eq!(permissions_request.call_id, permissions_call_id);
+    codex
+        .submit(Op::RequestPermissionsResponse {
+            id: permissions_request.call_id,
+            response: RequestPermissionsResponse {
+                permissions: permissions_request.permissions,
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: true,
+            },
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[2].body_json()["model"].as_str(), Some(model));
 
     Ok(())
 }
