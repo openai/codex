@@ -761,6 +761,7 @@ impl ModelClient {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
+            exclude: vec!["output".to_string()],
             service_tier,
             prompt_cache_key,
             text,

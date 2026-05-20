@@ -68,6 +68,10 @@ async fn responses_mode_stream_cli() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
+    assert_eq!(
+        request.body_json()["exclude"],
+        serde_json::json!(["output"])
+    );
 
     // TODO(jif) fix
     // // Verify a new session rollout was created and is discoverable via list_conversations

@@ -23,6 +23,8 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -121,6 +123,43 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[tokio::test]
+async fn build_responses_request_excludes_completed_output() {
+    let session = test_model_client(SessionSource::Cli).new_session();
+    let prompt = super::Prompt {
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions {
+            text: "base instructions".to_string(),
+        },
+        personality: None,
+        output_schema: None,
+        output_schema_strict: false,
+    };
+    let provider = session
+        .client
+        .state
+        .provider
+        .api_provider()
+        .await
+        .expect("resolve api provider");
+
+    let request = session
+        .client
+        .build_responses_request(
+            &provider,
+            &prompt,
+            &test_model_info(),
+            /*effort*/ None,
+            ReasoningSummaryConfig::None,
+            /*service_tier*/ None,
+        )
+        .expect("build responses request");
+
+    assert_eq!(request.exclude, vec!["output".to_string()]);
 }
 
 #[derive(Default)]
