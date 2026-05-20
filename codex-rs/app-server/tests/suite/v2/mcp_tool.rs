@@ -1,9 +1,15 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
+use anyhow::Context as _;
 use anyhow::Result;
+use anyhow::ensure;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
@@ -13,11 +19,14 @@ use axum::Router;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -29,8 +38,11 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses;
+use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::BooleanSchema;
@@ -68,6 +80,7 @@ const ELICITATION_MESSAGE: &str = "Allow this request?";
 const URL_ELICITATION_TRIGGER_MESSAGE: &str = "auth";
 const URL_ELICITATION_MESSAGE: &str = "Sign in to GitHub to continue.";
 const URL_ELICITATION_URL: &str = "https://github.example/login/device";
+const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
@@ -188,6 +201,121 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_stdio_servers_use_configured_local_and_remote_environments() -> Result<()> {
+    let Some(remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+
+    let local_stdio_server_bin = stdio_server_bin()?;
+    let remote_stdio_server_bin = copy_binary_to_remote_env(
+        &remote_env.container_name,
+        Path::new(&local_stdio_server_bin),
+    )?;
+    write_remote_environment_config(codex_home.path())?;
+    append_stdio_mcp_config(
+        codex_home.path(),
+        &local_stdio_server_bin,
+        &remote_stdio_server_bin,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_test_thread(&mut mcp).await?;
+
+    assert_echo_tool_call(&mut mcp, &thread_id, "remote_stdio", "hello remote").await?;
+    assert_echo_tool_call(&mut mcp, &thread_id, "local_stdio", "hello local").await?;
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = to_response(response)?;
+    let environment_ids = response
+        .data
+        .into_iter()
+        .map(|status| (status.name, status.environment_id))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        environment_ids,
+        BTreeMap::from([
+            ("local_stdio".to_string(), "local".to_string()),
+            ("remote_stdio".to_string(), "remote".to_string()),
+        ])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_stdio_server_requires_local_environment_when_config_omits_environment_id() -> Result<()>
+{
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    append_local_stdio_mcp_config(codex_home.path(), &stdio_server_bin()?)?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_test_thread(&mut mcp).await?;
+
+    let request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id,
+            server: "local_stdio".to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({
+                "message": "hello local",
+            })),
+            meta: None,
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains(
+            "failed to get client: MCP startup failed: local stdio MCP server `local_stdio` requires a local environment"
+        ),
+        "unexpected MCP tool-call error: {error:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_round_trips_elicitation() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
@@ -295,6 +423,152 @@ url = "{mcp_server_url}/mcp"
     let _ = mcp_server_handle.await;
 
     Ok(())
+}
+
+async fn start_test_thread(mcp: &mut McpProcess) -> Result<String> {
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+    Ok(thread.id)
+}
+
+async fn assert_echo_tool_call(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+    server: &str,
+    message: &str,
+) -> Result<()> {
+    let request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread_id.to_string(),
+            server: server.to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({
+                "message": message,
+            })),
+            meta: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(response)?;
+    assert_eq!(
+        response.structured_content,
+        Some(json!({
+            "echo": format!("ECHOING: {message}"),
+            "env": null,
+        }))
+    );
+    assert_eq!(response.is_error, Some(false));
+    Ok(())
+}
+
+fn append_stdio_mcp_config(
+    codex_home: &Path,
+    local_stdio_server_bin: &str,
+    remote_stdio_server_bin: &str,
+) -> Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.local_stdio]
+command = {local_stdio_server_bin:?}
+
+[mcp_servers.remote_stdio]
+environment_id = "remote"
+command = {remote_stdio_server_bin:?}
+cwd = "/tmp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+    Ok(())
+}
+
+fn append_local_stdio_mcp_config(codex_home: &Path, local_stdio_server_bin: &str) -> Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.local_stdio]
+command = {local_stdio_server_bin:?}
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+    Ok(())
+}
+
+fn write_remote_environment_config(codex_home: &Path) -> Result<()> {
+    let remote_exec_server_url = std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR)
+        .with_context(|| format!("{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set"))?;
+    std::fs::write(
+        codex_home.join("environments.toml"),
+        format!(
+            r#"default = "remote"
+
+[[environments]]
+id = "remote"
+url = {remote_exec_server_url:?}
+"#
+        ),
+    )?;
+    Ok(())
+}
+
+fn copy_binary_to_remote_env(container_name: &str, host_path: &Path) -> Result<String> {
+    let remote_path = unique_remote_path("test_stdio_server")?;
+    let mkdir_output = StdCommand::new("docker")
+        .args([
+            "exec",
+            container_name,
+            "mkdir",
+            "-p",
+            "/tmp/codex-remote-env",
+        ])
+        .output()
+        .context("create remote MCP test binary directory")?;
+    ensure!(
+        mkdir_output.status.success(),
+        "docker mkdir remote MCP test binary directory failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&mkdir_output.stdout).trim(),
+        String::from_utf8_lossy(&mkdir_output.stderr).trim()
+    );
+
+    let container_target = format!("{container_name}:{remote_path}");
+    let copy_output = StdCommand::new("docker")
+        .arg("cp")
+        .arg(host_path)
+        .arg(&container_target)
+        .output()
+        .with_context(|| format!("copy {} to remote MCP test env", host_path.display()))?;
+    ensure!(
+        copy_output.status.success(),
+        "docker cp remote MCP test binary failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&copy_output.stdout).trim(),
+        String::from_utf8_lossy(&copy_output.stderr).trim()
+    );
+
+    Ok(remote_path)
+}
+
+fn unique_remote_path(binary_name: &str) -> Result<String> {
+    let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    Ok(format!(
+        "/tmp/codex-remote-env/{binary_name}-{}-{unique_suffix}",
+        std::process::id()
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
