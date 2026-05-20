@@ -272,14 +272,16 @@ fn config_from_layers(
     layers: &ConfigLayerStack,
     exec_policy: &codex_execpolicy::Policy,
 ) -> Result<NetworkProxyConfig> {
-    let mut accumulator = NetworkConfigAccumulator::default();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        let parsed = network_tables_from_toml(&layer.config)?;
-        accumulator.apply_network_tables(parsed)?;
+        merge_toml_values(&mut merged, &layer.config);
     }
+    let parsed = network_tables_from_toml(&merged)?;
+    let mut accumulator = NetworkConfigAccumulator::default();
+    accumulator.apply_network_tables(parsed)?;
     let mut config = accumulator.finish()?;
     apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)

@@ -765,13 +765,13 @@ mode = "full"
 [permissions.dev.network.domains]
 "openai.com" = "allow"
 
-[permissions.workspace.network.mitm.hooks.github_write]
+[permissions.dev.network.mitm.hooks.github_write]
 host = "api.github.com"
 methods = ["POST", "PUT"]
 path_prefixes = ["/repos/openai/"]
 action = ["strip_auth"]
 
-[permissions.workspace.network.mitm.actions.strip_auth]
+[permissions.dev.network.mitm.actions.strip_auth]
 strip_request_headers = ["authorization"]
 "#;
     let cfg: ConfigToml =
