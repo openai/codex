@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -39,9 +40,11 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+const BIN_DIRNAME: &str = "bin";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const RESOURCES_DIRNAME: &str = "codex-resources";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -584,24 +587,38 @@ fn quote_arg(arg: &str) -> String {
 
 fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
+        return setup_exe;
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
+}
+
+fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let candidate = dir.join("codex-windows-sandbox-setup.exe");
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+
+    if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
+        && let Some(package_dir) = dir.parent()
+    {
+        let package_resource_candidate = package_dir
+            .join(RESOURCES_DIRNAME)
+            .join("codex-windows-sandbox-setup.exe");
+        if package_resource_candidate.is_file() {
+            return Some(package_resource_candidate);
+        }
+    }
+
+    // Older standalone installs keep Windows helper binaries under
+    // `codex-resources/` next to `codex.exe`, so elevation still probes that
+    // sibling folder before falling back to PATH.
+    let resource_candidate = dir
+        .join(RESOURCES_DIRNAME)
+        .join("codex-windows-sandbox-setup.exe");
+    resource_candidate.is_file().then_some(resource_candidate)
 }
 
 fn report_helper_failure(
@@ -964,8 +981,11 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::BIN_DIRNAME;
+    use super::RESOURCES_DIRNAME;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::find_setup_exe_for_current_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -1003,6 +1023,24 @@ mod tests {
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
         );
+    }
+
+    #[test]
+    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&setup_exe, b"setup").expect("write setup");
+
+        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
+
+        assert_eq!(resolved, setup_exe);
     }
 
     #[test]
