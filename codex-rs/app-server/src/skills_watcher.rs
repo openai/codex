@@ -16,6 +16,7 @@ use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio_util::sync::CancellationToken;
+use tokio_util::sync::DropGuard;
 use tracing::warn;
 
 #[cfg(not(test))]
@@ -26,6 +27,7 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 pub(crate) struct SkillsWatcher {
     subscriber: FileWatcherSubscriber,
     shutdown_token: CancellationToken,
+    _shutdown_drop_guard: DropGuard,
 }
 
 impl SkillsWatcher {
@@ -42,10 +44,12 @@ impl SkillsWatcher {
         };
         let (subscriber, rx) = file_watcher.add_subscriber();
         let shutdown_token = CancellationToken::new();
+        let shutdown_drop_guard = shutdown_token.clone().drop_guard();
         Self::spawn_event_loop(rx, skills_manager, outgoing, shutdown_token.child_token());
         Arc::new(Self {
             subscriber,
             shutdown_token,
+            _shutdown_drop_guard: shutdown_drop_guard,
         })
     }
 
@@ -126,11 +130,5 @@ impl SkillsWatcher {
                     .await;
             }
         });
-    }
-}
-
-impl Drop for SkillsWatcher {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }

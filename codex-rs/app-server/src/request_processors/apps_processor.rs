@@ -1,6 +1,5 @@
 use super::*;
 
-#[derive(Clone)]
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
@@ -8,6 +7,7 @@ pub(crate) struct AppsRequestProcessor {
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     shutdown_token: CancellationToken,
+    _shutdown_drop_guard: DropGuard,
 }
 
 impl AppsRequestProcessor {
@@ -19,6 +19,7 @@ impl AppsRequestProcessor {
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
         shutdown_token: CancellationToken,
     ) -> Self {
+        let shutdown_drop_guard = shutdown_token.clone().drop_guard();
         Self {
             auth_manager,
             thread_manager,
@@ -26,6 +27,7 @@ impl AppsRequestProcessor {
             config_manager,
             workspace_settings_cache,
             shutdown_token,
+            _shutdown_drop_guard: shutdown_drop_guard,
         }
     }
 
@@ -378,10 +380,4 @@ async fn send_app_list_updated_notification(
             AppListUpdatedNotification { data },
         ))
         .await;
-}
-
-impl Drop for AppsRequestProcessor {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
 }
