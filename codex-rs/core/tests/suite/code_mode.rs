@@ -715,6 +715,40 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_truncates_larger_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 25000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        format!(
+            "Total output lines: 1\n\n{}…2500 tokens truncated…{}",
+            "A".repeat(40_000),
+            "A".repeat(40_000)
+        )
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
