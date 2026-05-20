@@ -78,10 +78,16 @@ impl App {
     ) -> ThreadSessionState {
         let permission_profile = self.current_permission_profile();
         let active_permission_profile = self.current_active_permission_profile();
-        let mut session = self
-            .primary_session_configured
-            .clone()
-            .unwrap_or(ThreadSessionState {
+        let mut session = if let Some(mut session) = self.primary_session_configured.clone() {
+            if session.thread_id != thread_id {
+                // `thread/read` does not include thread settings, so do not carry
+                // thread-scoped state from the currently active session.
+                session.collaboration_mode = None;
+                session.personality = None;
+            }
+            session
+        } else {
+            ThreadSessionState {
                 thread_id,
                 forked_from_id: None,
                 fork_parent_title: None,
@@ -100,11 +106,12 @@ impl App {
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
                 collaboration_mode: None,
-                personality: self.chat_widget.config_ref().personality,
+                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: thread.path.clone(),
-            });
+            }
+        };
         session.thread_id = thread_id;
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
