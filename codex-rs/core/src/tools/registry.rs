@@ -72,7 +72,33 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
             return None;
         }
 
-        default_function_post_tool_use_payload(invocation, result)
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        Some(PostToolUsePayload {
+            tool_name: function_hook_tool_name(invocation),
+            tool_use_id: result.post_tool_use_id(&invocation.call_id),
+            tool_input: result
+                .post_tool_use_input(&invocation.payload)
+                .unwrap_or_else(|| function_hook_tool_input(arguments)),
+            tool_response: result
+                .post_tool_use_response(&invocation.call_id, &invocation.payload)
+                .or_else(|| {
+                    // Most function tools can expose their model-facing output
+                    // as the hook response. Outputs with a more stable hook
+                    // contract should override post_tool_use_response above.
+                    let ResponseInputItem::FunctionCallOutput {
+                        output: FunctionCallOutputPayload { body, .. },
+                        ..
+                    } = result.to_response_item(&invocation.call_id, &invocation.payload)
+                    else {
+                        return None;
+                    };
+
+                    serde_json::to_value(body).ok()
+                })?,
+        })
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -80,7 +106,14 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
             return None;
         }
 
-        default_function_pre_tool_use_payload(invocation)
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        Some(PreToolUsePayload {
+            tool_name: function_hook_tool_name(invocation),
+            tool_input: function_hook_tool_input(arguments),
+        })
     }
 
     /// Rebuilds a tool invocation from hook-facing `tool_input`.
@@ -93,7 +126,22 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
         if self.supports_default_function_tool_hooks() {
-            return rewrite_function_tool_hook_input(invocation, updated_input);
+            let ToolPayload::Function { .. } = &invocation.payload else {
+                return Err(FunctionCallError::RespondToModel(
+                    "hook input rewrite received unsupported function tool payload".to_string(),
+                ));
+            };
+
+            let arguments = serde_json::to_string(&updated_input).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to serialize rewritten {} arguments: {err}",
+                    flat_tool_name(&invocation.tool_name)
+                ))
+            })?;
+            return Ok(ToolInvocation {
+                payload: ToolPayload::Function { arguments },
+                ..invocation
+            });
         }
 
         Err(FunctionCallError::RespondToModel(
@@ -651,57 +699,6 @@ async fn handle_any_tool(
     })
 }
 
-fn default_function_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-    let ToolPayload::Function { arguments } = &invocation.payload else {
-        return None;
-    };
-
-    Some(PreToolUsePayload {
-        tool_name: function_hook_tool_name(invocation),
-        tool_input: function_hook_tool_input(arguments),
-    })
-}
-
-fn default_function_post_tool_use_payload(
-    invocation: &ToolInvocation,
-    result: &dyn ToolOutput,
-) -> Option<PostToolUsePayload> {
-    let ToolPayload::Function { arguments } = &invocation.payload else {
-        return None;
-    };
-
-    Some(PostToolUsePayload {
-        tool_name: function_hook_tool_name(invocation),
-        tool_use_id: result.post_tool_use_id(&invocation.call_id),
-        tool_input: result
-            .post_tool_use_input(&invocation.payload)
-            .unwrap_or_else(|| function_hook_tool_input(arguments)),
-        tool_response: result
-            .post_tool_use_response(&invocation.call_id, &invocation.payload)
-            .or_else(|| model_visible_function_tool_response(invocation, result))?,
-    })
-}
-
-fn rewrite_function_tool_hook_input(
-    mut invocation: ToolInvocation,
-    updated_input: Value,
-) -> Result<ToolInvocation, FunctionCallError> {
-    let ToolPayload::Function { .. } = &invocation.payload else {
-        return Err(FunctionCallError::RespondToModel(
-            "hook input rewrite received unsupported function tool payload".to_string(),
-        ));
-    };
-
-    let arguments = serde_json::to_string(&updated_input).map_err(|err| {
-        FunctionCallError::RespondToModel(format!(
-            "failed to serialize rewritten {} arguments: {err}",
-            flat_tool_name(&invocation.tool_name)
-        ))
-    })?;
-    invocation.payload = ToolPayload::Function { arguments };
-    Ok(invocation)
-}
-
 fn function_hook_tool_name(invocation: &ToolInvocation) -> HookToolName {
     HookToolName::new(flat_tool_name(&invocation.tool_name).into_owned())
 }
@@ -712,21 +709,6 @@ fn function_hook_tool_input(arguments: &str) -> Value {
     }
 
     serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_string()))
-}
-
-fn model_visible_function_tool_response(
-    invocation: &ToolInvocation,
-    result: &dyn ToolOutput,
-) -> Option<Value> {
-    let ResponseInputItem::FunctionCallOutput {
-        output: FunctionCallOutputPayload { body, .. },
-        ..
-    } = result.to_response_item(&invocation.call_id, &invocation.payload)
-    else {
-        return None;
-    };
-
-    serde_json::to_value(body).ok()
 }
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {
