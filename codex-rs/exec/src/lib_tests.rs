@@ -477,6 +477,53 @@ async fn thread_start_params_include_user_thread_source() {
     );
 }
 
+#[tokio::test]
+async fn exec_config_preserves_reviewable_approval_policy_for_required_auto_review() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let cloud_requirements = codex_config::CloudRequirementsLoader::new(async {
+        Ok(Some(codex_config::ConfigRequirementsToml {
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+            ..Default::default()
+        }))
+    });
+    let build_config = |approval_policy| {
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approval_policy,
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            })
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+    };
+    let constrained = build_config(Some(AskForApproval::Never))
+        .await
+        .expect("build config with exec approval override");
+    let exec_config = if constrained.approvals_reviewer == ApprovalsReviewer::AutoReview {
+        build_config(None)
+            .await
+            .expect("rebuild config without exec approval override")
+    } else {
+        constrained
+    };
+    let expected = build_config(None)
+        .await
+        .expect("build config without exec approval override");
+
+    assert_eq!(
+        exec_config.approvals_reviewer,
+        ApprovalsReviewer::AutoReview
+    );
+    assert_eq!(expected.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        exec_config.permissions.approval_policy.value(),
+        expected.permissions.approval_policy.value()
+    );
+}
+
 #[test]
 fn active_profile_selection_uses_profile_id_only() {
     let selection = permission_profile_id_from_active_profile(ActivePermissionProfile::new(

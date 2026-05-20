@@ -80,6 +80,7 @@ use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
@@ -405,12 +406,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         None // No model specified, will use the default.
     };
 
-    // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
         review_model: None,
         config_profile,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
+        // Default to never ask for approvals in headless mode. Rebuild below if
+        // the fully resolved reviewer is AutoReview.
         approval_policy: Some(AskForApproval::Never),
         approvals_reviewer: None,
         sandbox_mode,
@@ -435,14 +436,26 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
     };
 
-    let config = ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides)
-        .harness_overrides(overrides)
-        .loader_overrides(loader_overrides)
-        .strict_config(strict_config)
-        .cloud_requirements(cloud_requirements)
-        .build()
-        .await?;
+    let build_config = |overrides| {
+        ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .cli_overrides(cli_kv_overrides.clone())
+            .harness_overrides(overrides)
+            .loader_overrides(loader_overrides.clone())
+            .strict_config(strict_config)
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+    };
+    let config = build_config(overrides.clone()).await?;
+    let config = if config.approvals_reviewer == ApprovalsReviewer::AutoReview {
+        build_config(ConfigOverrides {
+            approval_policy: None,
+            ..overrides
+        })
+        .await?
+    } else {
+        config
+    };
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
