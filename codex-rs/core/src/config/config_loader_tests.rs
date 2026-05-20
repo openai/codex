@@ -1097,7 +1097,6 @@ allowed_approval_policies = ["on-request"]
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
-                default_permissions: None,
                 allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
@@ -1158,7 +1157,6 @@ allowed_approval_policies = ["on-request"]
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
-            default_permissions: None,
             allowed_permissions: None,
             remote_sandbox_config: None,
             allowed_web_search_modes: None,
@@ -1368,7 +1366,6 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
-        default_permissions: None,
         allowed_permissions: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
@@ -1427,10 +1424,7 @@ async fn system_requirements_define_managed_permission_profiles() -> anyhow::Res
     tokio::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
         r#"
-default_permissions = "local"
-
-[permissions.local.filesystem]
-":workspace_roots" = "read"
+default_permissions = "managed-standard"
 "#,
     )
     .await?;
@@ -1438,13 +1432,10 @@ default_permissions = "local"
     tokio::fs::write(
         &requirements_path,
         r#"
-default_permissions = "managed-standard"
 allowed_permissions = ["managed-standard"]
 
 [permissions.managed-standard]
-
-[permissions.managed-standard.filesystem]
-":workspace_roots" = "read"
+extends = ":workspace"
 "#,
     )
     .await?;
@@ -1588,51 +1579,6 @@ allowed_permissions = ["managed-standard"]
 }
 
 #[tokio::test]
-async fn system_requirements_profiles_apply_with_legacy_sandbox_config() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"
-sandbox_mode = "danger-full-access"
-"#,
-    )
-    .await?;
-    let requirements_path = tmp.path().join("requirements.toml");
-    tokio::fs::write(
-        &requirements_path,
-        r#"
-default_permissions = "managed-standard"
-allowed_permissions = ["managed-standard"]
-
-[permissions.managed-standard.filesystem]
-":workspace_roots" = "read"
-"#,
-    )
-    .await?;
-
-    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
-    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
-    overrides.system_requirements_path = Some(requirements_path);
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home)
-        .fallback_cwd(Some(cwd.to_path_buf()))
-        .loader_overrides(overrides)
-        .build()
-        .await?;
-
-    assert_eq!(
-        config
-            .permissions
-            .active_permission_profile()
-            .map(|profile| profile.id),
-        Some("managed-standard".to_string())
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn system_requirements_preserve_allowed_configured_permission_default() -> anyhow::Result<()>
 {
     let tmp = tempdir()?;
@@ -1649,14 +1595,13 @@ default_permissions = "managed-build"
     tokio::fs::write(
         &requirements_path,
         r#"
-default_permissions = "managed-standard"
 allowed_permissions = ["managed-standard", "managed-build"]
 
-[permissions.managed-standard.filesystem]
-":workspace_roots" = "read"
+[permissions.managed-standard]
+extends = ":read-only"
 
-[permissions.managed-build.filesystem]
-":workspace_roots" = "write"
+[permissions.managed-build]
+extends = ":workspace"
 "#,
     )
     .await?;
@@ -1691,11 +1636,10 @@ async fn system_requirements_warn_for_disallowed_explicit_permission_override() 
     tokio::fs::write(
         &requirements_path,
         r#"
-default_permissions = "managed-standard"
 allowed_permissions = ["managed-standard"]
 
-[permissions.managed-standard.filesystem]
-":workspace_roots" = "read"
+[permissions.managed-standard]
+extends = ":workspace"
 "#,
     )
     .await?;

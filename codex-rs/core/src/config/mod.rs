@@ -122,7 +122,6 @@ use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::compile_permission_profile_workspace_roots;
 use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
-use crate::config::permissions::is_builtin_permission_profile_name;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
 use crate::config_lock::config_without_lock_controls;
@@ -3801,8 +3800,7 @@ fn resolve_effective_permission_selection<'a>(
     Ok(EffectivePermissionSelection {
         profiles,
         selected_profile_id,
-        requirements_force_profile_selection: requirements_toml.default_permissions.is_some()
-            || requirements_toml.allowed_permissions.is_some(),
+        requirements_force_profile_selection: requirements_toml.allowed_permissions.is_some(),
     })
 }
 
@@ -3813,9 +3811,7 @@ fn resolve_default_permissions<'a>(
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<Option<&'a str>> {
     let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
-    let mut default_permissions = default_permissions_override
-        .or(configured_default_permissions)
-        .or(requirements_toml.default_permissions.as_deref());
+    let mut default_permissions = default_permissions_override.or(configured_default_permissions);
     if let (Some(selected_permissions), Some(allowed_permissions)) =
         (default_permissions, allowed_permissions)
         && !is_builtin_permission_profile_name(selected_permissions)
@@ -3823,11 +3819,7 @@ fn resolve_default_permissions<'a>(
             .iter()
             .any(|allowed_permission| allowed_permission == selected_permissions)
     {
-        let Some(fallback_permissions) = requirements_toml
-            .default_permissions
-            .as_deref()
-            .or_else(|| allowed_permissions.first().map(String::as_str))
-        else {
+        let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 "requirements.toml allowed_permissions must include at least one profile",
@@ -3853,17 +3845,6 @@ fn validate_required_permission_profile_catalog(
                 .is_some_and(|permissions| permissions.entries.contains_key(profile_id))
     };
 
-    if let Some(default_permissions) = requirements_toml.default_permissions.as_deref()
-        && !is_known_profile(default_permissions)
-    {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "requirements.toml default_permissions refers to undefined profile `{default_permissions}`"
-            ),
-        ));
-    }
-
     let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
         return Ok(());
     };
@@ -3883,20 +3864,6 @@ fn validate_required_permission_profile_catalog(
                 ),
             ));
         }
-    }
-
-    if let Some(default_permissions) = requirements_toml.default_permissions.as_deref()
-        && !is_builtin_permission_profile_name(default_permissions)
-        && !allowed_permissions
-            .iter()
-            .any(|profile_id| profile_id == default_permissions)
-    {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "requirements.toml default_permissions `{default_permissions}` must also be listed in allowed_permissions"
-            ),
-        ));
     }
 
     Ok(())
