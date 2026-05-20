@@ -14,7 +14,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crossterm::Command;
-use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -43,6 +42,7 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
+use crate::raw_ansi;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
@@ -91,9 +91,13 @@ impl Drop for Tui {
 mod tests {
     use std::io::Write as _;
 
+    use super::PendingHistoryLines;
+    use super::Tui;
     use super::clear_for_viewport_change;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
+    use crate::insert_history::HistoryLineWrapPolicy;
+    use crate::raw_ansi::RawAnsiCapability;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
     use ratatui::layout::Position;
@@ -163,10 +167,45 @@ mod tests {
             "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
     }
+
+    #[test]
+    fn raw_ansi_disabled_skips_pending_history_writes() {
+        let width = 12;
+        let backend = VT100Backend::new(width, /*height*/ 4);
+        let mut terminal =
+            CustomTerminal::with_options_and_cursor_position(backend, Position { x: 0, y: 1 })
+                .expect("terminal");
+        let mut pending_history_lines = vec![PendingHistoryLines {
+            lines: vec![ratatui::text::Line::from("history")],
+            wrap_policy: HistoryLineWrapPolicy::PreWrap,
+        }];
+
+        Tui::flush_pending_history_lines_with_raw_ansi_capability(
+            &mut terminal,
+            &mut pending_history_lines,
+            RawAnsiCapability::Unavailable,
+        )
+        .expect("skip history writes");
+
+        assert!(pending_history_lines.is_empty());
+        let rows: Vec<String> = terminal
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .collect();
+        assert!(
+            !rows.iter().any(|row| row.contains("history")),
+            "expected no history writes while raw ANSI is unavailable, rows: {rows:?}"
+        );
+    }
 }
 
 pub fn set_modes() -> Result<()> {
-    execute!(stdout(), EnableBracketedPaste)?;
+    let raw_ansi_capability = raw_ansi::stdout_capability();
+    if raw_ansi_capability.is_available() {
+        execute!(stdout(), EnableBracketedPaste)?;
+    }
 
     enable_raw_mode()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
@@ -177,7 +216,9 @@ pub fn set_modes() -> Result<()> {
     // gracefully if unsupported.
     keyboard_modes::enable_keyboard_enhancement();
 
-    let _ = execute!(stdout(), EnableFocusChange);
+    if raw_ansi_capability.is_available() {
+        let _ = execute!(stdout(), EnableFocusChange);
+    }
     Ok(())
 }
 
@@ -244,8 +285,15 @@ fn restore_common(
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
     }
 
-    let mut first_error = execute!(stdout(), DisableBracketedPaste).err();
-    let _ = execute!(stdout(), DisableFocusChange);
+    let raw_ansi_capability = raw_ansi::stdout_capability();
+    let mut first_error = if raw_ansi_capability.is_available() {
+        execute!(stdout(), DisableBracketedPaste).err()
+    } else {
+        None
+    };
+    if raw_ansi_capability.is_available() {
+        let _ = execute!(stdout(), DisableFocusChange);
+    }
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
     {
@@ -659,6 +707,10 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+        let raw_ansi_capability = raw_ansi::stdout_capability();
+        if !raw_ansi_capability.is_available() {
+            return Ok(());
+        }
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
         // Enable "alternate scroll" so terminals may translate wheel to arrows
         let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
@@ -681,9 +733,12 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+        let raw_ansi_capability = raw_ansi::stdout_capability();
         // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        if raw_ansi_capability.is_available() {
+            let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
+            let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        }
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
         }
@@ -762,11 +817,33 @@ impl Tui {
     }
 
     /// Write any buffered history lines above the viewport and clear the buffer.
-    fn flush_pending_history_lines(
-        terminal: &mut Terminal,
+    fn flush_pending_history_lines<B>(
+        terminal: &mut CustomTerminal<B>,
         pending_history_lines: &mut Vec<PendingHistoryLines>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
+        Self::flush_pending_history_lines_with_raw_ansi_capability(
+            terminal,
+            pending_history_lines,
+            raw_ansi::stdout_capability(),
+        )
+    }
+
+    fn flush_pending_history_lines_with_raw_ansi_capability<B>(
+        terminal: &mut CustomTerminal<B>,
+        pending_history_lines: &mut Vec<PendingHistoryLines>,
+        raw_ansi_capability: raw_ansi::RawAnsiCapability,
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
         if pending_history_lines.is_empty() {
+            return Ok(());
+        }
+        if !raw_ansi_capability.is_available() {
+            pending_history_lines.clear();
             return Ok(());
         }
 
@@ -797,7 +874,7 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
-        stdout().sync_update(|_| {
+        raw_ansi::synchronized_update(|| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -856,7 +933,7 @@ impl Tui {
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
         let terminal = &mut self.terminal;
         let state = &mut self.ambient_pet_image_state;
-        stdout().sync_update(|_| {
+        raw_ansi::synchronized_update(|| {
             match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
                 Ok(()) => Ok(Ok(())),
                 Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
@@ -871,7 +948,7 @@ impl Tui {
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
         let terminal = &mut self.terminal;
         let state = &mut self.pet_picker_preview_image_state;
-        stdout().sync_update(|_| {
+        raw_ansi::synchronized_update(|| {
             match crate::pets::render_pet_picker_preview_image(
                 terminal.backend_mut(),
                 state,
@@ -911,7 +988,7 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        stdout().sync_update(|_| {
+        raw_ansi::synchronized_update(|| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;

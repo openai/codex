@@ -3712,6 +3712,7 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "tracing",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

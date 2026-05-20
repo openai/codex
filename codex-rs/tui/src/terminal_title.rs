@@ -23,6 +23,8 @@ use std::io::stdout;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
+use crate::raw_ansi;
+
 /// Practical upper bound on title length, measured in Rust `char`s.
 ///
 /// Most terminals silently truncate titles beyond a few hundred characters.
@@ -41,6 +43,8 @@ pub(crate) enum SetTerminalTitleResult {
     /// empty post-sanitization value should result in no-op behavior, clearing
     /// the title Codex manages, or some other fallback.
     NoVisibleContent,
+    /// The title would require a raw ANSI write while stdout cannot safely emit one.
+    SkippedUnsupported,
 }
 
 /// Writes a sanitized OSC window-title sequence to stdout.
@@ -56,6 +60,9 @@ pub(crate) enum SetTerminalTitleResult {
 pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResult> {
     if !stdout().is_terminal() {
         return Ok(SetTerminalTitleResult::Applied);
+    }
+    if !title_output_supported(raw_ansi::stdout_capability()) {
+        return Ok(SetTerminalTitleResult::SkippedUnsupported);
     }
 
     let title = sanitize_terminal_title(title);
@@ -75,8 +82,15 @@ pub(crate) fn clear_terminal_title() -> io::Result<()> {
     if !stdout().is_terminal() {
         return Ok(());
     }
+    if !title_output_supported(raw_ansi::stdout_capability()) {
+        return Ok(());
+    }
 
     execute!(stdout(), SetWindowTitle(String::new()))
+}
+
+fn title_output_supported(raw_ansi_capability: raw_ansi::RawAnsiCapability) -> bool {
+    raw_ansi_capability.is_available()
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +195,8 @@ mod tests {
     use super::MAX_TERMINAL_TITLE_CHARS;
     use super::SetWindowTitle;
     use super::sanitize_terminal_title;
+    use super::title_output_supported;
+    use crate::raw_ansi::RawAnsiCapability;
     use crossterm::Command;
     use pretty_assertions::assert_eq;
 
@@ -221,5 +237,10 @@ mod tests {
             .write_ansi(&mut out)
             .expect("encode terminal title");
         assert_eq!(out, "\x1b]0;hello\x07");
+    }
+
+    #[test]
+    fn raw_ansi_disabled_skips_terminal_title_output() {
+        assert!(!title_output_supported(RawAnsiCapability::Unavailable));
     }
 }

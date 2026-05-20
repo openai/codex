@@ -15,5 +15,11 @@ workspace = true
 [dependencies]
 tracing = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -160,6 +160,7 @@ mod oss_selection;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+mod raw_ansi;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;

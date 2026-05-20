@@ -57,7 +57,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::WindowsStdoutVtState;
 use codex_terminal_detection::terminal_info;
+use codex_terminal_detection::windows_stdout_vt_state;
 use codex_tui::Cli as TuiCli;
 use codex_utils_cli::CliConfigOverrides;
 use http::HeaderMap;
@@ -1580,6 +1582,7 @@ struct TerminalCheckInputs {
     stream_supports_color: bool,
     terminal_size: Result<(u16, u16), String>,
     tmux_details: Vec<String>,
+    windows_stdout_vt_state: Option<WindowsStdoutVtState>,
 }
 
 impl TerminalCheckInputs {
@@ -1604,6 +1607,7 @@ impl TerminalCheckInputs {
             stream_supports_color: supports_color::on(Stream::Stdout).is_some(),
             terminal_size,
             tmux_details,
+            windows_stdout_vt_state: cfg!(windows).then(windows_stdout_vt_state),
         }
     }
 
@@ -1642,6 +1646,9 @@ fn terminal_check_from_inputs(inputs: TerminalCheckInputs) -> DoctorCheck {
     match &inputs.terminal_size {
         Ok((columns, rows)) => details.push(format!("terminal size: {columns}x{rows}")),
         Err(err) => details.push(format!("terminal size: unavailable ({err})")),
+    }
+    if let Some(windows_stdout_vt_state) = inputs.windows_stdout_vt_state {
+        push_windows_stdout_vt_details(&mut details, windows_stdout_vt_state);
     }
     push_terminal_env_values(&mut details, &inputs, TERMINAL_DIMENSION_ENV_VARS);
     details.push(format!("color output: {}", color_output_summary(&inputs)));
@@ -1709,6 +1716,26 @@ fn terminal_check_from_inputs(inputs: TerminalCheckInputs) -> DoctorCheck {
         check = check.issue(issue);
     }
     check
+}
+
+fn push_windows_stdout_vt_details(
+    details: &mut Vec<String>,
+    windows_stdout_vt_state: WindowsStdoutVtState,
+) {
+    match windows_stdout_vt_state {
+        WindowsStdoutVtState::Enabled { console_mode } => {
+            details.push(format!("Windows stdout console mode: {console_mode}"));
+            details.push("Windows stdout VT processing: enabled".to_string());
+        }
+        WindowsStdoutVtState::Disabled { console_mode } => {
+            details.push(format!("Windows stdout console mode: {console_mode}"));
+            details.push("Windows stdout VT processing: disabled".to_string());
+        }
+        WindowsStdoutVtState::Unavailable => {
+            details.push("Windows stdout console mode: unavailable".to_string());
+            details.push("Windows stdout VT processing: unavailable".to_string());
+        }
+    }
 }
 
 fn terminal_name(info: &TerminalInfo) -> &'static str {
@@ -3724,6 +3751,7 @@ mod tests {
             stream_supports_color: true,
             terminal_size: Ok((120, 40)),
             tmux_details: Vec::new(),
+            windows_stdout_vt_state: None,
         }
     }
 
@@ -3866,6 +3894,63 @@ mod tests {
 
         assert_eq!(check.status, CheckStatus::Ok);
         assert_eq!(check.summary, "terminal metadata was detected");
+    }
+
+    #[test]
+    fn terminal_check_reports_windows_stdout_vt_processing_when_enabled() {
+        let mut inputs = terminal_inputs();
+        inputs.windows_stdout_vt_state = Some(WindowsStdoutVtState::Enabled { console_mode: 7 });
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout console mode: 7".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout VT processing: enabled".to_string())
+        );
+    }
+
+    #[test]
+    fn terminal_check_reports_windows_stdout_vt_processing_when_disabled() {
+        let mut inputs = terminal_inputs();
+        inputs.windows_stdout_vt_state = Some(WindowsStdoutVtState::Disabled { console_mode: 3 });
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout console mode: 3".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout VT processing: disabled".to_string())
+        );
+    }
+
+    #[test]
+    fn terminal_check_reports_unavailable_windows_stdout_vt_processing() {
+        let mut inputs = terminal_inputs();
+        inputs.windows_stdout_vt_state = Some(WindowsStdoutVtState::Unavailable);
+
+        let check = terminal_check_from_inputs(inputs);
+
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout console mode: unavailable".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&"Windows stdout VT processing: unavailable".to_string())
+        );
     }
 
     #[test]

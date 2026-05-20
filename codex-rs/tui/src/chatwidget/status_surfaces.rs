@@ -237,6 +237,7 @@ impl ChatWidget {
                         tracing::debug!(error = %err, "failed to clear terminal title");
                     }
                 }
+                Ok(SetTerminalTitleResult::SkippedUnsupported) => {}
                 Err(err) => {
                     tracing::debug!(error = %err, "failed to set terminal title");
                 }

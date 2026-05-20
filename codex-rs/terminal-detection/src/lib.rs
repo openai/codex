@@ -5,6 +5,128 @@
 
 use std::sync::OnceLock;
 
+/// Visibility into the Windows stdout console VT-processing mode.
+///
+/// Windows console handles expose a mode bit that controls whether emitted VT
+/// sequences are interpreted by the terminal. PTY-style stdout handles do not
+/// necessarily support this console-mode inspection; those land in
+/// [`WindowsStdoutVtState::Unavailable`] instead of being treated as broken.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowsStdoutVtState {
+    /// Stdout is an inspectable Windows console handle and VT processing is enabled.
+    Enabled {
+        /// Console mode bits reported for stdout.
+        console_mode: u32,
+    },
+    /// Stdout is an inspectable Windows console handle and VT processing is disabled.
+    Disabled {
+        /// Console mode bits reported for stdout.
+        console_mode: u32,
+    },
+    /// Stdout is not an inspectable Windows console handle.
+    Unavailable,
+}
+
+impl WindowsStdoutVtState {
+    /// Returns the inspected stdout console mode, if one is visible.
+    pub fn console_mode(self) -> Option<u32> {
+        match self {
+            Self::Enabled { console_mode } | Self::Disabled { console_mode } => Some(console_mode),
+            Self::Unavailable => None,
+        }
+    }
+
+    /// Returns whether stdout VT processing is enabled when the mode is visible.
+    pub fn vt_processing_enabled(self) -> Option<bool> {
+        match self {
+            Self::Enabled { .. } => Some(true),
+            Self::Disabled { .. } => Some(false),
+            Self::Unavailable => None,
+        }
+    }
+}
+
+/// Inspects the Windows stdout console VT-processing mode without mutating it.
+///
+/// On non-Windows targets, and for stdout handles that do not support Windows
+/// console-mode inspection, this returns [`WindowsStdoutVtState::Unavailable`].
+pub fn windows_stdout_vt_state() -> WindowsStdoutVtState {
+    #[cfg(windows)]
+    {
+        let Some((_handle, console_mode)) = windows_stdout_console_mode() else {
+            return WindowsStdoutVtState::Unavailable;
+        };
+        windows_stdout_vt_state_from_mode(console_mode)
+    }
+
+    #[cfg(not(windows))]
+    {
+        WindowsStdoutVtState::Unavailable
+    }
+}
+
+/// Attempts to enable Windows stdout VT processing and returns the verified mode state.
+///
+/// This preserves the inspection result for PTY-style or otherwise unavailable
+/// stdout handles instead of assuming those handles cannot interpret ANSI.
+pub fn enable_windows_stdout_vt_processing() -> WindowsStdoutVtState {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        use windows_sys::Win32::System::Console::SetConsoleMode;
+
+        let Some((handle, console_mode)) = windows_stdout_console_mode() else {
+            return WindowsStdoutVtState::Unavailable;
+        };
+        let state = windows_stdout_vt_state_from_mode(console_mode);
+        if matches!(state, WindowsStdoutVtState::Disabled { .. }) {
+            // Safety: `handle` and `console_mode` came from `GetConsoleMode` for stdout.
+            let _ = unsafe {
+                SetConsoleMode(handle, console_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+            };
+        }
+        windows_stdout_vt_state()
+    }
+
+    #[cfg(not(windows))]
+    {
+        WindowsStdoutVtState::Unavailable
+    }
+}
+
+#[cfg(windows)]
+fn windows_stdout_vt_state_from_mode(console_mode: u32) -> WindowsStdoutVtState {
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+    if console_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 {
+        WindowsStdoutVtState::Enabled { console_mode }
+    } else {
+        WindowsStdoutVtState::Disabled { console_mode }
+    }
+}
+
+#[cfg(windows)]
+fn windows_stdout_console_mode() -> Option<(windows_sys::Win32::Foundation::HANDLE, u32)> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+
+    // Safety: requesting the process stdout handle does not transfer ownership.
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        return None;
+    }
+
+    let mut console_mode = 0;
+    // Safety: `console_mode` is a valid output pointer for the stdout handle query.
+    if unsafe { GetConsoleMode(handle, &mut console_mode) } == 0 {
+        return None;
+    }
+
+    Some((handle, console_mode))
+}
+
 /// Structured terminal identification data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalInfo {
