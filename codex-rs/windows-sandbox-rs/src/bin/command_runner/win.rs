@@ -22,11 +22,11 @@ use codex_windows_sandbox::OutputPayload;
 use codex_windows_sandbox::OutputStream;
 use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::ResizePayload;
-use codex_windows_sandbox::SandboxPolicy;
 use codex_windows_sandbox::SpawnReady;
 use codex_windows_sandbox::SpawnRequest;
 use codex_windows_sandbox::StderrMode;
 use codex_windows_sandbox::StdinMode;
+use codex_windows_sandbox::WindowsSandboxTokenMode;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
@@ -35,11 +35,11 @@ use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
-use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::token_mode_for_permission_profile;
 use codex_windows_sandbox::write_frame;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -235,7 +235,12 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
-    let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
+    let token_mode = token_mode_for_permission_profile(
+        &req.permission_profile,
+        &req.permission_profile_cwd,
+        &req.env,
+    )
+    .context("resolve permission profile token mode")?;
     let mut cap_psids: Vec<LocalSid> = Vec::new();
     for sid in &req.cap_sids {
         cap_psids.push(
@@ -253,15 +258,12 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let cap_psid_ptrs: Vec<*mut _> = cap_psids.iter().map(LocalSid::as_ptr).collect();
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     let h_token = OwnedWinHandle::new(unsafe {
-        match &policy {
-            SandboxPolicy::ReadOnly { .. } => {
+        match token_mode {
+            WindowsSandboxTokenMode::ReadOnlyCapability => {
                 create_readonly_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
             }
-            SandboxPolicy::WorkspaceWrite { .. } => {
+            WindowsSandboxTokenMode::WriteCapabilityRoots => {
                 create_workspace_write_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
-            }
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                unreachable!()
             }
         }
     }?);
