@@ -245,6 +245,10 @@ pub(super) fn code_mode_output_truncation_policy(
     TruncationPolicy::Tokens(resolve_max_tokens(max_output_tokens))
 }
 
+pub(super) fn code_mode_history_truncation_policy() -> TruncationPolicy {
+    TruncationPolicy::Bytes(usize::MAX)
+}
+
 async fn call_nested_tool(
     _exec: ExecContext,
     tool_runtime: ToolCallRuntime,

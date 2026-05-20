@@ -15,7 +15,7 @@ use codex_tools::ToolSpec;
 use super::DEFAULT_WAIT_YIELD_TIME_MS;
 use super::ExecContext;
 use super::WAIT_TOOL_NAME;
-use super::code_mode_output_truncation_policy;
+use super::code_mode_history_truncation_policy;
 use super::handle_runtime_response;
 use super::wait_spec::create_wait_tool;
 
@@ -117,13 +117,9 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
 impl CoreToolRuntime for CodeModeWaitHandler {
     fn history_truncation_policy(
         &self,
-        invocation: &ToolInvocation,
+        _invocation: &ToolInvocation,
     ) -> Option<codex_utils_output_truncation::TruncationPolicy> {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
-            return None;
-        };
-        let args: ExecWaitArgs = parse_arguments(arguments).ok()?;
-        Some(code_mode_output_truncation_policy(args.max_tokens))
+        Some(code_mode_history_truncation_policy())
     }
 
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
