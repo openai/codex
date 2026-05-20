@@ -263,6 +263,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
     pub local_version: Option<String>,
+    pub installed_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -1225,15 +1226,21 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let plugin_id =
+                            PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
                         let installed = installed_plugins.contains(&plugin_key);
+                        let installed_version = installed.then_some(()).and_then(|_| {
+                            plugin_id
+                                .as_ref()
+                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
+                        });
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
-                            && let Ok(plugin_id) =
-                                PluginId::new(plugin.name.clone(), marketplace_name.clone())
-                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(plugin_id) = plugin_id.as_ref()
+                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
                             local_version = manifest.version.clone();
@@ -1251,6 +1258,7 @@ impl PluginsManager {
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
                             id: plugin_key,
+                            installed_version,
                             installed,
                             enabled,
                             name: plugin.name,
@@ -1298,6 +1306,12 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let installed = installed_plugins.contains(&plugin_key);
+        let installed_version = if installed {
+            self.store.active_plugin_version(&plugin.plugin_id)
+        } else {
+            None
+        };
         let plugin = self
             .read_plugin_detail_for_marketplace_plugin(
                 config,
@@ -1309,6 +1323,7 @@ impl PluginsManager {
                         .manifest
                         .as_ref()
                         .and_then(|manifest| manifest.version.clone()),
+                    installed_version,
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1317,7 +1332,7 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
-                    installed: installed_plugins.contains(&plugin_key),
+                    installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
             )

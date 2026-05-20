@@ -1129,6 +1129,13 @@
           },
           "type": "array"
         },
+        "SubagentStop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {
