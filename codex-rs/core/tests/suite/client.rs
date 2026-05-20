@@ -1157,6 +1157,94 @@ async fn revoked_chatgpt_auth_user_turn_clears_auth_and_requests_relogin() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_chatgpt_auth_user_turn_retries_reloaded_auth() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/responses"))
+        .and(header("authorization", "Bearer revoked-access-token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "token_revoked",
+                "message": "revoked",
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/responses"))
+        .and(header("authorization", "Bearer replacement-access-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+                    "text/event-stream",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let _jwt = write_auth_json(
+        codex_home.as_ref(),
+        /*openai_api_key*/ None,
+        "pro",
+        "revoked-access-token",
+        Some("account_id"),
+    );
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await?
+    .expect("managed ChatGPT auth should load");
+
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
+    model_provider.supports_websockets = false;
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(auth)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+        });
+    let test = builder.build(&server).await?;
+
+    write_auth_json(
+        codex_home.as_ref(),
+        /*openai_api_key*/ None,
+        "pro",
+        "replacement-access-token",
+        Some("account_id"),
+    );
+
+    test.submit_turn("hello")
+        .await
+        .expect("reloaded managed auth should retry the HTTP turn");
+
+    let persisted_auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await?
+    .expect("replacement managed auth should persist");
+    assert_eq!(
+        persisted_auth
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     skip_if_no_network!();
 

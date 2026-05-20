@@ -1908,6 +1908,7 @@ where
                         err,
                         &mut revoked_auth_recovery,
                         &session_telemetry,
+                        items_added.is_empty(),
                     )
                     .await;
                     inference_trace_attempt.record_failed(
@@ -1945,6 +1946,7 @@ async fn map_response_stream_error(
     err: ApiError,
     revoked_auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,
+    retry_after_auth_recovery_allowed: bool,
 ) -> CodexErr {
     match err {
         ApiError::Transport(
@@ -1957,10 +1959,11 @@ async fn map_response_stream_error(
             match handle_unauthorized(recovery_transport, revoked_auth_recovery, session_telemetry)
                 .await
             {
-                Ok(_) => CodexErr::Stream(
+                Ok(_) if retry_after_auth_recovery_allowed => CodexErr::Stream(
                     WEBSOCKET_AUTH_RECOVERY_RETRY_REASON.to_string(),
                     /*requested_delay*/ None,
                 ),
+                Ok(_) => map_api_error(ApiError::Transport(transport)),
                 Err(err) => err,
             }
         }

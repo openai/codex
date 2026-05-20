@@ -892,6 +892,61 @@ async fn websocket_stream_token_revoked_401_retries_after_loading_replacement_au
 }
 
 #[tokio::test]
+async fn websocket_stream_token_revoked_401_after_output_does_not_retry_after_loading_replacement_auth()
+ {
+    let (codex_home, manager) = managed_chatgpt_auth_manager("revoked-access-token").await;
+    write_managed_chatgpt_auth(codex_home.path(), "replacement-access-token");
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::OutputItemDone(output_message(
+            "msg-1",
+            "partial answer",
+        ))),
+        Err(ApiError::Transport(TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: None,
+            headers: None,
+            body: Some(
+                r#"{"type":"error","status":401,"error":{"type":"token_revoked"}}"#.to_string(),
+            ),
+        })),
+    ]);
+
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        Some(manager.unauthorized_recovery()),
+    );
+    assert!(matches!(
+        stream
+            .next()
+            .await
+            .expect("partial output should be forwarded")
+            .expect("partial output should stay successful"),
+        ResponseEvent::OutputItemDone(_)
+    ));
+    let err = stream
+        .next()
+        .await
+        .expect("revoked websocket stream should emit an error")
+        .expect_err("revoked websocket stream should stop after output escapes");
+
+    assert!(
+        !super::is_websocket_auth_recovery_retry(&err),
+        "streams with recorded output must not transparently retry after auth recovery"
+    );
+    assert_eq!(
+        manager
+            .auth_cached()
+            .expect("replacement auth should remain cached")
+            .get_token()
+            .expect("replacement token should resolve"),
+        "replacement-access-token"
+    );
+}
+
+#[tokio::test]
 async fn websocket_stream_token_revoked_401_refreshes_external_auth_before_retry() {
     let codex_home = TempDir::new().expect("external auth tempdir");
     let initial_access_token = fake_chatgpt_jwt("external-initial");

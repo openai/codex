@@ -1362,6 +1362,11 @@ pub async fn start_websocket_server_with_headers(
 
             if close_after_requests {
                 let _ = ws_stream.close(None).await;
+            } else if !connections.lock().unwrap().is_empty() {
+                tokio::select! {
+                    _ = &mut shutdown_rx => return,
+                    _ = ws_stream.next() => {}
+                }
             } else {
                 let _ = shutdown_rx.await;
                 return;
