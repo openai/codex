@@ -161,6 +161,7 @@ fn remote_realtime_test_codex_builder(
     test_codex()
         .with_auth(CodexAuth::from_api_key("dummy"))
         .with_config(move |config| {
+            config.model_provider.name = "Azure".to_string();
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
         })
 }
