@@ -478,6 +478,10 @@ struct AppServerCommand {
 
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
     /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`.
     #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
     listen: Option<String>,
@@ -1376,11 +1380,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
+            let strict_config = cmd.strict_config || root_strict_config;
             run_exec_server_command(
                 cmd,
                 &arg0_paths,
                 &root_config_overrides,
                 interactive.config_profile.clone(),
+                strict_config,
             )
             .await?;
         }
@@ -1481,6 +1487,7 @@ async fn run_exec_server_command(
     arg0_paths: &Arg0DispatchPaths,
     root_config_overrides: &CliConfigOverrides,
     config_profile: Option<String>,
+    strict_config: bool,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1494,12 +1501,10 @@ async fn run_exec_server_command(
         let environment_id = cmd
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
-        let auth_provider = load_exec_server_remote_auth_provider(
-            root_config_overrides,
-            config_profile,
-            cmd.use_agent_identity_auth,
-        )
-        .await?;
+        let config =
+            load_exec_server_config(root_config_overrides, config_profile, strict_config).await?;
+        let auth_provider =
+            load_exec_server_remote_auth_provider(&config, cmd.use_agent_identity_auth).await?;
         let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
             base_url,
             environment_id,
@@ -1511,6 +1516,10 @@ async fn run_exec_server_command(
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         return Ok(());
     }
+    if strict_config {
+        let _ =
+            load_exec_server_config(root_config_overrides, config_profile, strict_config).await?;
+    }
     let listen_url = cmd
         .listen
         .as_deref()
@@ -1521,11 +1530,9 @@ async fn run_exec_server_command(
 }
 
 async fn load_exec_server_remote_auth_provider(
-    root_config_overrides: &CliConfigOverrides,
-    config_profile: Option<String>,
+    config: &codex_core::config::Config,
     use_agent_identity_auth: bool,
 ) -> anyhow::Result<codex_api::SharedAuthProvider> {
-    let config = load_exec_server_remote_config(root_config_overrides, config_profile).await?;
     if use_agent_identity_auth {
         let agent_identity_jwt = read_codex_access_token_from_env().ok_or_else(|| {
             anyhow::anyhow!("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
@@ -1537,7 +1544,7 @@ async fn load_exec_server_remote_auth_provider(
     }
 
     let auth = load_exec_server_remote_auth(
-        &config,
+        config,
         "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
     )
     .await?;
@@ -1551,9 +1558,10 @@ async fn load_exec_server_remote_auth_provider(
     Ok(codex_model_provider::auth_provider_from_auth(&auth))
 }
 
-async fn load_exec_server_remote_config(
+async fn load_exec_server_config(
     root_config_overrides: &CliConfigOverrides,
     config_profile: Option<String>,
+    strict_config: bool,
 ) -> anyhow::Result<codex_core::config::Config> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -1564,6 +1572,7 @@ async fn load_exec_server_remote_config(
             config_profile,
             ..Default::default()
         })
+        .strict_config(strict_config)
         .build()
         .await?)
 }
@@ -1869,6 +1878,7 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Exec(_))
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
+        | Some(Subcommand::ExecServer(_))
         | Some(Subcommand::Resume(_))
         | Some(Subcommand::Fork(_))
         | Some(Subcommand::Doctor(_)) => None,
@@ -1892,7 +1902,6 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::Apply(_)) => Some("apply"),
         Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
         Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
-        Some(Subcommand::ExecServer(_)) => Some("exec-server"),
         Some(Subcommand::Features(_)) => Some("features"),
     }
 }
@@ -2897,6 +2906,25 @@ mod tests {
                 ..
             }))
         );
+
+        let cli = MultitoolCli::try_parse_from(["codex", "exec-server", "--strict-config"])
+            .expect("parse");
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::ExecServer(ExecServerCommand {
+                strict_config: true,
+                ..
+            }))
+        );
+    }
+
+    #[test]
+    fn root_strict_config_is_supported_for_exec_server() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "exec-server"])
+            .expect("parse");
+
+        reject_root_strict_config_for_subcommand(cli.interactive.strict_config, &cli.subcommand)
+            .expect("exec-server should support root --strict-config");
     }
 
     #[test]
