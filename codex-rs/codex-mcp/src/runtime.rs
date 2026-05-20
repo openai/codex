@@ -68,7 +68,11 @@ impl McpRuntimeContext {
         // MCP config parsing materializes an omitted environment id as `local`,
         // so runtime resolution always starts from one explicit effective id.
         let environment_id = config.environment_id.clone();
-        let environment = self.environment_manager.get_environment(&environment_id);
+        let environment = if environment_id == LOCAL_ENVIRONMENT_ID {
+            self.environment_manager.try_local_environment()
+        } else {
+            self.environment_manager.get_environment(&environment_id)
+        };
         if environment.is_none() {
             if environment_id == LOCAL_ENVIRONMENT_ID
                 && matches!(

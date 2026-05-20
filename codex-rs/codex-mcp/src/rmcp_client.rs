@@ -50,7 +50,6 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
-use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
 use futures::future::BoxFuture;
@@ -587,25 +586,19 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = if resolved_environment.environment_id == LOCAL_ENVIRONMENT_ID {
-                Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.fallback_cwd(),
-                )) as Arc<dyn StdioServerLauncher>
-            } else {
-                let Some(environment) = resolved_environment.environment else {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "MCP server `{server_name}` resolved without an execution environment"
-                    )));
-                };
-                Arc::new(ExecutorStdioServerLauncher::new(
-                    environment.get_exec_backend(),
-                    runtime_context.fallback_cwd(),
-                ))
+            let Some(environment) = resolved_environment.environment else {
+                return Err(StartupOutcomeError::from(anyhow!(
+                    "MCP server `{server_name}` resolved without an execution environment"
+                )));
             };
+            let launcher = Arc::new(ExecutorStdioServerLauncher::new(
+                environment.get_exec_backend(),
+                runtime_context.fallback_cwd(),
+            )) as Arc<dyn StdioServerLauncher>;
 
             // `RmcpClient` always sees a launched MCP stdio server. The
-            // launcher hides whether that means a local child process or an
-            // executor process whose stdin/stdout bytes cross the process API.
+            // executor-backed launcher hides whether the selected environment
+            // owns a local or remote process backend.
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))

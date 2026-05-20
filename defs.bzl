@@ -210,8 +210,7 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
-        extra_binaries = [],
-        windows_cross_extra_binaries = None):
+        extra_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
     The macro mirrors Cargo conventions: it builds a library when `src/` exists,
@@ -256,8 +255,6 @@ def codex_rust_crate(
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
-        windows_cross_extra_binaries: Optional extra binaries to surface for
-            generated Windows gnullvm integration tests. Defaults to extra_binaries.
     """
     test_env = {
         # The launcher resolves an absolute workspace root at runtime so
@@ -390,22 +387,11 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
-    windows_cross_sanitized_binaries = list(sanitized_binaries)
-    windows_cross_cargo_env = dict(cargo_env)
-    windows_cross_cargo_env_runfiles = dict(cargo_env_runfiles)
-    resolved_windows_cross_extra_binaries = extra_binaries if windows_cross_extra_binaries == None else windows_cross_extra_binaries
-
     for binary_label in extra_binaries:
         sanitized_binaries.append(binary_label)
         binary = Label(binary_label).name
         cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + binary
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
-
-    for binary_label in resolved_windows_cross_extra_binaries:
-        windows_cross_sanitized_binaries.append(binary_label)
-        binary = Label(binary_label).name
-        windows_cross_cargo_env_runfiles[binary_label] = "CARGO_BIN_EXE_" + binary
-        windows_cross_cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     integration_test_kwargs = {}
     if integration_test_args:
@@ -522,7 +508,7 @@ def codex_rust_crate(
             crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + windows_cross_sanitized_binaries + test_data_extra,
+            data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
@@ -530,7 +516,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=codex-rs=",
             ],
             rustc_env = rustc_env,
-            env = windows_cross_cargo_env,
+            env = cargo_env,
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
             tags = test_tags + ["manual"],
         )
@@ -538,8 +524,8 @@ def codex_rust_crate(
         workspace_root_test(
             name = test_name + "-windows-cross",
             chdir_workspace_root = False,
-            env = windows_cross_cargo_env,
-            runfile_env = windows_cross_cargo_env_runfiles,
+            env = cargo_env,
+            runfile_env = cargo_env_runfiles,
             test_bin = ":" + windows_cross_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
