@@ -1604,6 +1604,7 @@
     "PluginListMarketplaceKind": {
       "enum": [
         "local",
+        "vertical",
         "workspace-directory",
         "shared-with-me"
       ],
