@@ -495,7 +495,7 @@ fn path_ends_with(path: &Path, suffix: &[&str]) -> bool {
     path_components.as_slice().ends_with(
         &suffix
             .iter()
-            .map(|part| part.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>(),
     )
 }
