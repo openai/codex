@@ -1,4 +1,7 @@
 use super::*;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -130,6 +133,52 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
         ),
         true
     );
+}
+
+#[tokio::test]
+async fn startup_thread_started_submits_queued_startup_input() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let request_id = "startup-thread-start-test".to_string();
+    app.pending_startup_thread_start_request_id = Some(request_id.clone());
+    app.chat_widget
+        .set_queue_submissions_until_session_configured(/*queue*/ true);
+    app.chat_widget
+        .apply_external_edit("queued before startup completes".to_string());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        vec!["queued before startup completes".to_string()]
+    );
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.handle_startup_thread_started(
+        &mut app_server,
+        request_id,
+        Ok(AppServerStartedThread {
+            session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            turns: Vec::new(),
+        }),
+    )
+    .await
+    .expect("startup thread should attach");
+
+    match next_user_turn_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued before startup completes".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued startup input submission, got {other:?}"),
+    }
 }
 
 #[tokio::test]

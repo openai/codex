@@ -444,10 +444,13 @@ impl App {
         }
 
         self.pending_startup_thread_start_request_id = None;
+        self.chat_widget
+            .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
                 self.enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
+                self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
