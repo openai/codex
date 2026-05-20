@@ -2883,6 +2883,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "pretty_assertions",
+ "reqwest",
  "sentry",
  "tracing",
  "tracing-subscriber",

@@ -415,32 +415,25 @@ impl FeedbackSnapshot {
     /// Upload feedback to Sentry with optional attachments.
     pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
         use std::str::FromStr;
-        use std::sync::Arc;
 
-        use sentry::Client;
-        use sentry::ClientOptions;
         use sentry::protocol::Envelope;
         use sentry::protocol::EnvelopeItem;
         use sentry::protocol::Event;
         use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
 
-        // Build Sentry client
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
+        let dsn = Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?;
+
+        let classification = canonical_classification(options.classification);
 
         let tags = self.upload_tags(
-            options.classification,
+            classification,
             options.reason,
             options.tags,
             options.session_source.as_ref(),
         );
 
-        let level = match options.classification {
+        let level = match classification {
             "bug" | "bad_result" | "safety_check" => Level::Error,
             _ => Level::Info,
         };
@@ -448,7 +441,7 @@ impl FeedbackSnapshot {
         let mut envelope = Envelope::new();
         let title = format!(
             "[{}]: Codex session {}",
-            display_classification(options.classification),
+            display_classification(classification),
             self.thread_id
         );
 
@@ -479,9 +472,7 @@ impl FeedbackSnapshot {
             envelope.add_item(EnvelopeItem::Attachment(attachment));
         }
 
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+        send_envelope_blocking(&dsn, envelope)
     }
 
     fn upload_tags(
@@ -491,6 +482,7 @@ impl FeedbackSnapshot {
         client_tags: Option<&BTreeMap<String, String>>,
         session_source: Option<&SessionSource>,
     ) -> BTreeMap<String, String> {
+        let classification = canonical_classification(classification);
         let cli_version = env!("CARGO_PKG_VERSION");
         let mut tags = BTreeMap::from([
             (String::from("thread_id"), self.thread_id.to_string()),
@@ -603,8 +595,21 @@ impl FeedbackSnapshot {
     }
 }
 
-fn display_classification(classification: &str) -> String {
+/// Return the canonical classification spelling used in Sentry tags and displays.
+///
+/// The desktop/webview client historically sent hyphenated values while the TUI
+/// sent underscored values. Accept both at the upload boundary so older clients
+/// do not get mislabeled as `Other`/Info.
+fn canonical_classification(classification: &str) -> &str {
     match classification {
+        "bad-result" => "bad_result",
+        "good-result" => "good_result",
+        value => value,
+    }
+}
+
+fn display_classification(classification: &str) -> String {
+    match canonical_classification(classification) {
         "bug" => "Bug".to_string(),
         "bad_result" => "Bad result".to_string(),
         "good_result" => "Good result".to_string(),
@@ -866,5 +871,163 @@ mod tests {
             Some("from-client")
         );
         assert_eq!(upload_tags.get("model").map(String::as_str), Some("gpt-5"));
+    }
+
+    #[test]
+    fn hyphenated_webview_classifications_are_canonicalized() {
+        assert_eq!(canonical_classification("bad-result"), "bad_result");
+        assert_eq!(canonical_classification("good-result"), "good_result");
+        assert_eq!(display_classification("bad-result"), "Bad result");
+        assert_eq!(display_classification("good-result"), "Good result");
+
+        let snapshot = FeedbackSnapshot {
+            bytes: Vec::new(),
+            tags: BTreeMap::new(),
+            feedback_diagnostics: FeedbackDiagnostics::default(),
+            thread_id: "thread-123".to_string(),
+        };
+        let upload_tags = snapshot.upload_tags(
+            "bad-result",
+            /*reason*/ None,
+            /*client_tags*/ None,
+            /*session_source*/ None,
+        );
+        assert_eq!(
+            upload_tags.get("classification").map(String::as_str),
+            Some("bad_result")
+        );
+    }
+}
+
+/// Send a Sentry envelope synchronously and surface transport/status failures.
+///
+/// Feedback submission is user-visible, so queue-drained is not a strong enough
+/// acknowledgement: the default Sentry transport logs HTTP 413/429/network
+/// failures at debug level and still lets `flush` succeed.  This path performs
+/// the one feedback POST directly and only returns success after ingest returns
+/// a 2xx status.
+fn send_envelope_blocking(
+    dsn: &sentry::types::Dsn,
+    envelope: sentry::protocol::Envelope,
+) -> Result<()> {
+    let mut body = Vec::new();
+    envelope
+        .to_writer(&mut body)
+        .map_err(|e| anyhow!("failed to serialize Sentry envelope: {e}"))?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| anyhow!("failed to build Sentry HTTP client: {e}"))?;
+
+    post_envelope_blocking(&client, dsn, body)
+}
+
+fn post_envelope_blocking(
+    client: &reqwest::blocking::Client,
+    dsn: &sentry::types::Dsn,
+    body: Vec<u8>,
+) -> Result<()> {
+    let body_len = body.len();
+    let response = client
+        .post(dsn.envelope_api_url().to_string())
+        .header(
+            "X-Sentry-Auth",
+            dsn.to_auth(/*client_agent*/ None).to_string(),
+        )
+        .header("Content-Type", "application/x-sentry-envelope")
+        .body(body)
+        .send()
+        .map_err(|e| anyhow!("failed to send Sentry envelope: {e}"))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    // Keep the error useful without accidentally logging a giant ingest response.
+    let response_text = response.text().unwrap_or_default();
+    let snippet: String = response_text.chars().take(/*n*/ 512).collect();
+    if snippet.is_empty() {
+        Err(anyhow!(
+            "Sentry ingest rejected feedback with HTTP {status} (envelope {body_len} bytes)"
+        ))
+    } else {
+        Err(anyhow!(
+            "Sentry ingest rejected feedback with HTTP {status} (envelope {body_len} bytes): {snippet}"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod acknowledged_transport_tests {
+    use super::*;
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::str::FromStr;
+
+    fn event_envelope() -> sentry::protocol::Envelope {
+        let mut envelope = sentry::protocol::Envelope::new();
+        envelope.add_item(sentry::protocol::EnvelopeItem::Event(
+            sentry::protocol::Event {
+                message: Some("feedback transport test".to_string()),
+                ..Default::default()
+            },
+        ));
+        envelope
+    }
+
+    fn serialize_test_envelope(envelope: sentry::protocol::Envelope) -> Vec<u8> {
+        let mut body = Vec::new();
+        envelope.to_writer(&mut body).unwrap();
+        body
+    }
+
+    fn local_test_client() -> reqwest::blocking::Client {
+        reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECS))
+            .build()
+            .unwrap()
+    }
+
+    fn run_fake_ingest(
+        response: &'static [u8],
+    ) -> (sentry::types::Dsn, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).unwrap_or(/*default*/ 0);
+            stream.write_all(response).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let dsn = sentry::types::Dsn::from_str(&format!("http://public@{addr}/42")).unwrap();
+        (dsn, handle)
+    }
+
+    #[test]
+    fn blocking_sender_returns_error_for_413() {
+        let (dsn, handle) = run_fake_ingest(
+            b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 9\r\n\r\ntoo large",
+        );
+        let body = serialize_test_envelope(event_envelope());
+        let client = local_test_client();
+        let err = post_envelope_blocking(&client, &dsn, body).unwrap_err();
+        assert!(err.to_string().contains("HTTP 413"), "{err:?}");
+        let request = handle.join().unwrap();
+        assert!(request.starts_with("POST /api/42/envelope/"));
+    }
+
+    #[test]
+    fn blocking_sender_accepts_2xx() {
+        let (dsn, handle) = run_fake_ingest(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n");
+        let body = serialize_test_envelope(event_envelope());
+        let client = local_test_client();
+        post_envelope_blocking(&client, &dsn, body).unwrap();
+        let request = handle.join().unwrap();
+        assert!(request.starts_with("POST /api/42/envelope/"));
     }
 }
