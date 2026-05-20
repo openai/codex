@@ -139,7 +139,11 @@ pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::ElevatedSandboxCaptureRequest;
 #[cfg(target_os = "windows")]
+pub use elevated_impl::ElevatedSandboxProfileCaptureRequest;
+#[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
+#[cfg(target_os = "windows")]
+pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run_windows_sandbox_capture_for_permission_profile_elevated;
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
@@ -257,6 +261,8 @@ pub use token::create_workspace_write_token_with_caps_from;
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_elevated;
+#[cfg(target_os = "windows")]
+pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
