@@ -41,10 +41,13 @@ plugins = true
 }
 
 fn write_marketplace_source(source: &Path) -> Result<()> {
-    std::fs::create_dir_all(source.join(".agents/plugins"))?;
-    std::fs::create_dir_all(source.join("plugins/sample/.codex-plugin"))?;
+    std::fs::create_dir_all(source.join(".agents").join("plugins"))?;
+    std::fs::create_dir_all(source.join("plugins").join("sample").join(".codex-plugin"))?;
     std::fs::write(
-        source.join(".agents/plugins/marketplace.json"),
+        source
+            .join(".agents")
+            .join("plugins")
+            .join("marketplace.json"),
         r#"{
   "name": "debug",
   "plugins": [
@@ -59,7 +62,11 @@ fn write_marketplace_source(source: &Path) -> Result<()> {
 }"#,
     )?;
     std::fs::write(
-        source.join("plugins/sample/.codex-plugin/plugin.json"),
+        source
+            .join("plugins")
+            .join("sample")
+            .join(".codex-plugin")
+            .join("plugin.json"),
         r#"{"name":"sample","version":"1.2.3","description":"Sample plugin"}"#,
     )?;
     Ok(())
@@ -104,9 +111,13 @@ fn setup_configured_marketplace_with_malformed_manifest() -> Result<(TempDir, Te
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     write_plugins_enabled_config(codex_home.path())?;
-    std::fs::create_dir_all(source.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(source.path().join(".agents").join("plugins"))?;
     std::fs::write(
-        source.path().join(".agents/plugins/marketplace.json"),
+        source
+            .path()
+            .join(".agents")
+            .join("plugins")
+            .join("marketplace.json"),
         "{not valid json",
     )?;
     let source_path = source.path().to_string_lossy().into_owned();
@@ -123,7 +134,9 @@ fn setup_local_marketplace_with_implicit_system_roots() -> Result<(TempDir, Temp
 
     let bundled_root = codex_home
         .path()
-        .join(".tmp/bundled-marketplaces/openai-bundled");
+        .join(".tmp")
+        .join("bundled-marketplaces")
+        .join("openai-bundled");
     std::fs::create_dir_all(&bundled_root)?;
     let bundled_source = bundled_root.display().to_string();
     record_user_marketplace(
@@ -135,7 +148,10 @@ fn setup_local_marketplace_with_implicit_system_roots() -> Result<(TempDir, Temp
     let cache_home = TempDir::new()?;
     let runtime_root = cache_home
         .path()
-        .join("codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime");
+        .join("codex-runtimes")
+        .join("codex-primary-runtime")
+        .join("plugins")
+        .join("openai-primary-runtime");
     std::fs::create_dir_all(&runtime_root)?;
     let runtime_source = runtime_root.display().to_string();
     record_user_marketplace(
@@ -153,7 +169,9 @@ fn setup_custom_marketplace_under_implicit_system_root() -> Result<(TempDir, std
 
     let custom_root = codex_home
         .path()
-        .join(".tmp/bundled-marketplaces/custom-marketplace");
+        .join(".tmp")
+        .join("bundled-marketplaces")
+        .join("custom-marketplace");
     std::fs::create_dir_all(&custom_root)?;
     let custom_source = custom_root.display().to_string();
     record_user_marketplace(
@@ -206,8 +224,12 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
 #[tokio::test]
 async fn plugin_list_prints_plugins_in_a_table() -> Result<()> {
     let (codex_home, source) = setup_local_marketplace()?;
-    let marketplace_manifest = source.path().join(".agents/plugins/marketplace.json");
-    let plugin_path = source.path().join("plugins/sample");
+    let marketplace_manifest = source
+        .path()
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    let plugin_path = source.path().join("plugins").join("sample");
 
     codex_command(codex_home.path())?
         .args(["plugin", "list"])
@@ -293,7 +315,9 @@ async fn plugin_list_ignores_implicit_system_marketplace_roots_without_manifests
         .stdout(contains(
             source
                 .path()
-                .join(".agents/plugins/marketplace.json")
+                .join(".agents")
+                .join("plugins")
+                .join("marketplace.json")
                 .display()
                 .to_string(),
         ))

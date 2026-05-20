@@ -470,7 +470,7 @@ fn is_implicit_system_marketplace_root(
     if matches!(
         marketplace_name,
         OPENAI_BUNDLED_MARKETPLACE_NAME | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
-    ) && root.starts_with(codex_home.join(".tmp/bundled-marketplaces"))
+    ) && root.starts_with(codex_home.join(".tmp").join("bundled-marketplaces"))
     {
         return true;
     }
