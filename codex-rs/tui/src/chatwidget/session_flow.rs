@@ -84,6 +84,12 @@ impl ChatWidget {
             mask.model = Some(model_for_header.clone());
             mask.reasoning_effort = Some(session.reasoning_effort);
         }
+        if let Some(collaboration_mode) = session.collaboration_mode.as_deref() {
+            let mut collaboration_mode = collaboration_mode.clone();
+            collaboration_mode.settings.model = model_for_header.clone();
+            collaboration_mode.settings.reasoning_effort = session.reasoning_effort;
+            self.set_effective_collaboration_mode(collaboration_mode);
+        }
         self.refresh_model_display();
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();

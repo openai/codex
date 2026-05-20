@@ -1590,6 +1590,7 @@ async fn thread_session_state_from_thread_response(
         runtime_workspace_roots,
         instruction_source_paths,
         reasoning_effort,
+        collaboration_mode: None,
         message_history: Some(MessageHistoryMetadata {
             log_id,
             entry_count,

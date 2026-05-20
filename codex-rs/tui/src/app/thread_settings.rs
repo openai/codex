@@ -16,16 +16,23 @@ impl App {
         app_server: &mut AppServerSession,
         model: String,
     ) {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(params) = self.active_thread_model_setting_update_params(model) else {
             return;
         };
-        let params = ThreadSettingsUpdateParams {
+        self.send_thread_settings_update(app_server, params).await;
+    }
+
+    pub(super) fn active_thread_model_setting_update_params(
+        &self,
+        model: String,
+    ) -> Option<ThreadSettingsUpdateParams> {
+        let thread_id = self.active_thread_id?;
+        Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             model: Some(model),
             collaboration_mode: Some(self.chat_widget.effective_collaboration_mode()),
             ..ThreadSettingsUpdateParams::default()
-        };
-        self.send_thread_settings_update(app_server, params).await;
+        })
     }
 
     pub(super) async fn sync_active_thread_reasoning_setting(
@@ -166,6 +173,13 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
     session.reasoning_effort = settings.effort;
+    let mut collaboration_mode = settings.collaboration_mode.clone();
+    collaboration_mode
+        .settings
+        .model
+        .clone_from(&settings.model);
+    collaboration_mode.settings.reasoning_effort = settings.effort;
+    session.collaboration_mode = Some(Box::new(collaboration_mode));
 }
 
 fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bool {

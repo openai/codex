@@ -52,6 +52,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
+        collaboration_mode: None,
         message_history: None,
         network_proxy: None,
         rollout_path: None,
