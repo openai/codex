@@ -430,15 +430,15 @@ impl App {
         result: Result<AppServerStartedThread, String>,
     ) -> Result<()> {
         if self.pending_startup_thread_start_request_id.as_deref() != Some(request_id.as_str()) {
-            if let Ok(started) = result
-                && let Err(err) = app_server
-                    .thread_unsubscribe(started.session.thread_id)
-                    .await
-            {
-                tracing::warn!(
-                    thread_id = %started.session.thread_id,
-                    "failed to unsubscribe stale startup thread: {err}"
-                );
+            if let Ok(started) = result {
+                let thread_id = started.session.thread_id;
+                if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        "failed to unsubscribe stale startup thread: {err}"
+                    );
+                }
+                self.discard_thread_local_state(thread_id).await;
             }
             return Ok(());
         }
@@ -453,9 +453,14 @@ impl App {
                 self.chat_widget.maybe_send_next_queued_input();
             }
             Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to start a fresh session through the app server: {err}"
-                ));
+                let message =
+                    format!("Failed to start a fresh session through the app server: {err}");
+                tracing::warn!(
+                    error = %err,
+                    "startup thread/start failed"
+                );
+                self.chat_widget.add_error_message(message.clone());
+                return Err(color_eyre::eyre::eyre!(message));
             }
         }
         Ok(())
