@@ -11,6 +11,8 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -20,6 +22,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::test_support::all_model_presets;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -75,6 +78,9 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     )
     .await??;
 
+    let read = read_thread_with_turns(&mut mcp, &thread.id).await?;
+    assert_eq!(read.thread.turns.len(), 1);
+
     let request_bodies = received_response_bodies(&server).await?;
     assert!(
         request_bodies.iter().any(|body| {
@@ -88,17 +94,22 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
 }
 
 #[tokio::test]
-async fn thread_settings_update_same_effective_settings_does_not_emit_notification() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+async fn thread_settings_update_while_turn_is_active_emits_notification() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let first_response =
+        responses::sse_response(create_final_assistant_message_sse_response("first done")?)
+            .set_delay(Duration::from_secs(2));
+    let _requests = responses::mount_response_sequence(&server, vec![first_response]).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let thread = start_thread(&mut mcp).await?.thread;
+    start_text_turn(&mut mcp, thread.id.clone()).await?;
     timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/started"),
+        mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
 
@@ -106,7 +117,7 @@ async fn thread_settings_update_same_effective_settings_does_not_emit_notificati
         &mut mcp,
         ThreadSettingsUpdateParams {
             thread_id: thread.id.clone(),
-            model: Some("mock-model-2".to_string()),
+            model: Some("mock-model-4".to_string()),
             ..Default::default()
         },
     )
@@ -114,27 +125,13 @@ async fn thread_settings_update_same_effective_settings_does_not_emit_notificati
 
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
-    assert_eq!(updated.thread_settings.model, "mock-model-2");
+    assert_eq!(updated.thread_settings.model, "mock-model-4");
 
-    send_thread_settings_update(
-        &mut mcp,
-        ThreadSettingsUpdateParams {
-            thread_id: thread.id,
-            model: Some("mock-model-2".to_string()),
-            ..Default::default()
-        },
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
-    .await?;
-
-    let unexpected = timeout(
-        Duration::from_millis(300),
-        mcp.read_stream_until_notification_message("thread/settings/updated"),
-    )
-    .await;
-    assert!(
-        unexpected.is_err(),
-        "same effective settings update should not emit thread/settings/updated"
-    );
+    .await??;
     Ok(())
 }
 
@@ -326,6 +323,24 @@ async fn start_thread(mcp: &mut McpProcess) -> Result<ThreadStartResponse> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn read_thread_with_turns(
+    mcp: &mut McpProcess,
+    thread_id: &str,
+) -> Result<ThreadReadResponse> {
+    let request_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.to_string(),
+            include_turns: true,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

@@ -489,6 +489,9 @@ impl TurnRequestProcessor {
         let collaboration_mode =
             collaboration_mode.map(|mode| self.normalize_collaboration_mode(mode));
         let runtime_workspace_roots_request = runtime_workspace_roots;
+        // `thread/settings/update` only acknowledges that the update was queued.
+        // Clients that send dependent partial updates should wait for
+        // `thread/settings/updated` or combine the fields in one request.
         let snapshot = if permissions.is_some() || runtime_workspace_roots_request.is_some() {
             Some(thread.config_snapshot().await)
         } else {
