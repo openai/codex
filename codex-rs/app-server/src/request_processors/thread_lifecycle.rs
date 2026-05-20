@@ -237,12 +237,19 @@ pub(super) async fn ensure_listener_task_running(
             &environments,
         )
         .await;
+    let thread_settings_baseline =
+        thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(cancel_tx, &conversation, watch_registration)
+        thread_state.set_listener(
+            cancel_tx,
+            &conversation,
+            watch_registration,
+            thread_settings_baseline,
+        )
     };
     let ListenerTaskContext {
         outgoing,

@@ -11,7 +11,9 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -224,13 +226,105 @@ pub struct ThreadStartResponse {
 )]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdateParams {
+    pub thread_id: String,
+    /// Override the working directory for subsequent turns.
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for subsequent turns.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy for subsequent turns.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Select a named permissions profile id for subsequent turns. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[experimental("thread/settings/update.permissions")]
+    #[ts(optional = nullable)]
+    pub permissions: Option<String>,
+    /// Override the model for subsequent turns.
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    /// Override the service tier for subsequent turns. `null` clears the
+    /// current service tier; omission leaves it unchanged.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<String>>,
+    /// Override the reasoning effort for subsequent turns.
+    #[ts(optional = nullable)]
+    pub effort: Option<ReasoningEffort>,
+    /// Override the reasoning summary for subsequent turns.
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    /// EXPERIMENTAL - Set a pre-set collaboration mode for subsequent turns.
+    ///
+    /// For `collaboration_mode.settings.developer_instructions`, `null` means
+    /// "use the built-in instructions for the selected mode".
+    #[experimental("thread/settings/update.collaborationMode")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+    /// Override the personality for subsequent turns.
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettings {
+    pub cwd: AbsolutePathBuf,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<String>,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: Option<ReasoningSummary>,
+    pub collaboration_mode: CollaborationMode,
+    pub personality: Option<Personality>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdatedNotification {
+    pub thread_id: String,
+    pub thread_settings: ThreadSettings,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 /// There are three ways to resume a thread:
 /// 1. By thread_id: load the thread from disk by thread_id and resume it.
 /// 2. By history: instantiate the thread from memory and resume it.
 /// 3. By path: load the thread from disk by path and resume it.
 ///
-/// The precedence is: history > path > thread_id.
-/// If using history or path, the thread_id param will be ignored.
+/// For non-running threads, the precedence is: history > non-empty path > thread_id.
+/// If using history or a non-empty path for a non-running thread, the thread_id
+/// param will be ignored.
+///
+/// If thread_id identifies a running thread, app-server rejoins that thread and
+/// treats a non-empty path as a consistency check against the active rollout path.
+/// Empty string path values are treated as absent.
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
@@ -244,8 +338,14 @@ pub struct ThreadResumeParams {
     pub history: Option<Vec<ResponseItem>>,
 
     /// [UNSTABLE] Specify the rollout path to resume from.
-    /// If specified, the thread_id param will be ignored.
+    /// If specified for a non-running thread, the thread_id param will be ignored.
+    /// If thread_id identifies a running thread, the path must match the active
+    /// rollout path.
     #[experimental("thread/resume.path")]
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 
@@ -346,7 +446,8 @@ pub struct ThreadResumeResponse {
 /// 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
 /// 2. By path: load the thread from disk by path and fork it into a new thread.
 ///
-/// If using path, the thread_id param will be ignored.
+/// If using a non-empty path, the thread_id param will be ignored.
+/// Empty string path values are treated as absent.
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
@@ -355,6 +456,10 @@ pub struct ThreadForkParams {
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
+    )]
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 

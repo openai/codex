@@ -150,7 +150,7 @@ async fn load_config(codex_home: &Path, cwd: &Path) -> PluginsConfigInput {
 
 fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
-        marketplace_name: "chatgpt-global".to_string(),
+        marketplace_name: "openai-curated-remote".to_string(),
         id: "plugins~Plugin_linear".to_string(),
         name: "linear".to_string(),
         enabled: true,
@@ -401,11 +401,11 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
         .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
         .expect("remote installed cache should be present");
     assert_eq!(marketplaces.len(), 1);
-    assert_eq!(marketplaces[0].name, "chatgpt-global");
-    assert_eq!(marketplaces[0].display_name, "ChatGPT Plugins");
+    assert_eq!(marketplaces[0].name, "openai-curated-remote");
+    assert_eq!(marketplaces[0].display_name, "OpenAI Curated Remote");
     assert_eq!(marketplaces[0].plugins.len(), 1);
     let plugin = &marketplaces[0].plugins[0];
-    assert_eq!(plugin.id, "linear@chatgpt-global");
+    assert_eq!(plugin.id, "linear@openai-curated-remote");
     assert_eq!(plugin.remote_plugin_id, "plugins~Plugin_linear");
     assert_eq!(plugin.name, "linear");
     assert_eq!(plugin.installed, true);

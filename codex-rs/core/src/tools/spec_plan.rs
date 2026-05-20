@@ -7,6 +7,7 @@ use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
@@ -69,6 +70,7 @@ use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
+use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
@@ -365,19 +367,27 @@ fn build_code_mode_executors(
         return vec![];
     }
 
-    let code_mode_nested_tool_specs = executors
-        .iter()
-        .filter_map(|executor| {
-            if executor.exposure() == ToolExposure::DirectModelOnly {
-                return None;
-            }
+    let mut code_mode_nested_tool_specs = Vec::new();
+    let mut exec_prompt_tool_specs = Vec::new();
+    for executor in executors {
+        let exposure = executor.exposure();
+        if exposure == ToolExposure::DirectModelOnly {
+            continue;
+        }
 
-            executor.spec()
-        })
-        .collect::<Vec<_>>();
-    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+        let Some(spec) = executor.spec() else {
+            continue;
+        };
+
+        if exposure != ToolExposure::Deferred {
+            exec_prompt_tool_specs.push(spec.clone());
+        }
+        code_mode_nested_tool_specs.push(spec);
+    }
+
+    let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
     let mut enabled_tools =
-        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+        collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
 
@@ -522,7 +532,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         && let Some(discoverable_tools) =
             context.discoverable_tools.filter(|tools| !tools.is_empty())
     {
-        planned_tools.add_runtime(RequestPluginInstallHandler::new(discoverable_tools));
+        planned_tools.add_runtime(ListAvailablePluginsToInstallHandler::new(
+            collect_request_plugin_install_entries(discoverable_tools),
+        ));
+        planned_tools.add_runtime(RequestPluginInstallHandler);
     }
 
     if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()

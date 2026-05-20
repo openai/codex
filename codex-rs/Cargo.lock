@@ -2321,6 +2321,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "hmac",
  "pretty_assertions",
  "serde",
@@ -2952,12 +2953,19 @@ dependencies = [
 name = "codex-goal-extension"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "chrono",
  "codex-extension-api",
  "codex-protocol",
+ "codex-state",
  "codex-tools",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2997,6 +3005,7 @@ dependencies = [
 name = "codex-install-context"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "pretty_assertions",
  "tempfile",
@@ -3016,6 +3025,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-install-context",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
@@ -3756,6 +3766,7 @@ dependencies = [
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-string",
  "pretty_assertions",
