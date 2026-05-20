@@ -30,6 +30,12 @@ impl EffectiveMcpServer {
         }
     }
 
+    pub fn environment_id(&self) -> &str {
+        match &self.launch {
+            McpServerLaunch::Configured(config) => &config.environment_id,
+        }
+    }
+
     pub fn enabled(&self) -> bool {
         match &self.launch {
             McpServerLaunch::Configured(config) => config.enabled,

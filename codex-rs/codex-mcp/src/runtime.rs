@@ -9,9 +9,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
 
@@ -33,8 +35,25 @@ pub struct SandboxState {
 /// Resolved environment placement for one MCP server startup.
 #[derive(Clone)]
 pub struct ResolvedMcpEnvironment {
-    pub environment_id: String,
-    pub environment: Option<Arc<Environment>>,
+    environment_id: String,
+    environment: Option<Arc<Environment>>,
+}
+
+impl ResolvedMcpEnvironment {
+    pub(crate) fn environment_id(&self) -> &str {
+        &self.environment_id
+    }
+
+    pub(crate) fn environment(&self) -> Option<Arc<Environment>> {
+        self.environment.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn http_client(&self) -> Arc<dyn HttpClient> {
+        self.environment.as_ref().map_or_else(
+            || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+            |environment| environment.get_http_client(),
+        )
+    }
 }
 
 /// Runtime context used when resolving per-server MCP environment placement.
@@ -68,13 +87,14 @@ impl McpRuntimeContext {
         // MCP config parsing materializes an omitted environment id as `local`,
         // so runtime resolution always starts from one explicit effective id.
         let environment_id = config.environment_id.clone();
-        let environment = if environment_id == LOCAL_ENVIRONMENT_ID {
+        let is_local_environment = config.is_local_environment();
+        let environment = if is_local_environment {
             self.environment_manager.try_local_environment()
         } else {
             self.environment_manager.get_environment(&environment_id)
         };
         if environment.is_none() {
-            if environment_id == LOCAL_ENVIRONMENT_ID
+            if is_local_environment
                 && matches!(
                     config.transport,
                     codex_config::McpServerTransportConfig::Stdio { .. }
@@ -84,7 +104,7 @@ impl McpRuntimeContext {
                     "local stdio MCP server `{server_name}` requires a local environment"
                 ));
             }
-            if environment_id != LOCAL_ENVIRONMENT_ID {
+            if !is_local_environment {
                 return Err(format!(
                     "MCP server `{server_name}` references unknown environment id `{environment_id}`"
                 ));
@@ -161,7 +181,7 @@ mod tests {
         );
 
         let error = match runtime_context
-            .resolve_server_environment("stdio", &stdio_server(LOCAL_ENVIRONMENT_ID))
+            .resolve_server_environment("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
         {
             Ok(_) => panic!("local stdio MCP should require a local environment"),
             Err(error) => error,
@@ -180,10 +200,13 @@ mod tests {
         );
 
         let resolved_environment = runtime_context
-            .resolve_server_environment("http", &http_server(LOCAL_ENVIRONMENT_ID))
+            .resolve_server_environment("http", &http_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
             .expect("local HTTP MCP should resolve");
-        assert_eq!(resolved_environment.environment_id, LOCAL_ENVIRONMENT_ID);
-        assert!(resolved_environment.environment.is_none());
+        assert_eq!(
+            resolved_environment.environment_id(),
+            DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+        );
+        assert!(resolved_environment.environment().is_none());
     }
 
     #[test]
@@ -222,8 +245,8 @@ mod tests {
             runtime_context.resolve_server_environment("http", &http_server("remote")),
         ] {
             let resolved_environment = resolved_environment.expect("remote MCP should resolve");
-            assert_eq!(resolved_environment.environment_id, "remote");
-            assert!(resolved_environment.environment.is_some());
+            assert_eq!(resolved_environment.environment_id(), "remote");
+            assert!(resolved_environment.environment().is_some());
         }
     }
 
@@ -235,9 +258,12 @@ mod tests {
         );
 
         let resolved_environment = runtime_context
-            .resolve_server_environment("stdio", &stdio_server(LOCAL_ENVIRONMENT_ID))
+            .resolve_server_environment("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
             .expect("local stdio MCP should resolve");
-        assert_eq!(resolved_environment.environment_id, LOCAL_ENVIRONMENT_ID);
-        assert!(resolved_environment.environment.is_some());
+        assert_eq!(
+            resolved_environment.environment_id(),
+            DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+        );
+        assert!(resolved_environment.environment().is_some());
     }
 }

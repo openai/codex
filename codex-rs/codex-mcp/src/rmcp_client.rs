@@ -45,9 +45,6 @@ use codex_async_utils::OrCancelExt;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_exec_server::HttpClient;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
@@ -586,7 +583,7 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let Some(environment) = resolved_environment.environment else {
+            let Some(environment) = resolved_environment.environment() else {
                 return Err(StartupOutcomeError::from(anyhow!(
                     "MCP server `{server_name}` resolved without an execution environment"
                 )));
@@ -609,17 +606,7 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            let http_client: Arc<dyn HttpClient> =
-                if resolved_environment.environment_id == LOCAL_ENVIRONMENT_ID {
-                    Arc::new(ReqwestHttpClient)
-                } else {
-                    let Some(environment) = resolved_environment.environment else {
-                        return Err(StartupOutcomeError::from(anyhow!(
-                            "MCP server `{server_name}` resolved without an HTTP environment"
-                        )));
-                    };
-                    environment.get_http_client()
-                };
+            let http_client = resolved_environment.http_client();
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

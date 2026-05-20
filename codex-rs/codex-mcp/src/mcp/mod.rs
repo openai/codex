@@ -346,13 +346,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
 
     let environment_ids = mcp_servers
         .iter()
-        .map(|(server_name, server)| {
-            let environment_id = server
-                .configured_config()
-                .map(|config| config.environment_id.clone())
-                .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string());
-            (server_name.clone(), environment_id)
-        })
+        .map(|(server_name, server)| (server_name.clone(), server.environment_id().to_string()))
         .collect();
 
     let (tx_event, rx_event) = unbounded();
@@ -465,7 +459,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
             http_headers,
             env_http_headers: None,
         },
-        environment_id: "local".to_string(),
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,

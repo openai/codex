@@ -13,6 +13,9 @@ use serde::de::Error as SerdeError;
 
 use crate::RequirementSource;
 
+/// Effective MCP environment id when config omits `environment_id`.
+pub const DEFAULT_MCP_SERVER_ENVIRONMENT_ID: &str = "local";
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AppToolApproval {
@@ -189,6 +192,10 @@ pub struct McpServerConfig {
 }
 
 impl McpServerConfig {
+    pub fn is_local_environment(&self) -> bool {
+        self.environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+    }
+
     pub fn oauth_client_id(&self) -> Option<&str> {
         self.oauth
             .as_ref()
@@ -351,7 +358,8 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
-            environment_id: environment_id.unwrap_or_else(|| "local".to_string()),
+            environment_id: environment_id
+                .unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string()),
             startup_timeout_sec,
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),

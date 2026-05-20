@@ -270,7 +270,6 @@ impl McpRequestProcessor {
         )
         .await;
 
-        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
         let McpServerStatusSnapshot {
             tools_by_server,
             resources,
@@ -278,15 +277,16 @@ impl McpRequestProcessor {
             auth_statuses,
             environment_ids,
         } = snapshot;
-
-        let mut server_names: Vec<String> = config
+        let environment_ids = config
             .mcp_servers
+            .iter()
+            .map(|(name, config)| (name.clone(), config.environment_id.clone()))
+            .chain(environment_ids)
+            .collect::<HashMap<_, _>>();
+
+        let mut server_names: Vec<String> = environment_ids
             .keys()
             .cloned()
-            // Include runtime-added/plugin MCP servers that are present in the
-            // effective runtime config even when they are not user-declared in
-            // `config.mcp_servers`.
-            .chain(effective_servers.keys().cloned())
             .chain(auth_statuses.keys().cloned())
             .chain(resources.keys().cloned())
             .chain(resource_templates.keys().cloned())
@@ -328,7 +328,7 @@ impl McpRequestProcessor {
                 environment_id: environment_ids
                     .get(name)
                     .cloned()
-                    .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+                    .expect("listed MCP server should have an environment id"),
             })
             .collect();
 

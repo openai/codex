@@ -300,7 +300,7 @@ mod document_helpers {
         if !config.enabled {
             entry["enabled"] = value(false);
         }
-        if config.environment_id != "local" {
+        if !config.is_local_environment() {
             entry["environment_id"] = value(config.environment_id.clone());
         }
         if config.required {
