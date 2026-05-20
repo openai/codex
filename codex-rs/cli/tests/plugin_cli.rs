@@ -147,6 +147,48 @@ fn setup_local_marketplace_with_implicit_system_roots() -> Result<(TempDir, Temp
     Ok((codex_home, source, cache_home))
 }
 
+fn setup_custom_marketplace_under_implicit_system_root() -> Result<(TempDir, std::path::PathBuf)> {
+    let codex_home = TempDir::new()?;
+    write_plugins_enabled_config(codex_home.path())?;
+
+    let custom_root = codex_home
+        .path()
+        .join(".tmp/bundled-marketplaces/custom-marketplace");
+    std::fs::create_dir_all(&custom_root)?;
+    let custom_source = custom_root.display().to_string();
+    record_user_marketplace(
+        codex_home.path(),
+        "custom-marketplace",
+        &configured_local_marketplace(&custom_source),
+    )?;
+
+    Ok((codex_home, custom_root))
+}
+
+fn remove_installed_plugin_config(codex_home: &Path, plugin_key: &str) -> Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let plugin_header = format!("[plugins.\"{plugin_key}\"]");
+    let config = std::fs::read_to_string(&config_path)?;
+    let mut rewritten = Vec::new();
+    let mut skipping = false;
+
+    for line in config.lines() {
+        if line == plugin_header {
+            skipping = true;
+            continue;
+        }
+        if skipping && line.starts_with('[') {
+            skipping = false;
+        }
+        if !skipping {
+            rewritten.push(line);
+        }
+    }
+
+    std::fs::write(config_path, format!("{}\n", rewritten.join("\n")))?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
     let (codex_home, source) = setup_local_marketplace()?;
@@ -258,6 +300,48 @@ async fn plugin_list_ignores_implicit_system_marketplace_roots_without_manifests
         .stderr(
             predicates::str::contains("failed to load configured marketplace snapshot(s):").not(),
         );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_fails_for_custom_marketplace_under_system_root() -> Result<()> {
+    let (codex_home, custom_root) = setup_custom_marketplace_under_implicit_system_root()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "list"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "failed to load configured marketplace snapshot(s):",
+        ))
+        .stderr(contains("`custom-marketplace`"))
+        .stderr(contains(custom_root.display().to_string()))
+        .stderr(contains(
+            "marketplace root does not contain a supported manifest",
+        ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_hides_version_for_cached_but_unconfigured_plugin() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug"])
+        .assert()
+        .success();
+
+    remove_installed_plugin_config(codex_home.path(), "sample@debug")?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "list"])
+        .assert()
+        .success()
+        .stdout(contains("sample@debug"))
+        .stdout(contains("not installed"))
+        .stdout(predicates::str::contains("1.2.3").not());
 
     Ok(())
 }

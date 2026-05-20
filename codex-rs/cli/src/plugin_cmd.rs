@@ -5,6 +5,7 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::ConfiguredMarketplace;
+use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
@@ -19,6 +20,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::marketplace_cmd::MarketplaceCli;
+
+const OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME: &str = "openai-bundled-alpha";
+const OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME: &str = "openai-primary-runtime";
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin")]
@@ -431,7 +435,7 @@ fn configured_marketplace_snapshot_issues(
         match find_marketplace_manifest_path(&root) {
             Some(path) => manifest_paths.push((configured_name.clone(), path)),
             None => {
-                if is_implicit_system_marketplace_root(codex_home, &root) {
+                if is_implicit_system_marketplace_root(configured_name, codex_home, &root) {
                     continue;
                 }
                 issues.push(ConfiguredMarketplaceSnapshotIssue {
@@ -458,13 +462,22 @@ fn configured_marketplace_snapshot_issues(
     issues
 }
 
-fn is_implicit_system_marketplace_root(codex_home: &Path, root: &Path) -> bool {
-    if root.starts_with(codex_home.join(".tmp/bundled-marketplaces")) {
+fn is_implicit_system_marketplace_root(
+    marketplace_name: &str,
+    codex_home: &Path,
+    root: &Path,
+) -> bool {
+    if matches!(
+        marketplace_name,
+        OPENAI_BUNDLED_MARKETPLACE_NAME | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
+    ) && root.starts_with(codex_home.join(".tmp/bundled-marketplaces"))
+    {
         return true;
     }
 
-    runtime_cache_root()
-        .is_some_and(|cache_root| root.starts_with(cache_root.join("codex-runtimes")))
+    marketplace_name == OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME
+        && runtime_cache_root()
+            .is_some_and(|cache_root| root.starts_with(cache_root.join("codex-runtimes")))
 }
 
 fn runtime_cache_root() -> Option<PathBuf> {

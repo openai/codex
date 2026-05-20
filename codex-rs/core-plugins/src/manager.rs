@@ -1228,10 +1228,12 @@ impl PluginsManager {
                         }
                         let plugin_id =
                             PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
-                        let installed_version = plugin_id
-                            .as_ref()
-                            .and_then(|plugin_id| self.store.active_plugin_version(plugin_id));
                         let installed = installed_plugins.contains(&plugin_key);
+                        let installed_version = installed.then_some(()).and_then(|_| {
+                            plugin_id
+                                .as_ref()
+                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
+                        });
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
@@ -1304,6 +1306,12 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let installed = installed_plugins.contains(&plugin_key);
+        let installed_version = if installed {
+            self.store.active_plugin_version(&plugin.plugin_id)
+        } else {
+            None
+        };
         let plugin = self
             .read_plugin_detail_for_marketplace_plugin(
                 config,
@@ -1315,7 +1323,7 @@ impl PluginsManager {
                         .manifest
                         .as_ref()
                         .and_then(|manifest| manifest.version.clone()),
-                    installed_version: self.store.active_plugin_version(&plugin.plugin_id),
+                    installed_version,
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1324,7 +1332,7 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
-                    installed: installed_plugins.contains(&plugin_key),
+                    installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
             )
