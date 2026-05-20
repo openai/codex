@@ -1107,14 +1107,32 @@ jobs:
           # If included in files: dist/**, release upload races on duplicate
           # asset names and can fail with 404s.
           find dist -type f -name 'cargo-timing.html' -delete
-          # Keep package-builder sidecar archives as workflow artifacts only
-          # until distribution channels are ready to consume them.
-          find dist -type f \
-            \( -name 'codex-package-*' -o -name 'codex-app-server-package-*' \) \
-            -delete
           find dist -type d -empty -delete
 
           ls -R dist/
+
+      - name: Add Codex package checksum manifest
+        run: |
+          set -euo pipefail
+
+          manifest="dist/codex-package_SHA256SUMS"
+          tmp_manifest="$(mktemp)"
+          find dist -type f \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$tmp_manifest"
+
+          if [[ ! -s "$tmp_manifest" ]]; then
+            echo "No Codex package archives found for checksum manifest"
+            exit 1
+          fi
+
+          mv "$tmp_manifest" "$manifest"
+          cat "$manifest"
 
       - name: Add config schema release asset
         run: |
