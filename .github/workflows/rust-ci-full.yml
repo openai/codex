@@ -5,6 +5,34 @@ on:
       - main
       - "**full-ci**"
   workflow_dispatch:
+    inputs:
+      repro_platform:
+        description: Platform lane to run. Use all for the normal full workflow.
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - macos-aarch64
+          - linux-x64-remote
+          - linux-arm64
+          - windows-x64
+          - windows-arm64
+      nextest_filterset:
+        description: cargo-nextest filterset selecting the tests to run.
+        required: true
+        default: all()
+        type: string
+      shard:
+        description: Full-CI shard to reproduce. Use 0 to run all four shards.
+        required: true
+        default: 0
+        type: number
+      repeat_count:
+        description: Number of times to rerun the selected shard/filterset in one job.
+        required: true
+        default: 1
+        type: number
 
 # CI builds in debug (dev) for faster signal.
 env:
@@ -16,6 +44,7 @@ env:
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' }}
     name: Format / etc
     runs-on: ubuntu-24.04
     defaults:
@@ -32,6 +61,7 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check
 
   cargo_shear:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' }}
     name: cargo shear
     runs-on: ubuntu-24.04
     defaults:
@@ -49,6 +79,7 @@ jobs:
         run: cargo shear --deny-warnings
 
   argument_comment_lint_package:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' }}
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
@@ -90,6 +121,7 @@ jobs:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' }}
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
@@ -149,6 +181,7 @@ jobs:
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' }}
     name: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
@@ -522,6 +555,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests_macos_aarch64:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' || github.event.inputs.repro_platform == 'macos-aarch64' }}
     name: Tests — macos-15-xlarge - aarch64-apple-darwin
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -530,9 +564,13 @@ jobs:
       profile: ci-test
       artifact_id: macos-aarch64
       use_sccache: true
+      nextest_filterset: ${{ github.event.inputs.nextest_filterset || 'all()' }}
+      selected_shard: ${{ fromJSON(github.event.inputs.shard || '0') }}
+      repeat_count: ${{ fromJSON(github.event.inputs.repeat_count || '1') }}
     secrets: inherit
 
   tests_linux_x64_remote:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' || github.event.inputs.repro_platform == 'linux-x64-remote' }}
     name: Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu (remote)
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -544,9 +582,13 @@ jobs:
       artifact_id: linux-x64-remote
       remote_env: true
       use_sccache: true
+      nextest_filterset: ${{ github.event.inputs.nextest_filterset || 'all()' }}
+      selected_shard: ${{ fromJSON(github.event.inputs.shard || '0') }}
+      repeat_count: ${{ fromJSON(github.event.inputs.repeat_count || '1') }}
     secrets: inherit
 
   tests_linux_arm64:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' || github.event.inputs.repro_platform == 'linux-arm64' }}
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -557,9 +599,13 @@ jobs:
       profile: ci-test
       artifact_id: linux-arm64
       use_sccache: true
+      nextest_filterset: ${{ github.event.inputs.nextest_filterset || 'all()' }}
+      selected_shard: ${{ fromJSON(github.event.inputs.shard || '0') }}
+      repeat_count: ${{ fromJSON(github.event.inputs.repeat_count || '1') }}
     secrets: inherit
 
   tests_windows_x64:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' || github.event.inputs.repro_platform == 'windows-x64' }}
     name: Tests — windows-x64 - x86_64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -570,9 +616,13 @@ jobs:
       profile: ci-test
       artifact_id: windows-x64
       test_threads: 8
+      nextest_filterset: ${{ github.event.inputs.nextest_filterset || 'all()' }}
+      selected_shard: ${{ fromJSON(github.event.inputs.shard || '0') }}
+      repeat_count: ${{ fromJSON(github.event.inputs.repeat_count || '1') }}
     secrets: inherit
 
   tests_windows_arm64:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.repro_platform == 'all' || github.event.inputs.repro_platform == 'windows-arm64' }}
     name: Tests — windows-arm64 - aarch64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -587,6 +637,9 @@ jobs:
       artifact_id: windows-arm64
       test_threads: 8
       use_sccache: true
+      nextest_filterset: ${{ github.event.inputs.nextest_filterset || 'all()' }}
+      selected_shard: ${{ fromJSON(github.event.inputs.shard || '0') }}
+      repeat_count: ${{ fromJSON(github.event.inputs.repeat_count || '1') }}
     secrets: inherit
 
   # --- Gatherer job for the full post-merge workflow --------------------------
@@ -621,16 +674,29 @@ jobs:
           echo "test arm64 : ${{ needs.tests_linux_arm64.result }}"
           echo "test winx64: ${{ needs.tests_windows_x64.result }}"
           echo "test winarm: ${{ needs.tests_windows_arm64.result }}"
-          [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
-          [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
-          [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
-          [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
-          [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
-          [[ '${{ needs.tests_macos_aarch64.result }}' == 'success' ]] || { echo 'tests_macos_aarch64 failed'; exit 1; }
-          [[ '${{ needs.tests_linux_x64_remote.result }}' == 'success' ]] || { echo 'tests_linux_x64_remote failed'; exit 1; }
-          [[ '${{ needs.tests_linux_arm64.result }}' == 'success' ]] || { echo 'tests_linux_arm64 failed'; exit 1; }
-          [[ '${{ needs.tests_windows_x64.result }}' == 'success' ]] || { echo 'tests_windows_x64 failed'; exit 1; }
-          [[ '${{ needs.tests_windows_arm64.result }}' == 'success' ]] || { echo 'tests_windows_arm64 failed'; exit 1; }
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' && '${{ github.event.inputs.repro_platform }}' != 'all' ]]; then
+            selected_result=''
+            case '${{ github.event.inputs.repro_platform }}' in
+              macos-aarch64) selected_result='${{ needs.tests_macos_aarch64.result }}' ;;
+              linux-x64-remote) selected_result='${{ needs.tests_linux_x64_remote.result }}' ;;
+              linux-arm64) selected_result='${{ needs.tests_linux_arm64.result }}' ;;
+              windows-x64) selected_result='${{ needs.tests_windows_x64.result }}' ;;
+              windows-arm64) selected_result='${{ needs.tests_windows_arm64.result }}' ;;
+              *) echo 'unknown repro_platform'; exit 1 ;;
+            esac
+            [[ "${selected_result}" == 'success' ]] || { echo "selected repro platform failed: ${selected_result}"; exit 1; }
+          else
+            [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
+            [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
+            [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+            [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
+            [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
+            [[ '${{ needs.tests_macos_aarch64.result }}' == 'success' ]] || { echo 'tests_macos_aarch64 failed'; exit 1; }
+            [[ '${{ needs.tests_linux_x64_remote.result }}' == 'success' ]] || { echo 'tests_linux_x64_remote failed'; exit 1; }
+            [[ '${{ needs.tests_linux_arm64.result }}' == 'success' ]] || { echo 'tests_linux_arm64 failed'; exit 1; }
+            [[ '${{ needs.tests_windows_x64.result }}' == 'success' ]] || { echo 'tests_windows_x64 failed'; exit 1; }
+            [[ '${{ needs.tests_windows_arm64.result }}' == 'success' ]] || { echo 'tests_windows_arm64 failed'; exit 1; }
+          fi
 
       - name: sccache summary note
         if: always()

@@ -47,6 +47,18 @@ on:
         required: false
         default: false
         type: boolean
+      nextest_filterset:
+        required: false
+        default: "all()"
+        type: string
+      selected_shard:
+        required: false
+        default: 0
+        type: number
+      repeat_count:
+        required: false
+        default: 1
+        type: number
 
 # Caller workflow-level env does not flow through workflow_call, so keep the
 # Cargo git transport hardening on the archive and shard jobs directly here.
@@ -75,6 +87,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Validate targeted test inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if (( ${{ inputs.selected_shard }} < 0 || ${{ inputs.selected_shard }} > 4 )); then
+            echo "selected_shard must be between 0 and 4" >&2
+            exit 1
+          fi
+          if (( ${{ inputs.repeat_count }} < 1 )); then
+            echo "repeat_count must be at least 1" >&2
+            exit 1
+          fi
 
       - name: Configure Dev Drive (Windows)
         if: ${{ runner.os == 'Windows' }}
@@ -300,7 +325,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ inputs.selected_shard == 0 && fromJSON('[1,2,3,4]') || fromJSON(format('[{0}]', inputs.selected_shard)) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -392,6 +417,7 @@ jobs:
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
             --partition "hash:${{ matrix.shard }}/4"
+            --filterset "${{ inputs.nextest_filterset }}"
           )
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
@@ -417,7 +443,10 @@ jobs:
             )
           fi
 
-          "${test_command[@]}"
+          for attempt in $(seq 1 "${{ inputs.repeat_count }}"); do
+            echo "nextest attempt ${attempt}/${{ inputs.repeat_count }}"
+            "${test_command[@]}"
+          done
         env:
           RUST_BACKTRACE: 1
           RUST_MIN_STACK: "8388608" # 8 MiB
