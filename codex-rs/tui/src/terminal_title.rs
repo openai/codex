@@ -63,6 +63,7 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResu
         return Ok(SetTerminalTitleResult::NoVisibleContent);
     }
 
+    crate::tui::log_windows_vt_output_mode("before_set_terminal_title");
     execute!(stdout(), SetWindowTitle(title))?;
     Ok(SetTerminalTitleResult::Applied)
 }
@@ -76,6 +77,7 @@ pub(crate) fn clear_terminal_title() -> io::Result<()> {
         return Ok(());
     }
 
+    crate::tui::log_windows_vt_output_mode("before_clear_terminal_title");
     execute!(stdout(), SetWindowTitle(String::new()))
 }
 

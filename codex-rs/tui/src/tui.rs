@@ -9,6 +9,8 @@ use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -56,6 +58,20 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+
+#[cfg(windows)]
+const DEBUG_WINDOWS_VT_OUTPUT_ENV: &str = "CODEX_TUI_DEBUG_VT_OUTPUT";
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebugWindowsVtOutputMode {
+    Log,
+    Off,
+    On,
+}
+
+#[cfg(windows)]
+static DEBUG_WINDOWS_VT_OUTPUT_MODE: OnceLock<Option<DebugWindowsVtOutputMode>> = OnceLock::new();
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -175,6 +191,123 @@ pub fn set_modes() -> Result<()> {
     let _ = execute!(stdout(), EnableFocusChange);
     Ok(())
 }
+
+#[cfg(windows)]
+fn debug_windows_vt_output_mode() -> Option<DebugWindowsVtOutputMode> {
+    *DEBUG_WINDOWS_VT_OUTPUT_MODE.get_or_init(|| {
+        let value = std::env::var(DEBUG_WINDOWS_VT_OUTPUT_ENV).ok()?;
+        match value.as_str() {
+            "log" => Some(DebugWindowsVtOutputMode::Log),
+            "off" => Some(DebugWindowsVtOutputMode::Off),
+            "on" => Some(DebugWindowsVtOutputMode::On),
+            _ => {
+                tracing::warn!(
+                    env_var = DEBUG_WINDOWS_VT_OUTPUT_ENV,
+                    value,
+                    "ignoring unsupported Windows VT output debug mode"
+                );
+                None
+            }
+        }
+    })
+}
+
+#[cfg(windows)]
+fn windows_stdout_handle() -> Result<windows_sys::Win32::Foundation::HANDLE> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(handle)
+}
+
+#[cfg(windows)]
+fn windows_stdout_console_mode() -> Result<u32> {
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+
+    let handle = windows_stdout_handle()?;
+    let mut mode = 0;
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(mode)
+}
+
+#[cfg(windows)]
+fn set_windows_stdout_vt_processing(enabled: bool) -> Result<()> {
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+
+    let handle = windows_stdout_handle()?;
+    let mut mode = 0;
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let updated_mode = if enabled {
+        mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    } else {
+        mode & !ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    };
+    if updated_mode != mode && unsafe { SetConsoleMode(handle, updated_mode) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_windows_vt_output_debug_override() {
+    let Some(debug_mode) = debug_windows_vt_output_mode() else {
+        return;
+    };
+    let enabled = match debug_mode {
+        DebugWindowsVtOutputMode::Log => return,
+        DebugWindowsVtOutputMode::Off => false,
+        DebugWindowsVtOutputMode::On => true,
+    };
+    if let Err(err) = set_windows_stdout_vt_processing(enabled) {
+        tracing::warn!(
+            error = %err,
+            ?debug_mode,
+            "failed to apply Windows VT output debug override"
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_windows_vt_output_debug_override() {}
+
+#[cfg(windows)]
+pub(crate) fn log_windows_vt_output_mode(phase: &'static str) {
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+    let Some(debug_mode) = debug_windows_vt_output_mode() else {
+        return;
+    };
+    match windows_stdout_console_mode() {
+        Ok(mode) => tracing::info!(
+            phase,
+            ?debug_mode,
+            console_mode = mode,
+            vt_processing_enabled = mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0,
+            "Windows stdout VT output debug state"
+        ),
+        Err(err) => tracing::warn!(
+            phase,
+            ?debug_mode,
+            error = %err,
+            "failed to read Windows stdout VT output debug state"
+        ),
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn log_windows_vt_output_mode(_phase: &'static str) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EnableAlternateScroll;
@@ -341,7 +474,10 @@ pub fn init() -> Result<Terminal> {
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
+    log_windows_vt_output_mode("before_set_modes");
     set_modes()?;
+    apply_windows_vt_output_debug_override();
+    log_windows_vt_output_mode("after_set_modes");
 
     flush_terminal_input_buffer();
 
@@ -732,6 +868,8 @@ impl Tui {
             return Ok(());
         }
 
+        log_windows_vt_output_mode("before_insert_history");
+
         for batch in pending_history_lines.iter() {
             crate::insert_history::insert_history_lines_with_wrap_policy(
                 terminal,
@@ -759,6 +897,7 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
+        log_windows_vt_output_mode("before_draw_sync_update");
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
@@ -873,6 +1012,7 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
+        log_windows_vt_output_mode("before_resize_reflow_sync_update");
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
