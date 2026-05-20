@@ -10,7 +10,7 @@ use codex_tools::ToolSpec;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
-use super::code_mode_output_truncation_policy;
+use super::code_mode_history_truncation_policy;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 
@@ -131,12 +131,8 @@ impl CoreToolRuntime for CodeModeExecuteHandler {
 
     fn history_truncation_policy(
         &self,
-        invocation: &ToolInvocation,
+        _invocation: &ToolInvocation,
     ) -> Option<codex_utils_output_truncation::TruncationPolicy> {
-        let ToolPayload::Custom { input } = &invocation.payload else {
-            return None;
-        };
-        let args = codex_code_mode::parse_exec_source(input).ok()?;
-        Some(code_mode_output_truncation_policy(args.max_output_tokens))
+        Some(code_mode_history_truncation_policy())
     }
 }
