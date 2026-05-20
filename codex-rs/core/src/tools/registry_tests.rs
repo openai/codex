@@ -222,6 +222,35 @@ async fn function_hook_input_defaults_empty_arguments_to_object() {
     );
 }
 
+#[tokio::test]
+async fn opted_out_function_tools_do_not_expose_default_hook_payloads() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let output = crate::tools::context::FunctionToolOutput::from_text("ok".to_string(), Some(true));
+
+    let request_permissions = crate::tools::handlers::RequestPermissionsHandler;
+    let request_permissions_invocation = test_invocation(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        "request-permissions-call",
+        request_permissions.tool_name(),
+    );
+    assert_eq!(
+        request_permissions.pre_tool_use_payload(&request_permissions_invocation),
+        None
+    );
+    assert_eq!(
+        request_permissions.post_tool_use_payload(&request_permissions_invocation, &output),
+        None
+    );
+
+    let wait = crate::tools::handlers::CodeModeWaitHandler;
+    let wait_invocation = test_invocation(session, turn, "wait-call", wait.tool_name());
+    assert_eq!(wait.pre_tool_use_payload(&wait_invocation), None);
+    assert_eq!(wait.post_tool_use_payload(&wait_invocation, &output), None);
+}
+
 #[test]
 fn model_visible_override_keeps_code_mode_result_typed() {
     let result = AnyToolResult {
