@@ -3304,6 +3304,16 @@ impl Config {
             &mut constrained_permission_profile,
             &mut startup_warnings,
         )?;
+        if permission_profile_was_constrained
+            && original_permission_profile == PermissionProfile::Disabled
+            && constrained_permission_profile.get() == &PermissionProfile::read_only()
+            && constrained_approval_policy.value() == AskForApproval::Never
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Change `approval_policy` to allow approvals or choose an allowed sandbox mode.",
+            ));
+        }
         if permission_profile_was_constrained {
             // The selected profile no longer describes the effective
             // permissions after requirements forced a fallback.

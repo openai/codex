@@ -9713,6 +9713,38 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 }
 
 #[tokio::test]
+async fn danger_full_access_with_never_is_rejected_when_requirements_force_read_only()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await
+        .expect_err("requirements-constrained yolo should require sandbox approval");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Change `approval_policy` to allow approvals or choose an allowed sandbox mode."
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
