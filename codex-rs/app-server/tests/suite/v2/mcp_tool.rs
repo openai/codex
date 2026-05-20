@@ -1,14 +1,20 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+#[cfg(not(target_os = "windows"))]
 use std::path::Path;
+#[cfg(not(target_os = "windows"))]
 use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(not(target_os = "windows"))]
 use std::time::SystemTime;
+#[cfg(not(target_os = "windows"))]
 use std::time::UNIX_EPOCH;
 
+#[cfg(not(target_os = "windows"))]
 use anyhow::Context as _;
 use anyhow::Result;
+#[cfg(not(target_os = "windows"))]
 use anyhow::ensure;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -19,13 +25,16 @@ use axum::Router;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+#[cfg(not(target_os = "windows"))]
 use codex_app_server_protocol::ListMcpServerStatusParams;
+#[cfg(not(target_os = "windows"))]
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+#[cfg(not(target_os = "windows"))]
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
@@ -38,10 +47,13 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+#[cfg(not(target_os = "windows"))]
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+#[cfg(not(target_os = "windows"))]
 use core_test_support::get_remote_test_env;
 use core_test_support::responses;
+#[cfg(not(target_os = "windows"))]
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -80,6 +92,7 @@ const ELICITATION_MESSAGE: &str = "Allow this request?";
 const URL_ELICITATION_TRIGGER_MESSAGE: &str = "auth";
 const URL_ELICITATION_MESSAGE: &str = "Sign in to GitHub to continue.";
 const URL_ELICITATION_URL: &str = "https://github.example/login/device";
+#[cfg(not(target_os = "windows"))]
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -200,6 +213,7 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_stdio_servers_use_configured_local_and_remote_environments() -> Result<()> {
     let Some(remote_env) = get_remote_test_env() else {
@@ -265,6 +279,7 @@ async fn mcp_stdio_servers_use_configured_local_and_remote_environments() -> Res
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn mcp_stdio_server_requires_local_environment_when_config_omits_environment_id() -> Result<()>
 {
@@ -425,6 +440,7 @@ url = "{mcp_server_url}/mcp"
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 async fn start_test_thread(mcp: &mut McpProcess) -> Result<String> {
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -441,6 +457,7 @@ async fn start_test_thread(mcp: &mut McpProcess) -> Result<String> {
     Ok(thread.id)
 }
 
+#[cfg(not(target_os = "windows"))]
 async fn assert_echo_tool_call(
     mcp: &mut McpProcess,
     thread_id: &str,
@@ -475,6 +492,7 @@ async fn assert_echo_tool_call(
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn append_stdio_mcp_config(
     codex_home: &Path,
     local_stdio_server_bin: &str,
@@ -497,6 +515,7 @@ cwd = "/tmp"
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn append_local_stdio_mcp_config(codex_home: &Path, local_stdio_server_bin: &str) -> Result<()> {
     let config_path = codex_home.join("config.toml");
     let mut config_toml = std::fs::read_to_string(&config_path)?;
@@ -510,6 +529,7 @@ command = {local_stdio_server_bin:?}
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn write_remote_environment_config(codex_home: &Path) -> Result<()> {
     let remote_exec_server_url = std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR)
         .with_context(|| format!("{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set"))?;
@@ -527,6 +547,7 @@ url = {remote_exec_server_url:?}
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn copy_binary_to_remote_env(container_name: &str, host_path: &Path) -> Result<String> {
     let remote_path = unique_remote_path("test_stdio_server")?;
     let mkdir_output = StdCommand::new("docker")
@@ -563,6 +584,7 @@ fn copy_binary_to_remote_env(container_name: &str, host_path: &Path) -> Result<S
     Ok(remote_path)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn unique_remote_path(binary_name: &str) -> Result<String> {
     let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     Ok(format!(
