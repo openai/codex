@@ -4078,6 +4078,8 @@ fn request_user_input_request(thread_id: ThreadId, turn_id: &str, item_id: &str)
             thread_id: thread_id.to_string(),
             turn_id: turn_id.to_string(),
             item_id: item_id.to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: Vec::new(),
         },
     }

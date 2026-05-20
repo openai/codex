@@ -1051,6 +1051,8 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let args = RequestUserInputArgs {
+        input_type: None,
+        option_picker_allow_multiple: None,
         questions: vec![question],
     };
     let response = sess

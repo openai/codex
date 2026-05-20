@@ -524,6 +524,8 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-2".to_string(),
                     item_id: "tool-1".to_string(),
+                    input_type: None,
+                    option_picker_allow_multiple: None,
                     questions: Vec::new(),
                 },
             }),
@@ -817,6 +819,8 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "tool-1".to_string(),
+                input_type: None,
+                option_picker_allow_multiple: None,
                 questions: Vec::new(),
             },
         });
@@ -839,6 +843,8 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: item_id.to_string(),
+                    input_type: None,
+                    option_picker_allow_multiple: None,
                     questions: Vec::new(),
                 },
             });

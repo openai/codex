@@ -2135,10 +2135,17 @@ impl Session {
             warn!("Overwriting existing pending user input for sub_id: {event_id}");
         }
 
+        let RequestUserInputArgs {
+            input_type,
+            option_picker_allow_multiple,
+            questions,
+        } = args;
         let event = EventMsg::RequestUserInput(RequestUserInputEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
-            questions: args.questions,
+            input_type,
+            option_picker_allow_multiple,
+            questions,
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()

@@ -78,6 +78,7 @@ use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use codex_protocol::request_user_input::RequestUserInputType;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
@@ -7556,6 +7557,10 @@ pub struct ToolRequestUserInputParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_type: Option<RequestUserInputType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_picker_allow_multiple: Option<bool>,
     pub questions: Vec<ToolRequestUserInputQuestion>,
 }
 

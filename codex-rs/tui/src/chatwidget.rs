@@ -1908,6 +1908,8 @@ fn request_user_input_from_params(params: ToolRequestUserInputParams) -> Request
     RequestUserInputEvent {
         turn_id: params.turn_id,
         call_id: params.item_id,
+        input_type: params.input_type,
+        option_picker_allow_multiple: params.option_picker_allow_multiple,
         questions: params
             .questions
             .into_iter()

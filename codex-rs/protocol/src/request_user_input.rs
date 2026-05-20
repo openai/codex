@@ -5,6 +5,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestUserInputType {
+    Structured,
+    OptionPicker,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputQuestionOption {
     pub label: String,
@@ -30,6 +37,22 @@ pub struct RequestUserInputQuestion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputArgs {
+    #[serde(
+        rename = "inputType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(rename = "inputType")]
+    #[ts(rename = "inputType")]
+    pub input_type: Option<RequestUserInputType>,
+    #[serde(
+        rename = "optionPickerAllowMultiple",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(rename = "optionPickerAllowMultiple")]
+    #[ts(rename = "optionPickerAllowMultiple")]
+    pub option_picker_allow_multiple: Option<bool>,
     pub questions: Vec<RequestUserInputQuestion>,
 }
 
@@ -51,5 +74,21 @@ pub struct RequestUserInputEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+    #[serde(
+        rename = "inputType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(rename = "inputType")]
+    #[ts(rename = "inputType")]
+    pub input_type: Option<RequestUserInputType>,
+    #[serde(
+        rename = "optionPickerAllowMultiple",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(rename = "optionPickerAllowMultiple")]
+    #[ts(rename = "optionPickerAllowMultiple")]
+    pub option_picker_allow_multiple: Option<bool>,
     pub questions: Vec<RequestUserInputQuestion>,
 }

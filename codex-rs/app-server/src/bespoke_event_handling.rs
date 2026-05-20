@@ -840,6 +840,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
                     item_id: request.call_id,
+                    input_type: request.input_type,
+                    option_picker_allow_multiple: request.option_picker_allow_multiple,
                     questions,
                 };
                 let (pending_request_id, rx) = outgoing

@@ -644,6 +644,8 @@ async fn handle_request_user_input(
     }
 
     let args = RequestUserInputArgs {
+        input_type: event.input_type,
+        option_picker_allow_multiple: event.option_picker_allow_multiple,
         questions: event.questions,
     };
     let response_fut =

@@ -250,6 +250,8 @@ async fn should_install_mcp_dependencies(
         ]),
     };
     let args = RequestUserInputArgs {
+        input_type: None,
+        option_picker_allow_multiple: None,
         questions: vec![question],
     };
     let sub_id = &turn_context.sub_id;

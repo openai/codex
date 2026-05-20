@@ -139,7 +139,11 @@ async fn request_skill_dependencies(
         .request_user_input(
             turn_context,
             format!("skill-deps-{}", turn_context.sub_id),
-            RequestUserInputArgs { questions },
+            RequestUserInputArgs {
+                input_type: None,
+                option_picker_allow_multiple: None,
+                questions,
+            },
         )
         .await
         .unwrap_or_else(|| RequestUserInputResponse {

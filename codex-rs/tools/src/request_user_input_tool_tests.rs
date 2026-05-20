@@ -13,7 +13,25 @@ fn request_user_input_tool_includes_questions_schema() {
             description: "Ask the user to choose.".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::object(BTreeMap::from([(
+            parameters: JsonSchema::object(BTreeMap::from([
+                (
+                    "inputType".to_string(),
+                    JsonSchema::string_enum(
+                        vec![json!("structured"), json!("option_picker")],
+                        Some(
+                            "Optional UI presentation hint. Use `option_picker` when the prompt should render as a selectable option picker; otherwise omit this or use `structured`."
+                                .to_string(),
+                        ),
+                    ),
+                ),
+                (
+                    "optionPickerAllowMultiple".to_string(),
+                    JsonSchema::boolean(Some(
+                        "Optional. For `inputType: option_picker`, set true when multiple choices may be selected."
+                            .to_string(),
+                    )),
+                ),
+                (
                     "questions".to_string(),
                     JsonSchema::array(
                         JsonSchema::object(
@@ -83,7 +101,8 @@ fn request_user_input_tool_includes_questions_schema() {
                             "Questions to show the user. Prefer 1 and do not exceed 3".to_string(),
                         ),
                     ),
-                )]), Some(vec!["questions".to_string()]), Some(false.into())),
+                ),
+            ]), Some(vec!["questions".to_string()]), Some(false.into())),
             output_schema: None,
         })
     );

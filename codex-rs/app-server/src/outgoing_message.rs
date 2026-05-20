@@ -1139,6 +1139,8 @@ mod tests {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
+                    input_type: None,
+                    option_picker_allow_multiple: None,
                     questions: vec![],
                 },
             ))
@@ -1197,6 +1199,8 @@ mod tests {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "call-1".to_string(),
+                    input_type: None,
+                    option_picker_allow_multiple: None,
                     questions: vec![],
                 },
             ))

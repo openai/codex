@@ -1487,6 +1487,8 @@ mod tests {
         RequestUserInputEvent {
             call_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions,
         }
     }
@@ -1548,11 +1550,15 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: vec![question_with_options("q2", "Second")],
         });
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: vec![question_with_options("q3", "Third")],
         });
 
@@ -1569,6 +1575,8 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                input_type: None,
+                option_picker_allow_multiple: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1596,6 +1604,8 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                input_type: None,
+                option_picker_allow_multiple: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1606,6 +1616,8 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: vec![question_with_options("q2", "Second")],
         });
 
@@ -1632,6 +1644,8 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
+                input_type: None,
+                option_picker_allow_multiple: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1642,11 +1656,15 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: vec![question_with_options("q2", "Second")],
         });
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
+            input_type: None,
+            option_picker_allow_multiple: None,
             questions: vec![question_with_options("q3", "Third")],
         });
 
