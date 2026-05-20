@@ -42,12 +42,13 @@ impl ChatWidget {
         extra_count: usize,
         failed_scan: bool,
     ) {
-        let (approval, active_permission_profile) = match &preset {
+        let (approval, permission_profile, active_permission_profile) = match &preset {
             Some(p) => (
                 Some(AskForApproval::from(p.approval)),
+                Some(p.permission_profile.clone()),
                 Some(p.active_permission_profile.clone()),
             ),
-            None => (None, None),
+            None => (None, None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_profile = |profile: &PermissionProfile| {
@@ -110,11 +111,14 @@ impl ChatWidget {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
             }));
         }
-        if let (Some(approval), Some(active_permission_profile)) =
-            (approval, active_permission_profile.clone())
-        {
+        if let (Some(approval), Some(permission_profile), Some(active_permission_profile)) = (
+            approval,
+            permission_profile.clone(),
+            active_permission_profile.clone(),
+        ) {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
+                permission_profile,
                 active_permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,
@@ -126,11 +130,12 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
-        if let (Some(approval), Some(active_permission_profile)) =
-            (approval, active_permission_profile)
+        if let (Some(approval), Some(permission_profile), Some(active_permission_profile)) =
+            (approval, permission_profile, active_permission_profile)
         {
             accept_and_remember_actions.extend(Self::approval_preset_actions(
                 approval,
+                permission_profile,
                 active_permission_profile,
                 mode_label.to_string(),
                 ApprovalsReviewer::User,

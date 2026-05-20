@@ -11,28 +11,28 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
-use crate::relay::run_multiplexed_executor;
+use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 
 #[derive(Clone)]
-struct ExecutorRegistryClient {
+struct EnvironmentRegistryClient {
     base_url: String,
     auth_provider: SharedAuthProvider,
     http: reqwest::Client,
 }
 
-impl std::fmt::Debug for ExecutorRegistryClient {
+impl std::fmt::Debug for EnvironmentRegistryClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExecutorRegistryClient")
+        f.debug_struct("EnvironmentRegistryClient")
             .field("base_url", &self.base_url)
             .field("auth_provider", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
 
-impl ExecutorRegistryClient {
+impl EnvironmentRegistryClient {
     fn new(base_url: String, auth_provider: SharedAuthProvider) -> Result<Self, ExecServerError> {
         let base_url = normalize_base_url(base_url)?;
         Ok(Self {
@@ -42,15 +42,15 @@ impl ExecutorRegistryClient {
         })
     }
 
-    async fn register_executor(
+    async fn register_environment(
         &self,
-        executor_id: &str,
-    ) -> Result<ExecutorRegistryExecutorRegistrationResponse, ExecServerError> {
+        environment_id: &str,
+    ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
         let response = self
             .http
             .post(endpoint_url(
                 &self.base_url,
-                &format!("/cloud/executor/{executor_id}/register"),
+                &format!("/cloud/environment/{environment_id}/register"),
             ))
             .headers(self.auth_provider.to_auth_headers())
             .send()
@@ -72,49 +72,49 @@ impl ExecutorRegistryClient {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-            return Err(executor_registry_auth_error(status, &body));
+            return Err(environment_registry_auth_error(status, &body));
         }
 
-        Err(executor_registry_http_error(status, &body))
+        Err(environment_registry_http_error(status, &body))
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
-struct ExecutorRegistryExecutorRegistrationResponse {
-    executor_id: String,
+struct EnvironmentRegistryRegistrationResponse {
+    environment_id: String,
     url: String,
 }
 
 /// Configuration for registering an exec-server for remote use.
 #[derive(Clone)]
-pub struct RemoteExecutorConfig {
+pub struct RemoteEnvironmentConfig {
     pub base_url: String,
-    pub executor_id: String,
+    pub environment_id: String,
     pub name: String,
     auth_provider: SharedAuthProvider,
 }
 
-impl std::fmt::Debug for RemoteExecutorConfig {
+impl std::fmt::Debug for RemoteEnvironmentConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RemoteExecutorConfig")
+        f.debug_struct("RemoteEnvironmentConfig")
             .field("base_url", &self.base_url)
-            .field("executor_id", &self.executor_id)
+            .field("environment_id", &self.environment_id)
             .field("name", &self.name)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
 }
 
-impl RemoteExecutorConfig {
+impl RemoteEnvironmentConfig {
     pub fn new(
         base_url: String,
-        executor_id: String,
+        environment_id: String,
         auth_provider: SharedAuthProvider,
     ) -> Result<Self, ExecServerError> {
-        let executor_id = normalize_executor_id(executor_id)?;
+        let environment_id = normalize_environment_id(environment_id)?;
         Ok(Self {
             base_url,
-            executor_id,
+            environment_id,
             name: "codex-exec-server".to_string(),
             auth_provider,
         })
@@ -123,27 +123,27 @@ impl RemoteExecutorConfig {
 
 /// Register an exec-server for remote use and serve requests over the returned
 /// rendezvous websocket.
-pub async fn run_remote_executor(
-    config: RemoteExecutorConfig,
+pub async fn run_remote_environment(
+    config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
     ensure_rustls_crypto_provider();
     let client =
-        ExecutorRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
+        EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let response = client.register_executor(&config.executor_id).await?;
+        let response = client.register_environment(&config.environment_id).await?;
         eprintln!(
-            "codex exec-server remote executor registered with executor_id {}",
-            response.executor_id
+            "codex exec-server remote environment registered with environment_id {}",
+            response.environment_id
         );
 
         match connect_async(response.url.as_str()).await {
             Ok((websocket, _)) => {
                 backoff = Duration::from_secs(1);
-                run_multiplexed_executor(websocket, processor.clone()).await;
+                run_multiplexed_environment(websocket, processor.clone()).await;
             }
             Err(err) => {
                 warn!("failed to connect remote exec-server websocket: {err}");
@@ -155,14 +155,14 @@ pub async fn run_remote_executor(
     }
 }
 
-fn normalize_executor_id(executor_id: String) -> Result<String, ExecServerError> {
-    let executor_id = executor_id.trim().to_string();
-    if executor_id.is_empty() {
-        return Err(ExecServerError::ExecutorRegistryConfig(
-            "executor id is required for remote exec-server registration".to_string(),
+fn normalize_environment_id(environment_id: String) -> Result<String, ExecServerError> {
+    let environment_id = environment_id.trim().to_string();
+    if environment_id.is_empty() {
+        return Err(ExecServerError::EnvironmentRegistryConfig(
+            "environment id is required for remote exec-server registration".to_string(),
         ));
     }
-    Ok(executor_id)
+    Ok(environment_id)
 }
 
 #[derive(Deserialize)]
@@ -179,8 +179,8 @@ struct RegistryError {
 fn normalize_base_url(base_url: String) -> Result<String, ExecServerError> {
     let trimmed = base_url.trim().trim_end_matches('/').to_string();
     if trimmed.is_empty() {
-        return Err(ExecServerError::ExecutorRegistryConfig(
-            "executor registry base URL is required".to_string(),
+        return Err(ExecServerError::EnvironmentRegistryConfig(
+            "environment registry base URL is required".to_string(),
         ));
     }
     Ok(trimmed)
@@ -190,14 +190,14 @@ fn endpoint_url(base_url: &str, path: &str) -> String {
     format!("{base_url}/{}", path.trim_start_matches('/'))
 }
 
-fn executor_registry_auth_error(status: StatusCode, body: &str) -> ExecServerError {
+fn environment_registry_auth_error(status: StatusCode, body: &str) -> ExecServerError {
     let message = registry_error_message(body).unwrap_or_else(|| "empty error body".to_string());
-    ExecServerError::ExecutorRegistryAuth(format!(
-        "executor registry authentication failed ({status}): {message}"
+    ExecServerError::EnvironmentRegistryAuth(format!(
+        "environment registry authentication failed ({status}): {message}"
     ))
 }
 
-fn executor_registry_http_error(status: StatusCode, body: &str) -> ExecServerError {
+fn environment_registry_http_error(status: StatusCode, body: &str) -> ExecServerError {
     let parsed = serde_json::from_str::<RegistryErrorBody>(body).ok();
     let (code, message) = parsed
         .and_then(|body| body.error)
@@ -216,7 +216,7 @@ fn executor_registry_http_error(status: StatusCode, body: &str) -> ExecServerErr
                     .unwrap_or_else(|| "empty or malformed error body".to_string()),
             )
         });
-    ExecServerError::ExecutorRegistryHttp {
+    ExecServerError::EnvironmentRegistryHttp {
         status,
         code,
         message,
@@ -277,46 +277,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_executor_posts_with_auth_provider_headers() {
+    async fn register_environment_posts_with_auth_provider_headers() {
         let server = MockServer::start().await;
-        let config = RemoteExecutorConfig::new(
+        let config = RemoteEnvironmentConfig::new(
             server.uri(),
-            "exec-requested".to_string(),
+            "environment-requested".to_string(),
             static_registry_auth_provider(),
         )
         .expect("config");
         Mock::given(method("POST"))
-            .and(path("/cloud/executor/exec-requested/register"))
+            .and(path("/cloud/environment/environment-requested/register"))
             .and(header("authorization", "Bearer registry-token"))
             .and(header("chatgpt-account-id", "workspace-123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "executor_id": "exec-1",
-                "url": "wss://rendezvous.test/executor/exec-1?role=executor&sig=abc"
+                "environment_id": "env-1",
+                "url": "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc"
             })))
             .mount(&server)
             .await;
-        let client = ExecutorRegistryClient::new(server.uri(), static_registry_auth_provider())
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
             .expect("client");
 
         let response = client
-            .register_executor(&config.executor_id)
+            .register_environment(&config.environment_id)
             .await
-            .expect("register executor");
+            .expect("register environment");
 
         assert_eq!(
             response,
-            ExecutorRegistryExecutorRegistrationResponse {
-                executor_id: "exec-1".to_string(),
-                url: "wss://rendezvous.test/executor/exec-1?role=executor&sig=abc".to_string(),
+            EnvironmentRegistryRegistrationResponse {
+                environment_id: "env-1".to_string(),
+                url: "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc".to_string(),
             }
         );
     }
 
     #[test]
     fn debug_output_redacts_auth_provider() {
-        let config = RemoteExecutorConfig::new(
+        let config = RemoteEnvironmentConfig::new(
             "https://registry.example".to_string(),
-            "exec-1".to_string(),
+            "env-1".to_string(),
             static_registry_auth_provider(),
         )
         .expect("config");

@@ -1,5 +1,6 @@
 """Supported package targets and default binary discovery."""
 
+import platform
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,14 +15,11 @@ class TargetSpec:
     target: str
     is_windows: bool
     is_linux: bool
+    dotslash_platform: str
 
     @property
     def exe_suffix(self) -> str:
         return ".exe" if self.is_windows else ""
-
-    @property
-    def codex_name(self) -> str:
-        return f"codex{self.exe_suffix}"
 
     @property
     def rg_name(self) -> str:
@@ -29,66 +27,115 @@ class TargetSpec:
 
 
 @dataclass(frozen=True)
+class PackageVariant:
+    name: str
+    cargo_bin: str
+    executable_stem: str
+
+    def entrypoint_name(self, spec: TargetSpec) -> str:
+        return f"{self.executable_stem}{spec.exe_suffix}"
+
+
+@dataclass(frozen=True)
 class PackageInputs:
-    codex_bin: Path
+    entrypoint_bin: Path
     rg_bin: Path
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
 
 
+PACKAGE_VARIANTS: dict[str, PackageVariant] = {
+    "codex": PackageVariant(
+        name="codex",
+        cargo_bin="codex",
+        executable_stem="codex",
+    ),
+    "codex-app-server": PackageVariant(
+        name="codex-app-server",
+        cargo_bin="codex-app-server",
+        executable_stem="codex-app-server",
+    ),
+}
+
+
 TARGET_SPECS: dict[str, TargetSpec] = {
+    "x86_64-unknown-linux-gnu": TargetSpec(
+        target="x86_64-unknown-linux-gnu",
+        is_windows=False,
+        is_linux=True,
+        dotslash_platform="linux-x86_64",
+    ),
     "x86_64-unknown-linux-musl": TargetSpec(
         target="x86_64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        dotslash_platform="linux-x86_64",
+    ),
+    "aarch64-unknown-linux-gnu": TargetSpec(
+        target="aarch64-unknown-linux-gnu",
+        is_windows=False,
+        is_linux=True,
+        dotslash_platform="linux-aarch64",
     ),
     "aarch64-unknown-linux-musl": TargetSpec(
         target="aarch64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        dotslash_platform="linux-aarch64",
     ),
     "x86_64-apple-darwin": TargetSpec(
         target="x86_64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        dotslash_platform="macos-x86_64",
     ),
     "aarch64-apple-darwin": TargetSpec(
         target="aarch64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        dotslash_platform="macos-aarch64",
     ),
     "x86_64-pc-windows-msvc": TargetSpec(
         target="x86_64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        dotslash_platform="windows-x86_64",
     ),
     "aarch64-pc-windows-msvc": TargetSpec(
         target="aarch64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        dotslash_platform="windows-aarch64",
     ),
 }
 
 
-def resolve_rg_bin(spec: TargetSpec, rg_bin: Path | None) -> Path:
-    return resolve_input_path(
-        rg_bin,
-        default_rg_candidates(spec),
-        "ripgrep executable",
-        "--rg-bin",
-    )
+HOST_RELEASE_TARGETS: dict[tuple[str, str], str] = {
+    ("darwin", "aarch64"): "aarch64-apple-darwin",
+    ("darwin", "x86_64"): "x86_64-apple-darwin",
+    ("linux", "aarch64"): "aarch64-unknown-linux-musl",
+    ("linux", "x86_64"): "x86_64-unknown-linux-musl",
+    ("windows", "aarch64"): "aarch64-pc-windows-msvc",
+    ("windows", "x86_64"): "x86_64-pc-windows-msvc",
+}
 
 
-def default_rg_candidates(spec: TargetSpec) -> list[Path]:
-    return [
-        REPO_ROOT / "codex-cli" / "vendor" / spec.target / "path" / spec.rg_name,
-    ]
+def default_target() -> str:
+    system = platform.system().lower()
+    machine = normalize_machine(platform.machine())
+    target = HOST_RELEASE_TARGETS.get((system, machine))
+    if target is None:
+        supported = ", ".join(sorted(TARGET_SPECS))
+        raise RuntimeError(
+            f"Unsupported host platform {platform.system()}/{platform.machine()}. "
+            f"Pass --target explicitly. Supported targets: {supported}"
+        )
+    return target
 
 
 def resolve_input_path(
     explicit_path: Path | None,
-    default_candidates: list[Path],
     description: str,
     flag_name: str,
 ) -> Path:
@@ -100,15 +147,17 @@ def resolve_input_path(
             raise RuntimeError(f"{description} is not executable: {path}")
         return path
 
-    for candidate in default_candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-
-    candidates = "\n".join(f"  - {candidate}" for candidate in default_candidates)
-    raise RuntimeError(
-        f"Could not find {description}. Pass {flag_name}, or create one of:\n{candidates}"
-    )
+    raise RuntimeError(f"Must specify {flag_name} for {description}.")
 
 
 def is_executable(path: Path) -> bool:
     return bool(path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+
+
+def normalize_machine(machine: str) -> str:
+    machine = machine.lower()
+    if machine in ("amd64", "x86_64"):
+        return "x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64"
+    return machine

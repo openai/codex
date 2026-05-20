@@ -150,6 +150,8 @@ pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
+pub(crate) use permissions::is_builtin_permission_profile_name;
+pub(crate) use permissions::reject_unknown_builtin_permission_profile;
 pub(crate) use permissions::resolve_permission_profile;
 pub use resolved_permission_profile::PermissionProfileSnapshot;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
@@ -491,6 +493,39 @@ fn profile_allows_configured_network_proxy(permission_profile: &PermissionProfil
         }
         PermissionProfile::Disabled => false,
     }
+}
+
+fn build_network_proxy_spec(
+    configured_network_proxy_config: NetworkProxyConfig,
+    network_requirements: Option<Sourced<codex_config::NetworkConstraints>>,
+    permission_profile: &PermissionProfile,
+) -> std::io::Result<Option<NetworkProxySpec>> {
+    let (network_requirements, network_requirements_source) = match network_requirements {
+        Some(Sourced { value, source }) => (Some(value), Some(source)),
+        None => (None, None),
+    };
+    let has_network_requirements = network_requirements.is_some();
+    let network = NetworkProxySpec::from_config_and_constraints(
+        configured_network_proxy_config,
+        network_requirements,
+        permission_profile,
+    )
+    .map_err(|err| {
+        if let Some(source) = network_requirements_source.as_ref() {
+            std::io::Error::new(
+                err.kind(),
+                format!("failed to build managed network proxy from {source}: {err}"),
+            )
+        } else {
+            err
+        }
+    })?;
+
+    Ok(if has_network_requirements {
+        Some(network)
+    } else {
+        network.enabled().then_some(network)
+    })
 }
 
 /// Configured thread persistence backend.
@@ -2426,6 +2461,7 @@ impl Config {
             permission_profile: mut constrained_permission_profile,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
+            computer_use: _,
             feature_requirements,
             managed_hooks: _,
             mcp_servers,
@@ -2437,14 +2473,17 @@ impl Config {
             guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions =
-            AgentsMdManager::load_global_instructions(LOCAL_FS.as_ref(), Some(&codex_home))
-                .await
-                .map(|loaded| loaded.contents);
         let mut startup_warnings = config_layer_stack
             .startup_warnings()
             .unwrap_or_default()
             .to_vec();
+        let user_instructions = AgentsMdManager::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&codex_home),
+            &mut startup_warnings,
+        )
+        .await
+        .map(|loaded| loaded.contents);
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -2803,7 +2842,15 @@ impl Config {
                 // when doing so would lose roots, network, or tmp settings.
                 None
             } else {
-                Some(ActivePermissionProfile::new(default_permissions))
+                let selected_profile_extends = cfg
+                    .permissions
+                    .as_ref()
+                    .and_then(|permissions| permissions.entries.get(default_permissions))
+                    .and_then(|profile| profile.extends.clone());
+                Some(ActivePermissionProfile {
+                    id: default_permissions.to_string(),
+                    extends: selected_profile_extends,
+                })
             };
             (
                 configured_network_proxy_config,
@@ -3306,32 +3353,12 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let (network_requirements, network_requirements_source) = match network_requirements {
-            Some(Sourced { value, source }) => (Some(value), Some(source)),
-            None => (None, None),
-        };
-        let has_network_requirements = network_requirements.is_some();
         let network_permission_profile = constrained_permission_profile.get().clone();
-        let network = NetworkProxySpec::from_config_and_constraints(
+        let network = build_network_proxy_spec(
             configured_network_proxy_config,
             network_requirements,
             &network_permission_profile,
-        )
-        .map_err(|err| {
-            if let Some(source) = network_requirements_source.as_ref() {
-                std::io::Error::new(
-                    err.kind(),
-                    format!("failed to build managed network proxy from {source}: {err}"),
-                )
-            } else {
-                err
-            }
-        })?;
-        let network = if has_network_requirements {
-            Some(network)
-        } else {
-            network.enabled().then_some(network)
-        };
+        )?;
         let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
@@ -3684,6 +3711,53 @@ impl Config {
             .requirements_toml()
             .network
             .is_some()
+    }
+
+    pub(crate) fn network_proxy_spec_for_active_permission_profile(
+        &self,
+        active_permission_profile: &ActivePermissionProfile,
+        permission_profile: &PermissionProfile,
+    ) -> std::io::Result<Option<NetworkProxySpec>> {
+        let profile_allows_network_proxy =
+            profile_allows_configured_network_proxy(permission_profile);
+        let configured_network_proxy_config = if profile_allows_network_proxy {
+            let cfg: ConfigToml = self
+                .config_layer_stack
+                .effective_config()
+                .try_into()
+                .map_err(|err| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "failed to read effective config for selected permission profile: {err}"
+                        ),
+                    )
+                })?;
+            let mut configured_network_proxy_config = network_proxy_config_for_profile_selection(
+                cfg.permissions.as_ref(),
+                active_permission_profile.id.as_str(),
+            )?;
+            if self.features.enabled(Feature::NetworkProxy)
+                && permission_profile.network_sandbox_policy().is_enabled()
+            {
+                if let Some(network_proxy) = network_proxy_toml_config(cfg.features.as_ref()) {
+                    apply_network_proxy_feature_config(
+                        &mut configured_network_proxy_config,
+                        network_proxy,
+                    );
+                }
+                configured_network_proxy_config.network.enabled = true;
+            }
+            configured_network_proxy_config
+        } else {
+            NetworkProxyConfig::default()
+        };
+
+        build_network_proxy_spec(
+            configured_network_proxy_config,
+            self.config_layer_stack.requirements().network.clone(),
+            permission_profile,
+        )
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {

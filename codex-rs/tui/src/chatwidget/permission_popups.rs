@@ -124,6 +124,7 @@ impl ChatWidget {
                     } else {
                         Self::approval_preset_actions(
                             preset_approval,
+                            preset.permission_profile.clone(),
                             preset.active_permission_profile.clone(),
                             base_name.clone(),
                             ApprovalsReviewer::User,
@@ -134,6 +135,7 @@ impl ChatWidget {
                 {
                     Self::approval_preset_actions(
                         preset_approval,
+                        preset.permission_profile.clone(),
                         preset.active_permission_profile.clone(),
                         base_name.clone(),
                         ApprovalsReviewer::User,
@@ -142,6 +144,7 @@ impl ChatWidget {
             } else {
                 Self::approval_preset_actions(
                     preset_approval,
+                    preset.permission_profile.clone(),
                     preset.active_permission_profile.clone(),
                     base_name.clone(),
                     ApprovalsReviewer::User,
@@ -180,6 +183,7 @@ impl ChatWidget {
                             ),
                         actions: Self::approval_preset_actions(
                             preset_approval,
+                            preset.permission_profile.clone(),
                             preset.active_permission_profile.clone(),
                             "Auto-review".to_string(),
                             ApprovalsReviewer::AutoReview,
@@ -308,6 +312,7 @@ impl ChatWidget {
 
     pub(super) fn approval_preset_actions(
         approval: AskForApproval,
+        permission_profile: PermissionProfile,
         active_permission_profile: ActivePermissionProfile,
         label: String,
         approvals_reviewer: ApprovalsReviewer,
@@ -317,6 +322,7 @@ impl ChatWidget {
                 /*cwd*/ None,
                 Some(approval),
                 Some(approvals_reviewer),
+                Some(permission_profile.clone()),
                 Some(active_permission_profile.clone()),
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
@@ -402,6 +408,7 @@ impl ChatWidget {
 
         let mut accept_actions = Self::approval_preset_actions(
             approval,
+            preset.permission_profile.clone(),
             preset.active_permission_profile.clone(),
             selected_name.clone(),
             ApprovalsReviewer::User,
@@ -412,6 +419,7 @@ impl ChatWidget {
 
         let mut accept_and_remember_actions = Self::approval_preset_actions(
             approval,
+            preset.permission_profile,
             preset.active_permission_profile,
             selected_name,
             ApprovalsReviewer::User,

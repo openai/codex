@@ -88,8 +88,10 @@ impl CoreToolRuntime for ExtensionToolAdapter {
 
 fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     ExtensionToolCall {
+        turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
+        truncation_policy: invocation.turn.truncation_policy,
         payload: invocation.payload.clone(),
     }
 }
@@ -108,6 +110,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tokio::sync::Mutex;
 
     use super::ExtensionToolAdapter;
     use crate::tools::context::ToolCallSource;
@@ -158,6 +161,27 @@ mod tests {
         }
     }
 
+    struct CapturingExtensionExecutor {
+        captured_call: Arc<Mutex<Option<codex_tools::ToolCall>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for CapturingExtensionExecutor {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            codex_tools::ToolName::plain("extension_echo")
+        }
+
+        async fn handle(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            *self.captured_call.lock().await = Some(call);
+            Ok(Box::new(codex_tools::JsonToolOutput::new(
+                json!({ "ok": true }),
+            )))
+        }
+    }
+
     #[tokio::test]
     async fn exposes_generic_hook_payloads() {
         let handler = ExtensionToolAdapter::new(Arc::new(StubExtensionExecutor));
@@ -192,5 +216,47 @@ mod tests {
                 tool_response: json!({ "ok": true }),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn passes_turn_fields_to_extension_call() {
+        let captured_call = Arc::new(Mutex::new(None));
+        let handler = ExtensionToolAdapter::new(Arc::new(CapturingExtensionExecutor {
+            captured_call: Arc::clone(&captured_call),
+        }));
+        let (session, turn) = crate::session::tests::make_session_and_context().await;
+        let turn_id = turn.sub_id.clone();
+        let truncation_policy = turn.truncation_policy;
+        let invocation = ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-extension".to_string(),
+            tool_name: codex_tools::ToolName::plain("extension_echo"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: json!({ "message": "hello" }).to_string(),
+            },
+        };
+
+        crate::tools::registry::ToolExecutor::handle(&handler, invocation)
+            .await
+            .expect("extension call should succeed");
+
+        let captured_call = captured_call.lock().await.clone().expect("captured call");
+        assert_eq!(captured_call.turn_id, turn_id);
+        assert_eq!(captured_call.call_id, "call-extension");
+        assert_eq!(
+            captured_call.tool_name,
+            codex_tools::ToolName::plain("extension_echo")
+        );
+        assert_eq!(captured_call.truncation_policy, truncation_policy);
+        match captured_call.payload {
+            ToolPayload::Function { arguments } => {
+                assert_eq!(arguments, json!({ "message": "hello" }).to_string());
+            }
+            payload => panic!("expected function payload, got {payload:?}"),
+        }
     }
 }

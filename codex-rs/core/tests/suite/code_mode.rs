@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -145,10 +146,20 @@ async fn run_code_mode_turn(
     prompt: &str,
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
+    run_code_mode_turn_with_config(server, prompt, code, |_| {}).await
+}
+
+async fn run_code_mode_turn_with_config(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    configure: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<(TestCodex, ResponseMock)> {
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            configure(config);
         });
     let test = builder.build(server).await?;
 
@@ -292,8 +303,7 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
     )
     .await?;
 
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
+    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
     assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(
@@ -645,40 +655,217 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
+async fn code_mode_exec_command_explicit_max_output_tokens_truncates() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use exec to truncate the final result",
-        r#"// @exec: {"max_output_tokens": 6}
-text(JSON.stringify(await tools.exec_command({
-  cmd: "printf 'token one token two token three token four token five token six token seven'",
-  max_output_tokens: 100
-})));
+        "use exec_command from code mode",
+        r#"
+const result = await tools.exec_command({
+  cmd: "printf '0123456789012345678901234567890123456789'",
+  max_output_tokens: 5
+});
+text(result.output);
 "#,
     )
     .await?;
 
-    let req = second_mock.single_request();
-    let items = custom_tool_output_items(&req, "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
         ),
-        text_item(&items, /*index*/ 0),
+        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
     );
-    let expected_pattern = r#"(?sx)
-\A
-Total\ output\ lines:\ 1\n
-\n
-.*…\d+\ tokens\ truncated….*
-\z
-"#;
-    assert_regex_match(expected_pattern, text_item(&items, /*index*/ 1));
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_default_truncates_larger_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 25000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        format!(
+            "Total output lines: 1\n\n{}…2500 tokens truncated…{}",
+            "A".repeat(40_000),
+            "A".repeat(40_000)
+        )
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
+  max_output_tokens: 20000
+});
+text(result.output);
+"#,
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_without_max_preserves_output_beyond_default() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 20000}
+const result = await tools.exec_command({
+  cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
+});
+text(result.output);
+"#,
+        |config| {
+            config.tool_output_token_limit = Some(50);
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "x".repeat(50_000)
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_explicit_max_output_tokens_truncates() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec_command from code mode",
+        r#"// @exec: {"max_output_tokens": 5}
+const result = await tools.exec_command({
+  cmd: "printf '0123456789012345678901234567890123456789'"
+});
+text(result.output);
+"#,
+    )
+    .await?;
+
+    assert_eq!(
+        text_item(
+            &custom_tool_output_items(&second_mock.single_request(), "call-1"),
+            /*index*/ 1
+        ),
+        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
+    );
 
     Ok(())
 }

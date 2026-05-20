@@ -11,12 +11,14 @@ use std::process::Command;
 use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
-use crate::allow::compute_allow_paths;
+use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::path_normalization::canonicalize_path;
 use crate::policy::SandboxPolicy;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
@@ -42,6 +44,7 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -84,8 +87,7 @@ pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
 }
 
 pub struct SandboxSetupRequest<'a> {
-    pub policy: &'a SandboxPolicy,
-    pub policy_cwd: &'a Path,
+    pub permissions: &'a ResolvedWindowsSandboxPermissions,
     pub command_cwd: &'a Path,
     pub env_map: &'a HashMap<String, String>,
     pub codex_home: &'a Path,
@@ -109,10 +111,17 @@ pub fn run_setup_refresh(
     codex_home: &Path,
     proxy_enforced: bool,
 ) -> Result<()> {
+    if matches!(
+        policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
+        return Ok(());
+    }
+    let permissions =
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
     run_setup_refresh_inner(
         SandboxSetupRequest {
-            policy,
-            policy_cwd,
+            permissions: &permissions,
             command_cwd,
             env_map,
             codex_home,
@@ -138,12 +147,19 @@ pub fn run_setup_refresh_with_extra_read_roots(
     extra_read_roots: Vec<PathBuf>,
     proxy_enforced: bool,
 ) -> Result<()> {
-    let mut read_roots = gather_read_roots(command_cwd, policy, codex_home);
+    if matches!(
+        policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
+        return Ok(());
+    }
+    let permissions =
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
+    let mut read_roots = gather_read_roots(command_cwd, &permissions, env_map, codex_home);
     read_roots.extend(extra_read_roots);
     run_setup_refresh_inner(
         SandboxSetupRequest {
-            policy,
-            policy_cwd,
+            permissions: &permissions,
             command_cwd,
             env_map,
             codex_home,
@@ -163,18 +179,14 @@ fn run_setup_refresh_inner(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
 ) -> Result<()> {
-    // Skip in danger-full-access.
-    if matches!(
-        request.policy,
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-    ) {
-        return Ok(());
+    if !request.permissions.is_enforceable_by_windows_sandbox() {
+        anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
-        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
@@ -358,9 +370,10 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     vec![helper_dir]
 }
 
-fn gather_legacy_full_read_roots(
+fn gather_full_read_roots_for_permissions(
     command_cwd: &Path,
-    policy: &SandboxPolicy,
+    permissions: &ResolvedWindowsSandboxPermissions,
+    env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
@@ -373,36 +386,52 @@ fn gather_legacy_full_read_roots(
         roots.extend(profile_read_roots(Path::new(&up)));
     }
     roots.push(command_cwd.to_path_buf());
-    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-        for root in writable_roots {
-            roots.push(root.to_path_buf());
-        }
-    }
+    roots.extend(
+        permissions
+            .writable_roots_for_cwd(command_cwd, env_map)
+            .into_iter()
+            .map(|root| root.root),
+    );
     canonical_existing(&roots)
 }
 
 pub(crate) fn gather_read_roots(
     command_cwd: &Path,
-    policy: &SandboxPolicy,
+    permissions: &ResolvedWindowsSandboxPermissions,
+    env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
-    gather_legacy_full_read_roots(command_cwd, policy, codex_home)
+    if permissions.has_full_disk_read_access() {
+        return gather_full_read_roots_for_permissions(
+            command_cwd,
+            permissions,
+            env_map,
+            codex_home,
+        );
+    }
+
+    let mut roots = gather_helper_read_roots(codex_home);
+    if permissions.include_platform_defaults() {
+        roots.extend(
+            WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+                .iter()
+                .map(PathBuf::from),
+        );
+    }
+    roots.extend(permissions.readable_roots_for_cwd(command_cwd));
+    canonical_existing(&roots)
 }
 
-pub(crate) fn gather_write_roots(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+pub(crate) fn gather_write_roots_for_permissions(
+    permissions: &ResolvedWindowsSandboxPermissions,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // Always include the command CWD for workspace-write.
-    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        roots.push(command_cwd.to_path_buf());
-    }
-    let AllowDenyPaths { allow, .. } =
-        compute_allow_paths(policy, policy_cwd, command_cwd, env_map);
-    roots.extend(allow);
+    let roots = permissions
+        .writable_roots_for_cwd(command_cwd, env_map)
+        .into_iter()
+        .map(|root| root.root)
+        .collect::<Vec<_>>();
     let mut dedup: HashSet<PathBuf> = HashSet::new();
     let mut out: Vec<PathBuf> = Vec::new();
     for r in canonical_existing(&roots) {
@@ -414,8 +443,23 @@ pub(crate) fn gather_write_roots(
 }
 
 pub(crate) fn effective_write_roots_for_setup(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permissions: &ResolvedWindowsSandboxPermissions,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    write_roots_override: Option<&[PathBuf]>,
+) -> Vec<PathBuf> {
+    effective_write_roots_for_permissions(
+        permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        write_roots_override,
+    )
+}
+
+pub(crate) fn effective_write_roots_for_permissions(
+    permissions: &ResolvedWindowsSandboxPermissions,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
@@ -424,7 +468,7 @@ pub(crate) fn effective_write_roots_for_setup(
     let write_roots = if let Some(roots) = write_roots_override {
         canonical_existing(roots)
     } else {
-        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+        gather_write_roots_for_permissions(permissions, command_cwd, env_map)
     };
     let write_roots = expand_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root(write_roots);
@@ -468,8 +512,11 @@ pub(crate) enum SandboxNetworkIdentity {
 }
 
 impl SandboxNetworkIdentity {
-    pub(crate) fn from_policy(policy: &SandboxPolicy, proxy_enforced: bool) -> Self {
-        if proxy_enforced || !policy.has_full_network_access() {
+    pub(crate) fn from_permissions(
+        permissions: &ResolvedWindowsSandboxPermissions,
+        proxy_enforced: bool,
+    ) -> Self {
+        if proxy_enforced || !permissions.network_policy().is_enabled() {
             Self::Offline
         } else {
             Self::Online
@@ -584,24 +631,15 @@ fn quote_arg(arg: &str) -> String {
 
 fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
+        return setup_exe;
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from(SETUP_EXE_FILENAME)
+}
+
+fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
+    bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
 }
 
 fn report_helper_failure(
@@ -738,6 +776,9 @@ pub fn run_elevated_setup(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
 ) -> Result<()> {
+    if !request.permissions.is_enforceable_by_windows_sandbox() {
+        anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
+    }
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(request.codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
@@ -750,7 +791,7 @@ pub fn run_elevated_setup(
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
-        SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
+        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
@@ -782,8 +823,7 @@ fn build_payload_roots(
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let write_roots = effective_write_roots_for_setup(
-        request.policy,
-        request.policy_cwd,
+        request.permissions,
         request.command_cwd,
         request.env_map,
         request.codex_home,
@@ -803,7 +843,12 @@ fn build_payload_roots(
         read_roots.extend(roots.iter().cloned());
         canonical_existing(&read_roots)
     } else {
-        gather_read_roots(request.command_cwd, request.policy, request.codex_home)
+        gather_read_roots(
+            request.command_cwd,
+            request.permissions,
+            request.env_map,
+            request.codex_home,
+        )
     };
     read_roots = expand_user_profile_root(read_roots);
     read_roots = filter_user_profile_root(read_roots);
@@ -818,9 +863,8 @@ fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
     explicit_deny_write_paths: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
-    let allow_deny_paths: AllowDenyPaths = compute_allow_paths(
-        request.policy,
-        request.policy_cwd,
+    let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
+        request.permissions,
         request.command_cwd,
         request.env_map,
     );
@@ -966,14 +1010,18 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
-    use super::gather_legacy_full_read_roots;
+    use super::find_setup_exe_for_current_exe;
+    use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use crate::helper_materialization::BIN_DIRNAME;
+    use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
+    use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -987,6 +1035,13 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
+    }
+
+    fn permissions_for(
+        policy: &SandboxPolicy,
+        policy_cwd: &std::path::Path,
+    ) -> ResolvedWindowsSandboxPermissions {
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd)
     }
 
     #[test]
@@ -1003,6 +1058,24 @@ mod tests {
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
         );
+    }
+
+    #[test]
+    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&setup_exe, b"setup").expect("write setup");
+
+        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
+
+        assert_eq!(resolved, setup_exe);
     }
 
     #[test]
@@ -1289,8 +1362,9 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();
+        let permissions = permissions_for(&policy, &command_cwd);
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &permissions, &HashMap::new(), &codex_home);
         let expected =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
@@ -1314,8 +1388,9 @@ mod tests {
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
+        let permissions = permissions_for(&policy, &command_cwd);
 
-        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_read_roots(&command_cwd, &permissions, &HashMap::new(), &codex_home);
         let expected_writable =
             dunce::canonicalize(&writable_root).expect("canonical writable root");
 
@@ -1335,11 +1410,11 @@ mod tests {
         let policy = SandboxPolicy::ReadOnly {
             network_access: false,
         };
+        let permissions = permissions_for(&policy, &policy_cwd);
 
         let (read_roots, write_roots) = build_payload_roots(
             &super::SandboxSetupRequest {
-                policy: &policy,
-                policy_cwd: &policy_cwd,
+                permissions: &permissions,
                 command_cwd: &command_cwd,
                 env_map: &HashMap::new(),
                 codex_home: &codex_home,
@@ -1383,11 +1458,11 @@ mod tests {
         let policy = SandboxPolicy::ReadOnly {
             network_access: false,
         };
+        let permissions = permissions_for(&policy, &policy_cwd);
 
         let (read_roots, write_roots) = build_payload_roots(
             &super::SandboxSetupRequest {
-                policy: &policy,
-                policy_cwd: &policy_cwd,
+                permissions: &permissions,
                 command_cwd: &command_cwd,
                 env_map: &HashMap::new(),
                 codex_home: &codex_home,
@@ -1435,6 +1510,7 @@ mod tests {
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
+        let permissions = permissions_for(&policy, &command_cwd);
         let override_roots = vec![
             command_cwd.clone(),
             extra_root.clone(),
@@ -1442,8 +1518,7 @@ mod tests {
             sandbox_root.clone(),
         ];
         let request = super::SandboxSetupRequest {
-            policy: &policy,
-            policy_cwd: &command_cwd,
+            permissions: &permissions,
             command_cwd: &command_cwd,
             env_map: &HashMap::new(),
             codex_home: &codex_home,
@@ -1458,8 +1533,7 @@ mod tests {
         };
 
         let effective_write_roots = super::effective_write_roots_for_setup(
-            &policy,
-            &command_cwd,
+            &permissions,
             &command_cwd,
             &HashMap::new(),
             &codex_home,
@@ -1476,6 +1550,37 @@ mod tests {
         assert!(effective_write_roots.contains(&expected_extra));
         assert!(!effective_write_roots.contains(&forbidden_codex_home));
         assert!(!effective_write_roots.contains(&forbidden_sandbox));
+    }
+
+    #[test]
+    fn effective_write_roots_use_policy_cwd_for_legacy_workspace_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let policy_cwd = tmp.path().join("workspace");
+        let command_cwd = policy_cwd.join("subdir");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let permissions = permissions_for(&policy, &policy_cwd);
+
+        let effective_write_roots = super::effective_write_roots_for_setup(
+            &permissions,
+            &command_cwd,
+            &HashMap::new(),
+            &codex_home,
+            /*write_roots_override*/ None,
+        );
+
+        assert_eq!(
+            effective_write_roots,
+            vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
+        );
     }
 
     #[test]
@@ -1498,9 +1603,9 @@ mod tests {
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
+        let permissions = permissions_for(&policy, &command_cwd);
         let request = super::SandboxSetupRequest {
-            policy: &policy,
-            policy_cwd: &command_cwd,
+            permissions: &permissions,
             command_cwd: &command_cwd,
             env_map: &HashMap::new(),
             codex_home: &codex_home,
@@ -1529,8 +1634,14 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         fs::create_dir_all(&command_cwd).expect("create workspace");
         let policy = SandboxPolicy::new_read_only_policy();
+        let permissions = permissions_for(&policy, &command_cwd);
 
-        let roots = gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home);
+        let roots = gather_full_read_roots_for_permissions(
+            &command_cwd,
+            &permissions,
+            &HashMap::new(),
+            &codex_home,
+        );
 
         assert!(
             canonical_windows_platform_default_roots()

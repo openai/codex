@@ -10,7 +10,7 @@ The builder creates a canonical Codex package directory:
 .
 ├── codex-package.json
 ├── bin
-│   └── codex[.exe]
+│   └── <entrypoint>[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── codex-command-runner.exe          # Windows only
@@ -22,18 +22,41 @@ The builder creates a canonical Codex package directory:
 The package directory is the primary artifact. Archive formats such as
 `.tar.gz`, `.tar.zst`, and `.zip` are serializations of that directory.
 
+If `--target` is omitted, the builder uses the release target for the current
+host platform. On Linux, that default is a musl target to match Codex release
+artifacts; pass a GNU Linux target explicitly for native glibc local builds. If
+`--package-dir` is omitted, the builder creates a new temporary directory and
+prints its path after the package is built.
+
+The `--variant` flag selects the package entrypoint. Supported variants are
+`codex` and `codex-app-server`. The `version` field in `codex-package.json` is
+read from `[workspace.package].version` in `codex-rs/Cargo.toml`.
+
 ## Source-built artifacts
 
-Artifacts built from this repository are always built by the package builder in
-one grouped `cargo build` command per package:
+Artifacts built from this repository are built by the package builder in one
+grouped `cargo build` command per package when they are needed and no prebuilt
+override was provided:
 
-- all targets: `codex`
-- Linux targets: `bwrap`
-- Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`
+- all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
+- Linux targets: `bwrap`, unless `--bwrap-bin` is provided
+- Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`,
+  unless the corresponding prebuilt helper flags are provided
 
 The default cargo profile is `dev-small` because local iteration should favor
-fast, small builds. Release jobs should pass `--cargo-profile release`.
+fast, small builds. Release jobs should pass `--cargo-profile release` and an
+explicit target. Release jobs that already built and signed/notarized the
+entrypoint should pass `--entrypoint-bin` so the package contains that exact
+binary instead of rebuilding it.
 
-`rg` is not built from this repository, so it remains an input. If `--rg-bin` is
-omitted, the builder looks in the existing `codex-cli/vendor/<target>/path/`
-location.
+Release jobs that already built package resource binaries should also pass the
+corresponding resource flags: `--bwrap-bin` for Linux packages, and
+`--codex-command-runner-bin` plus `--codex-windows-sandbox-setup-bin` for
+Windows packages. This keeps package archive creation as a pure staging step
+after signing instead of rebuilding resources.
+
+`rg` is not built from this repository, so the builder fetches it from the
+DotSlash manifest at `codex-cli/bin/rg`. Downloaded archives are cached under
+`$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded size
+and SHA-256 digest have been verified. Pass `--rg-bin` to use a local ripgrep
+executable instead.

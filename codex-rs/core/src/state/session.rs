@@ -4,6 +4,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
@@ -33,7 +34,7 @@ pub(crate) struct SessionState {
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
-    pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
@@ -52,7 +53,7 @@ impl SessionState {
             auto_compact_window: AutoCompactWindow::new(),
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
-            pending_session_start_source: None,
+            pending_session_start_sources: VecDeque::new(),
             granted_permissions: None,
             next_turn_is_first: true,
         }
@@ -218,17 +219,17 @@ impl SessionState {
         self.active_connector_selection.clear();
     }
 
-    pub(crate) fn set_pending_session_start_source(
+    pub(crate) fn queue_pending_session_start_source(
         &mut self,
-        value: Option<codex_hooks::SessionStartSource>,
+        value: codex_hooks::SessionStartSource,
     ) {
-        self.pending_session_start_source = value;
+        self.pending_session_start_sources.push_back(value);
     }
 
     pub(crate) fn take_pending_session_start_source(
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
-        self.pending_session_start_source.take()
+        self.pending_session_start_sources.pop_front()
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {

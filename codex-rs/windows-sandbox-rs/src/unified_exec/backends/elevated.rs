@@ -5,11 +5,13 @@ use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
+use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::runner_client::spawn_runner_transport;
 use crate::spawn_prep::prepare_elevated_spawn_context;
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
@@ -60,12 +62,16 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         &deny_write_paths_override,
     )?;
 
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+        &elevated.common.policy,
+        sandbox_policy_cwd,
+    );
     let spawn_request = SpawnRequest {
         command: command.clone(),
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
-        policy_json_or_preset: policy_json_or_preset.to_string(),
-        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+        permission_profile,
+        permission_profile_cwd: sandbox_policy_cwd.to_path_buf(),
         codex_home: elevated.common.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
@@ -106,7 +112,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         let outbound_tx = outbound_tx.clone();
         Some(Box::new(move || {
             let _ = outbound_tx.send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Terminate {
                     payload: EmptyPayload::default(),
                 },

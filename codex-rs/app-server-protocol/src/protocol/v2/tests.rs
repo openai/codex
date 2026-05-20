@@ -662,6 +662,33 @@ fn permission_profile_selection_uses_id_string() {
 }
 
 #[test]
+fn thread_path_params_deserialize_empty_path_as_none() {
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(resume.path, None);
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(fork.path, None);
+
+    let resume_with_path: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "/tmp/resume-thread.jsonl",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(
+        resume_with_path.path,
+        Some(PathBuf::from("/tmp/resume-thread.jsonl"))
+    );
+}
+
+#[test]
 fn fs_get_metadata_response_round_trips_minimal_fields() {
     let response = FsGetMetadataResponse {
         is_directory: false,
@@ -1703,6 +1730,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             allow_managed_hooks_only: None,
+            computer_use: None,
             feature_requirements: None,
             hooks: None,
             enforce_residency: None,
@@ -2680,14 +2708,14 @@ fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
 fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
     assert_eq!(
         serde_json::to_value(PluginMarketplaceEntry {
-            name: "openai-curated".to_string(),
+            name: "openai-curated-remote".to_string(),
             path: None,
             interface: None,
             plugins: Vec::new(),
         })
         .unwrap(),
         json!({
-            "name": "openai-curated",
+            "name": "openai-curated-remote",
             "path": null,
             "interface": null,
             "plugins": [],
@@ -2771,6 +2799,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             cwds: None,
             marketplace_kinds: Some(vec![
                 PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
                 PluginListMarketplaceKind::WorkspaceDirectory,
                 PluginListMarketplaceKind::SharedWithMe,
             ]),
@@ -2780,6 +2809,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             "cwds": null,
             "marketplaceKinds": [
                 "local",
+                "vertical",
                 "workspace-directory",
                 "shared-with-me",
             ],
@@ -2847,13 +2877,13 @@ fn plugin_read_params_serialization_uses_install_source_fields() {
 
     assert_eq!(
         serde_json::from_value::<PluginReadParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
         }))
         .unwrap(),
         PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2898,14 +2928,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 
     assert_eq!(
         serde_json::from_value::<PluginInstallParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
             "forceRemoteSync": true,
         }))
         .unwrap(),
         PluginInstallParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2915,13 +2945,13 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
     assert_eq!(
         serde_json::to_value(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
         .unwrap(),
         json!({
-            "remoteMarketplaceName": "chatgpt-global",
+            "remoteMarketplaceName": "openai-curated-remote",
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "skillName": "plan-work",
         }),
@@ -3116,7 +3146,7 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "gmail@chatgpt-global".to_string(),
+                    id: "gmail@openai-curated-remote".to_string(),
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     ),
@@ -3139,7 +3169,7 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "gmail@chatgpt-global",
+                    "id": "gmail@openai-curated-remote",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "localVersion": null,
                     "name": "gmail",
@@ -3548,6 +3578,77 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_explicit_null_service_tier() {
+    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "serviceTier": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let without_override = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        service_tier: None,
+        ..Default::default()
+    };
+    let serialized_without_override =
+        serde_json::to_value(&without_override).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_field_level_experimental_gates() {
+    let permissions = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        permissions: Some(":workspace".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&permissions),
+        Some("thread/settings/update.permissions")
+    );
+
+    let granular_approval = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        approval_policy: Some(AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&granular_approval),
+        Some("askForApproval.granular")
+    );
+
+    let collaboration_mode = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+            mode: codex_protocol::config_types::ModeKind::Plan,
+            settings: codex_protocol::config_types::Settings {
+                model: "mock-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&collaboration_mode),
+        Some("thread/settings/update.collaborationMode")
+    );
 }
 
 #[test]
