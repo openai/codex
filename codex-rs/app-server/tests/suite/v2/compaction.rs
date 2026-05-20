@@ -29,8 +29,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -122,29 +120,20 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         responses::ev_completed_with_tokens("r2", /*total_tokens*/ 330_000),
     ]);
     let sse3 = responses::sse(vec![
-        responses::ev_assistant_message("m3", "FINAL_REPLY"),
-        responses::ev_completed_with_tokens("r3", /*total_tokens*/ 120),
+        serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "compaction",
+                "encrypted_content": "ENCRYPTED_COMPACTION_SUMMARY",
+            }
+        }),
+        responses::ev_completed("r3"),
     ]);
-    let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
-
-    let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "REMOTE_COMPACT_SUMMARY".to_string(),
-            }],
-            phase: None,
-        },
-        ResponseItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
-    ];
-    let compact_mock = responses::mount_compact_json_once(
-        &server,
-        serde_json::json!({ "output": compacted_history }),
-    )
-    .await;
+    let sse4 = responses::sse(vec![
+        responses::ev_assistant_message("m3", "FINAL_REPLY"),
+        responses::ev_completed_with_tokens("r4", /*total_tokens*/ 120),
+    ]);
+    let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
@@ -184,12 +173,8 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(started_id, completed_id);
 
-    let compact_requests = compact_mock.requests();
-    assert_eq!(compact_requests.len(), 1);
-    assert_eq!(compact_requests[0].path(), "/v1/responses/compact");
-
     let response_requests = responses_log.requests();
-    assert_eq!(response_requests.len(), 3);
+    assert_eq!(response_requests.len(), 4);
 
     Ok(())
 }
