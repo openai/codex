@@ -16,6 +16,7 @@ codex_rust_crate(
     },
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
+        "//codex-rs/rmcp-client:test_stdio_server",
     ],
     test_tags = ["no-sandbox"],
 )

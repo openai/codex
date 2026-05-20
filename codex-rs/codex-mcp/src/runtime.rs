@@ -223,8 +223,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn local_stdio_accepts_local_environment_when_available() {
+    #[tokio::test]
+    async fn local_stdio_accepts_local_environment_when_available() {
         let runtime_context = McpRuntimeContext::new(
             Arc::new(EnvironmentManager::default_for_tests()),
             PathBuf::from("/tmp"),
