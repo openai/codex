@@ -8,6 +8,8 @@ use crate::metrics::API_CALL_DURATION_METRIC;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
+use crate::metrics::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
+use crate::metrics::PLUGIN_INSTALL_SUGGESTION_METRIC;
 use crate::metrics::PROFILE_USAGE_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
@@ -224,6 +226,67 @@ impl SessionTelemetry {
             common: {
                 event.name = "codex.turn_ttft",
                 duration_ms = %duration.as_millis(),
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    /// Records the moment a plugin or connector install elicitation is dispatched.
+    pub fn record_plugin_install_elicitation_sent(
+        &self,
+        tool_type: &str,
+        tool_id: &str,
+        tool_name: &str,
+    ) {
+        self.counter(
+            PLUGIN_INSTALL_ELICITATION_SENT_METRIC,
+            /*inc*/ 1,
+            &[("tool_type", tool_type)],
+        );
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.plugin_install_elicitation_sent",
+                plugin_install.tool_type = tool_type,
+                plugin_install.tool_id = tool_id,
+                plugin_install.tool_name = tool_name,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    /// Records the outcome of a surfaced plugin or connector install suggestion.
+    pub fn record_plugin_install_suggestion(
+        &self,
+        tool_type: &str,
+        tool_id: &str,
+        tool_name: &str,
+        response_action: &str,
+        user_confirmed: bool,
+        completed: bool,
+    ) {
+        let completed_tag = if completed { "true" } else { "false" };
+        self.counter(
+            PLUGIN_INSTALL_SUGGESTION_METRIC,
+            /*inc*/ 1,
+            &[
+                ("tool_type", tool_type),
+                ("response_action", response_action),
+                ("completed", completed_tag),
+            ],
+        );
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.plugin_install_suggestion",
+                plugin_install.tool_type = tool_type,
+                plugin_install.tool_id = tool_id,
+                plugin_install.tool_name = tool_name,
+                plugin_install.response_action = response_action,
+                plugin_install.user_confirmed = user_confirmed,
+                plugin_install.completed = completed,
             },
             log: {},
             trace: {},
