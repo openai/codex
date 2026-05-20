@@ -29,7 +29,8 @@ pub async fn search_rollout_paths(
     } else {
         SESSIONS_SUBDIR
     });
-    ripgrep_rollout_paths(rg_command, root.as_path(), search_term).await
+    let search_term = json_escaped_search_term(search_term)?;
+    ripgrep_rollout_paths(rg_command, root.as_path(), search_term.as_str()).await
 }
 
 async fn ripgrep_rollout_paths(
@@ -132,14 +133,20 @@ pub async fn first_rollout_content_match_snippet(
 ) -> io::Result<Option<String>> {
     let file = tokio::fs::File::open(path).await?;
     let mut lines = tokio::io::BufReader::new(file).lines();
+    let json_search_term = json_escaped_search_term(search_term)?;
     while let Some(line) = lines.next_line().await? {
-        if line.contains(search_term)
+        if line.contains(json_search_term.as_str())
             && let Some(snippet) = content_match_snippet(line.as_str(), search_term)
         {
             return Ok(Some(snippet));
         }
     }
     Ok(None)
+}
+
+fn json_escaped_search_term(search_term: &str) -> io::Result<String> {
+    let serialized = serde_json::to_string(search_term).map_err(io::Error::other)?;
+    Ok(serialized[1..serialized.len() - 1].to_string())
 }
 
 fn content_match_snippet(jsonl_line: &str, search_term: &str) -> Option<String> {

@@ -15,6 +15,7 @@ use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
 use super::list_threads::list_rollout_threads;
 use crate::ListThreadsParams;
+use crate::SearchThreadsParams;
 use crate::SortDirection;
 use crate::StoredThreadSearchResult;
 use crate::ThreadSearchPage;
@@ -29,15 +30,14 @@ struct ThreadSearchItem {
 
 pub(super) async fn search_threads(
     store: &LocalThreadStore,
-    params: ListThreadsParams,
+    params: SearchThreadsParams,
 ) -> ThreadStoreResult<ThreadSearchPage> {
-    let search_term =
-        params
-            .search_term
-            .as_deref()
-            .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                message: "thread/search requires search_term".to_string(),
-            })?;
+    let search_term = params.search_term.as_str();
+    if search_term.is_empty() {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: "thread/search requires search_term".to_string(),
+        });
+    }
     let cursor = params
         .cursor
         .as_deref()
@@ -85,9 +85,15 @@ pub(super) async fn search_threads(
     let scan_page_size = params.page_size.saturating_mul(8).clamp(256, 2048);
     let scan_params = ListThreadsParams {
         page_size: scan_page_size,
+        cursor: None,
+        sort_key: params.sort_key,
+        sort_direction: params.sort_direction,
+        allowed_sources: params.allowed_sources.clone(),
+        model_providers: None,
+        cwd_filters: None,
+        archived: params.archived,
         search_term: None,
         use_state_db_only: state_db.is_some(),
-        ..params.clone()
     };
     let mut remaining_paths = matching_paths;
 

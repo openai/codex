@@ -34,6 +34,7 @@ pub use types::LoadThreadHistoryParams;
 pub use types::ReadThreadByRolloutPathParams;
 pub use types::ReadThreadParams;
 pub use types::ResumeThreadParams;
+pub use types::SearchThreadsParams;
 pub use types::SortDirection;
 pub use types::StoredThread;
 pub use types::StoredThreadHistory;

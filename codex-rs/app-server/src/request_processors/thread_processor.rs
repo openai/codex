@@ -1906,7 +1906,7 @@ impl ThreadRequestProcessor {
         while remaining > 0 {
             let page = self
                 .thread_store
-                .search_threads(StoreListThreadsParams {
+                .search_threads(StoreSearchThreadsParams {
                     page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
                     cursor: cursor_obj.clone(),
                     sort_key: store_sort_key,
@@ -1915,11 +1915,8 @@ impl ThreadRequestProcessor {
                         SortDirection::Desc => StoreSortDirection::Desc,
                     },
                     allowed_sources: allowed_sources.clone(),
-                    model_providers: None,
-                    cwd_filters: None,
                     archived: archived.unwrap_or(false),
-                    search_term: Some(search_term.clone()),
-                    use_state_db_only: false,
+                    search_term: search_term.clone(),
                 })
                 .await
                 .map_err(thread_store_list_error)?;

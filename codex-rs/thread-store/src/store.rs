@@ -13,6 +13,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -80,7 +81,7 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Searches stored threads and returns search-only preview metadata.
     async fn search_threads(
         &self,
-        _params: ListThreadsParams,
+        _params: SearchThreadsParams,
     ) -> ThreadStoreResult<ThreadSearchPage> {
         Err(ThreadStoreError::Unsupported {
             operation: "thread/search",

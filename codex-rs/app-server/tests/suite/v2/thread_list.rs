@@ -730,6 +730,52 @@ async fn thread_search_returns_content_matches() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_search_matches_json_escaped_content() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let search_term = r#"quoted "needle" \ path"#;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        search_term,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: search_term.to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].thread.id, thread_id);
+    assert_eq!(
+        data[0].search_preview,
+        ThreadSearchPreview::ContentMatch {
+            snippet: search_term.to_string(),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_search_filters_by_source_kind() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;

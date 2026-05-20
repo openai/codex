@@ -29,6 +29,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -265,7 +266,7 @@ impl ThreadStore for LocalThreadStore {
 
     async fn search_threads(
         &self,
-        params: ListThreadsParams,
+        params: SearchThreadsParams,
     ) -> ThreadStoreResult<ThreadSearchPage> {
         search_threads::search_threads(self, params).await
     }
