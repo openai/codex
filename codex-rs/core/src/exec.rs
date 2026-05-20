@@ -115,12 +115,11 @@ pub(crate) struct WindowsSandboxFilesystemOverrides {
 
 fn windows_sandbox_uses_elevated_backend(
     sandbox_level: WindowsSandboxLevel,
-    proxy_enforced: bool,
+    _proxy_enforced: bool,
 ) -> bool {
-    // Windows firewall enforcement is tied to the logon-user sandbox identities, so
-    // proxy-enforced sessions must use that backend even when the configured mode is
-    // the default restricted-token sandbox.
-    proxy_enforced || matches!(sandbox_level, WindowsSandboxLevel::Elevated)
+    // Honor the configured Windows sandbox mode instead of silently upgrading
+    // restricted-token sessions onto the elevated setup path.
+    matches!(sandbox_level, WindowsSandboxLevel::Elevated)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

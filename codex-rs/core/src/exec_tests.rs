@@ -409,12 +409,12 @@ fn windows_restricted_token_runs_for_legacy_restricted_policies() {
 }
 
 #[test]
-fn windows_proxy_enforcement_uses_elevated_backend() {
+fn windows_restricted_token_mode_stays_unelevated_when_proxy_is_enforced() {
     assert!(!windows_sandbox_uses_elevated_backend(
         WindowsSandboxLevel::RestrictedToken,
         /*proxy_enforced*/ false,
     ));
-    assert!(windows_sandbox_uses_elevated_backend(
+    assert!(!windows_sandbox_uses_elevated_backend(
         WindowsSandboxLevel::RestrictedToken,
         /*proxy_enforced*/ true,
     ));
