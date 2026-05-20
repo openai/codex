@@ -58,15 +58,15 @@ description = "Inspect without writes."
         PermissionProfileListResponse {
             data: vec![
                 PermissionProfileSummary {
-                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                    description: None,
-                },
-                PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
                 },
                 PermissionProfileSummary {
@@ -124,15 +124,15 @@ description = "Project-scoped profile."
         PermissionProfileListResponse {
             data: vec![
                 PermissionProfileSummary {
-                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                    description: None,
-                },
-                PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
                 },
             ],
@@ -198,15 +198,15 @@ description = "Project-scoped profile."
         PermissionProfileListResponse {
             data: vec![
                 PermissionProfileSummary {
-                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                    description: None,
-                },
-                PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
                     description: None,
                 },
                 PermissionProfileSummary {
                     id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                    description: None,
+                },
+                PermissionProfileSummary {
+                    id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
                     description: None,
                 },
                 PermissionProfileSummary {

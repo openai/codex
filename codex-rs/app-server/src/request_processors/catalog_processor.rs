@@ -437,17 +437,17 @@ impl CatalogRequestProcessor {
                 description: None,
             },
         ];
-        profiles.extend(
-            effective_config
-                .permissions
-                .into_iter()
-                .flat_map(|permissions| permissions.entries)
-                .map(|(id, profile)| PermissionProfileSummary {
-                    id,
-                    description: profile.description,
-                }),
-        );
-        profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut configured_profiles = effective_config
+            .permissions
+            .into_iter()
+            .flat_map(|permissions| permissions.entries)
+            .map(|(id, profile)| PermissionProfileSummary {
+                id,
+                description: profile.description,
+            })
+            .collect::<Vec<_>>();
+        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles.extend(configured_profiles);
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
