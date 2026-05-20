@@ -11,6 +11,7 @@ use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
 use crate::MEMORIES_DB_FILENAME;
+use crate::QUEUE_DB_FILENAME;
 use crate::STATE_DB_FILENAME;
 use crate::SortKey;
 use crate::ThreadMetadata;
@@ -20,6 +21,7 @@ use crate::apply_rollout_item;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
+use crate::migrations::runtime_queue_migrator;
 use crate::migrations::runtime_state_migrator;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
@@ -62,6 +64,7 @@ mod backfill;
 mod goals;
 mod logs;
 mod memories;
+mod queued_turns;
 mod remote_control;
 #[cfg(test)]
 mod test_support;
@@ -72,6 +75,7 @@ pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
 pub use goals::GoalUpdate;
 pub use memories::MemoryStore;
+pub use queued_turns::QueueStore;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 
@@ -131,7 +135,15 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_memories",
 };
 
-const RUNTIME_DBS: [RuntimeDbSpec; 4] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB];
+const QUEUE_DB: RuntimeDbSpec = RuntimeDbSpec {
+    label: "queue DB",
+    filename: QUEUE_DB_FILENAME,
+    kind: DbKind::Queue,
+    open_phase: "open_queue",
+    migrate_phase: "migrate_queue",
+};
+
+const RUNTIME_DBS: [RuntimeDbSpec; 5] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB, QUEUE_DB];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDbPath {
@@ -147,6 +159,7 @@ pub struct StateRuntime {
     logs_pool: Arc<sqlx::SqlitePool>,
     thread_goals: GoalStore,
     memories: MemoryStore,
+    thread_queue: QueueStore,
     thread_updated_at_millis: Arc<AtomicI64>,
 }
 
@@ -184,10 +197,12 @@ impl StateRuntime {
         let logs_migrator = runtime_logs_migrator();
         let goals_migrator = runtime_goals_migrator();
         let memories_migrator = runtime_memories_migrator();
+        let queue_migrator = runtime_queue_migrator();
         let state_path = STATE_DB.path(codex_home.as_path());
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
+        let queue_path = QUEUE_DB.path(codex_home.as_path());
         let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
@@ -227,6 +242,14 @@ impl StateRuntime {
                 return Err(err);
             }
         };
+        let queue_pool =
+            match open_queue_sqlite(&queue_path, &queue_migrator, telemetry_override).await {
+                Ok(db) => Arc::new(db),
+                Err(err) => {
+                    warn!("failed to open queue db at {}: {err}", queue_path.display());
+                    return Err(err);
+                }
+            };
         let started = Instant::now();
         let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
         crate::telemetry::record_init_result(
@@ -255,6 +278,7 @@ impl StateRuntime {
         let runtime = Arc::new(Self {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
+            thread_queue: QueueStore::new(Arc::clone(&queue_pool)),
             pool,
             logs_pool,
             codex_home,
@@ -281,6 +305,10 @@ impl StateRuntime {
 
     pub fn memories(&self) -> &MemoryStore {
         &self.memories
+    }
+
+    pub fn thread_queue(&self) -> &QueueStore {
+        &self.thread_queue
     }
 
     pub async fn clear_memory_data_in_sqlite_home(sqlite_home: &Path) -> anyhow::Result<bool> {
@@ -345,6 +373,14 @@ async fn open_memories_sqlite(
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
+}
+
+async fn open_queue_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
+    open_sqlite(path, migrator, QUEUE_DB, telemetry_override).await
 }
 
 async fn open_sqlite(
@@ -429,6 +465,14 @@ pub fn memories_db_filename() -> String {
 
 pub fn memories_db_path(codex_home: &Path) -> PathBuf {
     MEMORIES_DB.path(codex_home)
+}
+
+pub fn queue_db_filename() -> String {
+    QUEUE_DB.filename.to_string()
+}
+
+pub fn queue_db_path(codex_home: &Path) -> PathBuf {
+    QUEUE_DB.path(codex_home)
 }
 
 pub fn runtime_db_paths(codex_home: &Path) -> Vec<RuntimeDbPath> {
@@ -649,6 +693,8 @@ mod tests {
             "migrate_goals",
             "open_memories",
             "migrate_memories",
+            "open_queue",
+            "migrate_queue",
             "ensure_backfill_state",
             "post_init_query",
         ]
