@@ -54,7 +54,21 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
     let resources_dir = test_exe_dir.join("codex-resources");
     std::fs::create_dir_all(&resources_dir)?;
     for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
+        let helper = match codex_utils_cargo_bin::cargo_bin(helper_name) {
+            Ok(helper) => helper,
+            Err(cargo_bin_error) => {
+                let helper = test_exe_dir
+                    .parent()
+                    .context("Windows test executable directory should have a parent directory")?
+                    .join(Path::new(helper_name).with_extension("exe"));
+                anyhow::ensure!(
+                    helper.exists(),
+                    "failed to resolve Windows sandbox helper {helper_name:?} via cargo_bin ({cargo_bin_error}); fallback path does not exist at {}",
+                    helper.display(),
+                );
+                helper
+            }
+        };
         let file_name = Path::new(helper_name).with_extension("exe");
         std::fs::copy(helper, resources_dir.join(file_name))?;
     }
