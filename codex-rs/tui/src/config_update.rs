@@ -8,6 +8,8 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
@@ -171,6 +173,23 @@ pub(crate) async fn write_config_batch(
         })
         .await
         .wrap_err("config/batchWrite failed in TUI")
+}
+
+pub(crate) async fn read_effective_config(
+    request_handle: AppServerRequestHandle,
+    cwd: String,
+) -> Result<ConfigReadResponse> {
+    let request_id = RequestId::String(format!("tui-config-read-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigRead {
+            request_id,
+            params: ConfigReadParams {
+                include_layers: false,
+                cwd: Some(cwd),
+            },
+        })
+        .await
+        .wrap_err("config/read failed in TUI")
 }
 
 pub(crate) async fn write_skill_enabled(

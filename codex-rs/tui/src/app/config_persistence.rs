@@ -41,6 +41,28 @@ impl App {
         }
     }
 
+    pub(super) async fn read_effective_config_after_overridden_write(
+        &mut self,
+        app_server: &mut AppServerSession,
+        setting: &str,
+    ) -> Option<ConfigReadResponse> {
+        let cwd = self.chat_widget.config_ref().cwd.display().to_string();
+        match crate::config_update::read_effective_config(app_server.request_handle(), cwd).await {
+            Ok(response) => Some(response),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    setting,
+                    "failed to refresh effective config after an overridden write"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "{setting} were saved, but Codex could not refresh the effective config: {err}"
+                ));
+                None
+            }
+        }
+    }
+
     pub(super) async fn rebuild_config_for_resume_or_fallback(
         &mut self,
         current_cwd: &Path,
@@ -319,11 +341,7 @@ impl App {
             }
         };
         if write_response.status == WriteStatus::OkOverridden {
-            let message = write_response
-                .overridden_metadata
-                .as_ref()
-                .map(|metadata| metadata.message.as_str())
-                .unwrap_or("the effective config is overridden by a higher-priority layer");
+            let message = overridden_write_message(&write_response);
             tracing::warn!(
                 message,
                 "feature flag config write was overridden by effective config"
@@ -331,6 +349,18 @@ impl App {
             self.chat_widget.add_error_message(format!(
                 "Experimental feature changes were saved but not applied: {message}"
             ));
+            if let Some(effective_config) = self
+                .read_effective_config_after_overridden_write(
+                    app_server,
+                    "Experimental feature changes",
+                )
+                .await
+            {
+                self.sync_feature_state_from_effective_config(
+                    &effective_config,
+                    &feature_updates_to_apply,
+                );
+            }
             return;
         }
 
@@ -469,11 +499,7 @@ impl App {
             }
         };
         if write_response.status == WriteStatus::OkOverridden {
-            let message = write_response
-                .overridden_metadata
-                .as_ref()
-                .map(|metadata| metadata.message.as_str())
-                .unwrap_or("the effective config is overridden by a higher-priority layer");
+            let message = overridden_write_message(&write_response);
             tracing::warn!(
                 message,
                 "memory settings config write was overridden by effective config"
@@ -481,7 +507,13 @@ impl App {
             self.chat_widget.add_error_message(format!(
                 "Memory setting changes were saved but not applied: {message}"
             ));
-            return false;
+            let Some(effective_config) = self
+                .read_effective_config_after_overridden_write(app_server, "Memory setting changes")
+                .await
+            else {
+                return false;
+            };
+            return self.sync_memory_state_from_effective_config(&effective_config);
         }
 
         self.config.memories.use_memories = use_memories;
@@ -505,6 +537,7 @@ impl App {
             return;
         }
 
+        let generate_memories = self.config.memories.generate_memories;
         if previous_generate_memories == generate_memories {
             return;
         }
@@ -618,6 +651,214 @@ impl App {
             Personality::Pragmatic => "Pragmatic",
         }
     }
+
+    fn sync_feature_state_from_effective_config(
+        &mut self,
+        effective_config: &ConfigReadResponse,
+        feature_updates: &[(Feature, bool)],
+    ) {
+        let active_profile = self.active_profile.clone();
+        let active_profile = active_profile.as_deref();
+        for (feature, _) in feature_updates {
+            let Some(enabled) =
+                feature_enabled_from_effective_config(effective_config, active_profile, *feature)
+            else {
+                continue;
+            };
+            if let Err(err) = self.config.features.set_enabled(*feature, enabled) {
+                tracing::warn!(
+                    error = %err,
+                    feature = feature.key(),
+                    "failed to sync effective feature state after an overridden write"
+                );
+                continue;
+            }
+            self.chat_widget.set_feature_enabled(*feature, enabled);
+        }
+
+        if let Some(reviewer) =
+            approvals_reviewer_from_effective_config(effective_config, active_profile)
+        {
+            self.set_approvals_reviewer_in_app_and_widget(reviewer);
+        }
+        if let Some(policy) =
+            approval_policy_from_effective_config(effective_config, active_profile)
+        {
+            if let Err(err) = self
+                .config
+                .permissions
+                .approval_policy
+                .set(policy.to_core())
+            {
+                tracing::warn!(
+                    error = %err,
+                    "failed to sync effective approval policy after an overridden write"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to refresh overridden Auto-review settings: {err}"
+                ));
+            } else {
+                self.chat_widget.set_approval_policy(policy);
+            }
+        }
+    }
+
+    fn sync_memory_state_from_effective_config(
+        &mut self,
+        effective_config: &ConfigReadResponse,
+    ) -> bool {
+        let Some(memories) = memories_from_effective_config(effective_config) else {
+            tracing::warn!(
+                "config/read omitted memories after an overridden memory settings write"
+            );
+            return false;
+        };
+        let use_memories = memories
+            .use_memories
+            .unwrap_or(self.config.memories.use_memories);
+        let generate_memories = memories
+            .generate_memories
+            .unwrap_or(self.config.memories.generate_memories);
+        self.config.memories.use_memories = use_memories;
+        self.config.memories.generate_memories = generate_memories;
+        self.chat_widget
+            .set_memory_settings(use_memories, generate_memories);
+        true
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) async fn sync_windows_sandbox_after_overridden_write(
+        &mut self,
+        app_server: &mut AppServerSession,
+        write_response: &ConfigWriteResponse,
+    ) {
+        let message = overridden_write_message(write_response);
+        tracing::warn!(
+            message,
+            "Windows sandbox config write was overridden by effective config"
+        );
+        self.chat_widget.add_error_message(format!(
+            "Windows sandbox changes were saved but not applied: {message}"
+        ));
+        let Some(effective_config) = self
+            .read_effective_config_after_overridden_write(app_server, "Windows sandbox changes")
+            .await
+        else {
+            return;
+        };
+        let Some(mode) = windows_sandbox_mode_from_effective_config(
+            &effective_config,
+            self.active_profile.as_deref(),
+        ) else {
+            return;
+        };
+        self.config.permissions.windows_sandbox_mode = Some(mode);
+        self.chat_widget.set_windows_sandbox_mode(Some(mode));
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        self.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                /*active_permission_profile*/ None,
+                Some(windows_sandbox_level),
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
+    }
+}
+
+fn overridden_write_message(write_response: &ConfigWriteResponse) -> &str {
+    write_response
+        .overridden_metadata
+        .as_ref()
+        .map(|metadata| metadata.message.as_str())
+        .unwrap_or("the effective config is overridden by a higher-priority layer")
+}
+
+fn feature_enabled_from_effective_config(
+    effective_config: &ConfigReadResponse,
+    active_profile: Option<&str>,
+    feature: Feature,
+) -> Option<bool> {
+    let profile_features = active_profile
+        .and_then(|profile| effective_config.config.profiles.get(profile))
+        .and_then(|profile| profile.additional.get("features"))
+        .and_then(features_toml_from_json);
+    let root_features = effective_config
+        .config
+        .additional
+        .get("features")
+        .and_then(features_toml_from_json);
+    profile_features
+        .as_ref()
+        .and_then(|features| features.entries().get(feature.key()).copied())
+        .or_else(|| {
+            root_features
+                .as_ref()
+                .and_then(|features| features.entries().get(feature.key()).copied())
+        })
+}
+
+fn approvals_reviewer_from_effective_config(
+    effective_config: &ConfigReadResponse,
+    active_profile: Option<&str>,
+) -> Option<ApprovalsReviewer> {
+    active_profile
+        .and_then(|profile| effective_config.config.profiles.get(profile))
+        .and_then(|profile| profile.approvals_reviewer)
+        .or(effective_config.config.approvals_reviewer)
+        .map(codex_app_server_protocol::ApprovalsReviewer::to_core)
+}
+
+fn approval_policy_from_effective_config(
+    effective_config: &ConfigReadResponse,
+    active_profile: Option<&str>,
+) -> Option<AskForApproval> {
+    active_profile
+        .and_then(|profile| effective_config.config.profiles.get(profile))
+        .and_then(|profile| profile.approval_policy)
+        .or(effective_config.config.approval_policy)
+}
+
+fn memories_from_effective_config(effective_config: &ConfigReadResponse) -> Option<MemoriesToml> {
+    effective_config
+        .config
+        .additional
+        .get("memories")
+        .and_then(|memories| serde_json::from_value(memories.clone()).ok())
+}
+
+fn features_toml_from_json(value: &serde_json::Value) -> Option<FeaturesToml> {
+    serde_json::from_value(value.clone()).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_sandbox_mode_from_effective_config(
+    effective_config: &ConfigReadResponse,
+    active_profile: Option<&str>,
+) -> Option<codex_config::types::WindowsSandboxModeToml> {
+    let profile_windows = active_profile
+        .and_then(|profile| effective_config.config.profiles.get(profile))
+        .and_then(|profile| profile.additional.get("windows"))
+        .and_then(windows_toml_from_json);
+    let root_windows = effective_config
+        .config
+        .additional
+        .get("windows")
+        .and_then(windows_toml_from_json);
+    profile_windows
+        .and_then(|windows| windows.sandbox)
+        .or_else(|| root_windows.and_then(|windows| windows.sandbox))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_toml_from_json(value: &serde_json::Value) -> Option<WindowsToml> {
+    serde_json::from_value(value.clone()).ok()
 }
 
 #[cfg(test)]
