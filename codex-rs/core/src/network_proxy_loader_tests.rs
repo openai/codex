@@ -17,11 +17,11 @@ use std::collections::BTreeMap;
 fn higher_precedence_profile_network_overlays_domain_entries() {
     let lower_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "lower.example.com" = "allow"
 "blocked.example.com" = "deny"
 "#,
@@ -29,11 +29,11 @@ default_permissions = "workspace"
     .expect("lower layer should parse");
     let higher_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "higher.example.com" = "allow"
 "#,
     )
@@ -68,11 +68,11 @@ default_permissions = "workspace"
 fn higher_precedence_profile_network_overrides_matching_domain_entries() {
     let lower_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "shared.example.com" = "deny"
 "other.example.com" = "allow"
 "#,
@@ -80,11 +80,11 @@ default_permissions = "workspace"
     .expect("lower layer should parse");
     let higher_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "shared.example.com" = "allow"
 "#,
     )
@@ -159,9 +159,9 @@ fn execpolicy_network_rules_overlay_network_lists() {
 fn apply_network_constraints_includes_allow_all_unix_sockets_flag() {
     let config: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 dangerously_allow_all_unix_sockets = true
 "#,
     )
@@ -219,25 +219,25 @@ default_permissions = ":unknown"
 fn selected_network_from_tables_resolves_builtin_workspace_parent() {
     let config: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace]
+[permissions.dev]
 extends = ":workspace"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 enabled = true
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "child.example.com" = "allow"
 "#,
     )
-    .expect("workspace extension config should parse");
+    .expect("dev extension config should parse");
 
     let network = selected_network_from_tables(
-        network_tables_from_toml(&config).expect("workspace extension config should deserialize"),
+        network_tables_from_toml(&config).expect("dev extension config should deserialize"),
     )
-    .expect("workspace extension should resolve")
-    .expect("workspace extension should expose child network config");
+    .expect("dev extension should resolve")
+    .expect("dev extension should expose child network config");
 
     assert_eq!(
         network,
@@ -258,7 +258,7 @@ enabled = true
 fn selected_network_from_tables_resolves_permission_profile_inheritance() {
     let config: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
 [permissions.base.network]
 enabled = true
@@ -268,13 +268,13 @@ dangerously_allow_all_unix_sockets = true
 "base.example.com" = "allow"
 "shared.example.com" = "deny"
 
-[permissions.workspace]
+[permissions.dev]
 extends = "base"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 allow_local_binding = true
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "child.example.com" = "allow"
 "shared.example.com" = "allow"
 "#,
@@ -327,12 +327,12 @@ fn config_from_layers_resolves_inherited_profiles_across_layers() {
     let higher_layer = ConfigLayerEntry::new(
         ConfigLayerSource::SessionFlags,
         toml::toml! {
-            default_permissions = "workspace"
+            default_permissions = "dev"
 
-            [permissions.workspace]
+            [permissions.dev]
             extends = "base"
 
-            [permissions.workspace.network.domains]
+            [permissions.dev.network.domains]
             "child.example.com" = "allow"
         }
         .into(),
@@ -357,13 +357,50 @@ fn config_from_layers_resolves_inherited_profiles_across_layers() {
 }
 
 #[test]
+fn config_from_layers_normalizes_profile_network_domains_before_merging_layers() {
+    let lower_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            default_permissions = "dev"
+
+            [permissions.dev.network.domains]
+            "example.com" = "deny"
+        }
+        .into(),
+    );
+    let higher_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::toml! {
+            [permissions.dev.network.domains]
+            "EXAMPLE.COM" = "allow"
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let config = config_from_layers(&layers, &Policy::empty())
+        .expect("network domain layer precedence should load");
+
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec!["example.com".to_string()])
+    );
+    assert_eq!(config.network.denied_domains(), None);
+}
+
+#[test]
 fn config_from_layers_uses_only_the_final_selected_profile_network() {
     let lower_layer = ConfigLayerEntry::new(
         ConfigLayerSource::SessionFlags,
         toml::toml! {
-            default_permissions = "workspace"
+            default_permissions = "dev"
 
-            [permissions.workspace.network.domains]
+            [permissions.dev.network.domains]
             "lower.example.com" = "allow"
         }
         .into(),
@@ -397,9 +434,9 @@ fn trusted_constraints_use_only_the_final_selected_profile_network() {
                 .expect("system config path should be absolute"),
         },
         toml::toml! {
-            default_permissions = "workspace"
+            default_permissions = "dev"
 
-            [permissions.workspace.network.domains]
+            [permissions.dev.network.domains]
             "managed.example.com" = "allow"
         }
         .into(),
@@ -429,14 +466,57 @@ fn trusted_constraints_use_only_the_final_selected_profile_network() {
 }
 
 #[test]
+fn trusted_constraints_normalize_profile_network_domains_before_merging_layers() {
+    let lower_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::System {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/system.toml"))
+                .expect("system config path should be absolute"),
+        },
+        toml::toml! {
+            default_permissions = "dev"
+
+            [permissions.dev.network.domains]
+            "example.com" = "deny"
+        }
+        .into(),
+    );
+    let higher_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/managed.toml"))
+                .expect("managed config path should be absolute"),
+        },
+        toml::toml! {
+            [permissions.dev.network.domains]
+            "EXAMPLE.COM" = "allow"
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![lower_layer, higher_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+
+    let constraints = network_constraints_from_trusted_layers(&layers)
+        .expect("trusted network domain layer precedence should load");
+
+    assert_eq!(
+        constraints.allowed_domains,
+        Some(vec!["example.com".to_string()])
+    );
+    assert_eq!(constraints.denied_domains, None);
+}
+
+#[test]
 fn apply_network_constraints_skips_empty_domain_sides() {
     let config: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "managed.example.com" = "allow"
 "#,
     )
@@ -461,22 +541,22 @@ default_permissions = "workspace"
 fn apply_network_constraints_overlay_domain_entries() {
     let lower_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "blocked.example.com" = "deny"
 "#,
     )
     .expect("lower layer should parse");
     let higher_network: toml::Value = toml::from_str(
         r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "api.example.com" = "allow"
 "#,
     )
