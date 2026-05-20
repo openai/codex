@@ -5,6 +5,8 @@
 //! loop.
 
 use super::*;
+#[cfg(target_os = "windows")]
+use codex_utils_approval_presets::ApprovalPreset;
 
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
