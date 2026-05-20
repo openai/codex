@@ -134,18 +134,15 @@ pub trait ToolLifecycleContributor: Send + Sync {
     }
 }
 
-/// Future returned by one claimed approval-review contribution.
-pub type ApprovalReviewFuture<'a> =
-    std::pin::Pin<Box<dyn Future<Output = ReviewDecision> + Send + 'a>>;
-
 /// Extension contribution that can claim rendered approval-review prompts.
+#[async_trait::async_trait]
 pub trait ApprovalReviewContributor: Send + Sync {
-    fn contribute<'a>(
-        &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> Option<ApprovalReviewFuture<'a>>;
+    async fn contribute(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        prompt: &str,
+    ) -> Option<ReviewDecision>;
 }
 
 /// Future returned by one ordered turn-item contribution.
