@@ -1694,6 +1694,10 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
+        self.refresh_token_with_refresh_lock_held().await
+    }
+
+    async fn refresh_token_with_refresh_lock_held(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1747,9 +1751,15 @@ impl AuthManager {
             return Ok(());
         }
 
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         let _refresh_lock = self.acquire_chatgpt_startup_refresh_lock().await?;
 
-        self.refresh_token().await
+        self.refresh_token_with_refresh_lock_held().await
     }
 
     async fn acquire_chatgpt_startup_refresh_lock(&self) -> Result<File, RefreshTokenError> {

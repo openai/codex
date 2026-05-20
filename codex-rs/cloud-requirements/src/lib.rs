@@ -760,12 +760,12 @@ pub async fn cloud_requirements_loader_for_storage(
     cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
-pub async fn cloud_requirements_loader_for_storage_with_startup_refresh(
+pub async fn refresh_managed_chatgpt_token_for_storage_if_near_expiry(
     codex_home: PathBuf,
     enable_codex_api_key_env: bool,
     credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: String,
-) -> CloudRequirementsLoader {
+) {
     let auth_manager = cloud_requirements_auth_manager_for_storage(
         &codex_home,
         enable_codex_api_key_env,
@@ -773,25 +773,29 @@ pub async fn cloud_requirements_loader_for_storage_with_startup_refresh(
         &chatgpt_base_url,
     )
     .await;
-    match timeout(
-        CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT,
-        auth_manager.refresh_managed_chatgpt_token_if_near_expiry(),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
+    let refresh_task = tokio::spawn(async move {
+        auth_manager
+            .refresh_managed_chatgpt_token_if_near_expiry()
+            .await
+    });
+    match timeout(CHATGPT_ACCESS_TOKEN_STARTUP_REFRESH_TIMEOUT, refresh_task).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(err))) => {
             tracing::warn!(
                 "failed to proactively refresh ChatGPT access token during CLI startup: {err}"
             );
         }
+        Ok(Err(err)) => {
+            tracing::warn!(
+                "startup ChatGPT access token refresh task failed before completion: {err}"
+            );
+        }
         Err(_) => {
             tracing::warn!(
-                "timed out proactively refreshing ChatGPT access token during CLI startup"
+                "timed out waiting for proactive ChatGPT access token refresh during CLI startup; refresh will continue in the background"
             );
         }
     }
-    cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
 fn parse_cloud_requirements(
