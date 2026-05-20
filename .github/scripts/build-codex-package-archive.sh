@@ -97,9 +97,14 @@ else
   python_bin="python"
 fi
 
+if ! command -v zstd >/dev/null 2>&1 && [[ -x "${repo_root}/.github/workflows/zstd" ]]; then
+  export PATH="${repo_root}/.github/workflows:${PATH}"
+fi
+
 mkdir -p "$archive_dir"
 package_dir="${RUNNER_TEMP:-/tmp}/${archive_stem}-${target}"
-archive_path="${archive_dir}/${archive_stem}-${target}.tar.gz"
+gzip_archive_path="${archive_dir}/${archive_stem}-${target}.tar.gz"
+zstd_archive_path="${archive_dir}/${archive_stem}-${target}.tar.zst"
 rm -rf "$package_dir"
 
 "$python_bin" "${repo_root}/scripts/build_codex_package.py" \
@@ -108,5 +113,6 @@ rm -rf "$package_dir"
   --entrypoint-bin "${entrypoint_dir%/}/${entrypoint_name}${exe_suffix}" \
   --cargo-profile release \
   --package-dir "$package_dir" \
-  --archive-output "$archive_path" \
+  --archive-output "$gzip_archive_path" \
+  --archive-output "$zstd_archive_path" \
   --force
