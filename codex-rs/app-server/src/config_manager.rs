@@ -9,6 +9,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
+use codex_install_context::InstallContext;
 use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -159,6 +160,7 @@ impl ConfigManager {
             .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        apply_default_zsh_path(&mut config);
         Ok(config)
     }
 
@@ -180,6 +182,7 @@ impl ConfigManager {
         }
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        apply_default_zsh_path(&mut config);
         Ok(config)
     }
 
@@ -219,6 +222,11 @@ impl ConfigManager {
         typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
+        let mut typesafe_overrides = typesafe_overrides;
+        if typesafe_overrides.default_zsh_path.is_none() {
+            typesafe_overrides.default_zsh_path = default_zsh_path();
+        }
+
         let merged_cli_overrides = cli_overrides
             .iter()
             .cloned()
@@ -317,6 +325,18 @@ impl ConfigManager {
             CloudRequirementsLoader::default(),
         )
     }
+}
+
+fn apply_default_zsh_path(config: &mut Config) {
+    if config.zsh_path.is_none() {
+        config.zsh_path = default_zsh_path();
+    }
+}
+
+fn default_zsh_path() -> Option<PathBuf> {
+    InstallContext::current()
+        .bundled_zsh_path()
+        .map(AbsolutePathBuf::into_path_buf)
 }
 
 pub(crate) fn protected_feature_keys(config_layer_stack: &ConfigLayerStack) -> BTreeSet<String> {
