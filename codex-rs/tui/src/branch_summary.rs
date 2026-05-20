@@ -101,6 +101,7 @@ pub(crate) async fn current_branch_name(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
 ) -> Option<String> {
+    crate::tui::log_windows_vt_output_mode("before_status_line_branch_lookup");
     let output = run_git_command(runner, cwd, &["branch", "--show-current"])
         .await
         .ok()?;

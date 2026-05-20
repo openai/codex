@@ -283,6 +283,26 @@ fn apply_windows_vt_output_debug_override() {
 fn apply_windows_vt_output_debug_override() {}
 
 #[cfg(windows)]
+fn log_windows_pending_history_lines(pending_history_lines: &[PendingHistoryLines]) {
+    if debug_windows_vt_output_mode().is_none() {
+        return;
+    }
+
+    let line_count: usize = pending_history_lines
+        .iter()
+        .map(|batch| batch.lines.len())
+        .sum();
+    tracing::info!(
+        batch_count = pending_history_lines.len(),
+        line_count,
+        "Windows pending history debug state"
+    );
+}
+
+#[cfg(not(windows))]
+fn log_windows_pending_history_lines(_pending_history_lines: &[PendingHistoryLines]) {}
+
+#[cfg(windows)]
 pub(crate) fn log_windows_vt_output_mode(phase: &'static str) {
     use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
@@ -868,6 +888,7 @@ impl Tui {
             return Ok(());
         }
 
+        log_windows_pending_history_lines(pending_history_lines);
         log_windows_vt_output_mode("before_insert_history");
 
         for batch in pending_history_lines.iter() {

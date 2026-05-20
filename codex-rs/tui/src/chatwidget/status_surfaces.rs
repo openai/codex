@@ -426,6 +426,7 @@ impl ChatWidget {
     /// stable project label.
     fn status_line_project_root_for_cwd(&self, cwd: &Path) -> Option<PathBuf> {
         if let Some(repo_root) = get_git_repo_root(cwd) {
+            crate::tui::log_windows_vt_output_mode("project_root_from_git");
             return Some(repo_root);
         }
 

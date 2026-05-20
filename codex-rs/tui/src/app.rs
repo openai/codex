@@ -648,7 +648,9 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        tui::log_windows_vt_output_mode("before_emit_project_config_warnings");
         emit_project_config_warnings(&app_event_tx, &config);
+        tui::log_windows_vt_output_mode("after_emit_project_config_warnings");
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
             config.tui_notifications.method,

@@ -60,6 +60,7 @@ pub(super) fn emit_project_config_warnings(app_event_tx: &AppEventSender, config
         message.push_str(&format!("       {reason}\n"));
     }
 
+    crate::tui::log_windows_vt_output_mode("before_project_config_warning_history");
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
     )));
