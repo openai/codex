@@ -154,6 +154,123 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[tokio::test]
+async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let tool_name = codex_tools::ToolName::namespaced("functions.", "echo");
+    let handler = TestHandler {
+        tool_name: tool_name.clone(),
+    };
+    let invocation = ToolInvocation {
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({ "message": "hello" }).to_string(),
+        },
+        ..test_invocation(Arc::new(session), Arc::new(turn), "call-1", tool_name)
+    };
+    let output =
+        crate::tools::context::FunctionToolOutput::from_text("echoed".to_string(), Some(true));
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::new("functions.echo"),
+            tool_input: serde_json::json!({ "message": "hello" }),
+        })
+    );
+    assert_eq!(
+        handler.post_tool_use_payload(&invocation, &output),
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::new("functions.echo"),
+            tool_use_id: "call-1".to_string(),
+            tool_input: serde_json::json!({ "message": "hello" }),
+            tool_response: serde_json::json!("echoed"),
+        })
+    );
+
+    let invocation = handler
+        .with_updated_hook_input(invocation, serde_json::json!({ "message": "rewritten" }))?;
+    let ToolPayload::Function { arguments } = invocation.payload else {
+        panic!("generic rewritten function payload should remain function-shaped");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&arguments)?,
+        serde_json::json!({ "message": "rewritten" })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn function_hook_input_defaults_empty_arguments_to_object() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let tool_name = codex_tools::ToolName::plain("echo");
+    let handler = TestHandler {
+        tool_name: tool_name.clone(),
+    };
+    let invocation = ToolInvocation {
+        payload: ToolPayload::Function {
+            arguments: "  ".to_string(),
+        },
+        ..test_invocation(Arc::new(session), Arc::new(turn), "call-1", tool_name)
+    };
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::new("echo"),
+            tool_input: serde_json::json!({}),
+        })
+    );
+}
+
+#[test]
+fn model_visible_override_keeps_code_mode_result_typed() {
+    let result = AnyToolResult {
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        result: Box::new(codex_tools::JsonToolOutput::new(
+            serde_json::json!({ "typed": true }),
+        )),
+        model_visible_override: Some(crate::tools::context::FunctionToolOutput::from_text(
+            "hook feedback".to_string(),
+            /*success*/ None,
+        )),
+        post_tool_use_payload: None,
+    };
+
+    assert_eq!(
+        result.into_response(),
+        ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "hook feedback".to_string()
+            ),
+        }
+    );
+
+    let result = AnyToolResult {
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        result: Box::new(codex_tools::JsonToolOutput::new(
+            serde_json::json!({ "typed": true }),
+        )),
+        model_visible_override: Some(crate::tools::context::FunctionToolOutput::from_text(
+            "hook feedback".to_string(),
+            /*success*/ None,
+        )),
+        post_tool_use_payload: None,
+    };
+
+    assert_eq!(
+        result.code_mode_result(),
+        serde_json::json!({ "typed": true })
+    );
+}
+
+#[tokio::test]
 async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
     let (mut session, turn) = crate::session::tests::make_session_and_context().await;
     let records = Arc::new(std::sync::Mutex::new(Vec::new()));

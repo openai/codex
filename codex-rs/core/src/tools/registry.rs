@@ -26,6 +26,7 @@ use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::util::error_or_panic;
 use codex_extension_api::ToolCallOutcome;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
 use codex_tools::ToolName;
@@ -64,14 +65,22 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
     fn post_tool_use_payload(
         &self,
-        _invocation: &ToolInvocation,
-        _result: &dyn ToolOutput,
+        invocation: &ToolInvocation,
+        result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        None
+        if !self.supports_default_function_tool_hooks() {
+            return None;
+        }
+
+        default_function_post_tool_use_payload(invocation, result)
     }
 
-    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        None
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        if !self.supports_default_function_tool_hooks() {
+            return None;
+        }
+
+        default_function_pre_tool_use_payload(invocation)
     }
 
     /// Rebuilds a tool invocation from hook-facing `tool_input`.
@@ -80,12 +89,26 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// hook contract they expose from `pre_tool_use_payload`.
     fn with_updated_hook_input(
         &self,
-        _invocation: ToolInvocation,
-        _updated_input: Value,
+        invocation: ToolInvocation,
+        updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
+        if self.supports_default_function_tool_hooks() {
+            return rewrite_function_tool_hook_input(invocation, updated_input);
+        }
+
         Err(FunctionCallError::RespondToModel(
             "tool does not support hook input rewriting".to_string(),
         ))
+    }
+
+    /// Returns whether this tool uses the generic function-tool hook contract.
+    ///
+    /// Most local function tools expose their JSON arguments directly to hooks.
+    /// Tools with compatibility-specific hook contracts can override the hook
+    /// payload methods instead, while function tools that should not run hooks
+    /// can opt out here.
+    fn supports_default_function_tool_hooks(&self) -> bool {
+        true
     }
 
     /// Creates an optional consumer for streamed tool argument diffs.
@@ -111,6 +134,7 @@ pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
+    pub(crate) model_visible_override: Option<FunctionToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
@@ -120,9 +144,13 @@ impl AnyToolResult {
             call_id,
             payload,
             result,
+            model_visible_override,
             ..
         } = self;
-        result.to_response_item(&call_id, &payload)
+        model_visible_override.map_or_else(
+            || result.to_response_item(&call_id, &payload),
+            |output| output.to_response_item(&call_id, &payload),
+        )
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -232,6 +260,10 @@ impl CoreToolRuntime for ExposureOverride {
     ) -> Result<ToolInvocation, FunctionCallError> {
         self.handler
             .with_updated_hook_input(invocation, updated_input)
+    }
+
+    fn supports_default_function_tool_hooks(&self) -> bool {
+        self.handler.supports_default_function_tool_hooks()
     }
 
     fn telemetry_tags<'a>(
@@ -539,7 +571,7 @@ impl ToolRegistry {
             if let Some(replacement_text) = replacement_text {
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
-                    result.result = Box::new(FunctionToolOutput::from_text(
+                    result.model_visible_override = Some(FunctionToolOutput::from_text(
                         replacement_text,
                         /*success*/ None,
                     ));
@@ -614,8 +646,87 @@ async fn handle_any_tool(
         call_id,
         payload,
         result: output,
+        model_visible_override: None,
         post_tool_use_payload,
     })
+}
+
+fn default_function_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
+        return None;
+    };
+
+    Some(PreToolUsePayload {
+        tool_name: function_hook_tool_name(invocation),
+        tool_input: function_hook_tool_input(arguments),
+    })
+}
+
+fn default_function_post_tool_use_payload(
+    invocation: &ToolInvocation,
+    result: &dyn ToolOutput,
+) -> Option<PostToolUsePayload> {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
+        return None;
+    };
+
+    Some(PostToolUsePayload {
+        tool_name: function_hook_tool_name(invocation),
+        tool_use_id: result.post_tool_use_id(&invocation.call_id),
+        tool_input: result
+            .post_tool_use_input(&invocation.payload)
+            .unwrap_or_else(|| function_hook_tool_input(arguments)),
+        tool_response: result
+            .post_tool_use_response(&invocation.call_id, &invocation.payload)
+            .or_else(|| model_visible_function_tool_response(invocation, result))?,
+    })
+}
+
+fn rewrite_function_tool_hook_input(
+    mut invocation: ToolInvocation,
+    updated_input: Value,
+) -> Result<ToolInvocation, FunctionCallError> {
+    let ToolPayload::Function { .. } = &invocation.payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hook input rewrite received unsupported function tool payload".to_string(),
+        ));
+    };
+
+    let arguments = serde_json::to_string(&updated_input).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {} arguments: {err}",
+            flat_tool_name(&invocation.tool_name)
+        ))
+    })?;
+    invocation.payload = ToolPayload::Function { arguments };
+    Ok(invocation)
+}
+
+fn function_hook_tool_name(invocation: &ToolInvocation) -> HookToolName {
+    HookToolName::new(flat_tool_name(&invocation.tool_name).into_owned())
+}
+
+fn function_hook_tool_input(arguments: &str) -> Value {
+    if arguments.trim().is_empty() {
+        return Value::Object(serde_json::Map::new());
+    }
+
+    serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_string()))
+}
+
+fn model_visible_function_tool_response(
+    invocation: &ToolInvocation,
+    result: &dyn ToolOutput,
+) -> Option<Value> {
+    let ResponseInputItem::FunctionCallOutput {
+        output: FunctionCallOutputPayload { body, .. },
+        ..
+    } = result.to_response_item(&invocation.call_id, &invocation.payload)
+    else {
+        return None;
+    };
+
+    serde_json::to_value(body).ok()
 }
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {

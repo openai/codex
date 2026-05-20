@@ -101,6 +101,10 @@ impl CoreToolRuntime for WriteStdinHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
+    fn supports_default_function_tool_hooks(&self) -> bool {
+        false
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
