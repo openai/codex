@@ -116,9 +116,15 @@ pub fn normalize_request_user_input_args(
 
 pub fn request_user_input_tool_description(available_modes: &[ModeKind]) -> String {
     let allowed_modes = format_allowed_modes(available_modes);
-    format!(
+    let mut description = format!(
         "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
-    )
+    );
+    if available_modes.contains(&ModeKind::Default) {
+        description.push_str(
+            " In Default mode, this tool is only available for artifact creation (documents, spreadsheets, presentations, pdfs) requests. Read the corresponding skills on how to invoke the tool before doing so.",
+        );
+    }
+    description
 }
 
 fn format_allowed_modes(available_modes: &[ModeKind]) -> String {
