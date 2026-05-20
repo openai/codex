@@ -210,6 +210,75 @@ async fn busy_thread_queue_rows_support_list_reorder_and_delete_before_drain() -
     Ok(())
 }
 
+#[tokio::test]
+async fn queued_turns_stay_serial_after_the_first_dispatch_starts() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "queued-serial-blocker",
+        )?,
+        create_final_assistant_message_sse_response("first queued turn done")?,
+        create_final_assistant_message_sse_response("second queued turn done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+
+    queue_turn(&mut mcp, &thread.id, "first queued").await?;
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected queued turn approval request to keep the first dispatch active");
+    };
+
+    let second = queue_turn(&mut mcp, &thread.id, "second queued").await?;
+    assert_eq!(list_queue_ids(&mut mcp, &thread.id).await?, vec![second]);
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    assert!(list_queue_ids(&mut mcp, &thread.id).await?.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[2].body).contains("second queued"),
+        "second queued follow-up should become its own later model request"
+    );
+
+    Ok(())
+}
+
 async fn initialize_experimental(mcp: &mut McpProcess) -> Result<()> {
     timeout(
         DEFAULT_READ_TIMEOUT,

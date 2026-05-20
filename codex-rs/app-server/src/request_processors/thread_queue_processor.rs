@@ -88,6 +88,7 @@ impl ThreadQueueRequestProcessor {
             .await;
         if deleted {
             self.emit_thread_queue_changed(thread_id).await;
+            self.drain_thread_queue_if_idle(thread_id).await;
         }
         Ok(None)
     }
@@ -117,6 +118,7 @@ impl ThreadQueueRequestProcessor {
             .await;
         self.send_thread_queue_changed(thread_id, queued_turns)
             .await;
+        self.drain_thread_queue_if_idle(thread_id).await;
         Ok(None)
     }
 
@@ -148,6 +150,21 @@ impl ThreadQueueRequestProcessor {
         self.drain_thread_queue_if_idle(thread_id).await;
     }
 
+    pub(crate) async fn complete_dispatch_after_turn_started(&self, thread_id: ThreadId) {
+        match self
+            .state_db
+            .remove_dispatching_thread_queued_turn(thread_id)
+            .await
+        {
+            Ok(true) | Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(
+                    "failed to clear queued dispatch claim for thread {thread_id}: {err}"
+                );
+            }
+        }
+    }
+
     async fn drain_thread_queue_if_idle(&self, thread_id: ThreadId) {
         let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
             return;
@@ -167,6 +184,7 @@ impl ThreadQueueRequestProcessor {
                 return;
             }
         };
+        self.emit_thread_queue_changed(thread_id).await;
         let params = match serde_json::from_slice::<TurnStartParams>(
             record.turn_start_params_jsonb.as_slice(),
         ) {
@@ -191,22 +209,6 @@ impl ThreadQueueRequestProcessor {
                 )),
             )
             .await;
-            return;
-        }
-        match self
-            .state_db
-            .remove_dispatched_thread_queued_turn(record.queued_turn_id.as_str())
-            .await
-        {
-            Ok(true) => self.emit_thread_queue_changed(thread_id).await,
-            Ok(false) => tracing::warn!(
-                "queued turn {} was accepted but its dispatch claim disappeared",
-                record.queued_turn_id
-            ),
-            Err(err) => tracing::warn!(
-                "failed to remove accepted queued turn {}: {err}",
-                record.queued_turn_id
-            ),
         }
     }
 
@@ -244,13 +246,18 @@ impl ThreadQueueRequestProcessor {
     }
 
     async fn send_thread_queue_changed(&self, thread_id: ThreadId, queued_turns: Vec<QueuedTurn>) {
+        let subscribed_connection_ids = self
+            .thread_state_manager
+            .subscribed_connection_ids(thread_id)
+            .await;
         self.outgoing
-            .send_server_notification(ServerNotification::ThreadQueueChanged(
-                ThreadQueueChangedNotification {
+            .send_server_notification_to_connections(
+                subscribed_connection_ids.as_slice(),
+                ServerNotification::ThreadQueueChanged(ThreadQueueChangedNotification {
                     thread_id: thread_id.to_string(),
                     queued_turns,
-                },
-            ))
+                }),
+            )
             .await;
     }
 

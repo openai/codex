@@ -231,18 +231,18 @@ RETURNING
         row.map(|row| thread_queued_turn_from_row(&row)).transpose()
     }
 
-    pub async fn remove_dispatched_thread_queued_turn(
+    pub async fn remove_dispatching_thread_queued_turn(
         &self,
-        queued_turn_id: &str,
+        thread_id: ThreadId,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
 DELETE FROM thread_queued_turns
-WHERE queued_turn_id = ?
+WHERE thread_id = ?
   AND state = 'dispatching'
             "#,
         )
-        .bind(queued_turn_id)
+        .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
         .await?;
 

@@ -335,6 +335,11 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
+                    if matches!(&event.msg, EventMsg::TurnStarted(_)) {
+                        thread_queue_processor
+                            .complete_dispatch_after_turn_started(conversation_id)
+                            .await;
+                    }
                     if matches!(
                         &event.msg,
                         EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
