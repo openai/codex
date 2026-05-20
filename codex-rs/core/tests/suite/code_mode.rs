@@ -88,6 +88,31 @@ fn text_item(items: &[Value], index: usize) -> &str {
         .expect("content item should be input_text")
 }
 
+fn custom_tool_output_items_with_stable_wall_time(
+    req: &ResponsesRequest,
+    call_id: &str,
+) -> Vec<Value> {
+    let mut items = custom_tool_output_items(req, call_id);
+    let header = items
+        .first_mut()
+        .and_then(|item| item.get_mut("text"))
+        .and_then(Value::as_str)
+        .expect("first content item should be the code-mode status header");
+    let Some((status, rest)) = header.split_once("\nWall time ") else {
+        panic!("code-mode status header should include wall time: {header:?}");
+    };
+    let Some((seconds, suffix)) = rest.split_once(" seconds\nOutput:\n") else {
+        panic!("code-mode status header should include output marker: {header:?}");
+    };
+    seconds
+        .parse::<f32>()
+        .expect("code-mode wall time should be numeric");
+    let normalized_header = format!("{status}\nWall time <elapsed> seconds\nOutput:\n{suffix}");
+
+    items[0]["text"] = Value::String(normalized_header);
+    items
+}
+
 fn extract_running_cell_id(text: &str) -> String {
     text.strip_prefix("Script running with cell ID ")
         .and_then(|rest| rest.split('\n').next())
@@ -672,18 +697,18 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
     assert_eq!(
-        text_item(&items, /*index*/ 1),
-        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789",
+            }),
+        ]
     );
 
     Ok(())
@@ -708,16 +733,19 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
+    assert_eq!(
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "x".repeat(50_000),
+            }),
+        ]
     );
-    assert_eq!(text_item(&items, /*index*/ 1), "x".repeat(50_000));
 
     Ok(())
 }
@@ -744,16 +772,19 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
+    assert_eq!(
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "x".repeat(50_000),
+            }),
+        ]
     );
-    assert_eq!(text_item(&items, /*index*/ 1), "x".repeat(50_000));
 
     Ok(())
 }
@@ -776,16 +807,19 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
+    assert_eq!(
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "x".repeat(50_000),
+            }),
+        ]
     );
-    assert_eq!(text_item(&items, /*index*/ 1), "x".repeat(50_000));
 
     Ok(())
 }
@@ -811,16 +845,19 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
+    assert_eq!(
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "x".repeat(50_000),
+            }),
+        ]
     );
-    assert_eq!(text_item(&items, /*index*/ 1), "x".repeat(50_000));
 
     Ok(())
 }
@@ -843,18 +880,18 @@ text(result.output);
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    assert_eq!(items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&items, /*index*/ 0),
-    );
     assert_eq!(
-        text_item(&items, /*index*/ 1),
-        "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789"
+        custom_tool_output_items_with_stable_wall_time(&second_mock.single_request(), "call-1"),
+        vec![
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
+            }),
+            serde_json::json!({
+                "type": "input_text",
+                "text": "Total output lines: 1\n\n0123456789…5 tokens truncated…0123456789",
+            }),
+        ]
     );
 
     Ok(())
