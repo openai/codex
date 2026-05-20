@@ -2,5 +2,8 @@
 /codex-rs/core/ @openai/codex-core-agent-team
 /codex-rs/ext/extension-api/ @openai/codex-core-agent-team
 
+# MITM proxy ownership.
+/codex-rs/network-proxy/ @viyatb-oai @winston-openai
+
 # Keep ownership changes reviewed by the same team.
 /.github/CODEOWNERS @openai/codex-core-agent-team
