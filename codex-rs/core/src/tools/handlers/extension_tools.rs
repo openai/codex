@@ -1,20 +1,14 @@
 use std::sync::Arc;
 
-use codex_tools::ToolCall as ExtensionToolCall;
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-use serde_json::Value;
-
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::flat_tool_name;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
-use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub(crate) struct ExtensionToolAdapter(Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>);
 
@@ -61,29 +55,6 @@ impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.arguments_from_payload(payload).is_some()
     }
-
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        let arguments = self.arguments_from_payload(&invocation.payload)?;
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
-            tool_input: extension_tool_hook_input(arguments),
-        })
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload> {
-        let arguments = self.arguments_from_payload(&invocation.payload)?;
-        Some(PostToolUsePayload {
-            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
-            tool_use_id: invocation.call_id.clone(),
-            tool_input: extension_tool_hook_input(arguments),
-            tool_response: result
-                .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
-        })
-    }
 }
 
 fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
@@ -94,14 +65,6 @@ fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
         truncation_policy: invocation.turn.truncation_policy,
         payload: invocation.payload.clone(),
     }
-}
-
-fn extension_tool_hook_input(arguments: &str) -> Value {
-    if arguments.trim().is_empty() {
-        return Value::Object(serde_json::Map::new());
-    }
-
-    serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_string()))
 }
 
 #[cfg(test)]

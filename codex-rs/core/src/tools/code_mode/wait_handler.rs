@@ -110,4 +110,8 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     }
 }
 
-impl CoreToolRuntime for CodeModeWaitHandler {}
+impl CoreToolRuntime for CodeModeWaitHandler {
+    fn supports_default_function_tool_hooks(&self) -> bool {
+        false
+    }
+}
