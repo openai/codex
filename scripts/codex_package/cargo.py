@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .targets import REPO_ROOT
+from .targets import PackageVariant
 from .targets import TargetSpec
 
 
@@ -14,7 +15,7 @@ CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
 
 @dataclass(frozen=True)
 class SourceBuildOutputs:
-    codex_bin: Path
+    entrypoint_bin: Path
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
@@ -22,28 +23,39 @@ class SourceBuildOutputs:
 
 def build_source_binaries(
     spec: TargetSpec,
+    variant: PackageVariant,
     *,
     cargo: str,
     profile: str,
+    entrypoint_bin: Path | None,
 ) -> SourceBuildOutputs:
-    binaries = source_binaries_for_target(spec)
-    cmd = [
-        cargo,
-        "build",
-        "--target",
-        spec.target,
-        "--profile",
-        profile,
-    ]
-    for binary in binaries:
-        cmd.extend(["--bin", binary])
+    binaries = source_binaries_for_target(
+        spec,
+        variant,
+        build_entrypoint=entrypoint_bin is None,
+    )
+    if binaries:
+        cmd = [
+            cargo,
+            "build",
+            "--target",
+            spec.target,
+            "--profile",
+            profile,
+        ]
+        for binary in binaries:
+            cmd.extend(["--bin", binary])
 
-    print("+", " ".join(cmd))
-    subprocess.run(cmd, cwd=CODEX_RS_ROOT, check=True)
+        print("+", " ".join(cmd))
+        subprocess.run(cmd, cwd=CODEX_RS_ROOT, check=True)
 
     output_dir = cargo_profile_output_dir(spec, profile)
     outputs = SourceBuildOutputs(
-        codex_bin=output_dir / spec.codex_name,
+        entrypoint_bin=(
+            entrypoint_bin.resolve()
+            if entrypoint_bin is not None
+            else output_dir / variant.entrypoint_name(spec)
+        ),
         bwrap_bin=output_dir / "bwrap" if spec.is_linux else None,
         codex_command_runner_bin=(
             output_dir / "codex-command-runner.exe" if spec.is_windows else None
@@ -56,8 +68,15 @@ def build_source_binaries(
     return outputs
 
 
-def source_binaries_for_target(spec: TargetSpec) -> list[str]:
-    binaries = ["codex"]
+def source_binaries_for_target(
+    spec: TargetSpec,
+    variant: PackageVariant,
+    *,
+    build_entrypoint: bool,
+) -> list[str]:
+    binaries = []
+    if build_entrypoint:
+        binaries.append(variant.cargo_bin)
     if spec.is_linux:
         binaries.append("bwrap")
     if spec.is_windows:
@@ -97,7 +116,7 @@ def cargo_profile_dirname(profile: str) -> str:
 
 def validate_source_outputs(outputs: SourceBuildOutputs) -> None:
     for path in [
-        outputs.codex_bin,
+        outputs.entrypoint_bin,
         outputs.bwrap_bin,
         outputs.codex_command_runner_bin,
         outputs.codex_windows_sandbox_setup_bin,

@@ -1,6 +1,7 @@
 """Command-line interface for building Codex package directories."""
 
 import argparse
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .layout import build_package_dir
 from .layout import prepare_package_dir
 from .layout import validate_package_dir
 from .ripgrep import resolve_rg_bin
+from .targets import PACKAGE_VARIANTS
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
 from .targets import default_target
@@ -30,14 +32,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--version",
-        default="0.0.0-dev",
-        help="Codex version to record in codex-package.json.",
-    )
-    parser.add_argument(
         "--variant",
+        choices=sorted(PACKAGE_VARIANTS),
         default="codex",
-        help="Package variant to record in codex-package.json.",
+        help="Package variant to build.",
     )
     parser.add_argument(
         "--package-dir",
@@ -75,6 +73,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--entrypoint-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt entrypoint executable for the selected package "
+            "variant. If omitted, the entrypoint is built with Cargo."
+        ),
+    )
+    parser.add_argument(
         "--rg-bin",
         type=Path,
         help=(
@@ -88,6 +94,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     spec = TARGET_SPECS[getattr(args, "target", None) or default_target()]
+    variant = PACKAGE_VARIANTS[args.variant]
     package_dir_arg = getattr(args, "package_dir", None)
     package_dir = (
         package_dir_arg.resolve()
@@ -97,19 +104,22 @@ def main() -> int:
 
     source_outputs = build_source_binaries(
         spec,
+        variant,
         cargo=args.cargo,
         profile=args.cargo_profile,
+        entrypoint_bin=args.entrypoint_bin,
     )
+    version = read_entrypoint_version(source_outputs.entrypoint_bin)
     inputs = PackageInputs(
-        codex_bin=source_outputs.codex_bin,
+        entrypoint_bin=source_outputs.entrypoint_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
     )
     prepare_package_dir(package_dir, force=args.force)
-    build_package_dir(package_dir, args.version, args.variant, spec, inputs)
-    validate_package_dir(package_dir, spec)
+    build_package_dir(package_dir, version, variant, spec, inputs)
+    validate_package_dir(package_dir, variant, spec)
 
     archive_output = args.archive_output
     if archive_output is not None:
@@ -119,3 +129,32 @@ def main() -> int:
 
     print(f"Built Codex package directory at {package_dir}")
     return 0
+
+
+def read_entrypoint_version(entrypoint_bin: Path) -> str:
+    cmd = [str(entrypoint_bin), "--version"]
+    print("+", " ".join(cmd))
+    try:
+        output = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip()
+        detail = f": {stderr}" if stderr else ""
+        raise RuntimeError(
+            f"Failed to read package version from {entrypoint_bin}{detail}"
+        ) from exc
+
+    version = parse_version_output(output)
+    print(f"Detected package version: {version}")
+    return version
+
+
+def parse_version_output(output: str) -> str:
+    parts = output.strip().split()
+    if not parts:
+        raise RuntimeError("Entrypoint --version output was empty")
+    return parts[-1]
