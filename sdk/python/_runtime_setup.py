@@ -65,11 +65,15 @@ def ensure_runtime_package_installed(
     with tempfile.TemporaryDirectory(prefix="codex-python-runtime-") as temp_root_str:
         temp_root = Path(temp_root_str)
         archive_path = _download_release_archive(requested_version, temp_root)
-        runtime_binary = _extract_runtime_binary(archive_path, temp_root)
+        runtime_package_dir = _extract_runtime_package_dir(
+            archive_path,
+            temp_root,
+            requested_version,
+        )
         staged_runtime_dir = _stage_runtime_package(
             sdk_python_dir,
             requested_version,
-            runtime_binary,
+            runtime_package_dir,
             temp_root / "runtime-stage",
         )
         _install_runtime_package(python_executable, staged_runtime_dir, install_target)
@@ -260,7 +264,7 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     return archive_path
 
 
-def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
+def _extract_runtime_package_dir(archive_path: Path, temp_root: Path, version: str) -> Path:
     extract_dir = temp_root / "extracted"
     extract_dir.mkdir(parents=True, exist_ok=True)
     if archive_path.name.endswith(".tar.gz"):
@@ -274,6 +278,13 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
             zip_file.extractall(extract_dir)
     else:
         raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
+
+    metadata_path = next(
+        (path for path in extract_dir.rglob("codex-package.json") if path.is_file()),
+        None,
+    )
+    if metadata_path is not None:
+        return metadata_path.parent
 
     binary_name = runtime_binary_name()
     archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
@@ -289,20 +300,45 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         raise RuntimeSetupError(
             f"Failed to find {binary_name} in extracted runtime archive {archive_path.name}."
         )
-    return candidates[0]
+    return _package_legacy_runtime_binary(candidates[0], temp_root, version)
+
+
+def _package_legacy_runtime_binary(runtime_binary: Path, temp_root: Path, version: str) -> Path:
+    package_dir = temp_root / "runtime-package"
+    bin_dir = package_dir / "bin"
+    resources_dir = package_dir / "codex-resources"
+    path_dir = package_dir / "codex-path"
+    bin_dir.mkdir(parents=True)
+    resources_dir.mkdir()
+    path_dir.mkdir()
+    shutil.copy2(runtime_binary, bin_dir / runtime_binary_name())
+    (package_dir / "codex-package.json").write_text(
+        json.dumps(
+            {
+                "layoutVersion": 1,
+                "version": version,
+                "entrypoint": f"bin/{runtime_binary_name()}",
+                "resourcesDir": "codex-resources",
+                "pathDir": "codex-path",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return package_dir
 
 
 def _stage_runtime_package(
     sdk_python_dir: Path,
     runtime_version: str,
-    runtime_binary: Path,
+    runtime_package_dir: Path,
     staging_dir: Path,
 ) -> Path:
     script_module = _load_update_script_module(sdk_python_dir)
     return script_module.stage_python_runtime_package(  # type: ignore[no-any-return]
         staging_dir,
         runtime_version,
-        runtime_binary.resolve(),
+        runtime_package_dir.resolve(),
     )
 
 
