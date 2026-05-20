@@ -137,6 +137,16 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn app_server_queue_is_under_development() {
+    assert_eq!(Feature::AppServerQueue.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::AppServerQueue.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("app_server_queue"),
+        Some(Feature::AppServerQueue)
+    );
+}
+
+#[test]
 fn remote_compaction_v2_is_under_development() {
     assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);

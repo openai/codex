@@ -184,6 +184,8 @@ pub enum Feature {
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Enable durable app-server queued turn submissions.
+    AppServerQueue,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1102,6 +1104,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AppServerQueue,
+        key: "app_server_queue",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,

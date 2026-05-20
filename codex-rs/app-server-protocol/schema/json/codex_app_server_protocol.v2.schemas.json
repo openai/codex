@@ -9797,6 +9797,65 @@
       ],
       "type": "object"
     },
+    "QueuedTurn": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/QueuedTurnStatus"
+        },
+        "submission": {
+          "$ref": "#/definitions/TurnSubmission"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "submission"
+      ],
+      "type": "object"
+    },
+    "QueuedTurnStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "pending"
+              ],
+              "title": "PendingQueuedTurnStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "PendingQueuedTurnStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/definitions/TurnError"
+            },
+            "type": {
+              "enum": [
+                "failed"
+              ],
+              "title": "FailedQueuedTurnStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "type"
+          ],
+          "title": "FailedQueuedTurnStatus",
+          "type": "object"
+        }
+      ]
+    },
     "RateLimitReachedType": {
       "enum": [
         "rate_limit_reached",
@@ -11516,6 +11575,26 @@
             "params"
           ],
           "title": "Thread/settings/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/queue/changed"
+              ],
+              "title": "Thread/queue/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadQueueChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/queue/changedNotification",
           "type": "object"
         },
         {
@@ -14806,6 +14885,26 @@
       "title": "ThreadNameUpdatedNotification",
       "type": "object"
     },
+    "ThreadQueueChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "queuedTurns": {
+          "items": {
+            "$ref": "#/definitions/QueuedTurn"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "queuedTurns",
+        "threadId"
+      ],
+      "title": "ThreadQueueChangedNotification",
+      "type": "object"
+    },
     "ThreadReadParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -16460,6 +16559,40 @@
         "turnId"
       ],
       "title": "TurnSteerResponse",
+      "type": "object"
+    },
+    "TurnSubmission": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "outputSchema": {
+          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    },
+    "TurnSubmissionParams": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "outputSchema": {
+          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        }
+      },
+      "required": [
+        "input"
+      ],
       "type": "object"
     },
     "TurnsPage": {

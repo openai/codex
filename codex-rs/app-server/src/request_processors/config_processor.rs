@@ -49,6 +49,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
+    "app_server_queue",
     "apps",
     "memories",
     "mentions_v2",

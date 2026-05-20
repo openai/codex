@@ -4118,6 +4118,23 @@
       ],
       "type": "object"
     },
+    "TurnSubmissionParams": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "outputSchema": {
+          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {

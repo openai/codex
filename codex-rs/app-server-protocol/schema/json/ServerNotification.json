@@ -84,6 +84,28 @@
       ],
       "type": "object"
     },
+    "AdditionalContextEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/AdditionalContextKind"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "AdditionalContextKind": {
+      "enum": [
+        "untrusted",
+        "application"
+      ],
+      "type": "string"
+    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {
@@ -2654,6 +2676,65 @@
         }
       ]
     },
+    "QueuedTurn": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/QueuedTurnStatus"
+        },
+        "submission": {
+          "$ref": "#/definitions/TurnSubmission"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "submission"
+      ],
+      "type": "object"
+    },
+    "QueuedTurnStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "pending"
+              ],
+              "title": "PendingQueuedTurnStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "PendingQueuedTurnStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/definitions/TurnError"
+            },
+            "type": {
+              "enum": [
+                "failed"
+              ],
+              "title": "FailedQueuedTurnStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "type"
+          ],
+          "title": "FailedQueuedTurnStatus",
+          "type": "object"
+        }
+      ]
+    },
     "RateLimitReachedType": {
       "enum": [
         "rate_limit_reached",
@@ -4246,6 +4327,24 @@
       ],
       "type": "object"
     },
+    "ThreadQueueChangedNotification": {
+      "properties": {
+        "queuedTurns": {
+          "items": {
+            "$ref": "#/definitions/QueuedTurn"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "queuedTurns",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadRealtimeAudioChunk": {
       "description": "EXPERIMENTAL - thread realtime audio chunk.",
       "properties": {
@@ -4819,6 +4918,21 @@
       ],
       "type": "object"
     },
+    "TurnEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "TurnError": {
       "properties": {
         "additionalDetails": {
@@ -4946,6 +5060,23 @@
         "inProgress"
       ],
       "type": "string"
+    },
+    "TurnSubmission": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "outputSchema": {
+          "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
     },
     "UserInput": {
       "oneOf": [
@@ -5483,6 +5614,26 @@
         "params"
       ],
       "title": "Thread/settings/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/queue/changed"
+          ],
+          "title": "Thread/queue/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadQueueChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/queue/changedNotification",
       "type": "object"
     },
     {

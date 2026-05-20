@@ -336,6 +336,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) thread_goal_processor: ThreadGoalRequestProcessor,
+    pub(super) thread_queue_processor: ThreadQueueRequestProcessor,
     pub(super) state_db: Option<StateDbHandle>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
@@ -356,6 +357,7 @@ impl ThreadRequestProcessor {
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
         thread_goal_processor: ThreadGoalRequestProcessor,
+        thread_queue_processor: ThreadQueueRequestProcessor,
         state_db: Option<StateDbHandle>,
         skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
@@ -372,6 +374,7 @@ impl ThreadRequestProcessor {
             thread_watch_manager,
             thread_list_state_permit,
             thread_goal_processor,
+            thread_queue_processor,
             state_db,
             background_tasks: TaskTracker::new(),
             skills_watcher,
@@ -2708,6 +2711,9 @@ impl ThreadRequestProcessor {
                 }
                 self.thread_goal_processor
                     .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
+                    .await;
+                self.thread_queue_processor
+                    .emit_resume_queue_snapshot(thread_id)
                     .await;
             }
             Err(err) => {
