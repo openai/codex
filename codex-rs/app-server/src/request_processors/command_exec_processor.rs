@@ -1,4 +1,12 @@
 use super::*;
+use codex_config::types::WindowsSandboxModeToml;
+
+fn should_skip_managed_network_proxy_for_command_exec(config: &Config) -> bool {
+    matches!(
+        config.permissions.windows_sandbox_mode,
+        Some(WindowsSandboxModeToml::Unelevated)
+    )
+}
 
 #[derive(Clone)]
 pub(crate) struct CommandExecRequestProcessor {
@@ -159,27 +167,34 @@ impl CommandExecRequestProcessor {
             },
             None => None,
         };
+        // Direct shell commands should honor an explicit unelevated Windows sandbox setting
+        // instead of silently re-routing through the elevated helper path.
+        let skip_managed_network_proxy =
+            should_skip_managed_network_proxy_for_command_exec(&self.config);
         let managed_network_requirements_enabled =
-            self.config.managed_network_requirements_enabled();
-        let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec
-                .start_proxy(
-                    self.config.permissions.permission_profile.get(),
-                    /*policy_decider*/ None,
-                    /*blocked_request_observer*/ None,
-                    managed_network_requirements_enabled,
-                    NetworkProxyAuditMetadata::default(),
-                )
-                .await
-            {
-                Ok(started) => Some(started),
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to start managed network proxy: {err}"
-                    )));
-                }
+            !skip_managed_network_proxy && self.config.managed_network_requirements_enabled();
+        let started_network_proxy = match skip_managed_network_proxy {
+            true => None,
+            false => match self.config.permissions.network.as_ref() {
+                Some(spec) => match spec
+                    .start_proxy(
+                        self.config.permissions.permission_profile.get(),
+                        /*policy_decider*/ None,
+                        /*blocked_request_observer*/ None,
+                        managed_network_requirements_enabled,
+                        NetworkProxyAuditMetadata::default(),
+                    )
+                    .await
+                {
+                    Ok(started) => Some(started),
+                    Err(err) => {
+                        return Err(internal_error(format!(
+                            "failed to start managed network proxy: {err}"
+                        )));
+                    }
+                },
+                None => None,
             },
-            None => None,
         };
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let output_bytes_cap = if disable_output_cap {
@@ -313,6 +328,50 @@ impl CommandExecRequestProcessor {
     ) {
         file_system_sandbox_policy
             .preserve_deny_read_restrictions_from(configured_file_system_sandbox_policy);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_skip_managed_network_proxy_for_command_exec;
+    use codex_core::config::Config;
+    use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+    use codex_protocol::config_types::WindowsSandboxLevel;
+    use tempfile::TempDir;
+
+    fn test_config() -> Config {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let cwd = TempDir::new().expect("temp cwd");
+        Config::load_from_base_config_with_cwd(
+            codex_home.path(),
+            cwd.path(),
+            WindowsSandboxLevel::Disabled,
+        )
+        .expect("load config")
+    }
+
+    #[test]
+    fn command_exec_skips_proxy_for_explicit_unelevated_windows_sandbox() {
+        let mut config = test_config();
+        config.set_windows_sandbox_enabled(true);
+
+        assert!(should_skip_managed_network_proxy_for_command_exec(&config));
+        assert_eq!(
+            WindowsSandboxLevel::from_config(&config),
+            WindowsSandboxLevel::RestrictedToken
+        );
+    }
+
+    #[test]
+    fn command_exec_keeps_proxy_when_windows_sandbox_is_not_explicitly_unelevated() {
+        let config = test_config();
+        assert!(!should_skip_managed_network_proxy_for_command_exec(&config));
+
+        let mut elevated = test_config();
+        elevated.set_windows_elevated_sandbox_enabled(true);
+        assert!(!should_skip_managed_network_proxy_for_command_exec(
+            &elevated
+        ));
     }
 }
 
