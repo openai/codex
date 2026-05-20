@@ -162,14 +162,21 @@ where
         }
 
         let turn_id = input.turn_store.level_id();
-        self.account_active_goal_progress(
-            input.thread_store,
-            turn_id,
-            &format!("{turn_id}:turn-stop"),
-            codex_state::GoalAccountingMode::ActiveOnly,
-            BudgetLimitedGoalDisposition::ClearActive,
-        )
-        .await;
+        if let Err(err) = self
+            .account_active_goal_progress(
+                input.thread_store,
+                turn_id,
+                &format!("{turn_id}:turn-stop"),
+                codex_state::GoalAccountingMode::ActiveOnly,
+                BudgetLimitedGoalDisposition::ClearActive,
+            )
+            .await
+        {
+            tracing::warn!(
+                "failed to account active goal progress at turn stop for {turn_id}: {err}"
+            );
+            return;
+        }
         accounting_state(input.thread_store).finish_turn(turn_id);
     }
 
@@ -179,14 +186,21 @@ where
         }
 
         let turn_id = input.turn_store.level_id();
-        self.account_active_goal_progress(
-            input.thread_store,
-            turn_id,
-            &format!("{turn_id}:turn-abort"),
-            codex_state::GoalAccountingMode::ActiveOnly,
-            BudgetLimitedGoalDisposition::ClearActive,
-        )
-        .await;
+        if let Err(err) = self
+            .account_active_goal_progress(
+                input.thread_store,
+                turn_id,
+                &format!("{turn_id}:turn-abort"),
+                codex_state::GoalAccountingMode::ActiveOnly,
+                BudgetLimitedGoalDisposition::ClearActive,
+            )
+            .await
+        {
+            tracing::warn!(
+                "failed to account active goal progress after turn abort for {turn_id}: {err}"
+            );
+            return;
+        }
         accounting_state(input.thread_store).finish_turn(turn_id);
     }
 }
@@ -228,17 +242,25 @@ where
             if !should_count_for_goal_progress {
                 return;
             }
-            let Some(progress) = self
+            let turn_id = input.turn_id;
+            let progress = match self
                 .account_active_goal_progress(
                     input.thread_store,
-                    input.turn_id,
+                    turn_id,
                     input.call_id,
                     codex_state::GoalAccountingMode::ActiveOnly,
                     BudgetLimitedGoalDisposition::KeepActive,
                 )
                 .await
-            else {
-                return;
+            {
+                Ok(Some(progress)) => progress,
+                Ok(None) => return,
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to account active goal progress after tool finish for {turn_id}: {err}"
+                    );
+                    return;
+                }
             };
             let goal = progress.goal;
             if goal.status != ThreadGoalStatus::BudgetLimited {
@@ -361,12 +383,14 @@ impl<C> GoalExtension<C> {
         event_id: &str,
         mode: codex_state::GoalAccountingMode,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
-    ) -> Option<AccountedGoalProgress> {
+    ) -> Result<Option<AccountedGoalProgress>, String> {
         let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
-            return None;
+            return Ok(None);
         };
         let accounting = accounting_state(thread_store);
-        let snapshot = accounting.progress_snapshot(turn_id)?;
+        let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
+            return Ok(None);
+        };
         let outcome = self
             .state_dbs
             .thread_goals()
@@ -378,8 +402,8 @@ impl<C> GoalExtension<C> {
                 Some(snapshot.expected_goal_id.as_str()),
             )
             .await
-            .ok()?;
-        match outcome {
+            .map_err(|err| err.to_string())?;
+        Ok(match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
                 let goal_id = goal.goal_id.clone();
                 accounting.mark_progress_accounted_for_status(
@@ -397,6 +421,6 @@ impl<C> GoalExtension<C> {
                 Some(AccountedGoalProgress { goal, goal_id })
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
-        }
+        })
     }
 }

@@ -86,6 +86,8 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
@@ -119,9 +121,20 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use uuid::Uuid;
+
+const JSONRPC_INVALID_REQUEST: i64 = -32600;
+const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
+const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
+}
+
+fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
+    source.code == JSONRPC_METHOD_NOT_FOUND
+        || (source.code == JSONRPC_INVALID_REQUEST
+            && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
 }
 
 /// Data collected during the TUI bootstrap phase that the main event loop
@@ -150,6 +163,7 @@ pub(crate) struct AppServerSession {
     next_request_id: i64,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
+    thread_settings_update_supported: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +181,7 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
@@ -189,6 +204,7 @@ impl AppServerSession {
             next_request_id: 1,
             remote_cwd_override: None,
             thread_params_mode,
+            thread_settings_update_supported: true,
         }
     }
 
@@ -337,6 +353,7 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
         self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
             .await
@@ -427,7 +444,7 @@ impl AppServerSession {
         Ok(started)
     }
 
-    fn thread_params_mode(&self) -> ThreadParamsMode {
+    pub(crate) fn thread_params_mode(&self) -> ThreadParamsMode {
         self.thread_params_mode
     }
 
@@ -523,6 +540,39 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/metadata/update failed while syncing git branch")
+    }
+
+    pub(crate) async fn thread_settings_update(
+        &mut self,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<()> {
+        if !self.thread_settings_update_supported {
+            return Ok(());
+        }
+        let request_id = self.next_request_id();
+        match self
+            .client
+            .request_typed::<ThreadSettingsUpdateResponse>(ClientRequest::ThreadSettingsUpdate {
+                request_id,
+                params,
+            })
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(TypedRequestError::Server { source, .. })
+                if is_thread_settings_update_unsupported(&source) =>
+            {
+                // Older remote app servers can reject this experimental method as
+                // method-not-found, experimental-capability-gated, or an unknown
+                // request variant. Treat those as a session-level capability
+                // downgrade so local TUI setting changes stay best-effort instead
+                // of showing an error every time the user changes model, effort,
+                // personality, or mode.
+                self.thread_settings_update_supported = false;
+                Ok(())
+            }
+            Err(err) => Err(err).wrap_err("thread/settings/update failed in TUI"),
+        }
     }
 
     pub(crate) async fn thread_inject_items(
@@ -1000,6 +1050,27 @@ impl AppServerSession {
         self.next_request_id += 1;
         RequestId::Integer(request_id)
     }
+}
+
+pub(crate) async fn start_thread_with_request_handle(
+    request_handle: AppServerRequestHandle,
+    config: Config,
+    thread_params_mode: ThreadParamsMode,
+    remote_cwd_override: Option<PathBuf>,
+) -> Result<AppServerStartedThread> {
+    let response: ThreadStartResponse = request_handle
+        .request_typed(ClientRequest::ThreadStart {
+            request_id: RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4())),
+            params: thread_start_params_from_config(
+                &config,
+                thread_params_mode,
+                remote_cwd_override.as_deref(),
+                /*session_start_source*/ None,
+            ),
+        })
+        .await
+        .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;
+    started_thread_from_start_response(response, &config, thread_params_mode).await
 }
 
 fn thread_realtime_start_params(
@@ -1575,6 +1646,8 @@ async fn thread_session_state_from_thread_response(
         runtime_workspace_roots,
         instruction_source_paths,
         reasoning_effort,
+        collaboration_mode: None,
+        personality: config.personality,
         message_history: Some(MessageHistoryMetadata {
             log_id,
             entry_count,
@@ -1674,6 +1747,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some("codex"), Some("other")]
         );
+    }
+
+    #[test]
+    fn thread_settings_update_compat_detects_unsupported_errors() {
+        let cases = [
+            (JSONRPC_METHOD_NOT_FOUND, "method not found", true),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "thread/settings/update requires experimentalApi capability",
+                true,
+            ),
+            (
+                JSONRPC_INVALID_REQUEST,
+                "Invalid request: unknown variant `thread/settings/update`",
+                true,
+            ),
+            (JSONRPC_INVALID_REQUEST, "invalid thread id", false),
+        ];
+
+        for (code, message, expected) in cases {
+            let source = JSONRPCErrorError {
+                code,
+                data: None,
+                message: message.to_string(),
+            };
+            assert_eq!(
+                is_thread_settings_update_unsupported(&source),
+                expected,
+                "{message}"
+            );
+        }
     }
 
     #[tokio::test]

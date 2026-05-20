@@ -397,6 +397,8 @@ export type { ThreadRollbackParams } from "./ThreadRollbackParams";
 export type { ThreadRollbackResponse } from "./ThreadRollbackResponse";
 export type { ThreadSetNameParams } from "./ThreadSetNameParams";
 export type { ThreadSetNameResponse } from "./ThreadSetNameResponse";
+export type { ThreadSettings } from "./ThreadSettings";
+export type { ThreadSettingsUpdatedNotification } from "./ThreadSettingsUpdatedNotification";
 export type { ThreadShellCommandParams } from "./ThreadShellCommandParams";
 export type { ThreadShellCommandResponse } from "./ThreadShellCommandResponse";
 export type { ThreadSortKey } from "./ThreadSortKey";

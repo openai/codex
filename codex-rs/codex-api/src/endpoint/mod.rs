@@ -5,6 +5,7 @@ pub(crate) mod realtime_call;
 pub(crate) mod realtime_websocket;
 pub(crate) mod responses;
 pub(crate) mod responses_websocket;
+pub(crate) mod search;
 mod session;
 
 pub use compact::CompactClient;
@@ -27,3 +28,4 @@ pub use responses_websocket::ResponsesWebsocketClient;
 pub use responses_websocket::ResponsesWebsocketClose;
 pub use responses_websocket::ResponsesWebsocketConnection;
 pub use responses_websocket::ResponsesWebsocketProbe;
+pub use search::SearchClient;

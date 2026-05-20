@@ -23,6 +23,10 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::StartupThreadStarted { result } => {
+                self.handle_startup_thread_started(app_server, result)
+                    .await?;
+            }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -756,12 +760,18 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.sync_active_thread_reasoning_setting(app_server, effort)
+                    .await;
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                self.sync_active_thread_model_setting(app_server, model)
+                    .await;
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
+                self.sync_active_thread_personality_setting(app_server, personality)
+                    .await;
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
@@ -1544,6 +1554,8 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_plan_mode_reasoning_setting(app_server)
+                    .await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::for_config(&self.config)

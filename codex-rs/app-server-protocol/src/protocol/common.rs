@@ -517,6 +517,13 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
+    #[experimental("thread/settings/update")]
+    ThreadSettingsUpdate => "thread/settings/update" {
+        params: v2::ThreadSettingsUpdateParams,
+        inspect_params: true,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSettingsUpdateResponse,
+    },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
         params: v2::ThreadMemoryModeSetParams,
@@ -1470,6 +1477,8 @@ server_notification_definitions! {
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     #[experimental("thread/goal/cleared")]
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/settings/updated")]
+    ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
@@ -3091,6 +3100,40 @@ mod tests {
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&cleared),
             Some("thread/goal/cleared")
+        );
+    }
+
+    #[test]
+    fn thread_settings_updated_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::ThreadSettingsUpdated(v2::ThreadSettingsUpdatedNotification {
+                thread_id: "thr_123".to_string(),
+                thread_settings: v2::ThreadSettings {
+                    cwd: absolute_path("/tmp/repo"),
+                    approval_policy: v2::AskForApproval::Never,
+                    approvals_reviewer: v2::ApprovalsReviewer::User,
+                    sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
+                    active_permission_profile: None,
+                    model: "gpt-5.4".to_string(),
+                    model_provider: "openai".to_string(),
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: "gpt-5.4".to_string(),
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    },
+                    personality: None,
+                },
+            });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
+            Some("thread/settings/updated")
         );
     }
 

@@ -38,6 +38,8 @@ mod policy;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
+mod resolved_permissions;
+#[cfg(target_os = "windows")]
 mod token;
 #[cfg(target_os = "windows")]
 mod wfp;

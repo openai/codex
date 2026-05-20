@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -15,6 +16,7 @@ use crate::logging::log_note;
 use crate::sandbox_bin_dir;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
+const BIN_DIRNAME: &str = "bin";
 const RESOURCES_DIRNAME: &str = "codex-resources";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -188,12 +190,21 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
 fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
     let dir = exe.parent()?;
     let direct_candidate = dir.join(file_name);
-    if direct_candidate.exists() {
+    if direct_candidate.is_file() {
         return Some(direct_candidate);
     }
 
+    if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
+        && let Some(package_dir) = dir.parent()
+    {
+        let package_resource_candidate = package_dir.join(RESOURCES_DIRNAME).join(file_name);
+        if package_resource_candidate.is_file() {
+            return Some(package_resource_candidate);
+        }
+    }
+
     let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
-    resource_candidate.exists().then_some(resource_candidate)
+    resource_candidate.is_file().then_some(resource_candidate)
 }
 
 fn helper_destination_for_source(
@@ -345,6 +356,7 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use super::BIN_DIRNAME;
     use super::CopyOutcome;
     use super::DEV_BUILD_VERSION_SENTINEL;
     use super::HelperExecutable;
@@ -461,6 +473,47 @@ mod tests {
             .expect("helper path");
 
         assert_eq!(resolved, helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_checks_package_resource_dir_for_bin_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&helper, b"runner").expect("write helper");
+
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_prefers_package_resource_dir_over_bin_resource_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let package_resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        let bin_resources_dir = bin_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&package_resources_dir).expect("create package resources dir");
+        fs::create_dir_all(&bin_resources_dir).expect("create bin resources dir");
+        let exe = bin_dir.join("codex.exe");
+        let package_helper = package_resources_dir.join("codex-command-runner.exe");
+        let bin_helper = bin_resources_dir.join("codex-command-runner.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&package_helper, b"package runner").expect("write package helper");
+        fs::write(&bin_helper, b"bin runner").expect("write bin helper");
+
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
+
+        assert_eq!(resolved, package_helper);
     }
 
     #[test]
