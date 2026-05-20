@@ -56,16 +56,10 @@ pub fn token_mode_for_permission_profile(
 }
 
 impl ResolvedWindowsSandboxPermissions {
-    pub(crate) fn from_legacy_policy(policy: &SandboxPolicy) -> Self {
-        Self {
-            file_system: FileSystemSandboxPolicy::from(policy),
-            network: NetworkSandboxPolicy::from(policy),
-        }
-    }
-
     pub(crate) fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
         Self {
-            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd),
+            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd)
+                .materialize_project_roots_with_cwd(cwd),
             network: NetworkSandboxPolicy::from(policy),
         }
     }
@@ -92,6 +86,18 @@ impl ResolvedWindowsSandboxPermissions {
 
     pub(crate) fn should_apply_network_block(&self) -> bool {
         !self.network.is_enabled()
+    }
+
+    pub(crate) fn network_policy(&self) -> NetworkSandboxPolicy {
+        self.network
+    }
+
+    pub(crate) fn uses_write_capabilities_for_cwd(
+        &self,
+        cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> bool {
+        !self.writable_roots_for_cwd(cwd, env_map).is_empty()
     }
 
     pub(crate) fn writable_roots_for_cwd(
@@ -205,6 +211,34 @@ mod tests {
         .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(expected_roots, roots);
+    }
+
+    #[test]
+    fn legacy_workspace_root_stays_bound_to_policy_cwd() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_cwd = tmp.path().join("workspace");
+        let command_cwd = policy_cwd.join("subdir");
+        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let permissions =
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(&policy, &policy_cwd);
+
+        let roots = permissions
+            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            roots,
+            vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
+        );
     }
 
     #[test]
