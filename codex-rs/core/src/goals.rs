@@ -476,7 +476,7 @@ impl Session {
                     .thread_goals()
                     .update_thread_goal(
                         self.conversation_id,
-                        codex_state::ThreadGoalUpdate {
+                        codex_state::GoalUpdate {
                             objective: Some(objective.to_string()),
                             status: status.map(state_goal_status_from_protocol),
                             token_budget,
@@ -516,7 +516,7 @@ impl Session {
                 .thread_goals()
                 .update_thread_goal(
                     self.conversation_id,
-                    codex_state::ThreadGoalUpdate {
+                    codex_state::GoalUpdate {
                         objective: None,
                         status,
                         token_budget,

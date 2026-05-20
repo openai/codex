@@ -13,7 +13,7 @@ impl GoalStore {
     }
 }
 
-pub struct ThreadGoalUpdate {
+pub struct GoalUpdate {
     pub objective: Option<String>,
     pub status: Option<crate::ThreadGoalStatus>,
     pub token_budget: Option<Option<i64>>,
@@ -170,9 +170,9 @@ RETURNING
     pub async fn update_thread_goal(
         &self,
         thread_id: ThreadId,
-        update: ThreadGoalUpdate,
+        update: GoalUpdate,
     ) -> anyhow::Result<Option<crate::ThreadGoal>> {
-        let ThreadGoalUpdate {
+        let GoalUpdate {
             objective,
             status,
             token_budget,
@@ -556,7 +556,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: Some(Some(200_000)),
@@ -732,7 +732,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -756,7 +756,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -853,7 +853,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: Some("draft the report clearly".to_string()),
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: Some(Some(200)),
@@ -891,7 +891,7 @@ mod tests {
 
         let status_update = runtime.thread_goals().update_thread_goal(
             thread_id,
-            ThreadGoalUpdate {
+            GoalUpdate {
                 objective: None,
                 status: Some(crate::ThreadGoalStatus::Paused),
                 token_budget: None,
@@ -900,7 +900,7 @@ mod tests {
         );
         let budget_update = runtime.thread_goals().update_thread_goal(
             thread_id,
-            ThreadGoalUpdate {
+            GoalUpdate {
                 objective: None,
                 status: None,
                 token_budget: Some(Some(200_000)),
@@ -954,7 +954,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -1165,7 +1165,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                crate::ThreadGoalUpdate {
+                crate::GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
@@ -1225,7 +1225,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: None,
                     token_budget: Some(Some(40)),
@@ -1272,7 +1272,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: Some("stay within budget, with clearer wording".to_string()),
                     status: Some(crate::ThreadGoalStatus::Active),
                     token_budget: None,
@@ -1323,7 +1323,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
@@ -1373,7 +1373,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Blocked),
                     token_budget: None,
@@ -1463,7 +1463,7 @@ mod tests {
             .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
