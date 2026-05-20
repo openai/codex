@@ -39,10 +39,11 @@ mod windows_impl {
     use crate::logging::log_success;
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
+    use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
     use crate::sandbox_utils::inject_git_safe_directory;
-    use crate::setup::effective_write_roots_for_setup;
+    use crate::setup::effective_write_roots_for_permissions;
     use crate::token::LocalSid;
     use anyhow::Result;
     use codex_protocol::models::PermissionProfile;
@@ -81,6 +82,10 @@ mod windows_impl {
             .map(AbsolutePathBuf::to_path_buf)
             .collect::<Vec<_>>();
         let policy = parse_policy(policy_json_or_preset)?;
+        let permissions = ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(
+            &policy,
+            sandbox_policy_cwd,
+        );
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
@@ -112,32 +117,26 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (sid_for_null, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => {
-                let sid = LocalSid::from_string(&caps.readonly)?;
-                (sid, vec![caps.readonly])
+        let (sid_for_null, cap_sids) = if permissions.uses_write_capabilities_for_cwd(cwd, &env_map)
+        {
+            let write_roots = effective_write_roots_for_permissions(
+                &permissions,
+                cwd,
+                &env_map,
+                codex_home,
+                write_roots_override,
+            );
+            let cap_sids = write_roots
+                .iter()
+                .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
+                .collect::<Result<Vec<_>>>()?;
+            if cap_sids.is_empty() {
+                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
             }
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let write_roots = effective_write_roots_for_setup(
-                    &policy,
-                    sandbox_policy_cwd,
-                    cwd,
-                    &env_map,
-                    codex_home,
-                    write_roots_override,
-                );
-                let cap_sids = write_roots
-                    .iter()
-                    .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
-                    .collect::<Result<Vec<_>>>()?;
-                if cap_sids.is_empty() {
-                    anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-                }
-                (LocalSid::from_string(&cap_sids[0])?, cap_sids)
-            }
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                unreachable!("DangerFullAccess handled above")
-            }
+            (LocalSid::from_string(&cap_sids[0])?, cap_sids)
+        } else {
+            let sid = LocalSid::from_string(&caps.readonly)?;
+            (sid, vec![caps.readonly])
         };
 
         unsafe {
