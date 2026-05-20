@@ -84,8 +84,12 @@ impl SessionTask for RegularTask {
             )
             .instrument(run_turn_span.clone())
             .await;
-            let (last_agent_message, can_restart_with_pending_input) = match turn_result {
-                RunTurnResult::Continue(last_agent_message) => (last_agent_message, true),
+            match turn_result {
+                RunTurnResult::Continue(last_agent_message) => {
+                    if !sess.input_queue.has_pending_input(&sess.active_turn).await {
+                        return last_agent_message;
+                    }
+                }
                 RunTurnResult::Terminal => {
                     let turn_state = {
                         let active_turn = sess.active_turn.lock().await;
@@ -101,14 +105,8 @@ impl SessionTask for RegularTask {
                                 .await,
                         );
                     }
-                    (None, false)
+                    return None;
                 }
-            };
-            if !can_restart_with_pending_input {
-                return last_agent_message;
-            }
-            if !sess.input_queue.has_pending_input(&sess.active_turn).await {
-                return last_agent_message;
             }
             next_input = Vec::new();
         }
