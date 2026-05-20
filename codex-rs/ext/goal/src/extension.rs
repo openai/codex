@@ -108,10 +108,11 @@ where
             return;
         }
 
-        // TODO: TurnStartInput should expose collaboration mode and token usage
-        // at turn start. Goals need mode to suppress plan-mode accounting and
-        // the token baseline to account deltas exactly.
-        accounting_state(input.thread_store).start_turn(input.turn_store.level_id());
+        accounting_state(input.thread_store).start_turn(
+            input.turn_id,
+            input.collaboration_mode.mode,
+            input.token_usage_at_turn_start,
+        );
     }
 
     async fn on_turn_stop(&self, input: TurnStopInput<'_>) {
@@ -158,7 +159,7 @@ where
         }
 
         let Some(_recorded) = accounting_state(thread_store)
-            .record_token_usage(turn_store.level_id(), &token_usage.last_token_usage)
+            .record_token_usage(turn_store.level_id(), &token_usage.total_token_usage)
         else {
             return;
         };
