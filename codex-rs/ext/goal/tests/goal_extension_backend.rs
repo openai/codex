@@ -124,10 +124,24 @@ async fn create_goal_resets_baseline_before_turn_stop_accounting() -> anyhow::Re
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
     let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
     harness
-        .start_turn("turn-1", &token_usage(100, 10, 30, 5, 135))
+        .start_turn(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 100, /*cached_input_tokens*/ 10,
+                /*output_tokens*/ 30, /*reasoning_output_tokens*/ 5,
+                /*total_tokens*/ 135,
+            ),
+        )
         .await;
     harness
-        .record_token_usage("turn-1", &token_usage(120, 14, 42, 8, 162))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 120, /*cached_input_tokens*/ 14,
+                /*output_tokens*/ 42, /*reasoning_output_tokens*/ 8,
+                /*total_tokens*/ 162,
+            ),
+        )
         .await;
 
     let tools = harness.tools();
@@ -141,7 +155,14 @@ async fn create_goal_resets_baseline_before_turn_stop_accounting() -> anyhow::Re
         .await?;
 
     harness
-        .record_token_usage("turn-1", &token_usage(127, 16, 52, 10, 189))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 127, /*cached_input_tokens*/ 16,
+                /*output_tokens*/ 52, /*reasoning_output_tokens*/ 10,
+                /*total_tokens*/ 189,
+            ),
+        )
         .await;
     harness.stop_turn("turn-1").await;
 
@@ -175,7 +196,13 @@ async fn tool_finish_accounts_active_goal_progress_and_emits_event() -> anyhow::
     harness.sink.clear();
 
     harness
-        .record_token_usage("turn-1", &token_usage(20, 5, 8, 2, 30))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5, /*output_tokens*/ 8,
+                /*reasoning_output_tokens*/ 2, /*total_tokens*/ 30,
+            ),
+        )
         .await;
     harness
         .notify_tool_finish("turn-1", "call-shell", "shell")
@@ -223,13 +250,27 @@ async fn budget_limited_goal_keeps_accruing_until_turn_stop() -> anyhow::Result<
     harness.sink.clear();
 
     harness
-        .record_token_usage("turn-1", &token_usage(20, 5, 10, 0, 30))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5,
+                /*output_tokens*/ 10, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 30,
+            ),
+        )
         .await;
     harness
         .notify_tool_finish("turn-1", "call-shell", "shell")
         .await;
     harness
-        .record_token_usage("turn-1", &token_usage(24, 5, 16, 0, 40))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 24, /*cached_input_tokens*/ 5,
+                /*output_tokens*/ 16, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 40,
+            ),
+        )
         .await;
     harness.stop_turn("turn-1").await;
 
@@ -281,7 +322,13 @@ async fn update_goal_can_block_and_accounts_final_progress() -> anyhow::Result<(
     harness.sink.clear();
 
     harness
-        .record_token_usage("turn-1", &token_usage(20, 5, 8, 2, 30))
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5, /*output_tokens*/ 8,
+                /*reasoning_output_tokens*/ 2, /*total_tokens*/ 30,
+            ),
+        )
         .await;
     let update_tool = tool_by_name(&tools, "update_goal");
     let invocation = tool_call(
