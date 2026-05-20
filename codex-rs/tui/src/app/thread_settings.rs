@@ -8,6 +8,7 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::PermissionProfile;
 
 impl App {
@@ -40,16 +41,23 @@ impl App {
         app_server: &mut AppServerSession,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     ) {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(params) = self.active_thread_reasoning_setting_update_params(effort) else {
             return;
         };
-        let params = ThreadSettingsUpdateParams {
+        self.send_thread_settings_update(app_server, params).await;
+    }
+
+    pub(super) fn active_thread_reasoning_setting_update_params(
+        &self,
+        effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    ) -> Option<ThreadSettingsUpdateParams> {
+        let thread_id = self.active_thread_id?;
+        Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             effort,
-            collaboration_mode: Some(self.chat_widget.effective_collaboration_mode()),
+            collaboration_mode: Some(self.chat_widget.current_collaboration_mode().clone()),
             ..ThreadSettingsUpdateParams::default()
-        };
-        self.send_thread_settings_update(app_server, params).await;
+        })
     }
 
     pub(super) async fn sync_active_thread_plan_mode_reasoning_setting(
@@ -161,7 +169,10 @@ impl App {
 }
 
 fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
-    session.model = settings.model.clone();
+    if settings.collaboration_mode.mode == ModeKind::Default {
+        session.model = settings.model.clone();
+        session.reasoning_effort = settings.effort;
+    }
     session.model_provider_id = settings.model_provider.clone();
     session.service_tier = settings.service_tier.clone();
     session.approval_policy = settings.approval_policy;
@@ -172,7 +183,7 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     );
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
-    session.reasoning_effort = settings.effort;
+    session.personality = settings.personality;
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
         .settings

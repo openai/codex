@@ -482,6 +482,7 @@ impl ChatWidget {
     }
 
     fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
+        let cwd_changed = self.config.cwd != settings.cwd;
         self.apply_thread_settings_cwd(settings.cwd.clone());
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_service_tier(settings.service_tier.clone());
@@ -521,6 +522,9 @@ impl ChatWidget {
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
+        if cwd_changed {
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+        }
         self.refresh_plugin_mentions();
         self.request_redraw();
     }

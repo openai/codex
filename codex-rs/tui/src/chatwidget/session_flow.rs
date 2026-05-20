@@ -71,24 +71,21 @@ impl ChatWidget {
             }
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
+        self.config.personality = session.personality;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = session.forked_from_id;
-        let model_for_header = session.model.clone();
-        self.session_header.set_model(&model_for_header);
+        let default_model = session.model.clone();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
-            Some(model_for_header.clone()),
+            Some(default_model.clone()),
             Some(session.reasoning_effort),
             /*developer_instructions*/ None,
         );
         if let Some(mask) = self.active_collaboration_mask.as_mut() {
-            mask.model = Some(model_for_header.clone());
+            mask.model = Some(default_model);
             mask.reasoning_effort = Some(session.reasoning_effort);
         }
         if let Some(collaboration_mode) = session.collaboration_mode.as_deref() {
-            let mut collaboration_mode = collaboration_mode.clone();
-            collaboration_mode.settings.model = model_for_header.clone();
-            collaboration_mode.settings.reasoning_effort = session.reasoning_effort;
-            self.set_effective_collaboration_mode(collaboration_mode);
+            self.set_effective_collaboration_mode(collaboration_mode.clone());
         }
         self.refresh_model_display();
         self.refresh_status_surfaces();
@@ -97,6 +94,7 @@ impl ChatWidget {
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
+        let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self

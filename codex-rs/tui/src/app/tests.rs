@@ -79,6 +79,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ActivePermissionProfile;
@@ -3748,6 +3749,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -3998,6 +4000,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -4575,6 +4578,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -4640,6 +4644,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -4734,6 +4739,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -5135,6 +5141,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -5250,6 +5257,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             .expect("thread/start should succeed");
         let thread_id = started.session.thread_id;
         let initial_model = started.session.model.clone();
+        let initial_effort = started.session.reasoning_effort;
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
@@ -5311,24 +5319,14 @@ async fn override_turn_context_sends_thread_settings_update() {
             notification.thread_settings.approvals_reviewer.to_core(),
             ApprovalsReviewer::AutoReview
         );
+        let notified_mode = &notification.thread_settings.collaboration_mode;
+        assert_eq!(notified_mode.mode, collaboration_mode.mode);
         assert_eq!(
-            notification.thread_settings.collaboration_mode.mode,
-            collaboration_mode.mode
-        );
-        assert_eq!(
-            notification
-                .thread_settings
-                .collaboration_mode
-                .settings
-                .model,
+            notified_mode.settings.model,
             collaboration_mode.settings.model
         );
         assert_eq!(
-            notification
-                .thread_settings
-                .collaboration_mode
-                .settings
-                .reasoning_effort,
+            notified_mode.settings.reasoning_effort,
             collaboration_mode.settings.reasoning_effort
         );
         assert_eq!(
@@ -5347,11 +5345,22 @@ async fn override_turn_context_sends_thread_settings_update() {
             .primary_session_configured
             .as_ref()
             .expect("primary session should be updated from notification");
-        assert_eq!(updated_session.model, "gpt-5.4");
+        assert_eq!(updated_session.model, initial_model);
+        assert_eq!(updated_session.reasoning_effort, initial_effort);
+        let updated_mode = updated_session
+            .collaboration_mode
+            .as_deref()
+            .expect("collaboration mode should be cached");
+        assert_eq!(updated_mode.mode, collaboration_mode.mode);
         assert_eq!(
-            updated_session.reasoning_effort,
-            Some(ReasoningEffortConfig::High)
+            updated_mode.settings.model,
+            collaboration_mode.settings.model
         );
+        assert_eq!(
+            updated_mode.settings.reasoning_effort,
+            collaboration_mode.settings.reasoning_effort
+        );
+        assert_eq!(updated_session.personality, Some(Personality::Pragmatic));
         assert_eq!(updated_session.service_tier, Some(service_tier));
         assert_eq!(updated_session.approval_policy, AskForApproval::OnRequest);
         assert_eq!(
@@ -5371,7 +5380,7 @@ async fn override_turn_context_sends_thread_settings_update() {
 }
 
 #[tokio::test]
-async fn update_model_setting_builds_thread_settings_update_params() {
+async fn thread_setting_update_params_sync_model_and_default_reasoning() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
     app.active_thread_id = Some(thread_id);
@@ -5391,6 +5400,33 @@ async fn update_model_setting_builds_thread_settings_update_params() {
             .settings
             .model,
         "gpt-5.4"
+    );
+
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    app.chat_widget
+        .set_collaboration_mask(CollaborationModeMask {
+            name: "Plan".to_string(),
+            mode: Some(ModeKind::Plan),
+            model: Some("gpt-plan".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffortConfig::Medium)),
+            developer_instructions: None,
+        });
+    app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let params = app
+        .active_thread_reasoning_setting_update_params(Some(ReasoningEffortConfig::High))
+        .expect("active thread should produce update params");
+
+    assert_eq!(params.thread_id, thread_id.to_string());
+    assert_eq!(params.effort, Some(ReasoningEffortConfig::High));
+    let collaboration_mode = params
+        .collaboration_mode
+        .expect("collaboration mode should sync with reasoning");
+    assert_eq!(collaboration_mode.mode, ModeKind::Default);
+    assert_eq!(
+        collaboration_mode.settings.reasoning_effort,
+        Some(ReasoningEffortConfig::High)
     );
 }
 
@@ -5448,7 +5484,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             effort: collaboration_mode.settings.reasoning_effort,
             summary: None,
             collaboration_mode: collaboration_mode.clone(),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
         },
     };
     app.enqueue_thread_notification(
@@ -5468,7 +5504,8 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         .session
         .clone()
         .expect("inactive session should remain cached");
-    assert_eq!(cached_session.model, "gpt-plan");
+    assert_eq!(cached_session.model, "gpt-test");
+    assert_eq!(cached_session.personality, Some(Personality::Pragmatic));
     assert_eq!(
         cached_session.collaboration_mode.as_deref(),
         Some(&collaboration_mode)
@@ -5481,8 +5518,16 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
     );
     assert_eq!(app.chat_widget.current_model(), "gpt-plan");
     assert_eq!(
+        app.chat_widget.current_collaboration_mode().model(),
+        "gpt-test"
+    );
+    assert_eq!(
         app.chat_widget.current_reasoning_effort(),
         Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        app.chat_widget.config_ref().personality,
+        Some(Personality::Pragmatic)
     );
 }
 
@@ -5508,6 +5553,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
