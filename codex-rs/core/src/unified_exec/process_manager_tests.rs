@@ -350,6 +350,20 @@ async fn startup_sandbox_denied_failure_preserves_captured_output() {
     assert_eq!(end_event.aggregated_output, "captured denial output");
 }
 
+#[tokio::test]
+async fn startup_rejected_failure_emits_declined_end() {
+    let err = crate::unified_exec::UnifiedExecError::rejected("rejected by user".to_string());
+
+    let end_event = emit_startup_failure_end_event("call-unified-rejected", &err).await;
+
+    assert_eq!(end_event.call_id, "call-unified-rejected");
+    assert_eq!(
+        end_event.status,
+        codex_protocol::protocol::ExecCommandStatus::Declined
+    );
+    assert_eq!(end_event.aggregated_output, "rejected by user");
+}
+
 #[test]
 fn pruning_prefers_exited_processes_outside_recently_used() {
     let now = Instant::now();

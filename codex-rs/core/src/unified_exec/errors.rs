@@ -23,6 +23,8 @@ pub(crate) enum UnifiedExecError {
         message: String,
         output: ExecToolCallOutput,
     },
+    #[error("Command rejected: {message}")]
+    Rejected { message: String },
 }
 
 impl UnifiedExecError {
@@ -36,5 +38,9 @@ impl UnifiedExecError {
 
     pub(crate) fn sandbox_denied(message: String, output: ExecToolCallOutput) -> Self {
         Self::SandboxDenied { message, output }
+    }
+
+    pub(crate) fn rejected(message: String) -> Self {
+        Self::Rejected { message }
     }
 }
