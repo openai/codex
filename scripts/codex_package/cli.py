@@ -1,6 +1,7 @@
 """Command-line interface for building Codex package directories."""
 
 import argparse
+import tempfile
 from pathlib import Path
 
 from .archive import write_archive
@@ -11,6 +12,7 @@ from .layout import validate_package_dir
 from .ripgrep import resolve_rg_bin
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
+from .targets import default_target
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,9 +22,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--target",
-        required=True,
+        default=argparse.SUPPRESS,
         choices=sorted(TARGET_SPECS),
-        help="Rust target triple for the package.",
+        help=(
+            "Rust target triple for the package. Defaults to the release target "
+            "for this host platform."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -37,8 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--package-dir",
         type=Path,
-        required=True,
-        help="Output directory to create as the package root.",
+        default=argparse.SUPPRESS,
+        help=(
+            "Output directory to create as the package root. Defaults to a new "
+            "temporary directory."
+        ),
     )
     parser.add_argument(
         "--archive-output",
@@ -79,8 +87,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    spec = TARGET_SPECS[args.target]
-    package_dir = args.package_dir.resolve()
+    spec = TARGET_SPECS[getattr(args, "target", None) or default_target()]
+    package_dir_arg = getattr(args, "package_dir", None)
+    package_dir = (
+        package_dir_arg.resolve()
+        if package_dir_arg is not None
+        else Path(tempfile.mkdtemp(prefix="codex-package-")).resolve()
+    )
 
     source_outputs = build_source_binaries(
         spec,
