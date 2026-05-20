@@ -277,31 +277,43 @@ async fn run_remote_compaction_request_v2(
     prompt: &Prompt,
     turn_metadata_header: Option<&str>,
 ) -> CodexResult<(ResponseItem, String)> {
-    let stream = client_session
-        .stream(
-            prompt,
-            &turn_context.model_info,
-            &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
-            turn_context.config.service_tier.clone(),
-            turn_metadata_header,
-            &InferenceTraceContext::disabled(),
-        )
-        .or_else(|err| async {
-            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-            let compact_request_log_data =
-                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
-            log_remote_compact_failure(
-                turn_context,
-                &compact_request_log_data,
-                total_usage_breakdown,
-                &err,
-            );
+    let mut websocket_auth_recovery_retries = 0;
+    loop {
+        let stream = client_session
+            .stream(
+                prompt,
+                &turn_context.model_info,
+                &turn_context.session_telemetry,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                turn_context.config.service_tier.clone(),
+                turn_metadata_header,
+                &InferenceTraceContext::disabled(),
+            )
+            .or_else(|err| async {
+                let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+                let compact_request_log_data =
+                    build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+                log_remote_compact_failure(
+                    turn_context,
+                    &compact_request_log_data,
+                    total_usage_breakdown,
+                    &err,
+                );
+                Err(err)
+            })
+            .await?;
+
+        match collect_compaction_output(stream).await {
             Err(err)
-        })
-        .await?;
-    collect_compaction_output(stream).await
+                if crate::client::is_websocket_auth_recovery_retry(&err)
+                    && websocket_auth_recovery_retries == 0 =>
+            {
+                websocket_auth_recovery_retries += 1;
+            }
+            result => return result,
+        }
+    }
 }
 
 async fn collect_compaction_output(

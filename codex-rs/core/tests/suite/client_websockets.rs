@@ -1767,6 +1767,10 @@ async fn responses_websocket_revoked_managed_auth_compact_retries_reloaded_auth(
         .with_home(codex_home.clone())
         .with_auth(auth)
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::RemoteCompactionV2)
+                .expect("test config should allow feature update");
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
         });
@@ -1785,6 +1789,12 @@ async fn responses_websocket_revoked_managed_auth_compact_retries_reloaded_auth(
         .await
         .expect("compact submission should succeed");
     wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 2, Duration::from_secs(10))
+            .await,
+        "compact auth recovery should reconnect with replacement auth"
+    );
 
     let persisted_auth = CodexAuth::from_auth_storage(
         codex_home.path(),
