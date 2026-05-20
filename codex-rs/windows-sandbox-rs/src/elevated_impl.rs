@@ -97,8 +97,7 @@ mod windows_impl {
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
         let sandbox_creds = require_logon_sandbox_creds(
-            &policy,
-            sandbox_policy_cwd,
+            &permissions,
             cwd,
             &env_map,
             codex_home,
