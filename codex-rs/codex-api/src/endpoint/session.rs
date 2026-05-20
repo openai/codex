@@ -166,9 +166,8 @@ fn observe_auth_response_headers<T>(
 ) where
     T: ResponseHeaders,
 {
-    match response {
-        Ok(response) => auth.observe_response_headers(request_url, response.headers()),
-        Err(_) => {}
+    if let Ok(response) = response {
+        auth.observe_response_headers(request_url, response.headers());
     }
 }
 
