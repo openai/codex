@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use crate::bazel_bwrap;
 use crate::exec_util::argv_to_cstrings;
 use crate::exec_util::make_files_inheritable;
+use codex_install_context::InstallContext;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use sha2::Digest as _;
 use sha2::Sha256;
@@ -26,7 +27,9 @@ pub(crate) struct BundledBwrapLauncher {
 
 pub(crate) fn launcher() -> Option<BundledBwrapLauncher> {
     let current_exe = std::env::current_exe().ok()?;
-    find_for_exe(&current_exe).map(|program| BundledBwrapLauncher { program })
+    find_for_install_context(InstallContext::current())
+        .or_else(|| find_legacy_for_exe(&current_exe))
+        .map(|program| BundledBwrapLauncher { program })
 }
 
 impl BundledBwrapLauncher {
@@ -66,8 +69,14 @@ impl BundledBwrapLauncher {
     }
 }
 
-fn find_for_exe(exe: &Path) -> Option<AbsolutePathBuf> {
-    candidates_for_exe(exe)
+fn find_for_install_context(context: &InstallContext) -> Option<AbsolutePathBuf> {
+    context
+        .bundled_resource("bwrap")
+        .filter(|path| is_executable_file(path))
+}
+
+fn find_legacy_for_exe(exe: &Path) -> Option<AbsolutePathBuf> {
+    legacy_candidates_for_exe(exe)
         .into_iter()
         .find(|candidate| is_executable_file(candidate))
         .map(|path| {
@@ -80,7 +89,7 @@ fn find_for_exe(exe: &Path) -> Option<AbsolutePathBuf> {
         })
 }
 
-fn candidates_for_exe(exe: &Path) -> Vec<PathBuf> {
+fn legacy_candidates_for_exe(exe: &Path) -> Vec<PathBuf> {
     let Some(exe_dir) = exe.parent() else {
         return Vec::new();
     };
@@ -180,13 +189,44 @@ fn bytes_to_hex(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_install_context::CodexPackageLayout;
+    use codex_install_context::InstallContext;
+    use codex_install_context::InstallMethod;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::NamedTempFile;
     use tempfile::tempdir;
 
     #[test]
-    fn finds_standalone_bundled_bwrap_next_to_exe_resources() {
+    fn finds_package_layout_bwrap_from_install_context() {
+        let temp_dir = tempdir().expect("temp dir");
+        let package_dir = temp_dir.path();
+        let bin_dir = package_dir.join("bin");
+        let resources_dir = package_dir.join("codex-resources");
+        let expected_bwrap = resources_dir.join("bwrap");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        write_executable(&expected_bwrap);
+
+        let context = InstallContext {
+            method: InstallMethod::Other,
+            package_layout: Some(CodexPackageLayout {
+                package_dir: AbsolutePathBuf::from_absolute_path(package_dir).expect("absolute"),
+                bin_dir: AbsolutePathBuf::from_absolute_path(&bin_dir).expect("absolute"),
+                resources_dir: Some(
+                    AbsolutePathBuf::from_absolute_path(&resources_dir).expect("absolute"),
+                ),
+                path_dir: None,
+            }),
+        };
+
+        assert_eq!(
+            find_for_install_context(&context),
+            Some(AbsolutePathBuf::from_absolute_path(&expected_bwrap).expect("absolute"))
+        );
+    }
+
+    #[test]
+    fn finds_legacy_standalone_bundled_bwrap_next_to_exe_resources() {
         let temp_dir = tempdir().expect("temp dir");
         let exe = temp_dir.path().join("codex");
         let expected_bwrap = temp_dir.path().join("codex-resources").join("bwrap");
@@ -194,7 +234,7 @@ mod tests {
         write_executable(&expected_bwrap);
 
         assert_eq!(
-            find_for_exe(&exe),
+            find_legacy_for_exe(&exe),
             Some(AbsolutePathBuf::from_absolute_path(&expected_bwrap).expect("absolute"))
         );
     }
@@ -209,7 +249,7 @@ mod tests {
         write_executable(&expected_bwrap);
 
         assert_eq!(
-            find_for_exe(&exe),
+            find_legacy_for_exe(&exe),
             Some(AbsolutePathBuf::from_absolute_path(&expected_bwrap).expect("absolute"))
         );
     }
@@ -223,7 +263,7 @@ mod tests {
         write_executable(&expected_bwrap);
 
         assert_eq!(
-            find_for_exe(&exe),
+            find_legacy_for_exe(&exe),
             Some(AbsolutePathBuf::from_absolute_path(&expected_bwrap).expect("absolute"))
         );
     }

@@ -18,8 +18,9 @@ use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 
 // Hide alias commands in the default popup list so each unique action appears once.
-// `quit` is an alias of `exit`, so we skip `quit` here.
-const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit];
+// `quit` is an alias of `exit`, and `btw` is an alias of `side`, so we skip
+// those aliases here.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Btw];
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,
@@ -416,6 +417,18 @@ mod tests {
         popup.on_composer_text_change("/qu".to_string());
         let items = popup.filtered_items();
         assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
+    fn btw_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Btw)));
+
+        popup.on_composer_text_change("/bt".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Btw)));
     }
 
     #[test]
