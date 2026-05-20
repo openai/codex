@@ -308,3 +308,90 @@ fn event_persistence_mode(mode: ThreadEventPersistenceMode) -> EventPersistenceM
         ThreadEventPersistenceMode::Extended => EventPersistenceMode::Extended,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use codex_protocol::protocol::ThreadMemoryMode;
+
+    use super::*;
+    use crate::BaseInstructions;
+    use crate::CreateThreadParams;
+    use crate::InMemoryThreadStore;
+    use crate::InMemoryThreadStoreCalls;
+    use crate::ThreadPersistenceMetadata;
+
+    #[tokio::test]
+    async fn init_guard_from_completed_join_branch_discards_on_task_cancellation() {
+        let store = Arc::new(InMemoryThreadStore::default());
+        let thread_store: Arc<dyn ThreadStore> = store.clone();
+        let thread_id = ThreadId::default();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+        let handle = tokio::spawn(async move {
+            let thread_persistence_fut = async move {
+                let live_thread = LiveThread::create(
+                    Arc::clone(&thread_store),
+                    CreateThreadParams {
+                        thread_id,
+                        forked_from_id: None,
+                        source: codex_protocol::SessionSource::Exec,
+                        thread_source: None,
+                        base_instructions: BaseInstructions::default(),
+                        dynamic_tools: Vec::new(),
+                        metadata: ThreadPersistenceMetadata {
+                            cwd: None,
+                            model_provider: "test-provider".to_string(),
+                            memory_mode: ThreadMemoryMode::Disabled,
+                        },
+                        event_persistence_mode: ThreadEventPersistenceMode::Limited,
+                    },
+                )
+                .await
+                .expect("create thread persistence");
+                LiveThreadInitGuard::new(Some(live_thread))
+            };
+            let wait_forever_fut = async move {
+                let _ = rx.await;
+            };
+
+            let (_guard, ()) = tokio::join!(thread_persistence_fut, wait_forever_fut);
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let calls = store.calls().await;
+                if calls.create_thread == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("thread persistence should initialize before cancellation");
+
+        handle.abort();
+        let _ = handle.await;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let calls = store.calls().await;
+                if calls.discard_thread == 1 {
+                    assert_eq!(
+                        InMemoryThreadStoreCalls {
+                            create_thread: 1,
+                            discard_thread: 1,
+                            ..Default::default()
+                        },
+                        calls
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelling the task should discard the live thread");
+    }
+}

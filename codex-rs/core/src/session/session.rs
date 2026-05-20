@@ -504,7 +504,7 @@ impl Session {
         // - load history metadata (skipped for subagents)
         let thread_persistence_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>(None)
+                Ok::<_, anyhow::Error>(LiveThreadInitGuard::new(None))
             } else {
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
@@ -556,7 +556,7 @@ impl Session {
                         .await?
                     }
                 };
-                Ok(Some(live_thread))
+                Ok(LiveThreadInitGuard::new(Some(live_thread)))
             }
         }
         .instrument(info_span!(
@@ -635,11 +635,10 @@ impl Session {
             );
         }
 
-        let mut live_thread_init =
-            LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
-                error!("failed to initialize thread persistence: {e:#}");
-                e
-            })?);
+        let mut live_thread_init = thread_persistence_result.map_err(|e| {
+            error!("failed to initialize thread persistence: {e:#}");
+            e
+        })?;
         let session_result: anyhow::Result<Arc<Self>> = async {
             let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
                 live_thread.local_rollout_path().await?
