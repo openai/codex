@@ -1918,6 +1918,9 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
 
     #[derive(Debug, PartialEq, Eq)]
     struct RecordedTurnStart {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
         turn_id: String,
         collaboration_mode: CollaborationMode,
         token_usage_at_turn_start: TokenUsage,
@@ -1936,6 +1939,9 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
                 .lock()
                 .expect("turn start records lock")
                 .push(RecordedTurnStart {
+                    session_level_id: input.session_store.level_id().to_string(),
+                    thread_level_id: input.thread_store.level_id().to_string(),
+                    turn_level_id: input.turn_store.level_id().to_string(),
                     turn_id: input.turn_id.to_string(),
                     collaboration_mode: input.collaboration_mode.clone(),
                     token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
@@ -1965,52 +1971,43 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         .insert(ThreadTurnStartMarker);
 
     let token_usage_at_turn_start = TokenUsage {
-        input_tokens: 120,
-        cached_input_tokens: 15,
-        output_tokens: 40,
-        reasoning_output_tokens: 9,
-        total_tokens: 169,
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        output_tokens: 25,
+        reasoning_output_tokens: 5,
+        total_tokens: 130,
     };
-    session
-        .state
-        .lock()
-        .await
-        .set_token_info(Some(TokenUsageInfo {
-            total_token_usage: token_usage_at_turn_start.clone(),
-            last_token_usage: TokenUsage::default(),
-            model_context_window: turn_context.model_context_window(),
-        }));
+    set_total_token_usage(&session, token_usage_at_turn_start.clone()).await;
 
-    let turn_context = Arc::new(turn_context);
-    let session = Arc::new(session);
-    session
-        .spawn_task(
-            Arc::clone(&turn_context),
-            Vec::new(),
-            NeverEndingTask {
-                kind: TaskKind::Regular,
-                listen_to_cancellation_token: true,
-            },
-        )
-        .await;
+    let expected = RecordedTurnStart {
+        session_level_id: session.session_id().to_string(),
+        thread_level_id: session.conversation_id.to_string(),
+        turn_level_id: turn_context.sub_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
+        collaboration_mode: turn_context.collaboration_mode.clone(),
+        token_usage_at_turn_start,
+        saw_session_store: true,
+        saw_thread_store: true,
+    };
 
-    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let sess = Arc::new(session);
+    sess.spawn_task(
+        Arc::new(turn_context),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     let actual = records
         .lock()
         .expect("turn start records lock")
         .drain(..)
         .collect::<Vec<_>>();
-    assert_eq!(
-        vec![RecordedTurnStart {
-            turn_id: turn_context.sub_id.clone(),
-            collaboration_mode: turn_context.collaboration_mode.clone(),
-            token_usage_at_turn_start,
-            saw_session_store: true,
-            saw_thread_store: true,
-        }],
-        actual
-    );
+    assert_eq!(vec![expected], actual);
 }
 
 #[tokio::test]
