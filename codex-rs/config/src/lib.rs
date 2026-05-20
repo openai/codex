@@ -1,3 +1,4 @@
+mod cloud_config_layers;
 mod cloud_requirements;
 mod config_requirements;
 pub mod config_toml;
@@ -29,6 +30,10 @@ pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+pub use cloud_config_layers::CloudConfigFragment;
+pub use cloud_config_layers::CloudConfigFragmentSource;
+pub use cloud_config_layers::CloudConfigLayerError;
+pub use cloud_config_layers::cloud_config_layers_from_fragments;
 pub use cloud_requirements::CloudRequirementsLoadError;
 pub use cloud_requirements::CloudRequirementsLoadErrorCode;
 pub use cloud_requirements::CloudRequirementsLoader;

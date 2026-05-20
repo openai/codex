@@ -371,6 +371,9 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
+        ConfigLayerSource::EnterpriseManaged { id, name } => synthetic_layer_path(&format!(
+            "<enterprise-managed:{name}:{id}>/{CONFIG_TOML_FILE}"
+        )),
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -611,6 +614,7 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
         ConfigLayerSource::User { .. } => (HookSource::User, false),
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
+        ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
             (HookSource::LegacyManagedConfigFile, true)
@@ -1058,6 +1062,13 @@ mod tests {
                 key: "config".to_string(),
             }),
             (HookSource::Mdm, true),
+        );
+        assert_eq!(
+            super::hook_metadata_for_config_layer_source(&ConfigLayerSource::EnterpriseManaged {
+                id: "cfg_123".to_string(),
+                name: "Base policy".to_string(),
+            }),
+            (HookSource::CloudManagedConfig, true),
         );
         assert_eq!(
             super::hook_metadata_for_config_layer_source(&ConfigLayerSource::SessionFlags),
