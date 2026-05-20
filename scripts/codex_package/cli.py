@@ -50,9 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--archive-output",
         type=Path,
+        action="append",
+        default=[],
         help=(
-            "Optional archive output path. Supported suffixes: .tar.gz, .tgz, "
-            ".tar.zst, .zip."
+            "Optional archive output path. May be repeated. Supported suffixes: "
+            ".tar.gz, .tgz, .tar.zst, .zip."
         ),
     )
     parser.add_argument(
@@ -130,8 +132,7 @@ def main() -> int:
     build_package_dir(package_dir, version, variant, spec, inputs)
     validate_package_dir(package_dir, variant, spec)
 
-    archive_output = args.archive_output
-    if archive_output is not None:
+    for archive_output in args.archive_output:
         archive_path = archive_output.resolve()
         write_archive(package_dir, archive_path, force=args.force)
         print(f"Built Codex package archive at {archive_path}")
