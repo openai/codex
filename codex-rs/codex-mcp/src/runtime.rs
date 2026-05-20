@@ -65,6 +65,9 @@ impl McpRuntimeContext {
         server_name: &str,
         config: &codex_config::McpServerConfig,
     ) -> Result<ResolvedMcpEnvironment, String> {
+        // MCP configs without an explicit environment keep their historical
+        // behavior: they resolve to the local environment instead of selecting
+        // a named remote executor.
         let environment_id = config
             .environment_id
             .clone()
