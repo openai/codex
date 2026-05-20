@@ -2005,6 +2005,9 @@
         "description": {
           "type": "string"
         },
+        "extends": {
+          "type": "string"
+        },
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
         },
