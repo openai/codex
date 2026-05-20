@@ -25,6 +25,7 @@ impl PermissionsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PermissionProfileToml {
+    pub description: Option<String>,
     pub workspace_roots: Option<WorkspaceRootsToml>,
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
