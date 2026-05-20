@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::merge::merge_toml_values;
 use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
@@ -9,6 +10,8 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use thiserror::Error;
+use toml::Value as TomlValue;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct PermissionsToml {
@@ -20,15 +23,188 @@ impl PermissionsToml {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub fn resolve_profile<F>(
+        &self,
+        profile_name: &str,
+        mut parent_profile: F,
+    ) -> Result<ResolvedPermissionProfileToml, PermissionProfileResolutionError>
+    where
+        F: FnMut(&str) -> Option<PermissionProfileToml>,
+    {
+        let mut profile_names = Vec::new();
+        let mut profiles = Vec::new();
+        let mut next_profile_name = profile_name.to_string();
+        let mut referenced_by: Option<String> = None;
+
+        loop {
+            if let Some(cycle_start) = profile_names
+                .iter()
+                .position(|name| name == &next_profile_name)
+            {
+                let cycle = profile_names[cycle_start..]
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(next_profile_name))
+                    .collect::<Vec<_>>();
+                return Err(PermissionProfileResolutionError::Cycle { cycle });
+            }
+
+            let profile = self
+                .entries
+                .get(&next_profile_name)
+                .cloned()
+                .or_else(|| parent_profile(&next_profile_name))
+                .ok_or_else(|| {
+                    referenced_by.as_deref().map_or_else(
+                        || PermissionProfileResolutionError::UndefinedProfile {
+                            profile_name: next_profile_name.clone(),
+                        },
+                        |referenced_by| {
+                            if next_profile_name.starts_with(':') {
+                                PermissionProfileResolutionError::UnsupportedBuiltInParent {
+                                    profile_name: referenced_by.to_string(),
+                                    parent_profile_name: next_profile_name.clone(),
+                                }
+                            } else {
+                                PermissionProfileResolutionError::UndefinedParent {
+                                    profile_name: referenced_by.to_string(),
+                                    parent_profile_name: next_profile_name.clone(),
+                                }
+                            }
+                        },
+                    )
+                })?;
+            let parent_profile_name = profile.extends.clone();
+
+            profile_names.push(next_profile_name.clone());
+
+            if let Some(parent_profile_name) = parent_profile_name {
+                profiles.push(profile);
+                referenced_by = Some(next_profile_name);
+                next_profile_name = parent_profile_name;
+                continue;
+            }
+
+            let profile = profiles
+                .into_iter()
+                .rev()
+                .try_fold(profile, merge_permission_profiles)?;
+            return Ok(ResolvedPermissionProfileToml {
+                profile,
+                inherited_profile_names: profile_names.into_iter().skip(1).collect(),
+            });
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PermissionProfileToml {
     pub description: Option<String>,
+    pub extends: Option<String>,
     pub workspace_roots: Option<WorkspaceRootsToml>,
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPermissionProfileToml {
+    pub profile: PermissionProfileToml,
+    /// Names of profiles inherited while resolving `profile`, ordered from the
+    /// selected profile's direct parent to the farthest ancestor.
+    ///
+    /// Callers use this to preserve which built-in baseline contributed the
+    /// resolved permissions after the parent profiles have been merged away.
+    pub inherited_profile_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PermissionProfileResolutionError {
+    #[error("default_permissions refers to undefined profile `{profile_name}`")]
+    UndefinedProfile { profile_name: String },
+    #[error(
+        "permissions profile `{profile_name}` extends undefined profile `{parent_profile_name}`"
+    )]
+    UndefinedParent {
+        profile_name: String,
+        parent_profile_name: String,
+    },
+    #[error(
+        "permissions profile `{profile_name}` cannot extend unsupported built-in profile `{parent_profile_name}`"
+    )]
+    UnsupportedBuiltInParent {
+        profile_name: String,
+        parent_profile_name: String,
+    },
+    #[error(
+        "permissions profile inheritance cycle detected: {}",
+        cycle.join(" -> ")
+    )]
+    Cycle { cycle: Vec<String> },
+    #[error("failed to serialize permissions profile while resolving inheritance: {source}")]
+    SerializeProfileToml {
+        #[source]
+        source: toml::ser::Error,
+    },
+    #[error(
+        "failed to deserialize merged permissions profile while resolving inheritance: {source}"
+    )]
+    DeserializeProfileToml {
+        #[source]
+        source: toml::de::Error,
+    },
+}
+
+fn merge_permission_profiles(
+    mut parent: PermissionProfileToml,
+    mut child: PermissionProfileToml,
+) -> Result<PermissionProfileToml, PermissionProfileResolutionError> {
+    let merges_network_domains = parent
+        .network
+        .as_ref()
+        .and_then(|network| network.domains.as_ref())
+        .is_some()
+        && child
+            .network
+            .as_ref()
+            .and_then(|network| network.domains.as_ref())
+            .is_some();
+
+    // Description and inheritance metadata belong to the selected profile
+    // declaration, so an inherited profile must not fill those gaps.
+    parent.description = None;
+    parent.extends = None;
+
+    if merges_network_domains {
+        normalize_profile_network_domains(&mut parent);
+        normalize_profile_network_domains(&mut child);
+    }
+
+    let mut merged = TomlValue::try_from(parent)
+        .map_err(|source| PermissionProfileResolutionError::SerializeProfileToml { source })?;
+    let child = TomlValue::try_from(child)
+        .map_err(|source| PermissionProfileResolutionError::SerializeProfileToml { source })?;
+    merge_toml_values(&mut merged, &child);
+    merged
+        .try_into()
+        .map_err(|source| PermissionProfileResolutionError::DeserializeProfileToml { source })
+}
+
+fn normalize_profile_network_domains(profile: &mut PermissionProfileToml) {
+    let Some(domains) = profile
+        .network
+        .as_mut()
+        .and_then(|network| network.domains.as_mut())
+    else {
+        return;
+    };
+
+    let entries = std::mem::take(&mut domains.entries);
+    domains.entries = entries
+        .into_iter()
+        .map(|(pattern, permission)| (normalize_host(&pattern), permission))
+        .collect();
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
