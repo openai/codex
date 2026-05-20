@@ -730,6 +730,58 @@ async fn thread_search_returns_content_matches() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_search_filters_by_source_kind() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let cli_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let exec_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Exec,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: Some(vec![ThreadSourceKind::Exec]),
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![exec_id.as_str()]);
+    assert_ne!(cli_id, exec_id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_state_db_only_returns_sqlite_without_jsonl_repair() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

@@ -124,14 +124,6 @@ impl LocalThreadStore {
         live_writer::rollout_path(self, thread_id).await
     }
 
-    /// Searches local rollout-backed threads and returns search-only preview metadata.
-    pub async fn search_threads(
-        &self,
-        params: ListThreadsParams,
-    ) -> ThreadStoreResult<ThreadSearchPage> {
-        search_threads::search_threads(self, params).await
-    }
-
     pub(super) async fn live_recorder(
         &self,
         thread_id: ThreadId,
@@ -269,6 +261,13 @@ impl ThreadStore for LocalThreadStore {
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
         list_threads::list_threads(self, params).await
+    }
+
+    async fn search_threads(
+        &self,
+        params: ListThreadsParams,
+    ) -> ThreadStoreResult<ThreadSearchPage> {
+        search_threads::search_threads(self, params).await
     }
 
     async fn update_thread_metadata(

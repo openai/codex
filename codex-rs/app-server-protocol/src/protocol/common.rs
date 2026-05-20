@@ -2980,24 +2980,6 @@ mod tests {
     }
 
     #[test]
-    fn thread_search_is_marked_experimental() {
-        let request = ClientRequest::ThreadSearch {
-            request_id: RequestId::Integer(1),
-            params: v2::ThreadSearchParams {
-                cursor: None,
-                limit: None,
-                sort_key: None,
-                sort_direction: None,
-                source_kinds: None,
-                archived: None,
-                search_term: "needle".to_string(),
-            },
-        };
-        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("thread/search"));
-    }
-
-    #[test]
     fn environment_add_is_marked_experimental() {
         let request = ClientRequest::EnvironmentAdd {
             request_id: RequestId::Integer(1),

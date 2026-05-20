@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_install_context::InstallContext;
 use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
 use codex_rollout::find_thread_names_by_ids;
+use codex_rollout::first_rollout_content_match_snippet;
 use codex_rollout::parse_cursor;
-use codex_rollout::search_rollout_snippets;
+use codex_rollout::search_rollout_paths;
 
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
@@ -61,7 +63,9 @@ pub(super) async fn search_threads(
         model_provider_id: store.config.default_model_provider_id.clone(),
         generate_memories: false,
     };
-    let snippets_by_path = search_rollout_snippets(
+    let rg_command = InstallContext::current().rg_command();
+    let matching_paths = search_rollout_paths(
+        rg_command.as_path(),
         store.config.codex_home.as_path(),
         params.archived,
         search_term,
@@ -90,19 +94,31 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
-        matching_items.extend(page.items.into_iter().filter_map(|item| {
-            snippets_by_path
-                .get(item.path.as_path())
-                .cloned()
-                .map(|snippet| ThreadSearchItem { item, snippet })
-        }));
+        for item in page.items {
+            if !matching_paths.contains(item.path.as_path()) {
+                continue;
+            }
+            let Some(snippet) =
+                first_rollout_content_match_snippet(item.path.as_path(), search_term)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!("failed to read rollout search match: {err}"),
+                    })?
+            else {
+                continue;
+            };
+            matching_items.push(ThreadSearchItem { item, snippet });
+            if matching_items.len() > params.page_size {
+                break;
+            }
+        }
         page_cursor = page.next_cursor;
         if matching_items.len() > params.page_size || page_cursor.is_none() {
             break;
         }
     }
 
-    let more_matches_available = matching_items.len() > params.page_size || page_cursor.is_some();
+    let more_matches_available = matching_items.len() > params.page_size;
     matching_items.truncate(params.page_size);
     let next_cursor = if more_matches_available {
         matching_items

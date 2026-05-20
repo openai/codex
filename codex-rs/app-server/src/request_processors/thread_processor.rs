@@ -1896,37 +1896,68 @@ impl ThreadRequestProcessor {
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
-        let Some(local_store) = self
-            .thread_store
-            .as_any()
-            .downcast_ref::<LocalThreadStore>()
-        else {
-            return Ok(ThreadSearchResponse {
-                data: Vec::new(),
-                next_cursor: None,
-                backwards_cursor: None,
-            });
-        };
-        let page = local_store
-            .search_threads(StoreListThreadsParams {
-                page_size: requested_page_size,
-                cursor,
-                sort_key: store_sort_key,
-                sort_direction: match store_sort_direction {
-                    SortDirection::Asc => StoreSortDirection::Asc,
-                    SortDirection::Desc => StoreSortDirection::Desc,
-                },
-                allowed_sources: compute_source_filters(source_kinds).0,
-                model_providers: None,
-                cwd_filters: None,
-                archived: archived.unwrap_or(false),
-                search_term: Some(search_term),
-                use_state_db_only: false,
-            })
-            .await
-            .map_err(thread_store_list_error)?;
-        let search_results = page.items;
-        let next_cursor = page.next_cursor;
+        let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
+        let mut cursor_obj = cursor;
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut search_results = Vec::with_capacity(requested_page_size);
+        let mut next_cursor = None;
+
+        while remaining > 0 {
+            let page = self
+                .thread_store
+                .search_threads(StoreListThreadsParams {
+                    page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
+                    cursor: cursor_obj.clone(),
+                    sort_key: store_sort_key,
+                    sort_direction: match store_sort_direction {
+                        SortDirection::Asc => StoreSortDirection::Asc,
+                        SortDirection::Desc => StoreSortDirection::Desc,
+                    },
+                    allowed_sources: allowed_sources.clone(),
+                    model_providers: None,
+                    cwd_filters: None,
+                    archived: archived.unwrap_or(false),
+                    search_term: Some(search_term.clone()),
+                    use_state_db_only: false,
+                })
+                .await
+                .map_err(thread_store_list_error)?;
+
+            for result in page.items {
+                let source = with_thread_spawn_agent_metadata(
+                    result.thread.source.clone(),
+                    result.thread.agent_nickname.clone(),
+                    result.thread.agent_role.clone(),
+                );
+                if source_kind_filter
+                    .as_ref()
+                    .is_none_or(|filter| source_kind_matches(&source, filter))
+                {
+                    search_results.push(result);
+                    if search_results.len() >= requested_page_size {
+                        break;
+                    }
+                }
+            }
+
+            remaining = requested_page_size.saturating_sub(search_results.len());
+            next_cursor = page.next_cursor;
+            if remaining == 0 {
+                break;
+            }
+
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
+            }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
+        }
+
         let backwards_cursor = search_results.first().and_then(|result| {
             thread_backwards_cursor_for_sort_key(
                 &result.thread,

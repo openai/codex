@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -9,7 +9,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
-use serde::Deserialize;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
@@ -19,50 +18,31 @@ use super::SESSIONS_SUBDIR;
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
 
-pub async fn search_rollout_snippets(
+pub async fn search_rollout_paths(
+    rg_command: &Path,
     codex_home: &Path,
     archived: bool,
     search_term: &str,
-) -> io::Result<HashMap<PathBuf, String>> {
+) -> io::Result<HashSet<PathBuf>> {
     let root = codex_home.join(if archived {
         ARCHIVED_SESSIONS_SUBDIR
     } else {
         SESSIONS_SUBDIR
     });
-    ripgrep_rollout_matches(root.as_path(), search_term).await
+    ripgrep_rollout_paths(rg_command, root.as_path(), search_term).await
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum RipgrepEvent {
-    Match {
-        data: RipgrepMatchData,
-    },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Deserialize)]
-struct RipgrepMatchData {
-    path: RipgrepText,
-    lines: RipgrepText,
-}
-
-#[derive(Debug, Deserialize)]
-struct RipgrepText {
-    text: Option<String>,
-}
-
-async fn ripgrep_rollout_matches(
+async fn ripgrep_rollout_paths(
+    rg_command: &Path,
     root: &Path,
     search_term: &str,
-) -> io::Result<HashMap<PathBuf, String>> {
+) -> io::Result<HashSet<PathBuf>> {
     if !tokio::fs::try_exists(root).await.unwrap_or(false) {
-        return Ok(HashMap::new());
+        return Ok(HashSet::new());
     }
 
-    let output = match Command::new("rg")
-        .arg("--json")
+    let output = match Command::new(rg_command)
+        .arg("-l")
         .arg("--fixed-strings")
         .arg("--no-ignore")
         .arg("--glob")
@@ -75,13 +55,13 @@ async fn ripgrep_rollout_matches(
     {
         Ok(output) => output,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return scan_rollout_matches(root, search_term).await;
+            return scan_rollout_paths(root, search_term).await;
         }
         Err(err) => return Err(err),
     };
     if !output.status.success() {
         if output.status.code() == Some(1) && output.stderr.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(HashSet::new());
         }
 
         return Err(io::Error::other(format!(
@@ -90,37 +70,22 @@ async fn ripgrep_rollout_matches(
         )));
     }
 
-    let mut matches = HashMap::new();
+    let mut matches = HashSet::new();
     for line in String::from_utf8_lossy(output.stdout.as_slice()).lines() {
-        let Ok(RipgrepEvent::Match { data }) = serde_json::from_str::<RipgrepEvent>(line) else {
-            continue;
-        };
-        let (Some(path), Some(jsonl_line)) = (data.path.text, data.lines.text) else {
-            continue;
-        };
-        let path = PathBuf::from(path);
+        let path = PathBuf::from(line);
         let path = if path.is_absolute() {
             path
         } else {
             root.join(path)
         };
-        if matches.contains_key(path.as_path()) {
-            continue;
-        }
-        let Some(snippet) = content_match_snippet(jsonl_line.as_str(), search_term) else {
-            continue;
-        };
-        matches.insert(path, snippet);
+        matches.insert(path);
     }
 
     Ok(matches)
 }
 
-async fn scan_rollout_matches(
-    root: &Path,
-    search_term: &str,
-) -> io::Result<HashMap<PathBuf, String>> {
-    let mut matches = HashMap::new();
+async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSet<PathBuf>> {
+    let mut matches = HashSet::new();
     let mut dirs = vec![root.to_path_buf()];
 
     while let Some(dir) = dirs.pop() {
@@ -141,8 +106,8 @@ async fn scan_rollout_matches(
             {
                 continue;
             }
-            if let Some(snippet) = first_matching_snippet(path.as_path(), search_term).await? {
-                matches.insert(path, snippet);
+            if rollout_contains(path.as_path(), search_term).await? {
+                matches.insert(path);
             }
         }
     }
@@ -150,7 +115,21 @@ async fn scan_rollout_matches(
     Ok(matches)
 }
 
-async fn first_matching_snippet(path: &Path, search_term: &str) -> io::Result<Option<String>> {
+async fn rollout_contains(path: &Path, search_term: &str) -> io::Result<bool> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.contains(search_term) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub async fn first_rollout_content_match_snippet(
+    path: &Path,
+    search_term: &str,
+) -> io::Result<Option<String>> {
     let file = tokio::fs::File::open(path).await?;
     let mut lines = tokio::io::BufReader::new(file).lines();
     while let Some(line) = lines.next_line().await? {
