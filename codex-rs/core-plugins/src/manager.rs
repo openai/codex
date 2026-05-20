@@ -22,6 +22,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
+use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
@@ -1208,7 +1209,7 @@ impl PluginsManager {
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplace_outcome =
-            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
+            self.discover_marketplaces_for_config(config, additional_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1284,6 +1285,18 @@ impl PluginsManager {
             marketplaces,
             errors: marketplace_outcome.errors,
         })
+    }
+
+    pub fn discover_marketplaces_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(MarketplaceListOutcome::default());
+        }
+
+        list_marketplaces(&self.marketplace_roots(config, additional_roots))
     }
 
     pub async fn read_plugin_for_config(

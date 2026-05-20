@@ -7,9 +7,21 @@ use predicates::str::contains;
 use std::path::Path;
 use tempfile::TempDir;
 
+const MARKETPLACE_HEADER: &str = "MARKETPLACE";
+const MARKETPLACE_LIST_HEADER: &str = "MARKETPLACE  ROOT";
+
+fn marketplace_list_row(marketplace_name: &str, root: &Path) -> String {
+    format!(
+        "{marketplace_name:<width$}  {}",
+        root.display(),
+        width = MARKETPLACE_HEADER.len()
+    )
+}
+
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
     cmd.env("CODEX_HOME", codex_home);
+    cmd.env("HOME", codex_home);
     Ok(cmd)
 }
 
@@ -40,7 +52,7 @@ plugins = true
     Ok(())
 }
 
-fn write_marketplace_source(source: &Path) -> Result<()> {
+fn write_marketplace_source_with_manifest(source: &Path, marketplace_manifest: &str) -> Result<()> {
     std::fs::create_dir_all(source.join(".agents").join("plugins"))?;
     std::fs::create_dir_all(source.join("plugins").join("sample").join(".codex-plugin"))?;
     std::fs::write(
@@ -48,6 +60,22 @@ fn write_marketplace_source(source: &Path) -> Result<()> {
             .join(".agents")
             .join("plugins")
             .join("marketplace.json"),
+        marketplace_manifest,
+    )?;
+    std::fs::write(
+        source
+            .join("plugins")
+            .join("sample")
+            .join(".codex-plugin")
+            .join("plugin.json"),
+        r#"{"name":"sample","version":"1.2.3","description":"Sample plugin"}"#,
+    )?;
+    Ok(())
+}
+
+fn write_marketplace_source(source: &Path) -> Result<()> {
+    write_marketplace_source_with_manifest(
+        source,
         r#"{
   "name": "debug",
   "plugins": [
@@ -60,16 +88,28 @@ fn write_marketplace_source(source: &Path) -> Result<()> {
     }
   ]
 }"#,
-    )?;
-    std::fs::write(
-        source
-            .join("plugins")
-            .join("sample")
-            .join(".codex-plugin")
-            .join("plugin.json"),
-        r#"{"name":"sample","version":"1.2.3","description":"Sample plugin"}"#,
-    )?;
-    Ok(())
+    )
+}
+
+fn write_marketplace_source_with_explicit_empty_products(source: &Path) -> Result<()> {
+    write_marketplace_source_with_manifest(
+        source,
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      },
+      "policy": {
+        "products": []
+      }
+    }
+  ]
+}"#,
+    )
 }
 
 fn setup_local_marketplace() -> Result<(TempDir, TempDir)> {
@@ -91,6 +131,20 @@ fn setup_unconfigured_local_marketplace() -> Result<(TempDir, TempDir)> {
     let source = TempDir::new()?;
     write_plugins_enabled_config(codex_home.path())?;
     write_marketplace_source(source.path())?;
+    Ok((codex_home, source))
+}
+
+fn setup_local_marketplace_with_explicit_empty_products() -> Result<(TempDir, TempDir)> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_plugins_enabled_config(codex_home.path())?;
+    write_marketplace_source_with_explicit_empty_products(source.path())?;
+    let source_path = source.path().to_string_lossy().into_owned();
+    record_user_marketplace(
+        codex_home.path(),
+        "debug",
+        &configured_local_marketplace(&source_path),
+    )?;
     Ok((codex_home, source))
 }
 
@@ -207,16 +261,203 @@ fn remove_installed_plugin_config(codex_home: &Path, plugin_key: &str) -> Result
     Ok(())
 }
 
+fn setup_configured_local_marketplace_with_missing_source() -> Result<TempDir> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.debug]
+source_type = "local"
+"#,
+    )?;
+    Ok(codex_home)
+}
+
+fn setup_configured_local_marketplace_with_invalid_name() -> Result<TempDir> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces."bad/name"]
+source_type = "local"
+source = "/tmp/debug"
+"#,
+    )?;
+    Ok(codex_home)
+}
+
+fn assert_configured_marketplace_snapshot_failure(
+    assert: assert_cmd::assert::Assert,
+    source: &Path,
+    detail: &str,
+) {
+    assert
+        .failure()
+        .stderr(contains(
+            "failed to load configured marketplace snapshot(s):",
+        ))
+        .stderr(contains("`debug`"))
+        .stderr(contains(source.display().to_string()))
+        .stderr(contains(detail));
+}
+
+fn assert_marketplace_failure(
+    assert: assert_cmd::assert::Assert,
+    marketplace_name: &str,
+    source: &Path,
+    detail: &str,
+) {
+    assert
+        .failure()
+        .stderr(contains("failed to load marketplace(s):"))
+        .stderr(contains(format!("`{marketplace_name}`")))
+        .stderr(contains(source.display().to_string()))
+        .stderr(contains(detail));
+}
+
 #[tokio::test]
 async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
     let (codex_home, source) = setup_local_marketplace()?;
+    let expected_row = marketplace_list_row("debug", source.path());
 
     codex_command(codex_home.path())?
         .args(["plugin", "marketplace", "list"])
         .assert()
         .success()
-        .stdout(contains("debug"))
-        .stdout(contains(source.path().display().to_string()));
+        .stdout(contains(MARKETPLACE_LIST_HEADER))
+        .stdout(contains(&expected_row))
+        .stdout(contains("\t").not());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_includes_home_marketplace_when_present() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    write_marketplace_source(home.path())?;
+    write_plugins_enabled_config(codex_home.path())?;
+    let expected_row = marketplace_list_row("debug", home.path());
+
+    codex_command(codex_home.path())?
+        .env("HOME", home.path())
+        .args(["plugin", "marketplace", "list"])
+        .assert()
+        .success()
+        .stdout(contains(MARKETPLACE_LIST_HEADER))
+        .stdout(contains(&expected_row))
+        .stdout(contains("\t").not());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_includes_root_when_plugins_are_filtered_out() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace_with_explicit_empty_products()?;
+    let expected_row = marketplace_list_row("debug", source.path());
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "list"])
+        .assert()
+        .success()
+        .stdout(contains(MARKETPLACE_LIST_HEADER))
+        .stdout(contains(&expected_row));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_fails_when_configured_marketplace_snapshot_is_missing() -> Result<()> {
+    let (codex_home, source) = setup_configured_marketplace_without_manifest()?;
+
+    assert_marketplace_failure(
+        codex_command(codex_home.path())?
+            .args(["plugin", "marketplace", "list"])
+            .assert(),
+        "debug",
+        source.path(),
+        "marketplace root does not contain a supported manifest",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_fails_when_configured_marketplace_name_is_invalid() -> Result<()> {
+    let codex_home = setup_configured_local_marketplace_with_invalid_name()?;
+
+    assert_marketplace_failure(
+        codex_command(codex_home.path())?
+            .args(["plugin", "marketplace", "list"])
+            .assert(),
+        "bad/name",
+        Path::new("<invalid config>"),
+        "marketplace name",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_fails_when_configured_local_marketplace_source_is_missing() -> Result<()>
+{
+    let codex_home = setup_configured_local_marketplace_with_missing_source()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "list"])
+        .assert()
+        .failure()
+        .stderr(contains("failed to load marketplace(s):"))
+        .stderr(contains("`debug`"))
+        .stderr(contains("<invalid source>"))
+        .stderr(contains(
+            "configured local marketplace source is missing or empty",
+        ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_fails_when_home_marketplace_is_malformed() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let home = TempDir::new()?;
+    write_plugins_enabled_config(codex_home.path())?;
+    std::fs::create_dir_all(home.path().join(".agents/plugins"))?;
+    let home_marketplace_path = home
+        .path()
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    std::fs::write(&home_marketplace_path, "{not valid json")?;
+
+    codex_command(codex_home.path())?
+        .env("HOME", home.path())
+        .args(["plugin", "marketplace", "list"])
+        .assert()
+        .failure()
+        .stderr(contains("failed to load marketplace(s):"))
+        .stderr(contains(home_marketplace_path.display().to_string()))
+        .stderr(contains("key must be a string"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_list_fails_when_configured_marketplace_snapshot_is_malformed() -> Result<()> {
+    let (codex_home, source) = setup_configured_marketplace_with_malformed_manifest()?;
+
+    assert_marketplace_failure(
+        codex_command(codex_home.path())?
+            .args(["plugin", "marketplace", "list"])
+            .assert(),
+        "debug",
+        source.path(),
+        "key must be a string",
+    );
 
     Ok(())
 }
@@ -286,18 +527,13 @@ async fn plugin_list_excludes_unconfigured_repo_local_marketplaces() -> Result<(
 async fn plugin_list_fails_when_configured_marketplace_snapshot_is_missing() -> Result<()> {
     let (codex_home, source) = setup_configured_marketplace_without_manifest()?;
 
-    codex_command(codex_home.path())?
-        .args(["plugin", "list"])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "failed to load configured marketplace snapshot(s):",
-        ))
-        .stderr(contains("`debug`"))
-        .stderr(contains(source.path().display().to_string()))
-        .stderr(contains(
-            "marketplace root does not contain a supported manifest",
-        ));
+    assert_configured_marketplace_snapshot_failure(
+        codex_command(codex_home.path())?
+            .args(["plugin", "list"])
+            .assert(),
+        source.path(),
+        "marketplace root does not contain a supported manifest",
+    );
 
     Ok(())
 }
@@ -414,18 +650,15 @@ async fn plugin_add_rejects_unconfigured_repo_local_marketplaces() -> Result<()>
 
 #[tokio::test]
 async fn plugin_add_fails_when_configured_marketplace_snapshot_is_malformed() -> Result<()> {
-    let (codex_home, _source) = setup_configured_marketplace_with_malformed_manifest()?;
+    let (codex_home, source) = setup_configured_marketplace_with_malformed_manifest()?;
 
-    codex_command(codex_home.path())?
-        .args(["plugin", "add", "sample@debug"])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "failed to load configured marketplace snapshot(s):",
-        ))
-        .stderr(contains("`debug`"))
-        .stderr(contains("invalid marketplace file"))
-        .stderr(contains("key must be a string"));
+    assert_configured_marketplace_snapshot_failure(
+        codex_command(codex_home.path())?
+            .args(["plugin", "add", "sample@debug"])
+            .assert(),
+        source.path(),
+        "key must be a string",
+    );
 
     Ok(())
 }

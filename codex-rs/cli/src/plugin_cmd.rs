@@ -359,10 +359,10 @@ fn find_marketplace_for_plugin(
     }
 }
 
-struct ConfiguredMarketplaceSnapshotIssue {
-    marketplace_name: String,
-    path: PathBuf,
-    message: String,
+pub(crate) struct ConfiguredMarketplaceSnapshotIssue {
+    pub(crate) marketplace_name: String,
+    pub(crate) path: PathBuf,
+    pub(crate) message: String,
 }
 
 fn ensure_configured_marketplace_snapshots_loaded(
@@ -396,17 +396,16 @@ fn ensure_configured_marketplace_snapshots_loaded(
     bail!("failed to load configured marketplace snapshot(s):\n{issue_lines}");
 }
 
-fn configured_marketplace_snapshot_issues(
+pub(crate) fn configured_marketplace_snapshot_issues(
     codex_home: &std::path::Path,
     plugins_input: &PluginsConfigInput,
     load_errors: &[MarketplaceListError],
     marketplace_name: Option<&str>,
 ) -> Vec<ConfiguredMarketplaceSnapshotIssue> {
-    let Some(user_layer) = plugins_input.config_layer_stack.get_active_user_layer() else {
+    let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(configured_marketplaces) = user_layer
-        .config
+    let Some(configured_marketplaces) = user_config
         .get("marketplaces")
         .and_then(toml::Value::as_table)
     else {
@@ -420,9 +419,33 @@ fn configured_marketplace_snapshot_issues(
         if marketplace_name.is_some_and(|name| configured_name != name) {
             continue;
         }
-        if !marketplace.is_table()
-            || validate_plugin_segment(configured_name, "marketplace name").is_err()
+        if !marketplace.is_table() {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid config>"),
+                message: "configured marketplace entry must be a table".to_string(),
+            });
+            continue;
+        }
+        if let Err(err) = validate_plugin_segment(configured_name, "marketplace name") {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid config>"),
+                message: err.to_string(),
+            });
+            continue;
+        }
+        if marketplace.get("source_type").and_then(toml::Value::as_str) == Some("local")
+            && marketplace
+                .get("source")
+                .and_then(toml::Value::as_str)
+                .is_none_or(str::is_empty)
         {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid source>"),
+                message: "configured local marketplace source is missing or empty".to_string(),
+            });
             continue;
         }
         let Some(root) = resolve_configured_marketplace_root(
