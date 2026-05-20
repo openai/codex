@@ -8127,7 +8127,11 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
-        let include_read_only = cfg!(target_os = "windows");
+        // The read-only preset should stay visible for native Windows and WSL.
+        // WSL runs the Linux build, so a compile-target-only gate hides a valid
+        // preset even though `sandbox_mode = "read-only"` still works there.
+        let include_read_only =
+            cfg!(target_os = "windows") || crate::clipboard_paste::is_probably_wsl();
         let current_approval =
             AskForApproval::from(self.config.permissions.approval_policy.value());
         let current_permission_profile = self.config.permissions.permission_profile();

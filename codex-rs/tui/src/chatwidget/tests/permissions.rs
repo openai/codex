@@ -65,6 +65,39 @@ async fn approvals_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("approvals_selection_popup", popup);
 }
 
+#[cfg(not(target_os = "windows"))]
+#[tokio::test]
+#[serial]
+async fn approvals_selection_popup_includes_read_only_preset_under_wsl() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let previous_wsl_distro = std::env::var_os("WSL_DISTRO_NAME");
+    struct EnvRestoreGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+    impl Drop for EnvRestoreGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var("WSL_DISTRO_NAME", value) },
+                None => unsafe { std::env::remove_var("WSL_DISTRO_NAME") },
+            }
+        }
+    }
+    let _guard = EnvRestoreGuard {
+        previous: previous_wsl_distro,
+    };
+    unsafe {
+        std::env::set_var("WSL_DISTRO_NAME", "Ubuntu");
+    }
+
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Read Only"),
+        "expected read-only preset in approvals popup: {popup}"
+    );
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[serial]
