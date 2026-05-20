@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Codex native binaries (Rust CLI, bwrap, and ripgrep helpers)."""
+"""Install Codex package archives and native helper binaries."""
 
 import argparse
 from contextlib import contextmanager
@@ -31,6 +31,7 @@ BINARY_TARGETS = (
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 )
+CODEX_PACKAGE_COMPONENT = "codex-package"
 
 
 @dataclass(frozen=True)
@@ -139,11 +140,10 @@ def parse_args() -> argparse.Namespace:
         "--component",
         dest="components",
         action="append",
-        choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
+        choices=tuple([CODEX_PACKAGE_COMPONENT, *BINARY_COMPONENTS, "rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to bwrap, codex, codex-windows-sandbox-setup,"
-            " codex-command-runner, and rg."
+            " May be repeated. Defaults to codex-package and codex-responses-api-proxy."
         ),
     )
     parser.add_argument(
@@ -165,13 +165,7 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    components = args.components or [
-        "bwrap",
-        "codex",
-        "codex-windows-sandbox-setup",
-        "codex-command-runner",
-        "rg",
-    ]
+    components = args.components or [CODEX_PACKAGE_COMPONENT, "codex-responses-api-proxy"]
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
@@ -184,6 +178,8 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
             artifacts_dir = Path(artifacts_dir_str)
             _download_artifacts(workflow_id, artifacts_dir)
+            if CODEX_PACKAGE_COMPONENT in components:
+                install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
             install_binary_components(
                 artifacts_dir,
                 vendor_dir,
@@ -197,6 +193,53 @@ def main() -> int:
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
+
+
+def install_codex_package_archives(
+    artifacts_dir: Path,
+    vendor_dir: Path,
+    targets: Sequence[str],
+) -> None:
+    targets = list(targets)
+    if not targets:
+        return
+
+    print("Installing Codex package archives for targets: " + ", ".join(targets))
+    max_workers = min(len(targets), max(1, (os.cpu_count() or 1)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _install_single_codex_package_archive,
+                artifacts_dir,
+                vendor_dir,
+                target,
+            ): target
+            for target in targets
+        }
+        for future in as_completed(futures):
+            installed_path = future.result()
+            print(f"  installed {installed_path}")
+
+
+def _install_single_codex_package_archive(
+    artifacts_dir: Path,
+    vendor_dir: Path,
+    target: str,
+) -> Path:
+    artifact_subdir = artifacts_dir / target
+    archive_path = artifact_subdir / f"codex-package-{target}.tar.gz"
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Expected package archive not found: {archive_path}")
+
+    dest_dir = vendor_dir / target
+    if dest_dir.exists():
+        shutil.rmtree(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        archive.extractall(dest_dir, filter="data")
+
+    return dest_dir
 
 
 def fetch_rg(

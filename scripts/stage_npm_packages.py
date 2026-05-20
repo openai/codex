@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Stage one or more Codex npm packages for release."""
 
-from __future__ import annotations
-
 import argparse
 import importlib.util
 import json
