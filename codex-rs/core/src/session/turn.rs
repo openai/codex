@@ -12,6 +12,7 @@ use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
+use crate::compact::should_use_remote_compact_task_v2;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
@@ -799,7 +800,7 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
-        if turn_context.features.enabled(Feature::RemoteCompactionV2) {
+        if should_use_remote_compact_task_v2(turn_context.provider.info(), &turn_context.features) {
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
                 Arc::clone(turn_context),
