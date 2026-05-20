@@ -114,55 +114,29 @@ release_url_for_asset() {
   printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
 }
 
-release_metadata_url() {
-  resolved_version="$1"
-
-  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
-}
-
-release_asset_digest() {
+package_archive_digest() {
   asset="$1"
-  resolved_version="$2"
-  release_json="$(download_text "$(release_metadata_url "$resolved_version")")"
+  manifest_path="$2"
 
-  digest="$(printf '%s\n' "$release_json" | awk -v asset="$asset" '
-    {
-      if ($0 ~ "\"name\":[[:space:]]*\"" asset "\"") {
-        in_asset = 1
-        asset_depth = depth
-      }
-
-      if (in_asset && /"digest":[[:space:]]*"[^"]+"/) {
-        sub(/^.*"digest":[[:space:]]*"/, "")
-        sub(/".*$/, "")
-        digest = $0
-      }
-
-      line = $0
-      opens = gsub(/\{/, "{", line)
-      closes = gsub(/\}/, "}", line)
-      depth += opens - closes
-
-      if (in_asset && depth < asset_depth) {
-        in_asset = 0
-      }
+  digest="$(awk -v asset="$asset" '
+    $2 == asset && $1 ~ /^[0-9a-fA-F]{64}$/ {
+      print tolower($1)
+      found = 1
+      exit
     }
     END {
-      if (digest != "") {
-        print digest
+      if (!found) {
+        exit 1
       }
     }
-  ')"
+  ' "$manifest_path" 2>/dev/null || true)"
 
-  case "$digest" in
-    sha256:????????????????????????????????????????????????????????????????)
-      printf '%s\n' "${digest#sha256:}"
-      ;;
-    *)
-      echo "Could not find SHA-256 digest for release asset $asset." >&2
-      exit 1
-      ;;
-  esac
+  if [ -z "$digest" ]; then
+    echo "Could not find SHA-256 digest for $asset in codex-package_SHA256SUMS." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$digest"
 }
 
 file_sha256() {
@@ -193,7 +167,7 @@ verify_archive_digest() {
   actual_digest="$(file_sha256 "$archive_path")"
 
   if [ "$actual_digest" != "$expected_digest" ]; then
-    echo "Downloaded Codex archive checksum did not match release metadata." >&2
+    echo "Downloaded Codex archive checksum did not match release checksum manifest." >&2
     echo "expected: $expected_digest" >&2
     echo "actual:   $actual_digest" >&2
     exit 1
@@ -441,6 +415,12 @@ version_from_binary() {
 }
 
 current_installed_version() {
+  version="$(version_from_binary "$CURRENT_LINK/bin/codex" || true)"
+  if [ -n "$version" ]; then
+    printf '%s\n' "$version"
+    return 0
+  fi
+
   version="$(version_from_binary "$CURRENT_LINK/codex" || true)"
   if [ -n "$version" ]; then
     printf '%s\n' "$version"
@@ -586,18 +566,15 @@ handle_conflicting_install() {
 
 install_release() {
   release_dir="$1"
-  vendor_root="$2"
+  archive_path="$2"
   stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
 
   mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release"
-  mkdir -p "$stage_release/codex-resources"
-  cp "$vendor_root/codex/codex" "$stage_release/codex"
-  cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
-  chmod 0755 "$stage_release/codex"
-  chmod 0755 "$stage_release/codex-resources/rg"
-  if [ -f "$vendor_root/codex-resources/bwrap" ]; then
-    cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
+  mkdir -p "$stage_release"
+  tar -xzf "$archive_path" -C "$stage_release"
+  chmod 0755 "$stage_release/bin/codex" "$stage_release/codex-path/rg"
+  if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
   fi
 
@@ -613,8 +590,9 @@ release_dir_is_complete() {
   expected_target="$3"
 
   [ -d "$release_dir" ] &&
-    [ -x "$release_dir/codex" ] &&
-    [ -x "$release_dir/codex-resources/rg" ] &&
+    [ -f "$release_dir/codex-package.json" ] &&
+    [ -x "$release_dir/bin/codex" ] &&
+    [ -x "$release_dir/codex-path/rg" ] &&
     [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ] &&
     case "$expected_target" in
       *linux*) [ -x "$release_dir/codex-resources/bwrap" ] ;;
@@ -633,7 +611,7 @@ update_visible_command() {
   mkdir -p "$BIN_DIR"
   tmp_link="$BIN_DIR/.codex.$$"
 
-  replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/codex" "$tmp_link"
+  replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/bin/codex" "$tmp_link"
 }
 
 verify_visible_command() {
@@ -679,29 +657,27 @@ fi
 
 if [ "$os" = "darwin" ]; then
   if [ "$arch" = "aarch64" ]; then
-    npm_tag="darwin-arm64"
     vendor_target="aarch64-apple-darwin"
     platform_label="macOS (Apple Silicon)"
   else
-    npm_tag="darwin-x64"
     vendor_target="x86_64-apple-darwin"
     platform_label="macOS (Intel)"
   fi
 else
   if [ "$arch" = "aarch64" ]; then
-    npm_tag="linux-arm64"
     vendor_target="aarch64-unknown-linux-musl"
     platform_label="Linux (ARM64)"
   else
-    npm_tag="linux-x64"
     vendor_target="x86_64-unknown-linux-musl"
     platform_label="Linux (x64)"
   fi
 fi
 
 resolved_version="$(resolve_version)"
-asset="codex-npm-$npm_tag-$resolved_version.tgz"
+asset="codex-package-$vendor_target.tar.gz"
+checksum_asset="codex-package_SHA256SUMS"
 download_url="$(release_url_for_asset "$asset" "$resolved_version")"
+checksum_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
 release_name="$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"
 current_version="$(current_installed_version)"
@@ -736,18 +712,16 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   fi
 
   archive_path="$tmp_dir/$asset"
-  extract_dir="$tmp_dir/extract"
+  checksum_path="$tmp_dir/$checksum_asset"
 
   step "Downloading Codex CLI"
-  expected_digest="$(release_asset_digest "$asset" "$resolved_version")"
+  download_file "$checksum_url" "$checksum_path"
+  expected_digest="$(package_archive_digest "$asset" "$checksum_path")"
   download_file "$download_url" "$archive_path"
   verify_archive_digest "$archive_path" "$expected_digest"
 
-  mkdir -p "$extract_dir"
-  tar -xzf "$archive_path" -C "$extract_dir"
-
   step "Installing standalone package to $release_dir"
-  install_release "$release_dir" "$extract_dir/package/vendor/$vendor_target"
+  install_release "$release_dir" "$archive_path"
 fi
 update_current_link "$release_dir"
 update_visible_command
