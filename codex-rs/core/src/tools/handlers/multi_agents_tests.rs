@@ -804,7 +804,7 @@ service_tier = "priority"
     );
     turn.config = Arc::new(config);
 
-    let err = SpawnAgentHandler::default()
+    let result = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -815,15 +815,14 @@ service_tier = "priority"
                 "service_tier": "turbo"
             })),
         ))
-        .await
-        .expect_err("invalid spawn service tier should still be rejected");
+        .await;
 
     assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
+        result.err(),
+        Some(FunctionCallError::RespondToModel(
             "Service tier `turbo` is not supported for model `gpt-5.4`. Supported service tiers: priority"
                 .to_string()
-        )
+        ))
     );
 }
 
