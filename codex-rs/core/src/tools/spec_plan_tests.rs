@@ -19,6 +19,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -524,7 +525,10 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
             },
         )
         .await;
-        plan.assert_visible_lacks(&["request_plugin_install"]);
+        plan.assert_visible_lacks(&[
+            "list_available_plugins_to_install",
+            "request_plugin_install",
+        ]);
     }
 
     let no_candidates = probe(|turn| {
@@ -534,7 +538,10 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
         );
     })
     .await;
-    no_candidates.assert_visible_lacks(&["request_plugin_install"]);
+    no_candidates.assert_visible_lacks(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
 
     let enabled = probe_with(
         |turn| {
@@ -549,7 +556,74 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
         },
     )
     .await;
-    enabled.assert_visible_contains(&["request_plugin_install"]);
+    enabled.assert_visible_contains(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+}
+
+#[tokio::test]
+async fn install_suggestion_tools_stay_visible_without_tool_search() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = false;
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            discoverable_tools: Some(vec![discoverable_plugin("github", "GitHub")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+    plan.assert_visible_lacks(&["tool_search"]);
+}
+
+#[tokio::test]
+async fn request_plugin_install_description_defers_inventory_to_list_tool() {
+    let plan = probe_with(
+        |turn| {
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            discoverable_tools: Some(vec![discoverable_plugin("github", "GitHub")]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Function(ResponsesApiTool {
+        description: list_description,
+        ..
+    }) = plan.visible_spec("list_available_plugins_to_install")
+    else {
+        panic!("expected list_available_plugins_to_install function spec");
+    };
+    assert!(list_description.contains(
+        "Returns known plugins and connectors that can be passed to `request_plugin_install`."
+    ));
+
+    let ToolSpec::Function(ResponsesApiTool {
+        description: request_description,
+        ..
+    }) = plan.visible_spec("request_plugin_install")
+    else {
+        panic!("expected request_plugin_install function spec");
+    };
+    assert!(request_description.contains(
+        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
+    ));
+    assert!(!request_description.contains("github"));
 }
 
 #[tokio::test]

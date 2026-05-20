@@ -14,6 +14,7 @@ class TargetSpec:
     target: str
     is_windows: bool
     is_linux: bool
+    dotslash_platform: str
 
     @property
     def exe_suffix(self) -> str:
@@ -42,53 +43,43 @@ TARGET_SPECS: dict[str, TargetSpec] = {
         target="x86_64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        dotslash_platform="linux-x86_64",
     ),
     "aarch64-unknown-linux-musl": TargetSpec(
         target="aarch64-unknown-linux-musl",
         is_windows=False,
         is_linux=True,
+        dotslash_platform="linux-aarch64",
     ),
     "x86_64-apple-darwin": TargetSpec(
         target="x86_64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        dotslash_platform="macos-x86_64",
     ),
     "aarch64-apple-darwin": TargetSpec(
         target="aarch64-apple-darwin",
         is_windows=False,
         is_linux=False,
+        dotslash_platform="macos-aarch64",
     ),
     "x86_64-pc-windows-msvc": TargetSpec(
         target="x86_64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        dotslash_platform="windows-x86_64",
     ),
     "aarch64-pc-windows-msvc": TargetSpec(
         target="aarch64-pc-windows-msvc",
         is_windows=True,
         is_linux=False,
+        dotslash_platform="windows-aarch64",
     ),
 }
 
 
-def resolve_rg_bin(spec: TargetSpec, rg_bin: Path | None) -> Path:
-    return resolve_input_path(
-        rg_bin,
-        default_rg_candidates(spec),
-        "ripgrep executable",
-        "--rg-bin",
-    )
-
-
-def default_rg_candidates(spec: TargetSpec) -> list[Path]:
-    return [
-        REPO_ROOT / "codex-cli" / "vendor" / spec.target / "path" / spec.rg_name,
-    ]
-
-
 def resolve_input_path(
     explicit_path: Path | None,
-    default_candidates: list[Path],
     description: str,
     flag_name: str,
 ) -> Path:
@@ -100,14 +91,7 @@ def resolve_input_path(
             raise RuntimeError(f"{description} is not executable: {path}")
         return path
 
-    for candidate in default_candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-
-    candidates = "\n".join(f"  - {candidate}" for candidate in default_candidates)
-    raise RuntimeError(
-        f"Could not find {description}. Pass {flag_name}, or create one of:\n{candidates}"
-    )
+    raise RuntimeError(f"Must specify {flag_name} for {description}.")
 
 
 def is_executable(path: Path) -> bool:

@@ -349,15 +349,15 @@ async fn run_resume_picker_with_launch_context(
     launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -395,15 +395,15 @@ pub async fn run_fork_picker_with_app_server(
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -513,12 +513,19 @@ fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
     }
 }
 
-fn local_picker_cwd_filter(cwd_filter: &Option<PathBuf>, is_remote: bool) -> Option<PathBuf> {
-    if is_remote { None } else { cwd_filter.clone() }
+fn local_picker_cwd_filter(
+    cwd_filter: &Option<PathBuf>,
+    uses_remote_workspace: bool,
+) -> Option<PathBuf> {
+    if uses_remote_workspace {
+        None
+    } else {
+        cwd_filter.clone()
+    }
 }
 
-fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
-    if is_remote {
+fn picker_provider_filter(config: &Config, uses_remote_workspace: bool) -> ProviderFilter {
+    if uses_remote_workspace {
         ProviderFilter::Any
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
@@ -533,12 +540,12 @@ fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
-    is_remote: bool,
+    uses_remote_workspace: bool,
     remote_cwd_override: Option<&Path>,
 ) -> Option<PathBuf> {
     if show_all {
         None
-    } else if is_remote {
+    } else if uses_remote_workspace {
         remote_cwd_override.map(Path::to_path_buf)
     } else {
         Some(config_cwd.to_path_buf())
@@ -3309,7 +3316,7 @@ mod tests {
         let cwd_filter = picker_cwd_filter(
             Path::new("/tmp/project"),
             /*show_all*/ false,
-            /*is_remote*/ false,
+            /*uses_remote_workspace*/ false,
             /*remote_cwd_override*/ None,
         );
         let params = thread_list_params(
@@ -3588,7 +3595,8 @@ mod tests {
             remote_cwd.clone(),
             SessionPickerAction::Resume,
         );
-        state.local_filter_cwd = local_picker_cwd_filter(&remote_cwd, /*is_remote*/ true);
+        state.local_filter_cwd =
+            local_picker_cwd_filter(&remote_cwd, /*uses_remote_workspace*/ true);
 
         state.start_initial_load();
 
