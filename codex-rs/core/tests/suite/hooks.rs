@@ -242,6 +242,66 @@ if payload.get("prompt") == {blocked_prompt_json}:
     Ok(())
 }
 
+fn write_session_start_and_user_prompt_submit_order_hooks(home: &Path) -> Result<()> {
+    let session_start_script_path = home.join("session_start_order_hook.py");
+    let user_prompt_submit_script_path = home.join("user_prompt_submit_order_hook.py");
+    let log_path = home.join("hook_order_log.jsonl");
+
+    let session_start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({{
+        "hook_event_name": payload.get("hook_event_name"),
+        "source": payload.get("source"),
+    }}) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let user_prompt_submit_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({{
+        "hook_event_name": payload.get("hook_event_name"),
+        "prompt": payload.get("prompt"),
+    }}) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", session_start_script_path.display()),
+                    "statusMessage": "running session start order hook",
+                }]
+            }],
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", user_prompt_submit_script_path.display()),
+                    "statusMessage": "running user prompt submit order hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&session_start_script_path, session_start_script)
+        .context("write session start order hook script")?;
+    fs::write(&user_prompt_submit_script_path, user_prompt_submit_script)
+        .context("write user prompt submit order hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_pre_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -953,6 +1013,10 @@ fn read_user_prompt_submit_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .collect()
 }
 
+fn read_hook_order_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    read_hook_inputs_from_log(home.join("hook_order_log.jsonl").as_path())
+}
+
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",
@@ -1132,6 +1196,54 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
         Some(false)
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello after hooks"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_and_user_prompt_submit_order_hooks(home) {
+                panic!("failed to write hook ordering fixtures: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let hook_inputs = read_hook_order_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .map(|input| input["hook_event_name"]
+                .as_str()
+                .expect("hook input event name"))
+            .collect::<Vec<_>>(),
+        vec!["SessionStart", "UserPromptSubmit"],
+    );
+    assert_eq!(
+        hook_inputs[0].get("source").and_then(Value::as_str),
+        Some("startup")
+    );
+    assert_eq!(
+        hook_inputs[1].get("prompt").and_then(Value::as_str),
+        Some("hello")
+    );
 
     Ok(())
 }
