@@ -482,15 +482,15 @@ struct ExecServerCommand {
     #[arg(long = "listen", value_name = "URL", conflicts_with = "remote")]
     listen: Option<String>,
 
-    /// Register this exec-server as a remote executor using the given base URL.
-    #[arg(long = "remote", value_name = "URL", requires = "executor_id")]
+    /// Register this exec-server as a remote environment using the given base URL.
+    #[arg(long = "remote", value_name = "URL", requires = "environment_id")]
     remote: Option<String>,
 
-    /// Executor id to attach to when registering remotely.
-    #[arg(long = "executor-id", value_name = "ID")]
-    executor_id: Option<String>,
+    /// Environment id to attach to when registering remotely.
+    #[arg(long = "environment-id", value_name = "ID")]
+    environment_id: Option<String>,
 
-    /// Human-readable executor name.
+    /// Human-readable environment name.
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
 
@@ -1491,21 +1491,24 @@ async fn run_exec_server_command(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     if let Some(base_url) = cmd.remote {
-        let executor_id = cmd
-            .executor_id
-            .ok_or_else(|| anyhow::anyhow!("--executor-id is required when --remote is set"))?;
+        let environment_id = cmd
+            .environment_id
+            .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let auth_provider = load_exec_server_remote_auth_provider(
             root_config_overrides,
             config_profile,
             cmd.use_agent_identity_auth,
         )
         .await?;
-        let mut remote_config =
-            codex_exec_server::RemoteExecutorConfig::new(base_url, executor_id, auth_provider)?;
+        let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
+            base_url,
+            environment_id,
+            auth_provider,
+        )?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
         }
-        codex_exec_server::run_remote_executor(remote_config, runtime_paths).await?;
+        codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         return Ok(());
     }
     let listen_url = cmd

@@ -367,19 +367,27 @@ fn build_code_mode_executors(
         return vec![];
     }
 
-    let code_mode_nested_tool_specs = executors
-        .iter()
-        .filter_map(|executor| {
-            if executor.exposure() == ToolExposure::DirectModelOnly {
-                return None;
-            }
+    let mut code_mode_nested_tool_specs = Vec::new();
+    let mut exec_prompt_tool_specs = Vec::new();
+    for executor in executors {
+        let exposure = executor.exposure();
+        if exposure == ToolExposure::DirectModelOnly {
+            continue;
+        }
 
-            executor.spec()
-        })
-        .collect::<Vec<_>>();
-    let namespace_descriptions = code_mode_namespace_descriptions(&code_mode_nested_tool_specs);
+        let Some(spec) = executor.spec() else {
+            continue;
+        };
+
+        if exposure != ToolExposure::Deferred {
+            exec_prompt_tool_specs.push(spec.clone());
+        }
+        code_mode_nested_tool_specs.push(spec);
+    }
+
+    let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
     let mut enabled_tools =
-        collect_code_mode_exec_prompt_tool_definitions(code_mode_nested_tool_specs.iter());
+        collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
 

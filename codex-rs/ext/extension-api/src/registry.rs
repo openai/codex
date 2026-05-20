@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use codex_protocol::protocol::ReviewDecision;
+
 use crate::ApprovalReviewContributor;
-use crate::ApprovalReviewFuture;
 use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
@@ -171,15 +172,22 @@ impl<C: Sync> ExtensionRegistry<C> {
 
     /// Claims the first rendered approval-review prompt accepted by an
     /// installed contributor.
-    pub fn approval_review<'a>(
-        &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> Option<ApprovalReviewFuture<'a>> {
-        self.approval_review_contributors
-            .iter()
-            .find_map(|contributor| contributor.contribute(session_store, thread_store, prompt))
+    pub async fn approval_review(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        prompt: &str,
+    ) -> Option<ReviewDecision> {
+        for contributor in &self.approval_review_contributors {
+            if let Some(decision) = contributor
+                .contribute(session_store, thread_store, prompt)
+                .await
+            {
+                return Some(decision);
+            }
+        }
+
+        None
     }
 
     /// Returns the registered prompt contributors.

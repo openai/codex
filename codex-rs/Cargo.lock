@@ -2952,12 +2952,19 @@ dependencies = [
 name = "codex-goal-extension"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "chrono",
  "codex-extension-api",
  "codex-protocol",
+ "codex-state",
  "codex-tools",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
