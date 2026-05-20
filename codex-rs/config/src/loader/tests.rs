@@ -1,4 +1,5 @@
 use super::*;
+use crate::ConfigLayerStackOrdering;
 use async_trait::async_trait;
 use codex_file_system::CopyOptions;
 use codex_file_system::CreateDirectoryOptions;
@@ -42,10 +43,18 @@ impl ExecutorFileSystem for TestFileSystem {
 
     async fn get_metadata(
         &self,
-        _path: &AbsolutePathBuf,
+        path: &AbsolutePathBuf,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        unimplemented!("test filesystem only supports reads")
+        let metadata = tokio::fs::metadata(path.as_path()).await?;
+        let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        Ok(FileMetadata {
+            is_directory: metadata.is_dir(),
+            is_file: metadata.is_file(),
+            is_symlink: symlink_metadata.file_type().is_symlink(),
+            created_at_ms: 0,
+            modified_at_ms: 0,
+        })
     }
 
     async fn read_directory(
@@ -169,4 +178,52 @@ model = "gpt-dev"
     )
     .await
     .expect("profile-v2 should allow unrelated legacy profiles in base user config");
+}
+
+#[tokio::test]
+async fn app_server_host_project_root_markers_apply_before_project_layer_discovery() {
+    let tmp = tempdir().expect("tempdir");
+    let project_root = tmp.path().join("repo");
+    let cwd = project_root.join("nested");
+    std::fs::create_dir_all(project_root.join(".codex")).expect("create project config dir");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    std::fs::write(project_root.join("WORKSPACE"), "").expect("write project root marker");
+    std::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "model = \"gpt-project\"\n",
+    )
+    .expect("write project config");
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(cwd).expect("absolute cwd")),
+        &[],
+        ConfigLoadOptions {
+            loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
+            strict_config: false,
+            app_server_host_config: Some(
+                toml::from_str(r#"project_root_markers = ["WORKSPACE"]"#)
+                    .expect("host config toml"),
+            ),
+        },
+        CloudRequirementsLoader::default(),
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("host project markers should load");
+
+    assert!(
+        stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .iter()
+            .any(
+                |layer| matches!(&layer.name, ConfigLayerSource::Project { .. })
+                    && layer.config.get("model").and_then(TomlValue::as_str) == Some("gpt-project")
+            ),
+        "host project root markers should expose the ancestor project config layer"
+    );
 }

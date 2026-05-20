@@ -1,3 +1,5 @@
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -124,13 +126,22 @@ impl ExternalAgentConfigService {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn detect(
         &self,
         params: ExternalAgentConfigDetectOptions,
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
+        self.detect_with_config(params, /*config*/ None).await
+    }
+
+    pub(crate) async fn detect_with_config(
+        &self,
+        params: ExternalAgentConfigDetectOptions,
+        config: Option<&Config>,
+    ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
         let mut items = Vec::new();
         if params.include_home {
-            self.detect_migrations(/*repo_root*/ None, &mut items)
+            self.detect_migrations(/*repo_root*/ None, config, &mut items)
                 .await?;
         }
 
@@ -138,7 +149,8 @@ impl ExternalAgentConfigService {
             let Some(repo_root) = find_repo_root(Some(cwd))? else {
                 continue;
             };
-            self.detect_migrations(Some(&repo_root), &mut items).await?;
+            self.detect_migrations(Some(&repo_root), config, &mut items)
+                .await?;
         }
 
         Ok(items)
@@ -261,6 +273,7 @@ impl ExternalAgentConfigService {
     async fn detect_migrations(
         &self,
         repo_root: Option<&Path>,
+        app_server_config: Option<&Config>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
         let cwd = repo_root.map(Path::to_path_buf);
@@ -498,49 +511,66 @@ impl ExternalAgentConfigService {
         }
 
         if let Some(settings) = settings.as_ref() {
-            match ConfigBuilder::default()
-                .codex_home(self.codex_home.clone())
-                .fallback_cwd(Some(self.codex_home.clone()))
-                .build()
-                .await
-            {
-                Ok(config) => {
-                    let configured_plugin_ids = config
-                        .config_layer_stack
-                        .get_active_user_layer()
-                        .and_then(|user_layer| user_layer.config.get("plugins"))
-                        .and_then(|plugins| {
-                            match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {
-                                Ok(plugins) => Some(plugins),
-                                Err(err) => {
-                                    tracing::warn!("invalid plugins config: {err}");
-                                    None
-                                }
-                            }
-                        })
-                        .map(|plugins| plugins.into_keys().collect::<HashSet<_>>())
-                        .unwrap_or_default();
-                    let configured_marketplace_plugins = configured_marketplace_plugins(
-                        &config,
-                        &PluginsManager::new(self.codex_home.clone()),
-                    )?;
-                    if let Some(item) = self.detect_plugin_migration(
-                        source_settings.as_path(),
-                        repo_root.unwrap_or(self.external_agent_home.as_path()),
-                        cwd.clone(),
-                        settings,
-                        &configured_plugin_ids,
-                        &configured_marketplace_plugins,
-                    ) {
-                        items.push(item);
+            let fallback_config = if app_server_config.is_none() {
+                match ConfigBuilder::default()
+                    .codex_home(self.codex_home.clone())
+                    .fallback_cwd(Some(self.codex_home.clone()))
+                    .build()
+                    .await
+                {
+                    Ok(config) => Some(config),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            settings_path = %source_settings.display(),
+                            "skipping external agent plugin migration detection because config load failed"
+                        );
+                        None
                     }
                 }
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        settings_path = %source_settings.display(),
-                        "skipping external agent plugin migration detection because config load failed"
-                    );
+            } else {
+                None
+            };
+
+            if let Some(config) = app_server_config.or(fallback_config.as_ref()) {
+                let configured_plugin_ids = config
+                    .config_layer_stack
+                    .get_layers(
+                        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                        /*include_disabled*/ false,
+                    )
+                    .into_iter()
+                    .filter(|layer| {
+                        matches!(
+                            layer.name,
+                            ConfigLayerSource::User { .. } | ConfigLayerSource::AppServerHost
+                        )
+                    })
+                    .filter_map(|layer| layer.config.get("plugins"))
+                    .filter_map(|plugins| {
+                        match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {
+                            Ok(plugins) => Some(plugins),
+                            Err(err) => {
+                                tracing::warn!("invalid plugins config: {err}");
+                                None
+                            }
+                        }
+                    })
+                    .flat_map(HashMap::into_keys)
+                    .collect::<HashSet<_>>();
+                let configured_marketplace_plugins = configured_marketplace_plugins(
+                    config,
+                    &PluginsManager::new(self.codex_home.clone()),
+                )?;
+                if let Some(item) = self.detect_plugin_migration(
+                    source_settings.as_path(),
+                    repo_root.unwrap_or(self.external_agent_home.as_path()),
+                    cwd.clone(),
+                    settings,
+                    &configured_plugin_ids,
+                    &configured_marketplace_plugins,
+                ) {
+                    items.push(item);
                 }
             }
         }

@@ -66,6 +66,8 @@ export type { ComputerUseRequirements } from "./ComputerUseRequirements";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
 export type { ConfigEdit } from "./ConfigEdit";
+export type { ConfigHostSetParams } from "./ConfigHostSetParams";
+export type { ConfigHostSetResponse } from "./ConfigHostSetResponse";
 export type { ConfigLayer } from "./ConfigLayer";
 export type { ConfigLayerMetadata } from "./ConfigLayerMetadata";
 export type { ConfigLayerSource } from "./ConfigLayerSource";

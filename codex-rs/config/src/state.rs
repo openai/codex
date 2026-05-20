@@ -21,6 +21,7 @@ use toml::Value as TomlValue;
 pub struct ConfigLoadOptions {
     pub loader_overrides: LoaderOverrides,
     pub strict_config: bool,
+    pub app_server_host_config: Option<TomlValue>,
 }
 
 impl From<LoaderOverrides> for ConfigLoadOptions {
@@ -28,6 +29,7 @@ impl From<LoaderOverrides> for ConfigLoadOptions {
         Self {
             loader_overrides,
             strict_config: false,
+            app_server_host_config: None,
         }
     }
 }
@@ -182,6 +184,7 @@ impl ConfigLayerEntry {
             ConfigLayerSource::Mdm { .. } => None,
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::User { file, .. } => file.parent(),
+            ConfigLayerSource::AppServerHost => None,
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,

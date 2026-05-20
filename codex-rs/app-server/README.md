@@ -221,12 +221,24 @@ Example with notification opt-out:
 - `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
-- `config/read` — fetch the effective config on disk after resolving config layering, including opaque `desktop` values stored in `config.toml`.
+- `config/read` — fetch the effective config after resolving config layering, including opaque `desktop` values stored in `config.toml`.
+- `config/host/set` — replace the in-memory host config layer for this app-server process. The layer is shaped like `config.toml`, sits above user config and below project/session overrides, and `{ "config": {} }` clears it.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home), and plugin/session migration items may additionally include structured `details` grouping plugin ids or session metadata.
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any plugin/session `details` returned by detect. When a request includes migration items, the server emits `externalAgentConfig/import/completed` once after the full import finishes (immediately after the response when everything completed synchronously, or after background imports finish).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk; dotted paths such as `desktop.someKey` use the same generic write surface.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads, including multiple `desktop.*` edits.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), lifecycle hook lockdown (`allowManagedHooksOnly`), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
+
+### Example: Set host config for one app-server process
+
+Use `config/host/set` when the host needs an app-server-scoped config layer that behaves like an in-memory `config.toml` layer for later config reads and thread creation.
+
+```json
+{ "method": "config/host/set", "id": 7, "params": { "config": { "model": "gpt-5.4" } } }
+{ "id": 7, "result": {} }
+{ "method": "config/host/set", "id": 8, "params": { "config": {} } }
+{ "id": 8, "result": {} }
+```
 
 ### Example: Start or resume a thread
 

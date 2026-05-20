@@ -1532,6 +1532,81 @@ enabled = true
 }
 
 #[tokio::test]
+async fn detect_repo_skips_plugins_that_are_already_configured_by_app_server_host() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(EXTERNAL_AGENT_DIR);
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(EXTERNAL_AGENT_DIR)).expect("create repo external agent dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true,
+            "deployer@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/external-agent-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(repo_root.clone()))
+        .app_server_host_config(Some(
+            toml::from_str(
+                r#"
+[plugins."formatter@acme-tools"]
+enabled = true
+"#,
+            )
+            .expect("host config toml"),
+        ))
+        .build()
+        .await
+        .expect("build config");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect_with_config(
+            ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![repo_root.clone()]),
+            },
+            Some(&config),
+        )
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate enabled plugins from {}",
+                repo_root
+                    .join(EXTERNAL_AGENT_DIR)
+                    .join("settings.json")
+                    .display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["deployer".to_string()],
+                }],
+                ..Default::default()
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn detect_repo_skips_plugins_that_are_disabled_in_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(EXTERNAL_AGENT_DIR);

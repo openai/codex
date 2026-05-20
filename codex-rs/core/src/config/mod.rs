@@ -1066,6 +1066,7 @@ pub struct ConfigBuilder {
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     strict_config: bool,
+    app_server_host_config: Option<TomlValue>,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
@@ -1094,6 +1095,11 @@ impl ConfigBuilder {
 
     pub fn strict_config(mut self, strict_config: bool) -> Self {
         self.strict_config = strict_config;
+        self
+    }
+
+    pub fn app_server_host_config(mut self, app_server_host_config: Option<TomlValue>) -> Self {
+        self.app_server_host_config = app_server_host_config;
         self
     }
 
@@ -1127,6 +1133,7 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             strict_config,
+            app_server_host_config,
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
@@ -1152,6 +1159,7 @@ impl ConfigBuilder {
             ConfigLoadOptions {
                 loader_overrides,
                 strict_config,
+                app_server_host_config,
             },
             cloud_requirements,
             thread_config_loader

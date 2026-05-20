@@ -545,6 +545,23 @@
           "type": "object"
         },
         {
+          "description": "In-memory host-supplied config for the current app-server instance.",
+          "properties": {
+            "type": {
+              "enum": [
+                "appServerHost"
+              ],
+              "title": "AppServerHostConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AppServerHostConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Path to a .codex/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
           "properties": {
             "dotCodexFolder": {

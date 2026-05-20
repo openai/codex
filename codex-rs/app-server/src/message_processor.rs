@@ -872,6 +872,11 @@ impl MessageProcessor {
                 .read(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ConfigHostSet { params, .. } => self
+                .config_processor
+                .host_set(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::WindowsSandboxReadiness { .. } => self
                 .windows_sandbox_processor
                 .windows_sandbox_readiness()

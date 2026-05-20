@@ -80,12 +80,29 @@ impl ExternalAgentConfigRequestProcessor {
         &self,
         params: ExternalAgentConfigDetectParams,
     ) -> Result<ExternalAgentConfigDetectResponse, JSONRPCErrorError> {
+        let config = match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => Some(config),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "external agent config detection could not load app-server config"
+                );
+                None
+            }
+        };
         let items = self
             .migration_service
-            .detect(ExternalAgentConfigDetectOptions {
-                include_home: params.include_home,
-                cwds: params.cwds,
-            })
+            .detect_with_config(
+                ExternalAgentConfigDetectOptions {
+                    include_home: params.include_home,
+                    cwds: params.cwds,
+                },
+                config.as_ref(),
+            )
             .await
             .map_err(|err| internal_error(err.to_string()))?;
 

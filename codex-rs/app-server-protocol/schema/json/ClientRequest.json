@@ -413,6 +413,19 @@
       ],
       "type": "object"
     },
+    "ConfigHostSetParams": {
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "description": "Full replacement app-server host config layer, shaped like config.toml. An empty object clears the host config layer.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "type": "object"
+    },
     "ConfigReadParams": {
       "properties": {
         "cwd": {
@@ -5979,6 +5992,30 @@
         "params"
       ],
       "title": "Config/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "config/host/set"
+          ],
+          "title": "Config/host/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ConfigHostSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Config/host/setRequest",
       "type": "object"
     },
     {

@@ -958,6 +958,7 @@ pub async fn run_main(
         codex_config::ConfigLoadOptions {
             loader_overrides: loader_overrides.clone(),
             strict_config,
+            app_server_host_config: None,
         },
     )
     .await

@@ -29,6 +29,7 @@ pub(crate) struct ConfigManager {
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
+    app_server_host_config: Arc<RwLock<Option<TomlValue>>>,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -50,6 +51,7 @@ impl ConfigManager {
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
+            app_server_host_config: Arc::new(RwLock::new(None)),
             loader_overrides,
             strict_config,
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
@@ -75,6 +77,13 @@ impl ConfigManager {
 
     pub(crate) fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
         self.cloud_requirements
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn current_app_server_host_config(&self) -> Option<TomlValue> {
+        self.app_server_host_config
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
@@ -113,6 +122,15 @@ impl ConfigManager {
         } else {
             warn!("failed to update thread config loader");
         }
+    }
+
+    pub(crate) fn replace_app_server_host_config(
+        &self,
+        app_server_host_config: Option<TomlValue>,
+    ) -> Result<(), ()> {
+        let mut guard = self.app_server_host_config.write().map_err(|_| ())?;
+        *guard = app_server_host_config;
+        Ok(())
     }
 
     fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
@@ -235,6 +253,7 @@ impl ConfigManager {
             .cli_overrides(merged_cli_overrides)
             .loader_overrides(self.loader_overrides.clone())
             .strict_config(self.strict_config)
+            .app_server_host_config(self.current_app_server_host_config())
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
@@ -257,6 +276,18 @@ impl ConfigManager {
         &self,
         cwd: Option<AbsolutePathBuf>,
     ) -> std::io::Result<ConfigLayerStack> {
+        self.load_config_layers_with_app_server_host_config(
+            cwd,
+            self.current_app_server_host_config(),
+        )
+        .await
+    }
+
+    pub(crate) async fn load_config_layers_with_app_server_host_config(
+        &self,
+        cwd: Option<AbsolutePathBuf>,
+        app_server_host_config: Option<TomlValue>,
+    ) -> std::io::Result<ConfigLayerStack> {
         let thread_config_loader = self.current_thread_config_loader();
         load_config_layers_state(
             LOCAL_FS.as_ref(),
@@ -266,6 +297,7 @@ impl ConfigManager {
             codex_config::ConfigLoadOptions {
                 loader_overrides: self.loader_overrides.clone(),
                 strict_config: self.strict_config,
+                app_server_host_config,
             },
             self.current_cloud_requirements(),
             thread_config_loader.as_ref(),

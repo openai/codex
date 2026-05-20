@@ -255,7 +255,9 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
 
 fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
     match &layer.name {
-        ConfigLayerSource::SessionFlags => render_session_flag_details(&layer.config),
+        ConfigLayerSource::AppServerHost | ConfigLayerSource::SessionFlags => {
+            render_session_flag_details(&layer.config)
+        }
         ConfigLayerSource::Mdm { .. } | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             render_mdm_layer_details(layer)
         }
@@ -388,6 +390,7 @@ fn format_config_layer_source(source: &ConfigLayerSource) -> String {
         ConfigLayerSource::User { file, .. } => {
             format!("user ({})", file.as_path().display())
         }
+        ConfigLayerSource::AppServerHost => "app-server-host".to_string(),
         ConfigLayerSource::Project { dot_codex_folder } => {
             format!(
                 "project ({}/config.toml)",

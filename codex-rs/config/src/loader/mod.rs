@@ -120,6 +120,7 @@ pub async fn load_config_layers_state(
     let ConfigLoadOptions {
         loader_overrides: overrides,
         strict_config,
+        app_server_host_config,
     } = options.into();
     let active_user_profile = overrides.user_config_profile.clone();
     let ignore_managed_requirements = overrides.ignore_managed_requirements;
@@ -184,7 +185,11 @@ pub async fn load_config_layers_state(
             .map(AbsolutePathBuf::as_path)
             .unwrap_or(codex_home);
         if strict_config {
-            validate_cli_overrides_strictly(&cli_overrides_layer, base_dir)?;
+            validate_inline_config_layer_strictly(
+                &cli_overrides_layer,
+                base_dir,
+                "-c/--config override",
+            )?;
         }
         Some(resolve_relative_paths_in_config_toml(
             cli_overrides_layer,
@@ -254,6 +259,22 @@ pub async fn load_config_layers_state(
             )
             .await?,
         );
+    }
+
+    if let Some(app_server_host_config) = app_server_host_config {
+        if strict_config {
+            validate_inline_config_layer_strictly(
+                &app_server_host_config,
+                codex_home,
+                "app-server host config override",
+            )?;
+        }
+        let app_server_host_config =
+            resolve_relative_paths_in_config_toml(app_server_host_config, codex_home)?;
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::AppServerHost,
+            app_server_host_config,
+        ));
     }
 
     let mut startup_warnings = None;
@@ -502,23 +523,23 @@ fn validate_config_toml_strictly(
     }
 }
 
-fn validate_cli_overrides_strictly(
-    cli_overrides_layer: &TomlValue,
+fn validate_inline_config_layer_strictly(
+    config_layer: &TomlValue,
     base_dir: &Path,
+    source_label: &str,
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(cli_overrides_layer.clone())
-    {
+    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(config_layer.clone()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+            format!("unknown configuration field `{ignored_path}` in {source_label}"),
         ));
     }
 
-    if let Some(ignored_path) = unknown_feature_toml_value_field(cli_overrides_layer) {
+    if let Some(ignored_path) = unknown_feature_toml_value_field(config_layer) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+            format!("unknown configuration field `{ignored_path}` in {source_label}"),
         ));
     }
 

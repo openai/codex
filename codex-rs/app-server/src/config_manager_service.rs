@@ -1,6 +1,8 @@
 use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigHostSetParams;
+use codex_app_server_protocol::ConfigHostSetResponse;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
@@ -29,6 +31,7 @@ use codex_core::path_utils::write_atomically;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -188,6 +191,65 @@ impl ConfigManager {
 
         self.apply_edits(params.file_path, params.expected_version, edits)
             .await
+    }
+
+    pub(crate) async fn set_host_config(
+        &self,
+        params: ConfigHostSetParams,
+    ) -> Result<ConfigHostSetResponse, ConfigManagerError> {
+        let app_server_host_config = parse_app_server_host_config(params.config)?;
+
+        let layers = self
+            .load_config_layers_with_app_server_host_config(
+                /*cwd*/ None,
+                app_server_host_config.clone(),
+            )
+            .await
+            .map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid app-server host configuration: {err}"),
+                )
+            })?;
+
+        if let Some(host_config) = app_server_host_config.as_ref() {
+            let host_config_toml =
+                deserialize_config_toml_with_base(host_config.clone(), self.codex_home()).map_err(
+                    |err| {
+                        ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            format!("Invalid app-server host configuration: {err}"),
+                        )
+                    },
+                )?;
+            validate_feature_requirements_for_config_toml(
+                &host_config_toml,
+                layers.requirements().feature_requirements.as_ref(),
+            )
+            .map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid app-server host configuration: {err}"),
+                )
+            })?;
+        }
+
+        validate_config(&layers.effective_config()).map_err(|err| {
+            ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Invalid app-server host configuration: {err}"),
+            )
+        })?;
+
+        self.replace_app_server_host_config(app_server_host_config)
+            .map_err(|()| {
+                ConfigManagerError::io(
+                    "failed to update app-server host config",
+                    std::io::Error::other("app-server host config lock poisoned"),
+                )
+            })?;
+
+        Ok(ConfigHostSetResponse {})
     }
 
     async fn apply_edits(
@@ -399,6 +461,25 @@ fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {
         .map_err(|err| format!("invalid value: {err}"))
 }
 
+fn parse_app_server_host_config(
+    config: HashMap<String, JsonValue>,
+) -> Result<Option<TomlValue>, ConfigManagerError> {
+    if config.is_empty() {
+        return Ok(None);
+    }
+
+    let host_config = serde_json::to_value(config)
+        .and_then(serde_json::from_value::<TomlValue>)
+        .map_err(|err| {
+            ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("invalid app-server host config: {err}"),
+            )
+        })?;
+
+    Ok(Some(host_config))
+}
+
 fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
     if path.trim().is_empty() {
         return Err("keyPath must not be empty".to_string());
@@ -608,6 +689,7 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
         }
+        ConfigLayerSource::AppServerHost => "Overridden by app-server host config".to_string(),
         ConfigLayerSource::Project { dot_codex_folder } => format!(
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
             dot_codex_folder.display(),

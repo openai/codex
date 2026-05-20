@@ -1988,6 +1988,30 @@
             },
             "method": {
               "enum": [
+                "config/host/set"
+              ],
+              "title": "Config/host/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ConfigHostSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Config/host/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "externalAgentConfig/detect"
               ],
               "title": "ExternalAgentConfig/detectRequestMethod",
@@ -7479,6 +7503,26 @@
         ],
         "type": "object"
       },
+      "ConfigHostSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "description": "Full replacement app-server host config layer, shaped like config.toml. An empty object clears the host config layer.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "ConfigHostSetParams",
+        "type": "object"
+      },
+      "ConfigHostSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ConfigHostSetResponse",
+        "type": "object"
+      },
       "ConfigLayer": {
         "properties": {
           "config": true,
@@ -7601,6 +7645,23 @@
               "type"
             ],
             "title": "UserConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "description": "In-memory host-supplied config for the current app-server instance.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "appServerHost"
+                ],
+                "title": "AppServerHostConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AppServerHostConfigLayerSource",
             "type": "object"
           },
           {

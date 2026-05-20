@@ -330,6 +330,7 @@ fn skill_roots_from_layer_stack_inner(
                 });
             }
             ConfigLayerSource::Mdm { .. }
+            | ConfigLayerSource::AppServerHost
             | ConfigLayerSource::SessionFlags
             | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
             | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {}

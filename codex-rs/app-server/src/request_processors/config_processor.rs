@@ -11,6 +11,8 @@ use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseRequirements;
 use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigHostSetParams;
+use codex_app_server_protocol::ConfigHostSetResponse;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigRequirements;
@@ -142,6 +144,19 @@ impl ConfigRequestProcessor {
         self.handle_config_mutation_result(self.batch_write_inner(params).await)
             .await
             .map(ClientResponsePayload::ConfigBatchWrite)
+    }
+
+    pub(crate) async fn host_set(
+        &self,
+        params: ConfigHostSetParams,
+    ) -> Result<ConfigHostSetResponse, JSONRPCErrorError> {
+        self.handle_config_mutation_result(
+            self.config_manager
+                .set_host_config(params)
+                .await
+                .map_err(map_error),
+        )
+        .await
     }
 
     pub(crate) async fn experimental_feature_enablement_set(
