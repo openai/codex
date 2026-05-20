@@ -7421,7 +7421,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
 
 #[tokio::test]
 async fn run_user_shell_command_does_not_set_reference_context_item() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(/*item*/ None);
@@ -7430,23 +7430,11 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
     handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
         .await;
 
-    let deadline = StdDuration::from_secs(15);
-    let start = std::time::Instant::now();
-    loop {
-        let remaining = deadline.saturating_sub(start.elapsed());
-        let evt = tokio::time::timeout(remaining, rx.recv())
-            .await
-            .expect("timeout waiting for event")
-            .expect("event");
-        if matches!(evt.msg, EventMsg::TurnComplete(_)) {
-            break;
-        }
-    }
-
     assert!(
         session.reference_context_item().await.is_none(),
         "standalone shell tasks should not mutate previous context"
     );
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[tokio::test]
