@@ -65,7 +65,8 @@ Checks:
 - Workspace manifests do not introduce workspace crate feature toggles.
 """
 
-from __future__ import annotations
+# removed duplicate future import
+
 
 import sys
 import tomllib
