@@ -602,8 +602,7 @@ async fn track_turn_resolved_config_analytics(
     let plan_type = sess
         .services
         .auth_manager
-        .auth()
-        .await
+        .auth_cached()
         .and_then(|auth| auth.account_plan_type());
     sess.services
         .analytics_events_client
