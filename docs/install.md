@@ -26,7 +26,7 @@ rustup component add rustfmt
 rustup component add clippy
 # Install helper tools used by the workspace justfile:
 cargo install --locked just
-# Optional: install nextest for the `just test` helper
+# Install nextest for the `just test` helper.
 cargo install --locked cargo-nextest
 
 # Build Codex.
@@ -40,13 +40,11 @@ just fmt
 just fix -p <crate-you-touched>
 
 # Run the relevant tests (project-specific is fastest), for example:
-cargo test -p codex-tui
-# If you have cargo-nextest installed, `just test` runs the test suite via nextest:
+just test -p codex-tui
+# `just test` runs the test suite via nextest:
 just test
 # Avoid `--all-features` for routine local runs because it increases build
 # time and `target/` disk usage by compiling additional feature combinations.
-# If you specifically want full feature coverage, use:
-cargo test --all-features
 ```
 
 ## Tracing / verbose logging
