@@ -16,6 +16,7 @@ from typing import Sequence
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/26201494185"  # rust-v0.133.0-alpha.4
+GITHUB_REPO = "openai/codex"
 VENDOR_DIR_NAME = "vendor"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
@@ -33,6 +34,12 @@ class BinaryComponent:
     artifact_prefix: str  # matches the artifact filename prefix (e.g. codex-<target>.zst)
     dest_dir: str  # directory under vendor/<target>/ where the binary is installed
     binary_basename: str  # executable name inside dest_dir (before optional .exe)
+
+
+@dataclass(frozen=True)
+class WorkflowArtifact:
+    name: str
+    size_in_bytes: int
 
 
 BINARY_COMPONENTS = {
@@ -100,6 +107,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help=(
+            "Directory used to cache downloaded workflow artifacts. Defaults to a "
+            "temporary directory."
+        ),
+    )
+    parser.add_argument(
         "root",
         nargs="?",
         type=Path,
@@ -124,22 +139,89 @@ def main() -> int:
     workflow_url = workflow_override or DEFAULT_WORKFLOW_URL
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
-    print(f"Downloading native artifacts from workflow {workflow_id}...")
+    print(f"Downloading native artifacts from workflow {workflow_id}...", flush=True)
 
     with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
-        with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
-            artifacts_dir = Path(artifacts_dir_str)
-            _download_artifacts(workflow_id, artifacts_dir)
-            if CODEX_PACKAGE_COMPONENT in components:
-                install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
-            install_binary_components(
-                artifacts_dir,
-                vendor_dir,
-                [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+        if args.artifacts_dir is not None:
+            artifacts_dir = args.artifacts_dir.resolve()
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            install_from_workflow_artifacts(workflow_id, artifacts_dir, components, vendor_dir)
+        else:
+            with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
+                artifacts_dir = Path(artifacts_dir_str)
+                install_from_workflow_artifacts(
+                    workflow_id,
+                    artifacts_dir,
+                    components,
+                    vendor_dir,
+                )
+
+    print(f"Installed native dependencies into {vendor_dir}", flush=True)
+    return 0
+
+
+def install_from_workflow_artifacts(
+    workflow_id: str,
+    artifacts_dir: Path,
+    components: Sequence[str],
+    vendor_dir: Path,
+) -> None:
+    artifact_names = select_target_artifacts(workflow_id, components)
+    _download_artifacts(workflow_id, artifacts_dir, artifact_names)
+    if CODEX_PACKAGE_COMPONENT in components:
+        install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
+    install_binary_components(
+        artifacts_dir,
+        vendor_dir,
+        [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+    )
+
+
+def select_target_artifacts(
+    workflow_id: str,
+    components: Sequence[str],
+) -> list[WorkflowArtifact]:
+    needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
+        component in BINARY_COMPONENTS for component in components
+    )
+    if not needs_target_artifacts:
+        return []
+
+    artifacts_by_name = {
+        artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id)
+    }
+    selected_artifacts: list[WorkflowArtifact] = []
+    for target in BINARY_TARGETS:
+        for artifact_name in [target, f"{target}-unsigned"]:
+            artifact = artifacts_by_name.get(artifact_name)
+            if artifact is not None:
+                selected_artifacts.append(artifact)
+                break
+        else:
+            raise FileNotFoundError(
+                f"Expected workflow artifact not found for target {target}"
             )
 
-    print(f"Installed native dependencies into {vendor_dir}")
-    return 0
+    return selected_artifacts
+
+
+def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
+    stdout = subprocess.check_output(
+        [
+            "gh",
+            "api",
+            f"repos/{GITHUB_REPO}/actions/runs/{workflow_id}/artifacts",
+            "--paginate",
+            "--jq",
+            ".artifacts[] | [.name, .size_in_bytes] | @tsv",
+        ],
+        text=True,
+    )
+    artifacts: list[WorkflowArtifact] = []
+    for line in stdout.splitlines():
+        name, size_in_bytes = line.split("\t", 1)
+        artifacts.append(WorkflowArtifact(name=name, size_in_bytes=int(size_in_bytes)))
+    return artifacts
 
 
 def install_codex_package_archives(
@@ -151,7 +233,10 @@ def install_codex_package_archives(
     if not targets:
         return
 
-    print("Installing Codex package archives for targets: " + ", ".join(targets))
+    print(
+        "Installing Codex package archives for targets: " + ", ".join(targets),
+        flush=True,
+    )
     max_workers = min(len(targets), max(1, (os.cpu_count() or 1)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -165,7 +250,7 @@ def install_codex_package_archives(
         }
         for future in as_completed(futures):
             installed_path = future.result()
-            print(f"  installed {installed_path}")
+            print(f"  installed {installed_path}", flush=True)
 
 
 def _install_single_codex_package_archive(
@@ -189,18 +274,43 @@ def _install_single_codex_package_archive(
     return dest_dir
 
 
-def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
-    cmd = [
-        "gh",
-        "run",
-        "download",
-        "--dir",
-        str(dest_dir),
-        "--repo",
-        "openai/codex",
-        workflow_id,
-    ]
-    subprocess.check_call(cmd)
+def _download_artifacts(
+    workflow_id: str,
+    dest_dir: Path,
+    artifacts: Sequence[WorkflowArtifact],
+) -> None:
+    total_bytes = sum(artifact.size_in_bytes for artifact in artifacts)
+    print(
+        f"Downloading {len(artifacts)} artifacts ({format_bytes(total_bytes)})",
+        flush=True,
+    )
+    for artifact in artifacts:
+        artifact_dir = dest_dir / artifact.name
+        if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
+            print(
+                f"  using cached {artifact.name} ({format_bytes(artifact.size_in_bytes)})",
+                flush=True,
+            )
+            continue
+
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"  downloading {artifact.name} ({format_bytes(artifact.size_in_bytes)})",
+            flush=True,
+        )
+        cmd = [
+            "gh",
+            "run",
+            "download",
+            "--name",
+            artifact.name,
+            "--dir",
+            str(artifact_dir),
+            "--repo",
+            GITHUB_REPO,
+            workflow_id,
+        ]
+        subprocess.check_call(cmd)
 
 
 def install_binary_components(
@@ -216,7 +326,8 @@ def install_binary_components(
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "
-            + ", ".join(component_targets)
+            + ", ".join(component_targets),
+            flush=True,
         )
         max_workers = min(len(component_targets), max(1, (os.cpu_count() or 1)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -232,7 +343,16 @@ def install_binary_components(
             }
             for future in as_completed(futures):
                 installed_path = future.result()
-                print(f"  installed {installed_path}")
+                print(f"  installed {installed_path}", flush=True)
+
+
+def format_bytes(size_in_bytes: int) -> str:
+    value = float(size_in_bytes)
+    for unit in ["B", "KiB", "MiB"]:
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GiB"
 
 
 def _install_single_binary(

@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -324,8 +325,10 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
-    print("+", " ".join(cmd))
-    subprocess.run(cmd, cwd=cwd, check=True)
+    print("+", " ".join(cmd), flush=True)
+    env = os.environ.copy()
+    env.setdefault("CI", "true")
+    subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
 def stage_codex_sdk_sources(staging_dir: Path) -> None:
@@ -412,9 +415,17 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
+        npm_cache_dir = pack_dir / "npm-cache"
+        npm_logs_dir = pack_dir / "npm-logs"
+        npm_cache_dir.mkdir()
+        npm_logs_dir.mkdir()
+        env = os.environ.copy()
+        env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
+        env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
             ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
+            env=env,
             text=True,
         )
         try:

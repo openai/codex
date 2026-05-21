@@ -121,11 +121,18 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
+    artifacts_dir: Path,
 ) -> None:
     if not components:
         return
 
-    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    cmd = [
+        str(INSTALL_NATIVE_DEPS),
+        "--workflow-url",
+        workflow_url,
+        "--artifacts-dir",
+        str(artifacts_dir),
+    ]
     for component in sorted(components):
         cmd.extend(["--component", component])
     cmd.append(str(vendor_root))
@@ -133,7 +140,7 @@ def install_native_components(
 
 
 def run_command(cmd: list[str]) -> None:
-    print("+", " ".join(cmd))
+    print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
@@ -154,9 +161,19 @@ def main() -> int:
 
     packages = expand_packages(list(args.packages))
     native_component_sets = collect_native_component_sets(packages)
+    print("Expanded packages: " + ", ".join(packages), flush=True)
+    if native_component_sets:
+        component_sets = [
+            "(" + ", ".join(components) + ")" for components in native_component_sets
+        ]
+        print(
+            "Native component sets: " + ", ".join(component_sets),
+            flush=True,
+        )
 
     vendor_temp_roots: list[Path] = []
     vendor_src_by_components: dict[tuple[str, ...], Path] = {}
+    artifacts_temp_root: Path | None = None
     resolved_head_sha: str | None = None
 
     final_messages = []
@@ -166,22 +183,35 @@ def main() -> int:
             workflow_url, resolved_head_sha = resolve_workflow_url(
                 args.release_version, args.workflow_url
             )
+            print(f"Using native artifacts from {workflow_url}", flush=True)
+            artifacts_temp_root = Path(
+                tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
+            )
+            print(f"Caching downloaded artifacts in {artifacts_temp_root}", flush=True)
             for components in native_component_sets:
                 vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
                 vendor_temp_roots.append(vendor_temp_root)
+                print(
+                    "Installing native components "
+                    + ", ".join(components)
+                    + f" into {vendor_temp_root}",
+                    flush=True,
+                )
                 install_native_components(
                     workflow_url,
                     set(components),
                     vendor_temp_root,
+                    artifacts_temp_root,
                 )
                 vendor_src_by_components[components] = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
-            print(f"should `git checkout {resolved_head_sha}`")
+            print(f"should `git checkout {resolved_head_sha}`", flush=True)
 
         for package in packages:
             staging_dir = Path(tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp))
             pack_output = output_dir / tarball_name_for_package(package, args.release_version)
+            print(f"Staging {package} in {staging_dir}", flush=True)
 
             cmd = [
                 str(BUILD_SCRIPT),
@@ -210,9 +240,11 @@ def main() -> int:
         if not args.keep_staging_dirs:
             for vendor_temp_root in vendor_temp_roots:
                 shutil.rmtree(vendor_temp_root, ignore_errors=True)
+        if artifacts_temp_root is not None:
+            shutil.rmtree(artifacts_temp_root, ignore_errors=True)
 
     for msg in final_messages:
-        print(msg)
+        print(msg, flush=True)
 
     return 0
 
