@@ -947,6 +947,13 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         }
     );
 
+    let standalone_web_search = probe(|turn| {
+        set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
+        set_web_search_mode(turn, WebSearchMode::Live);
+    })
+    .await;
+    standalone_web_search.assert_visible_lacks(&["web_search"]);
+
     let unsupported_provider = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
         use_bedrock_provider(turn);

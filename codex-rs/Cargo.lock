@@ -1859,6 +1859,7 @@ dependencies = [
  "pretty_assertions",
  "regex-lite",
  "reqwest",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
@@ -1927,6 +1928,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-pty",
+ "codex-web-search-extension",
  "core_test_support",
  "flate2",
  "futures",
@@ -4114,6 +4116,28 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "v8",
+]
+
+[[package]]
+name = "codex-web-search-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-api",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-thread-store",
+ "codex-tools",
+ "codex-utils-output-truncation",
+ "http 1.4.0",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde_json",
 ]
 
 [[package]]

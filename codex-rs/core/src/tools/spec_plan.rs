@@ -241,8 +241,12 @@ fn spec_for_model_request(
 pub(crate) fn hosted_model_tool_specs(turn_context: &TurnContext) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
     let provider_capabilities = turn_context.provider.capabilities();
-    let web_search_mode = provider_capabilities
-        .web_search
+    let standalone_web_search = turn_context
+        .config
+        .features
+        .enabled(Feature::StandaloneWebSearch)
+        && turn_context.provider.info().is_openai();
+    let web_search_mode = (!standalone_web_search && provider_capabilities.web_search)
         .then_some(turn_context.config.web_search_mode.value());
     let web_search_config = if provider_capabilities.web_search {
         turn_context.config.web_search_config.as_ref()
