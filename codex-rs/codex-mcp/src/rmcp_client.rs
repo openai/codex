@@ -45,6 +45,8 @@ use codex_async_utils::OrCancelExt;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
@@ -564,9 +566,10 @@ async fn make_rmcp_client(
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
-    let resolved_runtime = runtime_context
-        .resolve_server_runtime(server_name, &config)
+    let resolved_environment = runtime_context
+        .resolve_server_environment(server_name, &config)
         .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
+    let is_local_environment = config.is_local_environment();
     let McpServerConfig { transport, .. } = config;
 
     match transport {
@@ -584,21 +587,23 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = match &resolved_runtime {
-                crate::runtime::ResolvedMcpServerRuntime::Orchestrator => {
-                    // TODO(starr): Unify local stdio MCP launch with
-                    // `ExecutorStdioServerLauncher` once the executor-backed path
-                    // preserves `LocalStdioServerLauncher` semantics.
-                    Arc::new(LocalStdioServerLauncher::new(
-                        runtime_context.fallback_cwd(),
-                    )) as Arc<dyn StdioServerLauncher>
-                }
-                crate::runtime::ResolvedMcpServerRuntime::Environment(environment) => {
-                    Arc::new(ExecutorStdioServerLauncher::new(
-                        environment.get_exec_backend(),
-                        runtime_context.fallback_cwd(),
-                    )) as Arc<dyn StdioServerLauncher>
-                }
+            let launcher = if is_local_environment {
+                // TODO(starr): Unify local stdio MCP launch with
+                // `ExecutorStdioServerLauncher` once the executor-backed path
+                // preserves `LocalStdioServerLauncher` semantics.
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_context.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
+            } else {
+                let Some(environment) = resolved_environment.as_ref() else {
+                    unreachable!(
+                        "non-local stdio MCP servers resolve an environment before launch"
+                    );
+                };
+                Arc::new(ExecutorStdioServerLauncher::new(
+                    environment.get_exec_backend(),
+                    runtime_context.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
             };
 
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
@@ -611,7 +616,10 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            let http_client = resolved_runtime.http_client();
+            let http_client = resolved_environment.as_ref().map_or_else(
+                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                |environment| environment.get_http_client(),
+            );
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

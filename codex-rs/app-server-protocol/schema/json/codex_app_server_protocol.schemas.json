@@ -11025,46 +11025,6 @@
         "title": "McpServerRefreshResponse",
         "type": "object"
       },
-      "McpServerRuntimePlacement": {
-        "oneOf": [
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "orchestrator"
-                ],
-                "title": "OrchestratorMcpServerRuntimePlacementType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "OrchestratorMcpServerRuntimePlacement",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "environmentId": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "environment"
-                ],
-                "title": "EnvironmentMcpServerRuntimePlacementType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "environmentId",
-              "type"
-            ],
-            "title": "EnvironmentMcpServerRuntimePlacement",
-            "type": "object"
-          }
-        ]
-      },
       "McpServerStartupState": {
         "enum": [
           "starting",
@@ -11094,9 +11054,6 @@
             },
             "type": "array"
           },
-          "runtimePlacement": {
-            "$ref": "#/definitions/v2/McpServerRuntimePlacement"
-          },
           "tools": {
             "additionalProperties": {
               "$ref": "#/definitions/v2/Tool"
@@ -11109,7 +11066,6 @@
           "name",
           "resourceTemplates",
           "resources",
-          "runtimePlacement",
           "tools"
         ],
         "type": "object"

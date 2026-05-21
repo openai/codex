@@ -834,7 +834,6 @@ async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
         resources: Vec::new(),
         resource_templates: Vec::new(),
         auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        runtime_placement: codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator,
     }];
 
     let cell = new_mcp_tools_output_from_statuses(
@@ -893,7 +892,6 @@ async fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
             mime_type: None,
         }],
         auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        runtime_placement: codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator,
     }];
 
     let cell = new_mcp_tools_output_from_statuses(&config, &statuses, McpServerStatusDetail::Full);

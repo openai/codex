@@ -314,7 +314,7 @@ pub struct McpServerStatusSnapshot {
     pub resources: HashMap<String, Vec<Resource>>,
     pub resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     pub auth_statuses: HashMap<String, McpAuthStatus>,
-    pub runtime_placements: HashMap<String, crate::runtime::McpServerRuntimePlacement>,
+    pub server_names: Vec<String>,
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
@@ -333,7 +333,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
             auth_statuses: HashMap::new(),
-            runtime_placements: HashMap::new(),
+            server_names: Vec::new(),
         };
     }
 
@@ -344,10 +344,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     )
     .await;
 
-    let runtime_placements = mcp_servers
-        .iter()
-        .map(|(server_name, server)| (server_name.clone(), server.runtime_placement()))
-        .collect();
+    let server_names = mcp_servers.keys().cloned().collect();
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
@@ -374,7 +371,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,
         auth_status_entries,
-        runtime_placements,
+        server_names,
         detail,
     )
     .await;
@@ -583,7 +580,7 @@ fn convert_mcp_resource_templates(
 async fn collect_mcp_server_status_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
-    runtime_placements: HashMap<String, crate::runtime::McpServerRuntimePlacement>,
+    server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let (tools, resources, resource_templates) = tokio::join!(
@@ -622,7 +619,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         resources: convert_mcp_resources(resources),
         resource_templates: convert_mcp_resource_templates(resource_templates),
         auth_statuses: auth_statuses_from_entries(&auth_status_entries),
-        runtime_placements,
+        server_names,
     }
 }
 

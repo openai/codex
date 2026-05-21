@@ -1,8 +1,6 @@
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 
-use crate::runtime::McpServerRuntimePlacement;
-
 /// The runtime launch strategy for an effective MCP server.
 #[derive(Debug, Clone)]
 pub(crate) enum McpServerLaunch {
@@ -29,12 +27,6 @@ impl EffectiveMcpServer {
     pub fn configured_config(&self) -> Option<&McpServerConfig> {
         match &self.launch {
             McpServerLaunch::Configured(config) => Some(config.as_ref()),
-        }
-    }
-
-    pub fn runtime_placement(&self) -> McpServerRuntimePlacement {
-        match &self.launch {
-            McpServerLaunch::Configured(config) => McpServerRuntimePlacement::from_config(config),
         }
     }
 

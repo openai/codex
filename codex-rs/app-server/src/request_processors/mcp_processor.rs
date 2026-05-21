@@ -216,7 +216,6 @@ impl McpRequestProcessor {
                 outgoing,
                 request,
                 params,
-                config,
                 mcp_config,
                 auth,
                 runtime_context,
@@ -230,7 +229,6 @@ impl McpRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
@@ -238,7 +236,6 @@ impl McpRequestProcessor {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
             params,
-            config,
             mcp_config,
             auth,
             runtime_context,
@@ -250,7 +247,6 @@ impl McpRequestProcessor {
     async fn list_mcp_server_status_response(
         request_id: String,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
@@ -274,27 +270,15 @@ impl McpRequestProcessor {
             resources,
             resource_templates,
             auth_statuses,
-            runtime_placements,
+            mut server_names,
         } = snapshot;
-        let runtime_placements = config
-            .mcp_servers
-            .iter()
-            .map(|(name, config)| {
-                (
-                    name.clone(),
-                    codex_mcp::McpServerRuntimePlacement::from_config(config),
-                )
-            })
-            .chain(runtime_placements)
-            .collect::<HashMap<_, _>>();
-
-        let mut server_names: Vec<String> = runtime_placements
-            .keys()
-            .cloned()
-            .chain(auth_statuses.keys().cloned())
-            .chain(resources.keys().cloned())
-            .chain(resource_templates.keys().cloned())
-            .collect();
+        server_names.extend(
+            auth_statuses
+                .keys()
+                .cloned()
+                .chain(resources.keys().cloned())
+                .chain(resource_templates.keys().cloned()),
+        );
         server_names.sort();
         server_names.dedup();
 
@@ -319,24 +303,18 @@ impl McpRequestProcessor {
 
         let data: Vec<McpServerStatus> = server_names[start..end]
             .iter()
-            .map(|name| {
-                let runtime_placement = runtime_placements.get(name).cloned().ok_or_else(|| {
-                    internal_error(format!("MCP server `{name}` missing runtime placement"))
-                })?;
-                Ok(McpServerStatus {
-                    name: name.clone(),
-                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                    resources: resources.get(name).cloned().unwrap_or_default(),
-                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                    auth_status: auth_statuses
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                        .into(),
-                    runtime_placement: app_server_runtime_placement(runtime_placement),
-                })
+            .map(|name| McpServerStatus {
+                name: name.clone(),
+                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                resources: resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                auth_status: auth_statuses
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
             })
-            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
+            .collect();
 
         let next_cursor = if end < total {
             Some(end.to_string())
@@ -435,19 +413,6 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
-    }
-}
-
-fn app_server_runtime_placement(
-    placement: codex_mcp::McpServerRuntimePlacement,
-) -> codex_app_server_protocol::McpServerRuntimePlacement {
-    match placement {
-        codex_mcp::McpServerRuntimePlacement::Orchestrator => {
-            codex_app_server_protocol::McpServerRuntimePlacement::Orchestrator
-        }
-        codex_mcp::McpServerRuntimePlacement::Environment { environment_id } => {
-            codex_app_server_protocol::McpServerRuntimePlacement::Environment { environment_id }
-        }
     }
 }
 
