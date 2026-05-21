@@ -1,2 +1,5 @@
 codex-rs/app-server-protocol/schema/** linguist-generated
 codex-rs/hooks/schema/generated/** linguist-generated
+# Keep sqlx migration checksums stable across Windows and WSL/Linux builds.
+codex-rs/state/migrations/*.sql text eol=lf
+codex-rs/state/logs_migrations/*.sql text eol=lf
