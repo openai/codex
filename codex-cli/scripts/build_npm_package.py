@@ -16,7 +16,6 @@ RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / 
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 CODEX_NPM_NAME = "@openai/codex"
 CODEX_PACKAGE_COMPONENT = "codex-package"
-CODEX_PACKAGE_ENTRIES = ("codex-package.json", "bin", "codex-resources", "codex-path")
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
 # The underlying package published to npm is always `@openai/codex`.
@@ -397,17 +396,9 @@ def copy_native_binaries(
         dest_target_dir = vendor_dest / target_dir.name
 
         if CODEX_PACKAGE_COMPONENT in components_set:
-            validate_codex_package_dir(target_dir)
             if dest_target_dir.exists():
                 shutil.rmtree(dest_target_dir)
-            dest_target_dir.mkdir(parents=True, exist_ok=True)
-            for entry in CODEX_PACKAGE_ENTRIES:
-                src = target_dir / entry
-                dest = dest_target_dir / entry
-                if src.is_dir():
-                    shutil.copytree(src, dest)
-                else:
-                    shutil.copy2(src, dest)
+            shutil.copytree(target_dir, dest_target_dir)
         else:
             dest_target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -432,36 +423,6 @@ def copy_native_binaries(
         if missing_targets:
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
-
-
-def validate_codex_package_dir(package_dir: Path) -> None:
-    is_windows = "windows" in package_dir.name
-    required_files = [
-        Path("codex-package.json"),
-        Path("bin") / ("codex.exe" if is_windows else "codex"),
-        Path("codex-path") / ("rg.exe" if is_windows else "rg"),
-    ]
-
-    if "linux" in package_dir.name:
-        required_files.append(Path("codex-resources") / "bwrap")
-
-    if is_windows:
-        required_files.extend(
-            [
-                Path("codex-resources") / "codex-command-runner.exe",
-                Path("codex-resources") / "codex-windows-sandbox-setup.exe",
-            ]
-        )
-
-    missing_files = [
-        str(relative_path)
-        for relative_path in required_files
-        if not (package_dir / relative_path).is_file()
-    ]
-    if missing_files:
-        missing = ", ".join(missing_files)
-        raise RuntimeError(f"Missing files in Codex package directory {package_dir}: {missing}")
-
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
