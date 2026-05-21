@@ -11,8 +11,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "close_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_close_agent_tool_v1())
+    fn spec(&self) -> ToolSpec {
+        create_close_agent_tool_v1()
     }
 
     async fn handle(
@@ -110,7 +110,7 @@ impl CoreToolRuntime for Handler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         multi_agent_tool_search_info(
             "close_agent close shutdown stop agent subagent thread status target",
-            self.spec()?,
+            self.spec(),
         )
     }
 

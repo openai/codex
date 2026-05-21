@@ -30,8 +30,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("spawn_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_spawn_agent_tool_v2(self.options.clone()))
+    fn spec(&self) -> ToolSpec {
+        create_spawn_agent_tool_v2(self.options.clone())
     }
 
     async fn handle(
