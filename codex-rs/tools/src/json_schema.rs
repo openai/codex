@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
+const SCHEMA_CHILD_KEYS: [&str; 2] = ["items", "anyOf"];
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
@@ -167,6 +168,50 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
         return Err(singleton_null_schema_error());
     }
     Ok(schema)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefinitionTraversal {
+    Include,
+    Skip,
+}
+
+fn for_each_schema_child(
+    map: &serde_json::Map<String, JsonValue>,
+    definition_traversal: DefinitionTraversal,
+    visitor: &mut impl FnMut(&JsonValue),
+) {
+    if let Some(properties) = map.get("properties")
+        && let Some(properties_map) = properties.as_object()
+    {
+        for value in properties_map.values() {
+            visitor(value);
+        }
+    }
+
+    for key in SCHEMA_CHILD_KEYS {
+        if let Some(value) = map.get(key) {
+            visitor(value);
+        }
+    }
+
+    if let Some(additional_properties) = map.get("additionalProperties")
+        && !matches!(additional_properties, JsonValue::Bool(_))
+    {
+        visitor(additional_properties);
+    }
+
+    if definition_traversal == DefinitionTraversal::Include {
+        for key in DEFINITION_TABLE_KEYS {
+            if let Some(definitions) = map.get(key)
+                && let Some(definitions_map) = definitions.as_object()
+            {
+                for value in definitions_map.values() {
+                    visitor(value);
+                }
+            }
+        }
+    }
 }
 
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
@@ -353,57 +398,19 @@ fn collect_reachable_definitions(value: &JsonValue) -> BTreeSet<DefinitionPointe
     reachable
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefCollectionContext {
-    SchemaObject,
-    PropertiesMap,
-}
-
 fn collect_refs_outside_definitions(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
-    collect_refs_outside_definitions_in_context(value, refs, RefCollectionContext::SchemaObject);
-}
-
-fn collect_refs_outside_definitions_in_context(
-    value: &JsonValue,
-    refs: &mut Vec<DefinitionPointer>,
-    context: RefCollectionContext,
-) {
     match value {
         JsonValue::Array(values) => {
             for value in values {
-                collect_refs_outside_definitions_in_context(
-                    value,
-                    refs,
-                    RefCollectionContext::SchemaObject,
-                );
+                collect_refs_outside_definitions(value, refs);
             }
         }
-        JsonValue::Object(map) => match context {
-            RefCollectionContext::SchemaObject => {
-                collect_ref_from_map(map, refs);
-                for (key, value) in map {
-                    if DEFINITION_TABLE_KEYS.contains(&key.as_str()) {
-                        continue;
-                    }
-
-                    let child_context = if key == "properties" {
-                        RefCollectionContext::PropertiesMap
-                    } else {
-                        RefCollectionContext::SchemaObject
-                    };
-                    collect_refs_outside_definitions_in_context(value, refs, child_context);
-                }
-            }
-            RefCollectionContext::PropertiesMap => {
-                for value in map.values() {
-                    collect_refs_outside_definitions_in_context(
-                        value,
-                        refs,
-                        RefCollectionContext::SchemaObject,
-                    );
-                }
-            }
-        },
+        JsonValue::Object(map) => {
+            collect_ref_from_map(map, refs);
+            for_each_schema_child(map, DefinitionTraversal::Skip, &mut |value| {
+                collect_refs_outside_definitions(value, refs);
+            });
+        }
         _ => {}
     }
 }

@@ -958,6 +958,65 @@ fn parse_tool_input_schema_preserves_refs_from_properties_named_def_tables() {
 }
 
 #[test]
+fn parse_tool_input_schema_collects_refs_from_schema_child_keywords() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "items_holder": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Item"}
+            },
+            "map_holder": {
+                "type": "object",
+                "additionalProperties": {"$ref": "#/$defs/Extra"}
+            },
+            "choice": {
+                "anyOf": [
+                    {"$ref": "#/$defs/Choice"},
+                    {"type": "string"}
+                ]
+            }
+        },
+        "$defs": {
+            "Choice": {"type": "boolean"},
+            "Extra": {"type": "number"},
+            "Item": {"type": "string"},
+            "Unused": {"type": "null"}
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/Choice"},
+                        {"type": "string"}
+                    ]
+                },
+                "items_holder": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/Item"}
+                },
+                "map_holder": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {"$ref": "#/$defs/Extra"}
+                }
+            },
+            "$defs": {
+                "Choice": {"type": "boolean"},
+                "Extra": {"type": "number"},
+                "Item": {"type": "string"}
+            }
+        })
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_handles_cyclic_local_refs() {
     // Example schema shape:
     // {
