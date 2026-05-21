@@ -40,16 +40,17 @@ use serde_json::json;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_model_override_uses_parent_model_for_strict_auto_review() -> Result<()> {
+async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
     let server = MockServer::start().await;
     let model = "remote-auto-review-parent";
+    let review_model = "remote-auto-review-reviewer";
     mount_models_once(
         &server,
         ModelsResponse {
-            models: vec![remote_model_with_auto_review_override(model)],
+            models: vec![remote_model_with_auto_review_override(model, review_model)],
         },
     )
     .await;
@@ -129,7 +130,10 @@ async fn remote_model_override_uses_parent_model_for_strict_auto_review() -> Res
     let model_info = models_manager
         .get_model_info(model, &config.to_models_manager_config())
         .await;
-    assert_eq!(model_info.auto_review_model_override, Some(true));
+    assert_eq!(
+        model_info.auto_review_model_override,
+        Some(review_model.to_string())
+    );
 
     core_test_support::submit_thread_settings(
         &codex,
@@ -191,12 +195,15 @@ async fn remote_model_override_uses_parent_model_for_strict_auto_review() -> Res
         .into_iter()
         .find(|request| request.body_contains_text("auto-review-model-override.txt"))
         .expect("expected Guardian request for strict apply_patch");
-    assert_eq!(guardian_request.body_json()["model"].as_str(), Some(model));
+    assert_eq!(
+        guardian_request.body_json()["model"].as_str(),
+        Some(review_model)
+    );
 
     Ok(())
 }
 
-fn remote_model_with_auto_review_override(slug: &str) -> ModelInfo {
+fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
@@ -212,7 +219,7 @@ fn remote_model_with_auto_review_override(slug: &str) -> ModelInfo {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
-        auto_review_model_override: Some(true),
+        auto_review_model_override: Some(review_model.to_string()),
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),

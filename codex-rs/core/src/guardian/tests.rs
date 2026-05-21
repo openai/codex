@@ -1226,7 +1226,7 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
 }
 
 async fn guardian_request_model_for_auto_review_override(
-    auto_review_model_override: Option<bool>,
+    auto_review_model_override: Option<String>,
 ) -> anyhow::Result<(String, String, String)> {
     let server = start_mock_server().await;
     let guardian_assessment = serde_json::json!({
@@ -1284,31 +1284,32 @@ async fn guardian_request_model_for_auto_review_override(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_uses_parent_model_when_model_catalog_override_is_true()
+async fn guardian_review_uses_model_catalog_override_when_preferred_review_model_exists()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let override_model = "guardian-review-model-override".to_string();
     let (request_model, parent_model, preferred_model) =
-        guardian_request_model_for_auto_review_override(Some(true)).await?;
+        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
 
-    assert_eq!(request_model, parent_model);
+    assert_eq!(request_model, override_model);
+    assert_ne!(request_model, parent_model);
     assert_ne!(request_model, preferred_model);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_uses_preferred_review_model_without_parent_override() -> anyhow::Result<()>
-{
+async fn guardian_review_uses_preferred_review_model_without_model_catalog_override()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for auto_review_model_override in [None, Some(false)] {
-        let (request_model, parent_model, preferred_model) =
-            guardian_request_model_for_auto_review_override(auto_review_model_override).await?;
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
+            .await?;
 
-        assert_eq!(request_model, preferred_model);
-        assert_ne!(request_model, parent_model);
-    }
+    assert_eq!(request_model, preferred_model);
+    assert_ne!(request_model, parent_model);
 
     Ok(())
 }

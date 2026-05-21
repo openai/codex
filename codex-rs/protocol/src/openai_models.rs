@@ -313,7 +313,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub supports_search_tool: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_review_model_override: Option<bool>,
+    pub auto_review_model_override: Option<String>,
 }
 
 impl ModelInfo {
