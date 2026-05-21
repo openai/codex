@@ -96,11 +96,6 @@ async fn remote_model_override_uses_parent_model_for_strict_auto_review() -> Res
                 ),
                 ev_completed("resp-guardian"),
             ]),
-            sse(vec![
-                ev_response_created("resp-parent-3"),
-                ev_assistant_message("msg-parent-3", "done"),
-                ev_completed("resp-parent-3"),
-            ]),
         ],
     )
     .await;
