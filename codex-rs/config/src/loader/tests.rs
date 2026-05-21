@@ -120,7 +120,7 @@ model = "gpt-work"
     );
     let message = err.to_string();
     assert!(
-        message.contains("--profile-v2 `work` cannot be used"),
+        message.contains("--profile `work` cannot be used"),
         "unexpected error message: {message}"
     );
     assert!(
