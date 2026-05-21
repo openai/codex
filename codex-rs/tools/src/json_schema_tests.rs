@@ -779,17 +779,19 @@ fn parse_tool_input_schema_preserves_explicit_enum_type_union() {
     );
 }
 
-#[test]
-fn parse_large_tool_input_schema_drops_definitions() {
-    let many_properties = (0..300)
+fn many_string_properties(count: usize) -> serde_json::Map<String, serde_json::Value> {
+    (0..count)
         .map(|index| {
             (
                 format!("field_{index:03}"),
                 serde_json::json!({ "type": "string" }),
             )
         })
-        .collect::<serde_json::Map<_, _>>();
+        .collect()
+}
 
+#[test]
+fn parse_large_tool_input_schema_stops_after_descriptions_when_under_budget() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "description": "x".repeat(4_500),
@@ -800,72 +802,294 @@ fn parse_large_tool_input_schema_drops_definitions() {
         },
         "$defs": {
             "metadata": {
-                "type": "object",
-                "description": "metadata object",
-                "properties": many_properties
+                "type": "string",
+                "description": "Metadata value"
             }
         }
     }))
     .expect("parse schema");
 
     assert_eq!(
-        schema,
-        JsonSchema::object(
-            BTreeMap::from([(
-                "metadata".to_string(),
-                JsonSchema {
-                    schema_ref: Some("#/$defs/metadata".to_string()),
-                    ..Default::default()
-                },
-            )]),
-            /*required*/ None,
-            /*additional_properties*/ None,
-        )
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "$ref": "#/$defs/metadata"
+                }
+            },
+            "$defs": {
+                "metadata": {
+                    "type": "string"
+                }
+            }
+        })
     );
 }
 
 #[test]
-fn parse_large_tool_input_schema_collapses_deep_nested_shapes() {
-    let many_properties = (0..300)
-        .map(|index| {
-            (
-                format!("field_{index:03}"),
-                serde_json::json!({ "type": "string" }),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-
+fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_under_budget() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "description": "x".repeat(4_500),
         "properties": {
             "event": {
                 "type": "object",
+                "description": "Calendar event",
                 "properties": {
                     "recurrence": {
                         "type": "object",
-                        "properties": many_properties
+                        "description": "Recurrence settings",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Recurrence pattern"
+                            }
+                        }
                     }
                 }
+            },
+            "metadata": {
+                "$ref": "#/$defs/metadata"
+            }
+        },
+        "$defs": {
+            "metadata": {
+                "type": "object",
+                "description": "metadata object",
+                "properties": many_string_properties(300)
             }
         }
     }))
     .expect("parse schema");
 
     assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "event": {
+                    "type": "object",
+                    "properties": {
+                        "recurrence": {
+                            "type": "object",
+                            "properties": {
+                                "pattern": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "metadata": {
+                    "$ref": "#/$defs/metadata"
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn parse_large_tool_input_schema_strips_descriptions_without_removing_description_property() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "description": "x".repeat(4_500),
+        "properties": {
+            "description": {
+                "type": "string",
+                "description": "User-facing description value"
+            },
+            "metadata": {
+                "type": "object",
+                "description": "Metadata object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Metadata label"
+                    }
+                }
+            },
+            "tags": {
+                "type": "array",
+                "description": "Tag list",
+                "items": {
+                    "type": "string",
+                    "description": "Tag value"
+                }
+            },
+            "extras": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "string",
+                    "description": "Extra value"
+                }
+            },
+            "choice": {
+                "description": "Choice value",
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "description": "String choice"
+                    },
+                    {
+                        "type": "number",
+                        "description": "Number choice"
+                    }
+                ]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "number"
+                        }
+                    ]
+                },
+                "description": {
+                    "type": "string"
+                },
+                "extras": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn collapse_deep_schema_objects_traverses_schema_children() {
+    let mut schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "object_parent": {
+                "type": "object",
+                "properties": {
+                    "complex": {
+                        "type": "object",
+                        "properties": {
+                            "leaf": { "type": "string" }
+                        }
+                    },
+                    "scalar": {
+                        "type": "string"
+                    }
+                }
+            },
+            "array_parent": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "leaf": { "type": "string" }
+                    }
+                }
+            },
+            "map_parent": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "leaf": { "type": "string" }
+                    }
+                }
+            },
+            "union_parent": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "leaf": { "type": "string" }
+                        }
+                    },
+                    { "type": "string" }
+                ],
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "leaf": { "type": "string" }
+                        }
+                    }
+                ],
+                "allOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "leaf": { "type": "string" }
+                        }
+                    }
+                ]
+            }
+        }
+    });
+
+    super::collapse_deep_schema_objects(&mut schema, /*depth*/ 0);
+
+    assert_eq!(
         schema,
-        JsonSchema::object(
-            BTreeMap::from([(
-                "event".to_string(),
-                JsonSchema::object(
-                    BTreeMap::from([("recurrence".to_string(), JsonSchema::default())]),
-                    /*required*/ None,
-                    /*additional_properties*/ None,
-                )
-            )]),
-            /*required*/ None,
-            /*additional_properties*/ None,
-        )
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "object_parent": {
+                    "type": "object",
+                    "properties": {
+                        "complex": {},
+                        "scalar": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "array_parent": {
+                    "type": "array",
+                    "items": {}
+                },
+                "map_parent": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "union_parent": {
+                    "anyOf": [
+                        {},
+                        { "type": "string" }
+                    ],
+                    "oneOf": [
+                        {}
+                    ],
+                    "allOf": [
+                        {}
+                    ]
+                }
+            }
+        })
     );
 }
 
