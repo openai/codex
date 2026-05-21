@@ -16083,6 +16083,9 @@
             }
           ]
         },
+        "data": {
+          "default": null
+        },
         "message": {
           "type": "string"
         }

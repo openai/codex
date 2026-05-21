@@ -9,6 +9,7 @@ use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::DynamicToolSpec;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -16,10 +17,13 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -34,6 +38,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -277,6 +282,156 @@ async fn thread_start_rejects_dynamic_tools_not_supported_by_responses() -> Resu
     assert!(error.error.message.contains("lookup.ticket"));
 
     Ok(())
+}
+
+#[tokio::test]
+async fn backend_dynamic_tool_schema_error_is_reported_to_clients() -> Result<()> {
+    let server = MockServer::start().await;
+    let backend_error = "invalid_function_parameters ... Invalid schema for function 'create': schema must be a JSON Schema of 'type: \"object\"', got 'type: \"None\"";
+    let _response_mock = responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": backend_error,
+                "type": "invalid_request_error",
+                "param": "tools",
+                "code": "invalid_function_parameters"
+            }
+        })),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let dynamic_tool = DynamicToolSpec {
+        namespace: Some("repro".to_string()),
+        name: "create".to_string(),
+        description: "Repro tool with a top-level anyOf schema.".to_string(),
+        input_schema: json!({
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": ["wikiEdit"] },
+                        "slug": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["kind", "slug"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": ["chatMessage"] },
+                        "channel": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["kind", "channel"],
+                    "additionalProperties": false
+                }
+            ]
+        }),
+        defer_loading: false,
+    };
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            dynamic_tools: Some(vec![dynamic_tool]),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Say hello.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn_start: TurnStartResponse = to_response(turn_resp)?;
+
+    let error_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("error"),
+    )
+    .await??;
+    let error_notification: ErrorNotification =
+        serde_json::from_value(error_notification.params.context("error params")?)?;
+    let underlying_error = error_notification.error.message.clone();
+    let expected_error_data = expected_dynamic_tool_schema_error_data(backend_error);
+
+    assert!(underlying_error.contains("Invalid schema for function 'create'"));
+    assert_eq!(
+        error_notification.error.data,
+        Some(expected_error_data.clone())
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let read_req = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_req)),
+    )
+    .await??;
+    let read: ThreadReadResponse = to_response(read_resp)?;
+    let failed_turn = read
+        .thread
+        .turns
+        .iter()
+        .find(|turn| turn.id == turn_start.turn.id)
+        .context("expected failed turn in thread/read")?;
+    assert_eq!(failed_turn.status, TurnStatus::Failed);
+    assert_eq!(
+        failed_turn
+            .error
+            .as_ref()
+            .and_then(|error| error.data.clone()),
+        Some(expected_error_data)
+    );
+
+    Ok(())
+}
+
+fn expected_dynamic_tool_schema_error_data(underlying_error: &str) -> Value {
+    json!({
+        "reason": "dynamicToolInputSchema",
+        "backend": "Responses API",
+        "tool": {
+            "index": 0,
+            "namespace": "repro",
+            "name": "create",
+            "qualifiedName": "repro.create"
+        },
+        "schemaPath": "dynamicTools[0].inputSchema.anyOf",
+        "underlyingError": underlying_error,
+        "remediation": "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema."
+    })
 }
 
 /// Exercises the full dynamic tool call path (server request, client response, model output).

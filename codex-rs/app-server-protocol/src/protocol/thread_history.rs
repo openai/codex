@@ -21,6 +21,7 @@ use crate::protocol::v2::TurnItemsView;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
@@ -46,9 +47,11 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
@@ -86,6 +89,8 @@ pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    pending_context_turn_id: Option<String>,
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
@@ -102,6 +107,8 @@ impl ThreadHistoryBuilder {
         Self {
             turns: Vec::new(),
             current_turn: None,
+            dynamic_tools: Vec::new(),
+            pending_context_turn_id: None,
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
@@ -232,8 +239,17 @@ impl ThreadHistoryBuilder {
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(item),
-            RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::TurnContext(payload) => self.handle_turn_context(payload),
+            RolloutItem::SessionMeta(payload) => self.handle_session_meta(payload),
         }
+    }
+
+    fn handle_session_meta(&mut self, payload: &SessionMetaLine) {
+        self.dynamic_tools = payload.meta.dynamic_tools.clone().unwrap_or_default();
+    }
+
+    fn handle_turn_context(&mut self, payload: &TurnContextItem) {
+        self.pending_context_turn_id.clone_from(&payload.turn_id);
     }
 
     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
@@ -880,15 +896,23 @@ impl ThreadHistoryBuilder {
         if !payload.affects_turn_status() {
             return;
         }
+        if self.current_turn.is_none()
+            && let Some(turn_id) = self.pending_context_turn_id.take()
+        {
+            self.current_turn = Some(
+                self.new_turn(Some(turn_id))
+                    .with_status(TurnStatus::Failed)
+                    .opened_explicitly(),
+            );
+        }
         let Some(turn) = self.current_turn.as_mut() else {
             return;
         };
         turn.status = TurnStatus::Failed;
-        turn.error = Some(V2TurnError {
-            message: payload.message.clone(),
-            codex_error_info: payload.codex_error_info.clone().map(Into::into),
-            additional_details: None,
-        });
+        turn.error = Some(V2TurnError::from_core_error_event(
+            payload,
+            Some(&self.dynamic_tools),
+        ));
     }
 
     fn handle_turn_aborted(&mut self, payload: &TurnAbortedEvent) {
@@ -919,6 +943,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_turn_started(&mut self, payload: &TurnStartedEvent) {
+        self.pending_context_turn_id = None;
         self.finish_current_turn();
         self.current_turn = Some(
             self.new_turn(Some(payload.turn_id.clone()))
@@ -929,6 +954,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_turn_complete(&mut self, payload: &TurnCompleteEvent) {
+        self.pending_context_turn_id = None;
         let mark_completed = |turn: &mut PendingTurn| {
             if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
                 turn.status = TurnStatus::Completed;
@@ -993,7 +1019,11 @@ impl ThreadHistoryBuilder {
 
     fn finish_current_turn(&mut self) {
         if let Some(turn) = self.current_turn.take() {
-            if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
+            if turn.items.is_empty()
+                && turn.error.is_none()
+                && !turn.opened_explicitly
+                && !turn.saw_compaction
+            {
                 return;
             }
             self.turns.push(Turn::from(turn));
@@ -3094,6 +3124,85 @@ mod tests {
     }
 
     #[test]
+    fn error_after_turn_context_creates_failed_turn_with_dynamic_tool_schema_data() {
+        let error_message = "invalid_function_parameters ... Invalid schema for function 'create': schema must be a JSON Schema of 'type: \"object\"', got 'type: \"None\"";
+        let items = vec![
+            RolloutItem::SessionMeta(SessionMetaLine {
+                meta: codex_protocol::protocol::SessionMeta {
+                    dynamic_tools: Some(vec![DynamicToolSpec {
+                        namespace: Some("repro".to_string()),
+                        name: "create".to_string(),
+                        description: "test".to_string(),
+                        input_schema: serde_json::json!({
+                            "anyOf": [
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": { "type": "string", "enum": ["wikiEdit"] },
+                                        "slug": { "type": "string" }
+                                    },
+                                    "required": ["kind", "slug"],
+                                    "additionalProperties": false
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": { "type": "string", "enum": ["chatMessage"] },
+                                        "channel": { "type": "string" }
+                                    },
+                                    "required": ["kind", "channel"],
+                                    "additionalProperties": false
+                                }
+                            ]
+                        }),
+                        defer_loading: false,
+                    }]),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+            RolloutItem::TurnContext(turn_context_item("turn-a")),
+            RolloutItem::EventMsg(EventMsg::Error(ErrorEvent {
+                message: error_message.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(
+            turns,
+            vec![Turn {
+                id: "turn-a".to_string(),
+                items: Vec::new(),
+                items_view: TurnItemsView::Full,
+                status: TurnStatus::Failed,
+                error: Some(TurnError {
+                    message: error_message.to_string(),
+                    codex_error_info: Some(crate::protocol::v2::CodexErrorInfo::BadRequest),
+                    additional_details: None,
+                    data: Some(serde_json::json!({
+                        "reason": "dynamicToolInputSchema",
+                        "backend": "Responses API",
+                        "tool": {
+                            "index": 0,
+                            "namespace": "repro",
+                            "name": "create",
+                            "qualifiedName": "repro.create"
+                        },
+                        "schemaPath": "dynamicTools[0].inputSchema.anyOf",
+                        "underlyingError": error_message,
+                        "remediation": "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema."
+                    })),
+                }),
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }]
+        );
+    }
+
+    #[test]
     fn error_then_turn_complete_preserves_failed_status() {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
@@ -3142,6 +3251,7 @@ mod tests {
                     }
                 ),
                 additional_details: None,
+                data: None,
             })
         );
     }
@@ -3228,5 +3338,25 @@ mod tests {
         let turns = build_turns_from_rollout_items(&items);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].items.is_empty());
+    }
+
+    fn turn_context_item(turn_id: &str) -> TurnContextItem {
+        TurnContextItem {
+            turn_id: Some(turn_id.to_string()),
+            cwd: PathBuf::from("/tmp"),
+            current_date: None,
+            timezone: None,
+            approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        }
     }
 }

@@ -1410,6 +1410,8 @@ Dynamic tool identifiers follow the same constraints as Responses function tools
 
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `code_mode`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 
+If the model backend rejects a dynamic tool schema during turn startup, app-server emits the normal `error` notification and stores the failure on the turn returned by `thread/read`. When the backend error names a dynamic tool, `TurnError.data.reason` is `dynamicToolInputSchema` and includes the tool namespace/name, `schemaPath`, backend, underlying backend message, and remediation text.
+
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 
 ```json

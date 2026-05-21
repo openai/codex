@@ -787,6 +787,7 @@ impl TurnRequestProcessor {
                                 turn_kind: turn_kind.into(),
                             }),
                             additional_details: None,
+                            data: None,
                         };
                         let data = match serde_json::to_value(error) {
                             Ok(data) => Some(data),

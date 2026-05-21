@@ -6,6 +6,7 @@ use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
+use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
@@ -74,6 +75,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) last_terminal_turn_id: Option<String>,
+    pub(crate) last_terminal_turn: Option<Turn>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
@@ -117,6 +119,8 @@ impl ThreadState {
         }
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.last_terminal_turn_id = None;
+        self.last_terminal_turn = None;
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
     }
@@ -135,15 +139,30 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn last_terminal_turn_snapshot(&self) -> Option<Turn> {
+        self.last_terminal_turn.clone()
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
+            self.last_terminal_turn_id = None;
+            self.last_terminal_turn = None;
         }
         self.current_turn_history.handle_event(event);
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
+            let mut terminal_turn = self.current_turn_history.active_turn_snapshot();
+            if let Some(turn) = terminal_turn.as_mut()
+                && let Some(error) = self.turn_summary.last_error.clone()
+            {
+                turn.status = TurnStatus::Failed;
+                turn.error = Some(error);
+            }
+            self.last_terminal_turn = terminal_turn
+                .filter(|turn| turn.error.is_some() || matches!(turn.status, TurnStatus::Failed));
             self.current_turn_history.reset();
         }
     }

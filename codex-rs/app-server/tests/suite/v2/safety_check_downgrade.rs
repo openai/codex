@@ -155,6 +155,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
                 message: CYBER_POLICY_MESSAGE.to_string(),
                 codex_error_info: Some(CodexErrorInfo::CyberPolicy),
                 additional_details: None,
+                data: None,
             },
             will_retry: false,
             thread_id: thread.id,

@@ -782,6 +782,11 @@ impl Codex {
         state.session_configuration.environments.clone()
     }
 
+    pub(crate) async fn dynamic_tools(&self) -> Vec<DynamicToolSpec> {
+        let state = self.session.state.lock().await;
+        state.session_configuration.dynamic_tools.clone()
+    }
+
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }

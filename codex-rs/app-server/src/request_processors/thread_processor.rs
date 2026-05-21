@@ -2086,7 +2086,14 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            thread.turns = build_api_turns_from_rollout_items(&history.items);
+            let live_turn = {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let state = thread_state.lock().await;
+                state
+                    .active_turn_snapshot()
+                    .or_else(|| state.last_terminal_turn_snapshot())
+            };
+            populate_thread_turns_from_history(thread, &history.items, live_turn.as_ref());
         }
 
         Ok(())

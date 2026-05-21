@@ -910,11 +910,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 return;
             }
 
-            let turn_error = TurnError {
-                message: ev.message,
-                codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
-                additional_details: None,
-            };
+            let dynamic_tools = conversation.dynamic_tools().await;
+            let turn_error = TurnError::from_core_error_event(&ev, Some(dynamic_tools.as_slice()));
             handle_error(conversation_id, turn_error.clone(), &thread_state).await;
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
@@ -932,6 +929,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
                 additional_details: ev.additional_details,
+                data: None,
             };
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
@@ -3178,6 +3176,7 @@ mod tests {
                 message: "boom".to_string(),
                 codex_error_info: Some(V2CodexErrorInfo::InternalServerError),
                 additional_details: None,
+                data: None,
             },
             &thread_state,
         )
@@ -3190,6 +3189,7 @@ mod tests {
                 message: "boom".to_string(),
                 codex_error_info: Some(V2CodexErrorInfo::InternalServerError),
                 additional_details: None,
+                data: None,
             })
         );
         Ok(())
@@ -3350,6 +3350,7 @@ mod tests {
                 message: "oops".to_string(),
                 codex_error_info: None,
                 additional_details: None,
+                data: None,
             },
             &thread_state,
         )
@@ -3400,6 +3401,7 @@ mod tests {
                 message: "bad".to_string(),
                 codex_error_info: Some(V2CodexErrorInfo::Other),
                 additional_details: None,
+                data: None,
             },
             &thread_state,
         )
@@ -3435,6 +3437,7 @@ mod tests {
                         message: "bad".to_string(),
                         codex_error_info: Some(V2CodexErrorInfo::Other),
                         additional_details: None,
+                        data: None,
                     })
                 );
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
@@ -3645,6 +3648,7 @@ mod tests {
                 message: "a1".to_string(),
                 codex_error_info: Some(V2CodexErrorInfo::BadRequest),
                 additional_details: None,
+                data: None,
             },
             &thread_state,
         )
@@ -3666,6 +3670,7 @@ mod tests {
                 message: "b1".to_string(),
                 codex_error_info: None,
                 additional_details: None,
+                data: None,
             },
             &thread_state,
         )
@@ -3702,6 +3707,7 @@ mod tests {
                         message: "a1".to_string(),
                         codex_error_info: Some(V2CodexErrorInfo::BadRequest),
                         additional_details: None,
+                        data: None,
                     })
                 );
             }
@@ -3720,6 +3726,7 @@ mod tests {
                         message: "b1".to_string(),
                         codex_error_info: None,
                         additional_details: None,
+                        data: None,
                     })
                 );
             }

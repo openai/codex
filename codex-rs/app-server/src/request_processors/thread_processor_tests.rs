@@ -134,6 +134,39 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_accepts_root_any_of_input_schema() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("repro".to_string()),
+            name: "create".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["wikiEdit"] },
+                            "slug": { "type": "string" }
+                        },
+                        "required": ["kind", "slug"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["chatMessage"] },
+                            "channel": { "type": "string" }
+                        },
+                        "required": ["kind", "channel"],
+                        "additionalProperties": false
+                    }
+                ]
+            }),
+            defer_loading: false,
+        }];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
     fn validate_dynamic_tools_accepts_same_name_in_different_namespaces() {
         let tools = vec![
             ApiDynamicToolSpec {
