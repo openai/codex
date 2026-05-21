@@ -109,7 +109,7 @@ fn prepare_spawn_context_common(
     ensure_codex_home_exists(codex_home)?;
     let sandbox_base = codex_home.join(".sandbox");
     std::fs::create_dir_all(&sandbox_base)?;
-    let logs_base_dir = Some(sandbox_base.clone());
+    let logs_base_dir = Some(sandbox_base);
     log_start(command, logs_base_dir.as_deref());
 
     let permissions =
