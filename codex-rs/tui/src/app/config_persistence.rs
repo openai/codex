@@ -661,6 +661,15 @@ impl App {
             self.chat_widget.set_feature_enabled(*feature, enabled);
         }
 
+        if feature_updates
+            .iter()
+            .any(|(feature, _)| *feature == Feature::GuardianApproval)
+            && !self.config.features.enabled(Feature::GuardianApproval)
+        {
+            self.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::User);
+            return;
+        }
+
         if let Some(reviewer) =
             approvals_reviewer_from_effective_config(effective_config, active_profile)
         {
@@ -1079,6 +1088,46 @@ terminal_resize_reflow_max_rows = 9000
         assert_eq!(
             app.config.terminal_resize_reflow.max_rows,
             crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn overridden_disabled_guardian_does_not_apply_auto_review_companions() -> Result<()> {
+        let mut app = make_test_app().await;
+        let original_policy = app.config.permissions.approval_policy.value();
+        let effective_config: ConfigReadResponse = serde_json::from_value(serde_json::json!({
+            "config": {
+                "approval_policy": AskForApproval::OnRequest,
+                "approvals_reviewer": codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+                "sandbox_mode": AppServerSandboxMode::WorkspaceWrite,
+                "features": {
+                    "guardian_approval": false,
+                },
+            },
+            "origins": {},
+        }))?;
+
+        app.sync_feature_state_from_effective_config(
+            &effective_config,
+            &[(Feature::GuardianApproval, /*enabled*/ true)],
+        );
+
+        assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+        assert_eq!(
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
+        );
+        assert_eq!(
+            app.config.permissions.approval_policy.value(),
+            original_policy
         );
         Ok(())
     }
