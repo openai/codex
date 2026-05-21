@@ -1608,6 +1608,18 @@ async fn handle_server_request(
             )
             .await
         }
+        ServerRequest::ToolSetupCodexContextPicker { request_id, params } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                format!(
+                    "setup_codex_context_picker is not supported in exec mode for thread `{}`",
+                    params.thread_id
+                ),
+            )
+            .await
+        }
         ServerRequest::DynamicToolCall { request_id, params } => {
             reject_server_request(
                 client,

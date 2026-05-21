@@ -86,6 +86,7 @@ impl SideParentStatus {
         match request {
             ServerRequest::ToolRequestUserInput { .. } => Some(SideParentStatus::NeedsInput),
             ServerRequest::ToolOptionPicker { .. } => Some(SideParentStatus::NeedsInput),
+            ServerRequest::ToolSetupCodexContextPicker { .. } => Some(SideParentStatus::NeedsInput),
             ServerRequest::CommandExecutionRequestApproval { .. }
             | ServerRequest::FileChangeRequestApproval { .. }
             | ServerRequest::McpServerElicitationRequest { .. }

@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ToolSetupCodexContextPickerAction": {
+      "description": "EXPERIMENTAL. Action selected for setup_codex_context_picker.",
+      "enum": [
+        "continue",
+        "skip",
+        "dismiss"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "EXPERIMENTAL. Captures a user's response to setup_codex_context_picker.",
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/ToolSetupCodexContextPickerAction"
+    },
+    "selectedSources": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "action",
+    "selectedSources"
+  ],
+  "title": "ToolSetupCodexContextPickerResponse",
+  "type": "object"
+}

@@ -1491,3 +1491,32 @@ pub struct ToolOptionPickerResponse {
     pub selected_options: Vec<String>,
     pub freeform_answer: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Params sent with a setup_codex_context_picker event.
+pub struct ToolSetupCodexContextPickerParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Action selected for setup_codex_context_picker.
+pub enum ToolSetupCodexContextPickerAction {
+    Continue,
+    Skip,
+    Dismiss,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Captures a user's response to setup_codex_context_picker.
+pub struct ToolSetupCodexContextPickerResponse {
+    pub action: ToolSetupCodexContextPickerAction,
+    pub selected_sources: Vec<String>,
+}

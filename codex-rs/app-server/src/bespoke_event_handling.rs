@@ -73,6 +73,9 @@ use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
+use codex_app_server_protocol::ToolSetupCodexContextPickerAction;
+use codex_app_server_protocol::ToolSetupCodexContextPickerParams;
+use codex_app_server_protocol::ToolSetupCodexContextPickerResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -114,6 +117,8 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerAction as CoreSetupCodexContextPickerAction;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerResponse as CoreSetupCodexContextPickerResponse;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -723,6 +728,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             tokio::spawn(async move {
                 on_option_picker_response(
+                    event_turn_id,
+                    pending_request_id,
+                    rx,
+                    conversation,
+                    thread_state,
+                    user_input_guard,
+                )
+                .await;
+            });
+        }
+        EventMsg::SetupCodexContextPicker(request) => {
+            let user_input_guard = thread_watch_manager
+                .note_user_input_requested(&conversation_id.to_string())
+                .await;
+            let params = ToolSetupCodexContextPickerParams {
+                thread_id: conversation_id.to_string(),
+                turn_id: request.turn_id,
+                item_id: request.call_id,
+            };
+            let (pending_request_id, rx) = outgoing
+                .send_request(ServerRequestPayload::ToolSetupCodexContextPicker(params))
+                .await;
+            tokio::spawn(async move {
+                on_setup_codex_context_picker_response(
                     event_turn_id,
                     pending_request_id,
                     rx,
@@ -1715,6 +1744,83 @@ async fn submit_empty_option_picker_response(
         .await
     {
         error!("failed to submit OptionPickerResponse: {err}");
+    }
+}
+
+async fn on_setup_codex_context_picker_response(
+    event_turn_id: String,
+    pending_request_id: RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    user_input_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    drop(user_input_guard);
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+        Ok(Err(err)) => {
+            error!("setup codex context picker request failed with client error: {err:?}");
+            submit_empty_setup_codex_context_picker_response(event_turn_id, conversation).await;
+            return;
+        }
+        Err(err) => {
+            error!("setup codex context picker request failed: {err:?}");
+            submit_empty_setup_codex_context_picker_response(event_turn_id, conversation).await;
+            return;
+        }
+    };
+
+    let response = serde_json::from_value::<ToolSetupCodexContextPickerResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize ToolSetupCodexContextPickerResponse: {err}");
+            ToolSetupCodexContextPickerResponse {
+                action: ToolSetupCodexContextPickerAction::Dismiss,
+                selected_sources: Vec::new(),
+            }
+        });
+    let response = CoreSetupCodexContextPickerResponse {
+        action: match response.action {
+            ToolSetupCodexContextPickerAction::Continue => {
+                CoreSetupCodexContextPickerAction::Continue
+            }
+            ToolSetupCodexContextPickerAction::Skip => CoreSetupCodexContextPickerAction::Skip,
+            ToolSetupCodexContextPickerAction::Dismiss => {
+                CoreSetupCodexContextPickerAction::Dismiss
+            }
+        },
+        selected_source_ids: response.selected_sources,
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::SetupCodexContextPickerResponse {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit SetupCodexContextPickerResponse: {err}");
+    }
+}
+
+async fn submit_empty_setup_codex_context_picker_response(
+    event_turn_id: String,
+    conversation: Arc<CodexThread>,
+) {
+    let response = CoreSetupCodexContextPickerResponse {
+        action: CoreSetupCodexContextPickerAction::Dismiss,
+        selected_source_ids: Vec::new(),
+    };
+    if let Err(err) = conversation
+        .submit(Op::SetupCodexContextPickerResponse {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit SetupCodexContextPickerResponse: {err}");
     }
 }
 

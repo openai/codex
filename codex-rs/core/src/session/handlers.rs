@@ -50,6 +50,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerResponse;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -444,6 +445,15 @@ pub async fn option_picker_response(
     sess.notify_option_picker_response(&id, response).await;
 }
 
+pub async fn setup_codex_context_picker_response(
+    sess: &Arc<Session>,
+    id: String,
+    response: SetupCodexContextPickerResponse,
+) {
+    sess.notify_setup_codex_context_picker_response(&id, response)
+        .await;
+}
+
 pub async fn request_permissions_response(
     sess: &Arc<Session>,
     id: String,
@@ -803,6 +813,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::OptionPickerResponse { id, response } => {
                     option_picker_response(&sess, id, response).await;
+                    false
+                }
+                Op::SetupCodexContextPickerResponse { id, response } => {
+                    setup_codex_context_picker_response(&sess, id, response).await;
                     false
                 }
                 Op::RequestPermissionsResponse { id, response } => {

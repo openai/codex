@@ -14,6 +14,7 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::RequestId;
@@ -115,6 +116,8 @@ pub(crate) struct TurnState {
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_option_picker: HashMap<String, oneshot::Sender<OptionPickerResponse>>,
+    pending_setup_codex_context_picker:
+        HashMap<String, oneshot::Sender<SetupCodexContextPickerResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
@@ -153,6 +156,7 @@ impl TurnState {
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_option_picker.clear();
+        self.pending_setup_codex_context_picker.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
     }
@@ -201,6 +205,21 @@ impl TurnState {
         key: &str,
     ) -> Option<oneshot::Sender<OptionPickerResponse>> {
         self.pending_option_picker.remove(key)
+    }
+
+    pub(crate) fn insert_pending_setup_codex_context_picker(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<SetupCodexContextPickerResponse>,
+    ) -> Option<oneshot::Sender<SetupCodexContextPickerResponse>> {
+        self.pending_setup_codex_context_picker.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_setup_codex_context_picker(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<SetupCodexContextPickerResponse>> {
+        self.pending_setup_codex_context_picker.remove(key)
     }
 
     pub(crate) fn insert_pending_elicitation(

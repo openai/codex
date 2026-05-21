@@ -19,6 +19,7 @@ use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::SetupCodexContextPickerHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::TestSyncHandler;
@@ -574,6 +575,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     });
     if features.enabled(Feature::OnboardingInteractiveTools) {
         planned_tools.add(OptionPickerHandler);
+        planned_tools.add(SetupCodexContextPickerHandler);
     }
 
     if features.enabled(Feature::RequestPermissionsTool) {

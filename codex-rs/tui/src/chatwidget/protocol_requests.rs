@@ -36,6 +36,7 @@ impl ChatWidget {
                 self.on_request_user_input(params);
             }
             ServerRequest::ToolOptionPicker { .. }
+            | ServerRequest::ToolSetupCodexContextPicker { .. }
             | ServerRequest::DynamicToolCall { .. }
             | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }

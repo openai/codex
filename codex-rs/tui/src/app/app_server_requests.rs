@@ -133,6 +133,13 @@ impl PendingAppServerRequests {
                     message: "Option picker requests are not available in TUI yet.".to_string(),
                 })
             }
+            ServerRequest::ToolSetupCodexContextPicker { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Setup Codex context picker requests are not available in TUI yet."
+                        .to_string(),
+                })
+            }
             ServerRequest::DynamicToolCall { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),
@@ -343,6 +350,7 @@ impl PendingAppServerRequests {
                 .values()
                 .any(|pending_request_id| pending_request_id == request_id),
             ServerRequest::ToolOptionPicker { .. }
+            | ServerRequest::ToolSetupCodexContextPicker { .. }
             | ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::AttestationGenerate { .. }
