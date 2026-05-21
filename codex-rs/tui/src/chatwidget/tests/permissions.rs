@@ -284,6 +284,39 @@ async fn windows_sandbox_required_enable_prompt_snapshot() {
 }
 
 #[tokio::test]
+async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevated_allowed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        codex_config::ConfigRequirements::default(),
+        codex_config::ConfigRequirementsToml {
+            windows: Some(codex_config::WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![
+                    WindowsSandboxModeToml::Elevated,
+                    WindowsSandboxModeToml::Unelevated,
+                ]),
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("test config layer stack");
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_enable_prompt(preset);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenWindowsSandboxEnablePrompt { .. })
+    ));
+}
+
+#[tokio::test]
 async fn windows_sandbox_required_fallback_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

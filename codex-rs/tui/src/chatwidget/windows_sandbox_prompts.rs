@@ -14,6 +14,21 @@ impl ChatWidget {
             .is_none_or(|implementations| implementations.contains(&mode))
     }
 
+    #[cfg(any(target_os = "windows", test))]
+    fn elevated_windows_sandbox_setup_required(&self) -> bool {
+        WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Elevated
+            && self
+                .config
+                .config_layer_stack
+                .requirements_toml()
+                .windows
+                .as_ref()
+                .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
+            && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+                self.config.codex_home.as_path(),
+            )
+    }
+
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -242,6 +257,8 @@ impl ChatWidget {
 
         let allow_unelevated =
             self.windows_sandbox_mode_allowed(WindowsSandboxModeToml::Unelevated);
+        let setup_choice_is_required =
+            !allow_unelevated || self.elevated_windows_sandbox_setup_required();
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(if allow_unelevated {
@@ -316,7 +333,7 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(header),
-            on_cancel: (!allow_unelevated).then(|| {
+            on_cancel: setup_choice_is_required.then(|| {
                 Box::new(move |tx: &AppEventSender| {
                     tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
                         preset: retry_preset.clone(),
@@ -336,6 +353,8 @@ impl ChatWidget {
 
         let allow_unelevated =
             self.windows_sandbox_mode_allowed(WindowsSandboxModeToml::Unelevated);
+        let setup_choice_is_required =
+            !allow_unelevated || self.elevated_windows_sandbox_setup_required();
         let mut lines = Vec::new();
         lines.push(line![
             "Couldn't set up your sandbox with Administrator permissions".bold()
@@ -423,7 +442,7 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header: Box::new(header),
-            on_cancel: (!allow_unelevated).then(|| {
+            on_cancel: setup_choice_is_required.then(|| {
                 Box::new(move |tx: &AppEventSender| {
                     tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
                         preset: retry_preset.clone(),
@@ -441,17 +460,7 @@ impl ChatWidget {
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let setup_is_required = windows_sandbox_level == WindowsSandboxLevel::Disabled
-            || (windows_sandbox_level == WindowsSandboxLevel::Elevated
-                && self
-                    .config
-                    .config_layer_stack
-                    .requirements_toml()
-                    .windows
-                    .as_ref()
-                    .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
-                && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-                    self.config.codex_home.as_path(),
-                ));
+            || self.elevated_windows_sandbox_setup_required();
         if show_now
             && setup_is_required
             && let Some(preset) = builtin_approval_presets()
