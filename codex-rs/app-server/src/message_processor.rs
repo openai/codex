@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
+use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
@@ -984,8 +985,10 @@ impl MessageProcessor {
                         })?
                 } else {
                     self.environment_manager
-                        .default_environment()
-                        .unwrap_or_else(|| self.environment_manager.local_environment())
+                        .default_or_local_environment()
+                        .ok_or_else(|| {
+                            internal_error("runtime install environment is not configured")
+                        })?
                 };
                 let response = environment.install_runtime(params).await?;
                 let response =
