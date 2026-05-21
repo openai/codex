@@ -8,6 +8,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
+        if self.suppress_initial_user_message_submit {
+            return;
+        }
+        #[cfg(any(target_os = "windows", test))]
+        if self.elevated_windows_sandbox_setup_required() {
+            return;
+        }
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }

@@ -310,6 +310,66 @@ async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevate
 }
 
 #[tokio::test]
+async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial_prompt = "fix required sandbox startup".to_string();
+
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    chat.config.config_layer_stack = windows_sandbox_requirements_stack(vec![
+        WindowsSandboxModeToml::Elevated,
+        WindowsSandboxModeToml::Unelevated,
+    ]);
+    chat.initial_user_message =
+        create_initial_user_message(Some(initial_prompt.clone()), Vec::new(), Vec::new());
+
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: None,
+        cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: Some(PathBuf::new()),
+    });
+    drain_insert_history(&mut rx);
+
+    assert!(chat.initial_user_message.is_some());
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::UserTurn { .. }),
+            "required sandbox setup should hold the configured initial prompt"
+        );
+    }
+
+    chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    chat.submit_initial_user_message_if_pending();
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected initial prompt submission after setup is no longer required");
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: initial_prompt,
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn windows_sandbox_required_fallback_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

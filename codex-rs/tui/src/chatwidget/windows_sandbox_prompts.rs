@@ -14,7 +14,7 @@ impl ChatWidget {
     }
 
     #[cfg(any(target_os = "windows", test))]
-    fn elevated_windows_sandbox_setup_required(&self) -> bool {
+    pub(super) fn elevated_windows_sandbox_setup_required(&self) -> bool {
         WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Elevated
             && self
                 .config
