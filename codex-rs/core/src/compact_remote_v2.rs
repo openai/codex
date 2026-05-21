@@ -11,6 +11,7 @@ use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
+use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -44,8 +45,8 @@ use tracing::info;
 // Mirror the current /responses/compact retained-message default while the
 // server-side path remains the reference implementation.
 const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
-const RETAINED_MESSAGE_CHAR_BUDGET: usize = RETAINED_MESSAGE_TOKEN_BUDGET * 4;
-const MIN_RETAINED_MESSAGE_CHAR_BUDGET: usize = 1;
+const RETAINED_MESSAGE_BYTE_BUDGET: usize = RETAINED_MESSAGE_TOKEN_BUDGET * 4;
+const MIN_RETAINED_MESSAGE_BYTE_BUDGET: usize = 1;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -352,92 +353,48 @@ fn build_v2_compacted_history(
     prompt_input: &[ResponseItem],
     compaction_output: ResponseItem,
 ) -> Vec<ResponseItem> {
-    let retained = prompt_input
-        .iter()
-        .filter(|item| is_retained_for_remote_compaction_v2(item))
-        .cloned()
-        .collect::<Vec<_>>();
     let mut retained =
-        truncate_retained_items_for_remote_compaction(retained, RETAINED_MESSAGE_CHAR_BUDGET);
+        truncate_retained_items_for_remote_compaction(prompt_input, RETAINED_MESSAGE_BYTE_BUDGET);
     retained.push(compaction_output);
     retained
 }
 
-fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
-    let ResponseItem::Message { role, .. } = item else {
-        return false;
-    };
-
-    matches!(role.as_str(), "user" | "developer" | "system")
+#[derive(Clone, Copy)]
+enum RetainedMessageKind {
+    Truncatable,
+    Atomic,
 }
 
 fn truncate_retained_items_for_remote_compaction(
-    items: Vec<ResponseItem>,
-    max_chars: usize,
+    items: &[ResponseItem],
+    max_bytes: usize,
 ) -> Vec<ResponseItem> {
-    if max_chars == 0 {
-        return items;
+    if max_bytes == 0 {
+        return Vec::new();
     }
 
-    let mut remaining = max_chars;
+    let mut remaining = max_bytes;
     let mut truncated_reversed = Vec::with_capacity(items.len());
-    for item in items.into_iter().rev() {
-        let ResponseItem::Message { content, .. } = &item else {
-            truncated_reversed.push(item);
-            continue;
+    for item in items.iter().rev() {
+        let kind = match crate::event_mapping::parse_turn_item(item) {
+            Some(TurnItem::UserMessage(_)) => RetainedMessageKind::Truncatable,
+            Some(TurnItem::HookPrompt(_)) => RetainedMessageKind::Atomic,
+            _ => continue,
         };
-        let text_chars = content
-            .iter()
-            .map(|content| match content {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                    text.chars().count()
-                }
-                ContentItem::InputImage { .. } => 0,
-            })
-            .sum::<usize>();
-        let message_char_cost = text_chars.max(MIN_RETAINED_MESSAGE_CHAR_BUDGET);
         if remaining == 0 {
             continue;
         }
-        if remaining >= message_char_cost {
-            truncated_reversed.push(item);
-            remaining = remaining.saturating_sub(message_char_cost);
-        } else {
-            let ResponseItem::Message {
-                id,
-                role,
-                content,
-                phase,
-            } = item
-            else {
-                unreachable!("retained messages were matched above");
-            };
-            let mut message_remaining = remaining;
-            let mut truncated_content = Vec::with_capacity(content.len());
-            for mut content_item in content {
-                match &mut content_item {
-                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                        if message_remaining == 0 {
-                            continue;
-                        }
-                        let text_chars = text.chars().count();
-                        if text_chars <= message_remaining {
-                            message_remaining = message_remaining.saturating_sub(text_chars);
-                        } else {
-                            *text = truncate_text(text, TruncationPolicy::Bytes(message_remaining));
-                            message_remaining = 0;
-                        }
-                        truncated_content.push(content_item);
-                    }
-                    ContentItem::InputImage { .. } => truncated_content.push(content_item),
-                }
+
+        let message_cost = retained_item_model_visible_byte_cost(item);
+        if remaining >= message_cost {
+            truncated_reversed.push(item.clone());
+            remaining = remaining.saturating_sub(message_cost);
+        } else if matches!(kind, RetainedMessageKind::Truncatable) {
+            if let Some(truncated_item) =
+                truncate_retained_message_to_byte_budget(item.clone(), remaining)
+            {
+                truncated_reversed.push(truncated_item);
             }
-            truncated_reversed.push(ResponseItem::Message {
-                id,
-                role,
-                content: truncated_content,
-                phase,
-            });
             remaining = 0;
         }
     }
@@ -445,9 +402,94 @@ fn truncate_retained_items_for_remote_compaction(
     truncated_reversed
 }
 
+fn retained_item_model_visible_byte_cost(item: &ResponseItem) -> usize {
+    usize::try_from(estimate_response_item_model_visible_bytes(item).max(0))
+        .unwrap_or(usize::MAX)
+        .max(MIN_RETAINED_MESSAGE_BYTE_BUDGET)
+}
+
+fn truncate_retained_message_to_byte_budget(
+    item: ResponseItem,
+    max_bytes: usize,
+) -> Option<ResponseItem> {
+    let ResponseItem::Message {
+        id,
+        role,
+        content,
+        phase,
+    } = item
+    else {
+        return None;
+    };
+
+    if content
+        .iter()
+        .any(|item| matches!(item, ContentItem::InputImage { .. }))
+    {
+        return None;
+    }
+
+    let empty_text_content = content
+        .iter()
+        .map(|item| match item {
+            ContentItem::InputText { .. } => ContentItem::InputText {
+                text: String::new(),
+            },
+            ContentItem::OutputText { .. } => ContentItem::OutputText {
+                text: String::new(),
+            },
+            ContentItem::InputImage { .. } => unreachable!("images were rejected above"),
+        })
+        .collect::<Vec<_>>();
+    let empty_text_cost = retained_item_model_visible_byte_cost(&ResponseItem::Message {
+        id: id.clone(),
+        role: role.clone(),
+        content: empty_text_content,
+        phase: phase.clone(),
+    });
+    let mut remaining_text_bytes = max_bytes.saturating_sub(empty_text_cost);
+    if remaining_text_bytes == 0 {
+        return None;
+    }
+
+    let mut truncated_content = Vec::with_capacity(content.len());
+    for mut content_item in content {
+        let text = match &mut content_item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => text,
+            ContentItem::InputImage { .. } => unreachable!("images were rejected above"),
+        };
+        if remaining_text_bytes == 0 {
+            continue;
+        }
+        let text_bytes = text.len();
+        if text_bytes <= remaining_text_bytes {
+            remaining_text_bytes = remaining_text_bytes.saturating_sub(text_bytes);
+        } else {
+            *text = truncate_text(text, TruncationPolicy::Bytes(remaining_text_bytes));
+            remaining_text_bytes = 0;
+        }
+        if !text.is_empty() {
+            truncated_content.push(content_item);
+        }
+    }
+
+    if truncated_content.is_empty() {
+        return None;
+    }
+
+    Some(ResponseItem::Message {
+        id,
+        role,
+        content: truncated_content,
+        phase,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::MessagePhase;
     use pretty_assertions::assert_eq;
@@ -480,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn build_v2_compacted_history_matches_prod_retention_shape() {
+    fn build_v2_compacted_history_filters_to_installed_retention_shape() {
         let input = vec![
             message("developer", "dev", /*phase*/ None),
             message("system", "sys", /*phase*/ None),
@@ -506,78 +548,111 @@ mod tests {
 
         assert_eq!(
             history,
-            vec![
-                message("developer", "dev", /*phase*/ None),
-                message("system", "sys", /*phase*/ None),
-                message("user", "user", /*phase*/ None),
-                output,
-            ]
+            vec![message("user", "user", /*phase*/ None), output]
         );
     }
 
     #[test]
     fn retained_history_truncation_keeps_newest_messages_first() {
+        let middle = message("user", "middle1234", /*phase*/ None);
+        let new = message("user", "new", /*phase*/ None);
         let retained = vec![
             message("user", "old-old", /*phase*/ None),
-            message("user", "middle1234", /*phase*/ None),
-            message("user", "new", /*phase*/ None),
+            middle,
+            new.clone(),
         ];
+        let max_bytes = retained_item_model_visible_byte_cost(&new)
+            + retained_item_model_visible_byte_cost(&message("user", "", /*phase*/ None))
+            + 8;
 
         let truncated =
-            truncate_retained_items_for_remote_compaction(retained, /*max_chars*/ 12);
+            truncate_retained_items_for_remote_compaction(&retained, /*max_bytes*/ max_bytes);
 
         assert_eq!(
             truncated,
             vec![
-                message("user", "midd…1 chars truncated…e1234", /*phase*/ None),
-                message("user", "new", /*phase*/ None),
+                message("user", "midd…2 chars truncated…1234", /*phase*/ None),
+                new,
             ]
         );
     }
 
     #[test]
-    fn retained_history_truncation_preserves_images_and_truncates_later_text_parts() {
-        let item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputText {
-                    text: "abcdef".to_string(),
-                },
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,abc".to_string(),
-                    detail: None,
-                },
-                ContentItem::OutputText {
-                    text: "uvwxyz".to_string(),
-                },
-            ],
-            phase: None,
-        };
+    fn retained_history_truncation_counts_utf8_bytes() {
+        let retained = vec![message("user", "😀😀😀", /*phase*/ None)];
+        let max_bytes =
+            retained_item_model_visible_byte_cost(&message("user", "", /*phase*/ None)) + 3;
 
         let truncated =
-            truncate_retained_items_for_remote_compaction(vec![item], /*max_chars*/ 8);
+            truncate_retained_items_for_remote_compaction(&retained, /*max_bytes*/ max_bytes);
 
         assert_eq!(
             truncated,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "abcdef".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: "data:image/png;base64,abc".to_string(),
-                        detail: None,
-                    },
-                    ContentItem::OutputText {
-                        text: "u…4 chars truncated…z".to_string(),
-                    },
-                ],
-                phase: None,
-            }]
+            vec![message("user", "…3 chars truncated…", /*phase*/ None)]
         );
+    }
+
+    #[test]
+    fn retained_history_truncation_budgets_only_installed_items() {
+        let old = message("user", "old", /*phase*/ None);
+        let new = message("user", "new", /*phase*/ None);
+        let retained = vec![
+            old.clone(),
+            message("developer", &"dev ".repeat(1024), /*phase*/ None),
+            message(
+                "user",
+                "<environment_context>ctx</environment_context>",
+                /*phase*/ None,
+            ),
+            new.clone(),
+        ];
+        let max_bytes = retained_item_model_visible_byte_cost(&old)
+            + retained_item_model_visible_byte_cost(&new);
+
+        let truncated =
+            truncate_retained_items_for_remote_compaction(&retained, /*max_bytes*/ max_bytes);
+
+        assert_eq!(truncated, vec![old, new]);
+    }
+
+    #[test]
+    fn retained_history_truncation_charges_images_against_budget() {
+        let image_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            }],
+            phase: None,
+        };
+        let new = message("user", "new", /*phase*/ None);
+        let retained = vec![image_message, new.clone()];
+        let max_bytes = retained_item_model_visible_byte_cost(&new) + 1;
+
+        let truncated =
+            truncate_retained_items_for_remote_compaction(&retained, /*max_bytes*/ max_bytes);
+
+        assert_eq!(truncated, vec![new]);
+    }
+
+    #[test]
+    fn retained_history_truncation_drops_structured_messages_instead_of_truncating_them() {
+        let hook = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+            "Retry with care and preserve the full hook prompt.",
+            "hook-run-1",
+        )])
+        .expect("hook prompt message");
+        let new = message("user", "new", /*phase*/ None);
+        let retained = vec![hook, new.clone()];
+        let max_bytes = retained_item_model_visible_byte_cost(&new)
+            + retained_item_model_visible_byte_cost(&message("user", "", /*phase*/ None))
+            + 8;
+
+        let truncated =
+            truncate_retained_items_for_remote_compaction(&retained, /*max_bytes*/ max_bytes);
+
+        assert_eq!(truncated, vec![new]);
     }
 
     #[tokio::test]
