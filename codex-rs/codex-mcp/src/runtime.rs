@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
 
@@ -85,6 +87,18 @@ impl McpRuntimeContext {
         Err(format!(
             "MCP server `{server_name}` references unknown environment id `{}`",
             config.environment_id
+        ))
+    }
+
+    pub fn resolve_streamable_http_client(
+        &self,
+        server_name: &str,
+        config: &codex_config::McpServerConfig,
+    ) -> Result<Arc<dyn HttpClient>, String> {
+        let resolved_environment = self.resolve_server_environment(server_name, config)?;
+        Ok(resolved_environment.map_or_else(
+            || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+            |environment| environment.get_http_client(),
         ))
     }
 }

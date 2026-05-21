@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
+use codex_exec_server::HttpHeader;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
@@ -124,6 +125,18 @@ pub(crate) fn apply_default_headers(
     } else {
         builder.default_headers(default_headers.clone())
     }
+}
+
+pub(crate) fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|value| HttpHeader {
+                name: name.as_str().to_string(),
+                value: value.to_string(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(unix)]
