@@ -5,13 +5,16 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::config::Config;
-use codex_features::Feature;
-use codex_login::CodexAuth;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_EXTRACT_TEXT_TOOL_NAME;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_HOOK_MATCHER;
 use core_test_support::apps_test_server::DOCUMENT_EXTRACT_TEXT_RESOURCE_URI;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE as DOCUMENT_EXTRACT_NAMESPACE;
+use core_test_support::apps_test_server::apps_enabled_builder;
+use core_test_support::apps_test_server::recorded_apps_tool_call_by_name;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -20,7 +23,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -30,17 +32,6 @@ use wiremock::matchers::body_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
-
-const DOCUMENT_EXTRACT_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const DOCUMENT_EXTRACT_TOOL: &str = "_extract_text";
-const DOCUMENT_EXTRACT_HOOK_MATCHER: &str = "mcp__codex_apps__calendar_extract_text";
-
-fn configure_apps(config: &mut Config, chatgpt_base_url: &str) {
-    if let Err(err) = config.features.enable(Feature::Apps) {
-        panic!("test config should allow feature update: {err}");
-    }
-    config.chatgpt_base_url = chatgpt_base_url.to_string();
-}
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
@@ -154,15 +145,13 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
         .with_pre_build_hook(move |home| {
             if let Err(error) = write_post_tool_use_hook(home) {
                 panic!("failed to write apps file post tool use hook fixture: {error}");
             }
         })
         .with_config(move |config| {
-            configure_apps(config, apps_server.chatgpt_base_url.as_str());
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -192,20 +181,8 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         }))
     );
 
-    let apps_tool_call = server
-        .received_requests()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|request| {
-            let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/apps"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call")
-                && body.pointer("/params/name").and_then(Value::as_str)
-                    == Some("calendar_extract_text"))
-            .then_some(body)
-        })
-        .expect("apps calendar_extract_text tools/call request should be recorded");
+    let apps_tool_call =
+        recorded_apps_tool_call_by_name(&server, CALENDAR_EXTRACT_TEXT_TOOL_NAME).await;
 
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),

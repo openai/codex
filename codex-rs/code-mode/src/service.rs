@@ -1308,7 +1308,7 @@ image({
 image(
   {
     image_url: "https://example.com/image.jpg",
-    detail: "low",
+    detail: "high",
   },
   "original",
 );
@@ -1348,7 +1348,7 @@ image(
     mimeType: "image/png",
     _meta: { "codex/imageDetail": "original" },
   },
-  "low",
+  "high",
 );
 "#
                 .to_string(),
@@ -1364,10 +1364,40 @@ image(
                 cell_id: "1".to_string(),
                 content_items: vec![FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
-                    detail: Some(crate::ImageDetail::Low),
+                    detail: Some(crate::ImageDetail::High),
                 }],
                 stored_values: HashMap::new(),
                 error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn image_helper_rejects_unsupported_detail() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+image({
+  image_url: "https://example.com/image.jpg",
+  detail: "low",
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some("image detail must be one of: high, original".to_string()),
             }
         );
     }

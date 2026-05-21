@@ -28,6 +28,7 @@ use codex_core::config::set_project_trust_level;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -237,6 +238,89 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let cwd_tmp = TempDir::new()?;
+    let cwd = cwd_tmp.path().to_path_buf();
+    let relative_root = PathBuf::from("extra-root");
+    std::fs::create_dir_all(cwd.join(&relative_root))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            runtime_workspace_roots: Some(vec![relative_root.clone()]),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        cwd: response_cwd,
+        runtime_workspace_roots,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(response_cwd, cwd.abs());
+    assert_eq!(
+        runtime_workspace_roots,
+        vec![cwd_tmp.path().join(relative_root).abs()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_excludes_profile_workspace_roots_from_runtime_workspace_roots() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let profile_root = TempDir::new()?;
+    create_config_toml_with_profile_workspace_root(
+        codex_home.path(),
+        &server.uri(),
+        profile_root.path(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(cwd.path().to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        runtime_workspace_roots,
+        ..
+    } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(
+        runtime_workspace_roots,
+        vec![cwd.path().to_path_buf().abs()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_rejects_unknown_environment_as_invalid_request() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -401,7 +485,7 @@ model_reasoning_effort = "high"
 }
 
 #[tokio::test]
-async fn thread_start_accepts_arbitrary_service_tier_id() -> Result<()> {
+async fn thread_start_drops_unsupported_service_tier_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -425,7 +509,39 @@ async fn thread_start_accepts_arbitrary_service_tier_id() -> Result<()> {
     .await??;
     let ThreadStartResponse { service_tier, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    assert_eq!(service_tier, Some(service_tier_id));
+    // Unsupported catalog ids are dropped at session config time instead of echoed back.
+    assert_eq!(service_tier, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_accepts_default_service_tier() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            service_tier: Some(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { service_tier, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(
+        service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
     Ok(())
 }
 
@@ -976,6 +1092,42 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#
+        ),
+    )
+}
+
+fn create_config_toml_with_profile_workspace_root(
+    codex_home: &Path,
+    server_uri: &str,
+    profile_root: &Path,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let profile_root_key = profile_root
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+default_permissions = "dev"
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[permissions.dev.workspace_roots]
+"{profile_root_key}" = true
+
+[permissions.dev.filesystem.":workspace_roots"]
+"." = "write"
+"#,
         ),
     )
 }

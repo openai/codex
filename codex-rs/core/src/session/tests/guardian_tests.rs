@@ -5,8 +5,9 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
 use crate::test_support::models_manager_with_provider;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerEntry;
@@ -22,8 +23,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -48,8 +49,23 @@ use tempfile::tempdir;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-fn expect_text_output(output: &FunctionToolOutput) -> String {
-    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+fn expect_text_output<T>(output: &T) -> String
+where
+    T: ToolOutput + ?Sized,
+{
+    let response = output.to_response_item(
+        "call-guardian",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+            output.body.to_text().unwrap_or_default()
+        }
+        other => panic!("expected function output, got {other:?}"),
+    }
 }
 
 #[tokio::test]

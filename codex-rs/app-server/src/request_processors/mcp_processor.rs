@@ -205,27 +205,20 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
-        };
+        // This threadless status path has no turn cwd or turn-selected
+        // environment. Use config cwd only as the local stdio fallback; named
+        // environment stdio MCPs must declare their own absolute cwd.
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
                 outgoing,
                 request,
                 params,
-                config,
                 mcp_config,
                 auth,
-                runtime_environment,
+                runtime_context,
             )
             .await;
         });
@@ -236,18 +229,16 @@ impl McpRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
             params,
-            config,
             mcp_config,
             auth,
-            runtime_environment,
+            runtime_context,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -256,10 +247,9 @@ impl McpRequestProcessor {
     async fn list_mcp_server_status_response(
         request_id: String,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -270,31 +260,25 @@ impl McpRequestProcessor {
             &mcp_config,
             auth.as_ref(),
             request_id,
-            runtime_environment,
+            runtime_context,
             detail,
         )
         .await;
 
-        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
         let McpServerStatusSnapshot {
             tools_by_server,
             resources,
             resource_templates,
             auth_statuses,
+            mut server_names,
         } = snapshot;
-
-        let mut server_names: Vec<String> = config
-            .mcp_servers
-            .keys()
-            .cloned()
-            // Include runtime-added/plugin MCP servers that are present in the
-            // effective runtime config even when they are not user-declared in
-            // `config.mcp_servers`.
-            .chain(effective_servers.keys().cloned())
-            .chain(auth_statuses.keys().cloned())
-            .chain(resources.keys().cloned())
-            .chain(resource_templates.keys().cloned())
-            .collect();
+        server_names.extend(
+            auth_statuses
+                .keys()
+                .cloned()
+                .chain(resources.keys().cloned())
+                .chain(resource_templates.keys().cloned()),
+        );
         server_names.sort();
         server_names.dedup();
 
@@ -369,22 +353,19 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = {
-            let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
-                .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-        };
+        let environment_manager = self.thread_manager.environment_manager();
+        // This threadless resource-read path has no turn cwd or turn-selected
+        // environment. Use config cwd only as the local stdio fallback; named
+        // environment stdio MCPs must declare their own absolute cwd.
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
-                runtime_environment,
+                runtime_context,
                 &server,
                 &uri,
             )

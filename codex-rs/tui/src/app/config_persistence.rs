@@ -5,6 +5,8 @@
 //! loop.
 
 use super::*;
+#[cfg(target_os = "windows")]
+use codex_utils_approval_presets::ApprovalPreset;
 
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
@@ -19,6 +21,161 @@ impl App {
             .build()
             .await
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+    }
+
+    pub(super) async fn rebuild_config_for_permission_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<Config> {
+        let mut overrides = self.harness_overrides.clone();
+        overrides.cwd = Some(self.chat_widget.config_ref().cwd.to_path_buf());
+        overrides.sandbox_mode = None;
+        overrides.permission_profile = None;
+        overrides.default_permissions = Some(profile_id.to_string());
+        ConfigBuilder::default()
+            .codex_home(self.config.codex_home.to_path_buf())
+            .cli_overrides(self.cli_kv_overrides.clone())
+            .harness_overrides(overrides)
+            .loader_overrides(self.loader_overrides.clone())
+            .build()
+            .await
+            .wrap_err_with(|| {
+                format!("Failed to rebuild config for permission profile {profile_id}")
+            })
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) async fn permission_profile_for_windows_setup(
+        &self,
+        preset: &ApprovalPreset,
+        profile_selection: Option<&PermissionProfileSelection>,
+    ) -> Result<PermissionProfile> {
+        match profile_selection {
+            Some(selection) => Ok(self
+                .rebuild_config_for_permission_profile(selection.profile_id.as_str())
+                .await?
+                .permissions
+                .permission_profile()
+                .clone()),
+            None => Ok(preset.permission_profile.clone()),
+        }
+    }
+
+    pub(super) async fn apply_permission_profile_selection(
+        &mut self,
+        selection: PermissionProfileSelection,
+    ) -> bool {
+        let PermissionProfileSelection {
+            profile_id,
+            approval_policy,
+            approvals_reviewer,
+            display_label,
+        } = selection;
+        let selected_config = match self
+            .rebuild_config_for_permission_profile(profile_id.as_str())
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    profile_id,
+                    "failed to resolve selected permission profile"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to set permission profile `{profile_id}`: {err}"
+                ));
+                return false;
+            }
+        };
+        let permission_profile = selected_config.permissions.permission_profile();
+        let active_permission_profile = selected_config.permissions.active_permission_profile();
+        let network = selected_config.permissions.network.clone();
+
+        let mut config = self.config.clone();
+        if let Some(policy) = approval_policy
+            && !self.try_set_approval_policy_on_config(
+                &mut config,
+                policy,
+                "Failed to set approval policy",
+                "failed to set selected permission profile approval policy on app config",
+            )
+        {
+            return false;
+        }
+        if let Err(err) = config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    permission_profile.clone(),
+                    active_permission_profile.clone(),
+                ),
+            )
+        {
+            tracing::warn!(
+                error = %err,
+                profile_id,
+                "failed to set selected permission profile on app config"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to set permission profile `{profile_id}`: {err}"
+            ));
+            return false;
+        }
+        if let Some(reviewer) = approvals_reviewer {
+            config.approvals_reviewer = reviewer;
+        }
+        config.permissions.network = network.clone();
+        self.config = config;
+
+        if let Some(policy) = approval_policy {
+            self.runtime_approval_policy_override = Some(policy);
+            self.chat_widget.set_approval_policy(policy);
+        }
+        if let Err(err) = self.chat_widget.set_permission_profile_with_active_profile(
+            permission_profile.clone(),
+            active_permission_profile.clone(),
+        ) {
+            tracing::warn!(
+                error = %err,
+                profile_id,
+                "failed to set selected permission profile on chat config"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to set permission profile `{profile_id}`: {err}"
+            ));
+            return false;
+        }
+        if let Some(reviewer) = approvals_reviewer {
+            self.chat_widget.set_approvals_reviewer(reviewer);
+        }
+        self.chat_widget.set_permission_network(network);
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
+        self.sync_active_thread_permission_settings_to_cached_session()
+            .await;
+        self.app_event_tx
+            .send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                approval_policy,
+                approvals_reviewer,
+                Some(permission_profile.clone()),
+                active_permission_profile,
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_info_event(
+                format!("Permissions updated to {display_label}"),
+                /*hint*/ None,
+            ),
+        )));
+        true
     }
 
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
@@ -73,13 +230,25 @@ impl App {
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(profile) = self.runtime_permission_profile_override.as_ref()
-            && let Err(err) = config.permissions.set_permission_profile(profile.clone())
-        {
-            tracing::warn!(%err, "failed to carry forward permission profile override");
-            self.chat_widget.add_error_message(format!(
-                "Failed to carry forward permission profile override: {err}"
-            ));
+        if let Some(profile_override) = self.runtime_permission_profile_override.as_ref() {
+            match config
+                .permissions
+                .set_permission_profile_from_session_snapshot(
+                    PermissionProfileSnapshot::from_session_snapshot(
+                        profile_override.permission_profile.clone(),
+                        profile_override.active_permission_profile.clone(),
+                    ),
+                ) {
+                Ok(()) => {
+                    config.permissions.network = profile_override.network.clone();
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "failed to carry forward permission profile override");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to carry forward permission profile override: {err}"
+                    ));
+                }
+            }
         }
     }
 
@@ -105,24 +274,41 @@ impl App {
         true
     }
 
-    pub(super) fn try_set_permission_profile_on_config(
+    pub(super) fn try_set_builtin_active_permission_profile_on_config(
         &mut self,
         config: &mut Config,
-        permission_profile: PermissionProfile,
+        active_permission_profile: ActivePermissionProfile,
         user_message_prefix: &str,
         log_message: &str,
-    ) -> bool {
+    ) -> Option<PermissionProfile> {
+        let Some(permission_profile) =
+            builtin_permission_profile_for_active_permission_profile(&active_permission_profile)
+        else {
+            tracing::warn!(
+                id = %active_permission_profile.id,
+                "{log_message}: unsupported active permission profile"
+            );
+            self.chat_widget.add_error_message(format!(
+                "{user_message_prefix}: unsupported active permission profile `{}`",
+                active_permission_profile.id
+            ));
+            return None;
+        };
+
         if let Err(err) = config
             .permissions
-            .set_permission_profile(permission_profile)
+            .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                permission_profile.clone(),
+                active_permission_profile,
+            ))
         {
             tracing::warn!(error = %err, "{log_message}");
             self.chat_widget
                 .add_error_message(format!("{user_message_prefix}: {err}"));
-            return false;
+            return None;
         }
 
-        true
+        Some(permission_profile)
     }
 
     pub(super) async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
@@ -149,6 +335,7 @@ impl App {
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut permission_profile_override = None;
+        let mut active_permission_profile_override = None;
         let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
         // Auto-Review owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
@@ -240,14 +427,16 @@ impl App {
                 ) {
                     continue;
                 }
-                if !self.try_set_permission_profile_on_config(
-                    &mut feature_config,
-                    auto_review_preset.permission_profile.clone(),
-                    "Failed to enable Auto-review",
-                    "failed to set auto-review permission profile on staged config",
-                ) {
+                let Some(permission_profile) = self
+                    .try_set_builtin_active_permission_profile_on_config(
+                        &mut feature_config,
+                        auto_review_preset.active_permission_profile.clone(),
+                        "Failed to enable Auto-review",
+                        "failed to set auto-review permission profile on staged config",
+                    )
+                else {
                     continue;
-                }
+                };
                 feature_edits.extend([
                     ConfigEdit::SetPath {
                         segments: scoped_segments("approval_policy"),
@@ -259,7 +448,9 @@ impl App {
                     },
                 ]);
                 approval_policy_override = Some(auto_review_preset.approval_policy);
-                permission_profile_override = Some(auto_review_preset.permission_profile.clone());
+                permission_profile_override = Some(permission_profile);
+                active_permission_profile_override =
+                    Some(auto_review_preset.active_permission_profile.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -299,10 +490,18 @@ impl App {
                 self.config.permissions.approval_policy.value(),
             ));
         }
-        if permission_profile_override.is_some()
+        let permission_profile_override_value = permission_profile_override
+            .is_some()
+            .then(|| self.config.permissions.permission_profile().clone());
+        if let Some(permission_profile) = permission_profile_override_value.as_ref()
             && let Err(err) = self
                 .chat_widget
-                .set_permission_profile(self.config.permissions.permission_profile())
+                .set_permission_profile_from_session_snapshot(
+                    PermissionProfileSnapshot::from_session_snapshot(
+                        permission_profile.clone(),
+                        active_permission_profile_override.clone(),
+                    ),
+                )
         {
             tracing::error!(
                 error = %err,
@@ -313,7 +512,7 @@ impl App {
         }
         if permission_profile_override.is_some() {
             self.runtime_permission_profile_override =
-                Some(self.config.permissions.permission_profile());
+                Some(RuntimePermissionProfileOverride::from_config(&self.config));
         }
 
         if approval_policy_override.is_some()
@@ -332,6 +531,7 @@ impl App {
                 approval_policy_override,
                 approvals_reviewer_override,
                 permission_profile_override,
+                active_permission_profile_override,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
@@ -359,6 +559,7 @@ impl App {
                         /*approval_policy*/ None,
                         /*approvals_reviewer*/ None,
                         /*permission_profile*/ None,
+                        /*active_permission_profile*/ None,
                         #[cfg(target_os = "windows")]
                         Some(windows_sandbox_level),
                         /*model*/ None,
@@ -560,6 +761,7 @@ mod tests {
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
+    use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
@@ -659,8 +861,11 @@ mod tests {
                 permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,
                 cwd: next_cwd.clone().abs(),
+                runtime_workspace_roots: Vec::new(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
+                collaboration_mode: None,
+                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),

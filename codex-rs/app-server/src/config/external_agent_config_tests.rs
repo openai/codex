@@ -422,7 +422,7 @@ async fn detect_repo_skips_hooks_when_only_unsupported_hooks_exist() {
     fs::create_dir_all(repo_root.join(EXTERNAL_AGENT_DIR)).expect("create external agent dir");
     fs::write(
         repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
-        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","if":"Bash(rm *)","command":"echo blocked"}]}],"SubagentStart":[{"matcher":"worker","hooks":[{"type":"command","command":"echo started"}]}]}}"#,
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","if":"Bash(rm *)","command":"echo blocked"}]}],"UnsupportedEvent":[{"matcher":"worker","hooks":[{"type":"command","command":"echo started"}]}]}}"#,
     )
     .expect("write hooks");
 
@@ -696,10 +696,25 @@ async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
         "Codex guidance"
     );
 
-    assert_eq!(
-        fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
-        "sandbox_mode = \"workspace-write\"\n\n[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nCI = \"false\"\nFOO = \"bar\"\nMAX_RETRIES = \"3\"\nMY_TEAM = \"codex\"\n"
-    );
+    let config: TomlValue =
+        toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).expect("read config"))
+            .expect("parse config");
+    let expected: TomlValue = toml::from_str(
+        r#"
+sandbox_mode = "workspace-write"
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CI = "false"
+FOO = "bar"
+MAX_RETRIES = "3"
+MY_TEAM = "codex"
+"#,
+    )
+    .expect("parse expected config");
+    assert_eq!(config, expected);
     assert_eq!(
         fs::read_to_string(agents_skills.join("skill-a").join("SKILL.md"))
             .expect("read copied skill"),
@@ -732,10 +747,24 @@ async fn import_home_config_uses_local_settings_over_project_settings() {
         .await
         .expect("import");
 
-    assert_eq!(
-        fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
-        "sandbox_mode = \"workspace-write\"\n\n[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nFOO = \"local\"\nLOCAL_ONLY = \"true\"\nPROJECT_ONLY = \"yes\"\n"
-    );
+    let config: TomlValue =
+        toml::from_str(&fs::read_to_string(codex_home.join("config.toml")).expect("read config"))
+            .expect("parse config");
+    let expected: TomlValue = toml::from_str(
+        r#"
+sandbox_mode = "workspace-write"
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+FOO = "local"
+LOCAL_ONLY = "true"
+PROJECT_ONLY = "yes"
+"#,
+    )
+    .expect("parse expected config");
+    assert_eq!(config, expected);
 }
 
 #[tokio::test]

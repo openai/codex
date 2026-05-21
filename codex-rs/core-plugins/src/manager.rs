@@ -22,6 +22,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
+use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
@@ -37,6 +38,7 @@ use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -259,6 +261,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
     pub local_version: Option<String>,
+    pub installed_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -575,6 +578,39 @@ impl PluginsManager {
         remote_installed_plugins_to_config(plugins, &self.store)
     }
 
+    pub fn build_remote_installed_plugin_marketplaces_from_cache(
+        &self,
+        visible_scopes: &[RemotePluginScope],
+    ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let plugins = cache.as_ref()?;
+        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
+    }
+
+    pub async fn build_and_cache_remote_installed_plugin_marketplaces(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let plugins = crate::remote::fetch_remote_installed_plugins(
+            &remote_plugin_service_config(config),
+            auth,
+        )
+        .await?;
+        let marketplaces =
+            crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
+        let changed = self.write_remote_installed_plugins_cache(plugins);
+        if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
+            on_effective_plugins_changed();
+        }
+        Ok(marketplaces)
+    }
+
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
         let mut cache = match self.remote_installed_plugins_cache.write() {
             Ok(cache) => cache,
@@ -652,7 +688,7 @@ impl PluginsManager {
         );
     }
 
-    fn maybe_start_remote_installed_plugin_bundle_sync(
+    pub fn maybe_start_remote_installed_plugin_bundle_sync(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
@@ -1151,7 +1187,7 @@ impl PluginsManager {
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplace_outcome =
-            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
+            self.discover_marketplaces_for_config(config, additional_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1169,15 +1205,21 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let plugin_id =
+                            PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
                         let installed = installed_plugins.contains(&plugin_key);
+                        let installed_version = installed.then_some(()).and_then(|_| {
+                            plugin_id
+                                .as_ref()
+                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
+                        });
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
-                            && let Ok(plugin_id) =
-                                PluginId::new(plugin.name.clone(), marketplace_name.clone())
-                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(plugin_id) = plugin_id.as_ref()
+                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
                             local_version = manifest.version.clone();
@@ -1195,6 +1237,7 @@ impl PluginsManager {
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
                             id: plugin_key,
+                            installed_version,
                             installed,
                             enabled,
                             name: plugin.name,
@@ -1222,6 +1265,18 @@ impl PluginsManager {
         })
     }
 
+    pub fn discover_marketplaces_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(MarketplaceListOutcome::default());
+        }
+
+        list_marketplaces(&self.marketplace_roots(config, additional_roots))
+    }
+
     pub async fn read_plugin_for_config(
         &self,
         config: &PluginsConfigInput,
@@ -1242,6 +1297,12 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let installed = installed_plugins.contains(&plugin_key);
+        let installed_version = if installed {
+            self.store.active_plugin_version(&plugin.plugin_id)
+        } else {
+            None
+        };
         let plugin = self
             .read_plugin_detail_for_marketplace_plugin(
                 config,
@@ -1253,6 +1314,7 @@ impl PluginsManager {
                         .manifest
                         .as_ref()
                         .and_then(|manifest| manifest.version.clone()),
+                    installed_version,
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1261,7 +1323,7 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
-                    installed: installed_plugins.contains(&plugin_key),
+                    installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
             )

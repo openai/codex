@@ -105,24 +105,29 @@ fn read_only_user_turn_with_model(
     let cwd = fixture.cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
-    Op::UserTurn {
+    Op::UserInput {
         items: vec![UserInput::Text {
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        final_output_json_schema: None,
-        cwd,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: None,
-        sandbox_policy,
-        permission_profile,
-        model,
-        effort: None,
-        summary: None,
-        service_tier: None,
-        collaboration_mode: None,
-        personality: None,
         environments: None,
+        final_output_json_schema: None,
+        responsesapi_client_metadata: None,
+        thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd: Some(cwd),
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: Some(sandbox_policy),
+            permission_profile,
+            collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                mode: codex_protocol::config_types::ModeKind::Default,
+                settings: codex_protocol::config_types::Settings {
+                    model,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        },
     }
 }
 
@@ -134,11 +139,13 @@ enum McpCallEvent {
 
 const REMOTE_MCP_ENVIRONMENT: &str = "remote";
 
-fn remote_aware_experimental_environment() -> Option<String> {
+fn remote_aware_environment_id() -> String {
     // These tests run locally in normal CI and against the Docker-backed
     // executor in full-ci. Match that shared test environment instead of
     // parameterizing each stdio MCP test with its own local/remote cases.
-    std::env::var_os(remote_env_env_var()).map(|_| REMOTE_MCP_ENVIRONMENT.to_string())
+    std::env::var_os(remote_env_env_var())
+        .map(|_| REMOTE_MCP_ENVIRONMENT.to_string())
+        .unwrap_or_else(|| codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
 }
 
 /// Returns the stdio MCP test server command path for the active test placement.
@@ -280,11 +287,20 @@ async fn wait_for_mcp_server(fixture: &TestCodex, server_name: &str) -> anyhow::
     Ok(())
 }
 
-#[derive(Default)]
 struct TestMcpServerOptions {
-    experimental_environment: Option<String>,
+    environment_id: String,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
+}
+
+impl Default for TestMcpServerOptions {
+    fn default() -> Self {
+        Self {
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            supports_parallel_tool_calls: false,
+            tool_timeout_sec: None,
+        }
+    }
 }
 
 fn stdio_transport(
@@ -321,7 +337,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
-            experimental_environment: options.experimental_environment,
+            environment_id: options.environment_id,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
@@ -475,7 +491,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -598,7 +614,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
                     Some(configured_cwd),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -612,59 +628,6 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
         .clone()
         .expect("test config should record configured MCP cwd");
     let structured = call_cwd_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
-
-    assert_cwd_tool_output(&structured, &expected_cwd);
-    server.verify().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[serial(mcp_cwd)]
-async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -> anyhow::Result<()>
-{
-    skip_if_no_network!(Ok(()));
-    if std::env::var_os(remote_env_env_var()).is_none() {
-        return Ok(());
-    }
-
-    let server = responses::start_mock_server().await;
-    let server_name = "rmcp_fallback_cwd";
-    let expected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
-    let expected_cwd_for_config = Arc::clone(&expected_cwd);
-    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
-
-    let fixture = test_codex()
-        .with_config(move |config| {
-            *expected_cwd_for_config
-                .lock()
-                .expect("expected cwd lock should not be poisoned") =
-                Some(config.cwd.to_path_buf());
-            insert_mcp_server(
-                config,
-                server_name,
-                stdio_transport(
-                    rmcp_test_server_bin,
-                    Some(HashMap::from([(
-                        "MCP_TEST_VALUE".to_string(),
-                        "fallback-cwd".to_string(),
-                    )])),
-                    Vec::new(),
-                ),
-                TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
-                    ..Default::default()
-                },
-            );
-        })
-        .build_with_remote_env(&server)
-        .await?;
-
-    let expected_cwd = expected_cwd
-        .lock()
-        .expect("expected cwd lock should not be poisoned")
-        .clone()
-        .expect("test config should record runtime fallback cwd");
-    let structured = call_cwd_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
 
     assert_cwd_tool_output(&structured, &expected_cwd);
     server.verify().await;
@@ -770,7 +733,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -867,7 +830,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                     ..Default::default()
                 },
@@ -984,7 +947,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
@@ -1066,7 +1029,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1098,6 +1061,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 arguments: Some(json!({})),
             },
             mcp_app_resource_uri: None,
+            plugin_id: None,
         },
     );
 
@@ -1198,7 +1162,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1270,6 +1234,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 priority: 1,
                 additional_speed_tiers: Vec::new(),
                 service_tiers: Vec::new(),
+                default_service_tier: None,
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,
@@ -1333,7 +1298,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                     Vec::new(),
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1435,7 +1400,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     vec!["MCP_TEST_VALUE".into()],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1553,7 +1518,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
                     }],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1645,7 +1610,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
                     }],
                 ),
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -1803,7 +1768,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     .await;
 
     // Phase 2: start the Streamable HTTP MCP test server in the active
-    // placement. In full CI this may be the remote executor container; locally
+    // placement. In full CI this may be the remote environment container; locally
     // it is a host process.
     let expected_env_value = "propagated-env-http";
     let Some(http_server) =
@@ -1828,7 +1793,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );
@@ -2014,7 +1979,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    experimental_environment: remote_aware_experimental_environment(),
+                    environment_id: remote_aware_environment_id(),
                     ..Default::default()
                 },
             );

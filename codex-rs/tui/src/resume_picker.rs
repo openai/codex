@@ -349,15 +349,15 @@ async fn run_resume_picker_with_launch_context(
     launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -395,15 +395,15 @@ pub async fn run_fork_picker_with_app_server(
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -477,6 +477,9 @@ async fn run_session_picker_with_loader(
                             return Ok(sel);
                         }
                     }
+                    TuiEvent::Paste(pasted) => {
+                        state.handle_paste(pasted);
+                    }
                     TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
                             let list_height =
@@ -489,7 +492,6 @@ async fn run_session_picker_with_loader(
                             state.open_pending_transcript_if_ready();
                         }
                     }
-                    _ => {}
                 }
             }
             Some(event) = background_events.next() => {
@@ -511,12 +513,19 @@ fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
     }
 }
 
-fn local_picker_cwd_filter(cwd_filter: &Option<PathBuf>, is_remote: bool) -> Option<PathBuf> {
-    if is_remote { None } else { cwd_filter.clone() }
+fn local_picker_cwd_filter(
+    cwd_filter: &Option<PathBuf>,
+    uses_remote_workspace: bool,
+) -> Option<PathBuf> {
+    if uses_remote_workspace {
+        None
+    } else {
+        cwd_filter.clone()
+    }
 }
 
-fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
-    if is_remote {
+fn picker_provider_filter(config: &Config, uses_remote_workspace: bool) -> ProviderFilter {
+    if uses_remote_workspace {
         ProviderFilter::Any
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
@@ -531,16 +540,21 @@ fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
-    is_remote: bool,
+    uses_remote_workspace: bool,
     remote_cwd_override: Option<&Path>,
 ) -> Option<PathBuf> {
     if show_all {
         None
-    } else if is_remote {
+    } else if uses_remote_workspace {
         remote_cwd_override.map(Path::to_path_buf)
     } else {
         Some(config_cwd.to_path_buf())
     }
+}
+
+fn normalize_pasted_query(pasted: &str) -> Option<String> {
+    let normalized = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn spawn_app_server_page_loader(
@@ -1225,6 +1239,21 @@ impl PickerState {
             _ => {}
         }
         Ok(None)
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if self.is_transcript_loading() {
+            return;
+        }
+        let Some(pasted) = normalize_pasted_query(&pasted) else {
+            return;
+        };
+        let mut new_query = self.query.clone();
+        if !new_query.is_empty() && !new_query.ends_with(char::is_whitespace) {
+            new_query.push(' ');
+        }
+        new_query.push_str(&pasted);
+        self.set_query(new_query);
     }
 
     fn start_initial_load(&mut self) {
@@ -2929,12 +2958,12 @@ fn render_expanded_session_details(
     width: u16,
 ) -> Vec<Line<'static>> {
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
-    let session = row
-        .thread_name
-        .as_deref()
-        .map(str::to_string)
-        .or_else(|| row.thread_id.map(|thread_id| thread_id.to_string()))
-        .unwrap_or_else(|| "-".to_string());
+    let session = match (row.thread_name.as_deref(), row.thread_id) {
+        (Some(thread_name), Some(thread_id)) => format!("{thread_name} ({thread_id})"),
+        (Some(thread_name), None) => thread_name.to_string(),
+        (None, Some(thread_id)) => thread_id.to_string(),
+        (None, None) => "-".to_string(),
+    };
     let directory = row
         .cwd
         .as_ref()
@@ -3287,7 +3316,7 @@ mod tests {
         let cwd_filter = picker_cwd_filter(
             Path::new("/tmp/project"),
             /*show_all*/ false,
-            /*is_remote*/ false,
+            /*uses_remote_workspace*/ false,
             /*remote_cwd_override*/ None,
         );
         let params = thread_list_params(
@@ -3387,7 +3416,9 @@ mod tests {
         let expected_directory =
             format_directory_display(row.cwd.as_deref().expect("cwd"), /*max_width*/ None);
 
-        assert!(rendered.contains("Session:    feat(tui): add raw scrollback mode"));
+        assert!(rendered.contains(
+            "Session:    feat(tui): add raw scrollback mode (019dabc1-0ef5-7431-b81c-03037f51f62c)"
+        ));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
         assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
@@ -3564,7 +3595,8 @@ mod tests {
             remote_cwd.clone(),
             SessionPickerAction::Resume,
         );
-        state.local_filter_cwd = local_picker_cwd_filter(&remote_cwd, /*is_remote*/ true);
+        state.local_filter_cwd =
+            local_picker_cwd_filter(&remote_cwd, /*uses_remote_workspace*/ true);
 
         state.start_initial_load();
 
@@ -6214,6 +6246,87 @@ session_picker_view = "dense"
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn paste_appends_to_existing_query() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("resize");
+
+        state.handle_paste(String::from("results"));
+
+        assert_eq!(state.query, "resize results");
+    }
+
+    #[test]
+    fn normalize_pasted_query_collapses_whitespace() {
+        assert_eq!(
+            normalize_pasted_query("  alpha\n\tbeta\r\n gamma  "),
+            Some(String::from("alpha beta gamma"))
+        );
+    }
+
+    #[tokio::test]
+    async fn whitespace_only_paste_is_ignored() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.query = String::from("resize");
+
+        state.handle_paste(String::from("  \n\t  "));
+
+        assert_eq!(state.query, "resize");
+    }
+
+    #[tokio::test]
+    async fn paste_uses_existing_search_loading_path() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader = page_only_loader(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![make_row(
+                "/tmp/start.jsonl",
+                "2025-01-01T00:00:00Z",
+                "alpha",
+            )],
+            Some("2025-01-02T00:00:00Z"),
+            /*num_scanned_files*/ 1,
+            /*reached_scan_cap*/ false,
+        ));
+        recorded_requests.lock().unwrap().clear();
+
+        state.handle_paste(String::from("target"));
+
+        let guard = recorded_requests.lock().unwrap();
+        assert_eq!(state.query, "target");
+        assert_eq!(guard.len(), 1);
+        assert!(guard[0].search_token.is_some());
     }
 
     #[tokio::test]

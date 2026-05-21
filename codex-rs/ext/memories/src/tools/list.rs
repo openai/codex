@@ -39,23 +39,22 @@ impl<B> ToolExecutor<ToolCall> for ListTool<B>
 where
     B: MemoriesBackend,
 {
-    type Output = JsonToolOutput;
-
     fn tool_name(&self) -> ToolName {
         memory_tool_name(LIST_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<ListArgs, ListMemoriesResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<ListArgs, ListMemoriesResponse>(
             LIST_TOOL_NAME,
             "List immediate files and directories under a path in the Codex memories store.",
-        ))
+        )
     }
 
     async fn handle(
         &self,
         call: ToolCall,
-    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
         let args: ListArgs = parse_args(&call)?;
         let response = backend
@@ -70,6 +69,6 @@ where
             })
             .await
             .map_err(backend_error_to_function_call)?;
-        Ok(JsonToolOutput::new(json!(response)))
+        Ok(Box::new(JsonToolOutput::new(json!(response))))
     }
 }

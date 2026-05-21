@@ -4,10 +4,11 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
-use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -30,7 +31,7 @@ use tracing::warn;
 
 pub struct DynamicToolHandler {
     tool_name: ToolName,
-    spec: Option<ToolSpec>,
+    spec: ToolSpec,
     exposure: ToolExposure,
     search_text: String,
 }
@@ -49,7 +50,7 @@ impl DynamicToolHandler {
         };
         Some(Self {
             tool_name,
-            spec: Some(spec),
+            spec,
             exposure: if tool.defer_loading {
                 ToolExposure::Deferred
             } else {
@@ -62,13 +63,11 @@ impl DynamicToolHandler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
-    type Output = FunctionToolOutput;
-
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.spec.clone()
     }
 
@@ -76,7 +75,10 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
         self.exposure
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -117,15 +119,18 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(FunctionToolOutput::from_content(body, Some(success)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_content(
+            body,
+            Some(success),
+        )))
     }
 }
 
-impl ToolHandler for DynamicToolHandler {
+impl CoreToolRuntime for DynamicToolHandler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         ToolSearchInfo::from_spec(
             self.search_text.clone(),
-            self.spec()?,
+            self.spec(),
             Some(ToolSearchSourceInfo {
                 name: "Dynamic tools".to_string(),
                 description: Some("Tools provided by the current Codex thread.".to_string()),

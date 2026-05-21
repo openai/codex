@@ -38,6 +38,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -58,6 +59,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
+use serde_json::Value as JsonValue;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -154,6 +156,10 @@ pub struct ConfigToml {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Controls whether the auto-compaction limit applies to the full context or
+    /// only to tokens after the carried prefix in the current compaction window.
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -353,11 +359,14 @@ pub struct ConfigToml {
     pub personality: Option<Personality>,
 
     /// Optional explicit service tier request id for new turns (for example
-    /// `priority` or `flex`; legacy `fast` also works).
+    /// `default`, `priority`, or `flex`; legacy `fast` also works).
     pub service_tier: Option<String>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
+    pub apps_mcp_product_sku: Option<String>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
@@ -474,6 +483,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
+    /// Opaque desktop settings stored alongside the rest of config.toml.
+    #[serde(default)]
+    pub desktop: Option<HashMap<String, JsonValue>>,
+
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,
 
@@ -485,10 +498,6 @@ pub struct ConfigToml {
     /// See [`crate::types::Notice`] for more details
     pub notice: Option<Notice>,
 
-    /// Legacy, now use features
-    /// Deprecated: ignored. Use `model_instructions_file`.
-    #[schemars(skip)]
-    pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".

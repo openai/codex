@@ -341,7 +341,8 @@ impl ChatWidget {
             server_name: params.server_name.clone(),
         });
 
-        let thread_id = self.thread_id.unwrap_or_default();
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .unwrap_or_else(|_| self.thread_id.unwrap_or_default());
         if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_url_app_server_request(
             thread_id,
             &params.server_name,

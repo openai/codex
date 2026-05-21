@@ -7,6 +7,8 @@ pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+const PRIMARY_LIMIT_FALLBACK_LABEL: &str = "usage";
+const SECONDARY_LIMIT_FALLBACK_LABEL: &str = "secondary usage";
 
 #[derive(Default)]
 pub(super) struct RateLimitWarningState {
@@ -40,9 +42,8 @@ impl RateLimitWarningState {
                 self.secondary_index += 1;
             }
             if let Some(threshold) = highest_secondary {
-                let limit_label = secondary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
+                let limit_label =
+                    limit_label_for_window(secondary_window_minutes, /*is_secondary*/ true);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -59,9 +60,8 @@ impl RateLimitWarningState {
                 self.primary_index += 1;
             }
             if let Some(threshold) = highest_primary {
-                let limit_label = primary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
+                let limit_label =
+                    limit_label_for_window(primary_window_minutes, /*is_secondary*/ false);
                 let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
                     "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
@@ -73,26 +73,49 @@ impl RateLimitWarningState {
     }
 }
 
-pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
+pub(crate) fn limit_label_for_window(window_minutes: Option<i64>, is_secondary: bool) -> String {
+    window_minutes
+        .and_then(get_limits_duration)
+        .unwrap_or_else(|| fallback_limit_label(is_secondary).to_string())
+}
+
+pub(crate) fn get_limits_duration(windows_minutes: i64) -> Option<String> {
     const MINUTES_PER_HOUR: i64 = 60;
+    const MINUTES_PER_5_HOURS: i64 = 5 * MINUTES_PER_HOUR;
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
     const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
     const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
-    const ROUNDING_BIAS_MINUTES: i64 = 3;
+    const MINUTES_PER_YEAR: i64 = 365 * MINUTES_PER_DAY;
 
     let windows_minutes = windows_minutes.max(0);
 
-    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
-        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
-        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
-        format!("{hours}h")
-    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "weekly".to_string()
-    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "monthly".to_string()
+    if is_approximate_window(windows_minutes, MINUTES_PER_5_HOURS) {
+        Some("5h".to_string())
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_DAY) {
+        Some("daily".to_string())
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_WEEK) {
+        Some("weekly".to_string())
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_MONTH) {
+        Some("monthly".to_string())
+    } else if is_approximate_window(windows_minutes, MINUTES_PER_YEAR) {
+        Some("annual".to_string())
     } else {
-        "annual".to_string()
+        None
     }
+}
+
+pub(crate) fn fallback_limit_label(is_secondary: bool) -> &'static str {
+    if is_secondary {
+        SECONDARY_LIMIT_FALLBACK_LABEL
+    } else {
+        PRIMARY_LIMIT_FALLBACK_LABEL
+    }
+}
+
+fn is_approximate_window(minutes: i64, expected_minutes: i64) -> bool {
+    let minutes = minutes as f64;
+    let expected_minutes = expected_minutes as f64;
+    minutes >= expected_minutes * 0.95 && minutes <= expected_minutes * 1.05
 }
 
 #[derive(Default)]
@@ -286,6 +309,7 @@ impl ChatWidget {
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
                 /*permission_profile*/ None,
+                /*active_permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 Some(switch_model_for_events.clone()),
                 Some(Some(default_effort)),

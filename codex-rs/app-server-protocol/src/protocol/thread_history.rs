@@ -525,6 +525,7 @@ impl ThreadHistoryBuilder {
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            plugin_id: payload.plugin_id.clone(),
             result: None,
             error: None,
             duration_ms: None,
@@ -566,6 +567,7 @@ impl ThreadHistoryBuilder {
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            plugin_id: payload.plugin_id.clone(),
             result,
             error,
             duration_ms,
@@ -1077,12 +1079,18 @@ impl ThreadHistoryBuilder {
             });
         }
         if let Some(images) = &payload.images {
-            for image in images {
-                content.push(UserInput::Image { url: image.clone() });
+            for (idx, image) in images.iter().enumerate() {
+                content.push(UserInput::Image {
+                    url: image.clone(),
+                    detail: payload.image_details.get(idx).copied().flatten(),
+                });
             }
         }
-        for path in &payload.local_images {
-            content.push(UserInput::LocalImage { path: path.clone() });
+        for (idx, path) in payload.local_images.iter().enumerate() {
+            content.push(UserInput::LocalImage {
+                path: path.clone(),
+                detail: payload.local_image_details.get(idx).copied().flatten(),
+            });
         }
         content
     }
@@ -1203,6 +1211,7 @@ mod tests {
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::ImageDetail;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
@@ -1241,6 +1250,7 @@ mod tests {
                 images: Some(vec!["https://example.com/one.png".into()]),
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Hi there".into(),
@@ -1258,6 +1268,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Reply two".into(),
@@ -1288,6 +1299,7 @@ mod tests {
                     },
                     UserInput::Image {
                         url: "https://example.com/one.png".into(),
+                        detail: None,
                     }
                 ],
             }
@@ -1336,6 +1348,45 @@ mod tests {
     }
 
     #[test]
+    fn rebuilds_user_message_image_details_from_legacy_events() {
+        let local_path = PathBuf::from("/tmp/local.png");
+        let events = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "inspect these".into(),
+                images: Some(vec!["https://example.com/image.png".into()]),
+                image_details: vec![Some(ImageDetail::Original)],
+                local_images: vec![local_path.clone()],
+                local_image_details: vec![Some(ImageDetail::Original)],
+                text_elements: Vec::new(),
+            },
+        ))];
+
+        let turns = build_turns_from_rollout_items(&events);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::UserMessage {
+                id: "item-1".into(),
+                content: vec![
+                    UserInput::Text {
+                        text: "inspect these".into(),
+                        text_elements: Vec::new(),
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/image.png".into(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                    UserInput::LocalImage {
+                        path: local_path,
+                        detail: Some(ImageDetail::Original),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn ignores_non_plan_item_lifecycle_events() {
         let turn_id = "turn-1";
         let thread_id = ThreadId::new();
@@ -1351,6 +1402,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id,
@@ -1428,6 +1480,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             })),
             RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
                 call_id: "ig_123".into(),
@@ -1485,6 +1538,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "first summary".into(),
@@ -1537,6 +1591,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Working...".into(),
@@ -1554,6 +1609,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Second attempt complete.".into(),
@@ -1624,6 +1680,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
@@ -1635,6 +1692,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
@@ -1647,6 +1705,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A3".into(),
@@ -1712,6 +1771,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
@@ -1723,6 +1783,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
@@ -1754,12 +1815,14 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Steer".into(),
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -1812,6 +1875,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::WebSearchEnd(WebSearchEndEvent {
                 call_id: "search-1".into(),
@@ -1849,6 +1913,7 @@ mod tests {
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
             }),
@@ -1898,6 +1963,7 @@ mod tests {
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "boom".into(),
@@ -1924,6 +1990,7 @@ mod tests {
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                plugin_id: Some("sample@test".into()),
                 duration: Duration::from_millis(8),
                 result: Ok(CallToolResult {
                     content: vec![serde_json::json!({
@@ -1954,6 +2021,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                plugin_id: Some("sample@test".into()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
                         "type": "text",
@@ -1984,6 +2052,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::DynamicToolCallRequest(
                 codex_protocol::dynamic_tools::DynamicToolCallRequest {
@@ -2049,6 +2118,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-declined".into(),
@@ -2138,6 +2208,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: "review-guardian-exec".into(),
@@ -2221,6 +2292,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: "review-guardian-execve".into(),
@@ -2284,6 +2356,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -2303,6 +2376,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-late".into(),
@@ -2376,6 +2450,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -2395,6 +2470,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-unknown-turn".into(),
@@ -2463,6 +2539,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: "patch-call".into(),
@@ -2527,6 +2604,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id: "patch-call".into(),
@@ -2591,6 +2669,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -2610,6 +2689,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -2657,6 +2737,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -2676,6 +2757,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-a".into()),
@@ -2748,6 +2830,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::CollabResumeEnd(codex_protocol::protocol::CollabResumeEndEvent {
                 call_id: "resume-1".into(),
@@ -2805,6 +2888,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
                 call_id: "spawn-1".into(),
@@ -2866,6 +2950,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::CollabAgentInteractionBegin(
                 codex_protocol::protocol::CollabAgentInteractionBeginEvent {
@@ -2929,6 +3014,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "done".into(),
@@ -2965,6 +3051,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),
@@ -3020,6 +3107,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             }),
             EventMsg::Error(ErrorEvent {
                 message: "stream failure".into(),
@@ -3077,6 +3165,7 @@ mod tests {
                 images: None,
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
+                ..Default::default()
             })),
             RolloutItem::ResponseItem(hook_prompt),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {

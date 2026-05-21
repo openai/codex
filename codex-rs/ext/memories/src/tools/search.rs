@@ -47,30 +47,29 @@ impl<B> ToolExecutor<ToolCall> for SearchTool<B>
 where
     B: MemoriesBackend,
 {
-    type Output = JsonToolOutput;
-
     fn tool_name(&self) -> ToolName {
         memory_tool_name(SEARCH_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
             SEARCH_TOOL_NAME,
             "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
-        ))
+        )
     }
 
     async fn handle(
         &self,
         call: ToolCall,
-    ) -> Result<Self::Output, codex_extension_api::FunctionCallError> {
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
         let args: SearchArgs = parse_args(&call)?;
         let response = backend
             .search(args.into_request())
             .await
             .map_err(backend_error_to_function_call)?;
-        Ok(JsonToolOutput::new(json!(response)))
+        Ok(Box::new(JsonToolOutput::new(json!(response))))
     }
 }
 

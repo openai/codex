@@ -24,7 +24,7 @@ use codex_protocol::protocol::AskForApproval;
 pub struct ConfigProfile {
     pub model: Option<String>,
     /// Optional explicit service tier request id for new turns (for example
-    /// `priority` or `flex`; legacy `fast` also works).
+    /// `default`, `priority`, or `flex`; legacy `fast` also works).
     pub service_tier: Option<String>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
@@ -50,9 +50,6 @@ pub struct ConfigProfile {
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
     pub zsh_path: Option<AbsolutePathBuf>,
-    /// Deprecated: ignored. Use `model_instructions_file`.
-    #[schemars(skip)]
-    pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub include_permissions_instructions: Option<bool>,
     pub include_apps_instructions: Option<bool>,

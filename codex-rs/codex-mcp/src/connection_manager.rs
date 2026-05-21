@@ -27,7 +27,7 @@ use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::rmcp_client::list_tools_for_client_uncached;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
@@ -71,6 +71,7 @@ use tracing::warn;
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
@@ -81,13 +82,21 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         permission_profile: &Constrained<PermissionProfile>,
     ) -> Self {
+        Self::new_uninitialized_with_permission_profile(approval_policy, permission_profile.get())
+    }
+
+    pub fn new_uninitialized_with_permission_profile(
+        approval_policy: &Constrained<AskForApproval>,
+        permission_profile: &PermissionProfile,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_metadata: HashMap::new(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
-                permission_profile.get().clone(),
+                permission_profile.clone(),
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
@@ -129,6 +138,11 @@ impl McpConnectionManager {
             .is_none_or(|metadata| metadata.pollutes_memory)
     }
 
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+        self.tool_plugin_provenance
+            .plugin_id_for_mcp_server_name(server_name)
+    }
+
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
@@ -162,7 +176,7 @@ impl McpConnectionManager {
         submit_id: String,
         tx_event: Sender<Event>,
         initial_permission_profile: PermissionProfile,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         host_owned_codex_apps_enabled: bool,
@@ -234,7 +248,7 @@ impl McpConnectionManager {
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
-                runtime_environment.clone(),
+                runtime_context.clone(),
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
             );
@@ -276,6 +290,7 @@ impl McpConnectionManager {
         let manager = Self {
             clients,
             server_metadata,
+            tool_plugin_provenance,
             host_owned_codex_apps_enabled,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
