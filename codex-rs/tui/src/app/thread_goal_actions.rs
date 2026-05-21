@@ -298,7 +298,9 @@ fn is_ephemeral_thread_goal_error(err: &color_eyre::Report) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::history_cell::HistoryCell;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
 
     use super::*;
 
@@ -313,6 +315,29 @@ mod tests {
             thread_goal_error_message("read", &err),
             EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE
         );
+    }
+
+    #[test]
+    fn thread_goal_ephemeral_error_message_renders_snapshot() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/goal/get failed: ephemeral thread does not support goals: thread-1"
+        )
+        .wrap_err("thread/goal/get failed in TUI");
+        let cell = crate::history_cell::new_error_event(thread_goal_error_message("read", &err));
+        let width = 72;
+        let height = 6;
+        let backend = crate::test_backend::VT100Backend::new(width, height);
+        let mut terminal =
+            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+        crate::insert_history::insert_history_lines(
+            &mut terminal,
+            cell.display_lines(/*width*/ width),
+        )
+        .expect("insert history lines");
+
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
