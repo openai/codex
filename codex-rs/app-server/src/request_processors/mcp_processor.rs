@@ -319,24 +319,24 @@ impl McpRequestProcessor {
 
         let data: Vec<McpServerStatus> = server_names[start..end]
             .iter()
-            .map(|name| McpServerStatus {
-                name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                resources: resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                auth_status: auth_statuses
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                    .into(),
-                runtime_placement: app_server_runtime_placement(
-                    runtime_placements
+            .map(|name| {
+                let runtime_placement = runtime_placements.get(name).cloned().ok_or_else(|| {
+                    internal_error(format!("MCP server `{name}` missing runtime placement"))
+                })?;
+                Ok(McpServerStatus {
+                    name: name.clone(),
+                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                    resources: resources.get(name).cloned().unwrap_or_default(),
+                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                    auth_status: auth_statuses
                         .get(name)
                         .cloned()
-                        .expect("listed MCP server should have a runtime placement"),
-                ),
+                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                        .into(),
+                    runtime_placement: app_server_runtime_placement(runtime_placement),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
 
         let next_cursor = if end < total {
             Some(end.to_string())

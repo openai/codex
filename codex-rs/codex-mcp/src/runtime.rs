@@ -230,9 +230,12 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let resolved_runtime = runtime_context
+        let resolved_runtime = match runtime_context
             .resolve_server_runtime("http", &http_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
-            .expect("local HTTP MCP should resolve");
+        {
+            Ok(resolved_runtime) => resolved_runtime,
+            Err(error) => panic!("local HTTP MCP should resolve: {error}"),
+        };
         assert!(matches!(
             resolved_runtime,
             ResolvedMcpServerRuntime::Orchestrator
@@ -278,7 +281,10 @@ mod tests {
             runtime_context.resolve_server_runtime("stdio", &remote_stdio),
             runtime_context.resolve_server_runtime("http", &http_server("remote")),
         ] {
-            let resolved_runtime = resolved_runtime.expect("remote MCP should resolve");
+            let resolved_runtime = match resolved_runtime {
+                Ok(resolved_runtime) => resolved_runtime,
+                Err(error) => panic!("remote MCP should resolve: {error}"),
+            };
             assert!(matches!(
                 resolved_runtime,
                 ResolvedMcpServerRuntime::Environment(_)
@@ -293,9 +299,12 @@ mod tests {
             PathBuf::from("/tmp"),
         );
 
-        let resolved_runtime = runtime_context
+        let resolved_runtime = match runtime_context
             .resolve_server_runtime("stdio", &stdio_server(DEFAULT_MCP_SERVER_ENVIRONMENT_ID))
-            .expect("local stdio MCP should resolve");
+        {
+            Ok(resolved_runtime) => resolved_runtime,
+            Err(error) => panic!("local stdio MCP should resolve: {error}"),
+        };
         assert!(matches!(
             resolved_runtime,
             ResolvedMcpServerRuntime::Orchestrator
