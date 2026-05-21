@@ -1113,6 +1113,40 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
 }
 
 #[tokio::test]
+async fn mcp_tool_call_item_includes_plugin_id() {
+    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+
+    notify_mcp_tool_call_started(
+        &session,
+        &turn_context,
+        "call-plugin",
+        McpInvocation {
+            server: "sample".to_string(),
+            tool: "echo".to_string(),
+            arguments: None,
+        },
+        McpToolCallItemMetadata {
+            mcp_app_resource_uri: None,
+            plugin_id: Some("sample@test".to_string()),
+        },
+    )
+    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("tool call item timed out")
+        .expect("tool call item event");
+    let EventMsg::ItemStarted(item_started) = event.msg else {
+        panic!("expected ItemStarted event");
+    };
+    let TurnItem::McpToolCall(item) = item_started.item else {
+        panic!("expected MCP tool call item");
+    };
+
+    assert_eq!(item.plugin_id.as_deref(), Some("sample@test"));
+}
+
+#[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = turn_context

@@ -4,6 +4,7 @@ use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::SessionPickerViewMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -32,6 +33,20 @@ fn blocking_set_model_top_level() {
 model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
+}
+
+#[test]
+fn set_service_tier_saves_default_as_default() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_service_tier(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "service_tier = \"default\"\n");
 }
 
 #[test]

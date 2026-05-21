@@ -36,7 +36,12 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codex_cli_bin"]
-include = ["src/codex_cli_bin/bin/**"]
+include = [
+  "src/codex_cli_bin/codex-package.json",
+  "src/codex_cli_bin/bin/**",
+  "src/codex_cli_bin/codex-resources/**",
+  "src/codex_cli_bin/codex-path/**",
+]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 

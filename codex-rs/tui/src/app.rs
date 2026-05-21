@@ -211,6 +211,7 @@ mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
+mod thread_settings;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -543,6 +544,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    pending_startup_thread_start: bool,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
@@ -573,6 +575,27 @@ async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -
             None
         }
     }
+}
+
+fn spawn_startup_thread_start(
+    app_server: &AppServerSession,
+    config: Config,
+    app_event_tx: AppEventSender,
+) {
+    let request_handle = app_server.request_handle();
+    let thread_params_mode = app_server.thread_params_mode();
+    let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
+    tokio::spawn(async move {
+        let result = crate::app_server_session::start_thread_with_request_handle(
+            request_handle,
+            config,
+            thread_params_mode,
+            remote_cwd_override,
+        )
+        .await
+        .map_err(|err| format!("{err:#}"));
+        app_event_tx.send(AppEvent::StartupThreadStarted { result });
+    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,10 +801,14 @@ impl App {
                 &initial_images,
             );
         let thread_and_widget_started_at = Instant::now();
+        let pending_startup_thread_start = matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
-                // Only count a startup tooltip once the fresh thread can actually render it.
+                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+                // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
@@ -811,7 +838,9 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(started))
+                let mut chat_widget = ChatWidget::new_with_app_event(init);
+                chat_widget.set_queue_submissions_until_session_configured(/*queue*/ true);
+                (chat_widget, None)
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
@@ -956,6 +985,7 @@ See the Codex keymap documentation for supported actions and examples."
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_startup_thread_start,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };

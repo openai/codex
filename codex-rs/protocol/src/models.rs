@@ -339,8 +339,8 @@ pub struct ActivePermissionProfile {
     /// profile.
     pub id: String,
 
-    /// Optional parent profile identifier once permissions profiles support
-    /// inheritance. This is always `None` until that config feature exists.
+    /// Optional parent profile identifier from the selected permissions
+    /// profile's `extends` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,

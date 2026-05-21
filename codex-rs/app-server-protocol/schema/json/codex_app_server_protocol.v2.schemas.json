@@ -134,7 +134,7 @@
       "properties": {
         "extends": {
           "default": null,
-          "description": "Parent profile identifier once permissions profiles support inheritance. This is currently always `null`.",
+          "description": "Parent profile identifier from the selected permissions profile's `extends` setting, when present.",
           "type": [
             "string",
             "null"
@@ -1096,6 +1096,78 @@
             "params"
           ],
           "title": "Thread/name/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/goal/set"
+              ],
+              "title": "Thread/goal/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/goal/get"
+              ],
+              "title": "Thread/goal/getRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalGetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/getRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/goal/clear"
+              ],
+              "title": "Thread/goal/clearRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalClearParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/clearRequest",
           "type": "object"
         },
         {
@@ -4041,6 +4113,15 @@
             "null"
           ]
         },
+        "allowedPermissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "allowedSandboxModes": {
           "items": {
             "$ref": "#/definitions/SandboxMode"
@@ -6190,6 +6271,7 @@
         "sessionStart",
         "userPromptSubmit",
         "subagentStart",
+        "subagentStop",
         "stop"
       ],
       "type": "string"
@@ -7135,6 +7217,12 @@
           },
           "type": "array"
         },
+        "SubagentStop": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -7163,6 +7251,7 @@
         "SessionStart",
         "Stop",
         "SubagentStart",
+        "SubagentStop",
         "UserPromptSubmit"
       ],
       "type": "object"
@@ -7794,6 +7883,14 @@
         },
         "defaultReasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "defaultServiceTier": {
+          "default": null,
+          "description": "Catalog default service tier id for this model, when one is configured.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "description": {
           "type": "string"
@@ -11411,6 +11508,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/settings/updated"
+              ],
+              "title": "Thread/settings/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSettingsUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/settings/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -13550,6 +13667,32 @@
       ],
       "type": "object"
     },
+    "ThreadGoalClearParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalClearParams",
+      "type": "object"
+    },
+    "ThreadGoalClearResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cleared": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "title": "ThreadGoalClearResponse",
+      "type": "object"
+    },
     "ThreadGoalClearedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -13561,6 +13704,85 @@
         "threadId"
       ],
       "title": "ThreadGoalClearedNotification",
+      "type": "object"
+    },
+    "ThreadGoalGetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalGetParams",
+      "type": "object"
+    },
+    "ThreadGoalGetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "ThreadGoalGetResponse",
+      "type": "object"
+    },
+    "ThreadGoalSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tokenBudget": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalSetParams",
+      "type": "object"
+    },
+    "ThreadGoalSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "goal": {
+          "$ref": "#/definitions/ThreadGoal"
+        }
+      },
+      "required": [
+        "goal"
+      ],
+      "title": "ThreadGoalSetResponse",
       "type": "object"
     },
     "ThreadGoalStatus": {
@@ -13925,6 +14147,12 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pluginId": {
               "type": [
                 "string",
                 "null"
@@ -15056,6 +15284,104 @@
     "ThreadSetNameResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadSetNameResponse",
+      "type": "object"
+    },
+    "ThreadSettings": {
+      "properties": {
+        "activePermissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivePermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalPolicy": {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        "approvalsReviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        "collaborationMode": {
+          "$ref": "#/definitions/CollaborationMode"
+        },
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandboxPolicy": {
+          "$ref": "#/definitions/SandboxPolicy"
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "collaborationMode",
+        "cwd",
+        "model",
+        "modelProvider",
+        "sandboxPolicy"
+      ],
+      "type": "object"
+    },
+    "ThreadSettingsUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "threadSettings": {
+          "$ref": "#/definitions/ThreadSettings"
+        }
+      },
+      "required": [
+        "threadId",
+        "threadSettings"
+      ],
+      "title": "ThreadSettingsUpdatedNotification",
       "type": "object"
     },
     "ThreadShellCommandParams": {
