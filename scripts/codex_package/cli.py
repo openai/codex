@@ -114,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help=(
             "Optional local ripgrep executable override instead of fetching from "
-            "codex-cli/bin/rg."
+            "scripts/codex_package/rg."
         ),
     )
     return parser.parse_args()
