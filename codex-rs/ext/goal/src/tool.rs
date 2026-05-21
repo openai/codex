@@ -125,12 +125,12 @@ impl ToolExecutor<ToolCall> for GoalToolExecutor {
         })
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(match self.kind {
+    fn spec(&self) -> ToolSpec {
+        match self.kind {
             GoalToolKind::Get => create_get_goal_tool(),
             GoalToolKind::Create => create_create_goal_tool(),
             GoalToolKind::Update => create_update_goal_tool(),
-        })
+        }
     }
 
     async fn handle(&self, invocation: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {

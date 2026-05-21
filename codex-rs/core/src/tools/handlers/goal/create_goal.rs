@@ -24,8 +24,8 @@ impl ToolExecutor<ToolInvocation> for CreateGoalHandler {
         ToolName::plain(CREATE_GOAL_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_create_goal_tool())
+    fn spec(&self) -> ToolSpec {
+        create_create_goal_tool()
     }
 
     async fn handle(

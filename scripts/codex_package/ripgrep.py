@@ -1,4 +1,4 @@
-"""Fetch ripgrep from the DotSlash manifest used by the npm package."""
+"""Fetch ripgrep from the DotSlash manifest used by the package builder."""
 
 import hashlib
 import json
@@ -17,7 +17,7 @@ from .targets import TargetSpec
 from .targets import resolve_input_path
 
 
-RG_MANIFEST = REPO_ROOT / "codex-cli" / "bin" / "rg"
+RG_MANIFEST = REPO_ROOT / "scripts" / "codex_package" / "rg"
 DOWNLOAD_TIMEOUT_SECS = 60
 
 

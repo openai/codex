@@ -36,6 +36,17 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         self.tool_name.clone()
     }
 
+    fn spec(&self) -> codex_tools::ToolSpec {
+        codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: self.tool_name.name.clone(),
+            description: "Test tool.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::default(),
+            output_schema: None,
+        })
+    }
+
     async fn handle(
         &self,
         _invocation: ToolInvocation,

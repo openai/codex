@@ -2,9 +2,8 @@ use super::*;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadGoal;
-use codex_app_server_protocol::ThreadGoalStatus;
-use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -15,20 +14,11 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
 }
 
-fn thread_goal_updated_notification() -> ServerNotification {
-    ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+fn thread_realtime_started_notification() -> ServerNotification {
+    ServerNotification::ThreadRealtimeStarted(ThreadRealtimeStartedNotification {
         thread_id: "thread-1".to_string(),
-        turn_id: None,
-        goal: ThreadGoal {
-            thread_id: "thread-1".to_string(),
-            objective: "ship goal mode".to_string(),
-            status: ThreadGoalStatus::Active,
-            token_budget: None,
-            tokens_used: 0,
-            time_used_seconds: 0,
-            created_at: 1,
-            updated_at: 1,
-        },
+        realtime_session_id: None,
+        version: RealtimeConversationVersion::V1,
     })
 }
 
@@ -182,7 +172,7 @@ async fn experimental_notifications_are_dropped_without_capability() {
         &mut connections,
         OutgoingEnvelope::ToConnection {
             connection_id,
-            message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+            message: OutgoingMessage::AppServerNotification(thread_realtime_started_notification()),
             write_complete_tx: None,
         },
     )
@@ -215,7 +205,7 @@ async fn experimental_notifications_are_preserved_with_capability() {
         &mut connections,
         OutgoingEnvelope::ToConnection {
             connection_id,
-            message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+            message: OutgoingMessage::AppServerNotification(thread_realtime_started_notification()),
             write_complete_tx: None,
         },
     )
@@ -227,7 +217,7 @@ async fn experimental_notifications_are_preserved_with_capability() {
         .expect("experimental notification should reach opted-in client");
     assert!(matches!(
         message.message,
-        OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(_))
+        OutgoingMessage::AppServerNotification(ServerNotification::ThreadRealtimeStarted(_))
     ));
 }
 

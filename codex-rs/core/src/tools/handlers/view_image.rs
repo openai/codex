@@ -70,8 +70,8 @@ impl ToolExecutor<ToolInvocation> for ViewImageHandler {
         ToolName::plain("view_image")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_view_image_tool(self.options))
+    fn spec(&self) -> ToolSpec {
+        create_view_image_tool(self.options)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

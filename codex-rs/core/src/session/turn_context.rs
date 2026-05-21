@@ -473,9 +473,11 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
-        per_turn_config.service_tier = per_turn_config
-            .service_tier
-            .filter(|service_tier| model_info.supports_service_tier(service_tier));
+        per_turn_config.service_tier = get_service_tier(
+            per_turn_config.service_tier,
+            per_turn_config.features.enabled(Feature::FastMode),
+            &model_info,
+        );
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -704,6 +706,7 @@ impl Session {
             &self.services.models_manager,
             self.services
                 .network_proxy
+                .load_full()
                 .as_ref()
                 .and_then(|started_proxy| {
                     Self::managed_network_proxy_active_for_permission_profile(

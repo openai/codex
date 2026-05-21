@@ -63,6 +63,7 @@ fn test_model_info(
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers,
+        default_service_tier: None,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,

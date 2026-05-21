@@ -10,6 +10,7 @@ use crate::compact::compaction_status_from_result;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -27,16 +28,24 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::truncate_text;
 use futures::StreamExt;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+// Mirror the current /responses/compact retained-message default while the
+// server-side path remains the reference implementation.
+const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -343,11 +352,14 @@ fn build_v2_compacted_history(
     prompt_input: &[ResponseItem],
     compaction_output: ResponseItem,
 ) -> Vec<ResponseItem> {
-    let mut retained = prompt_input
+    let retained = prompt_input
         .iter()
         .filter(|item| is_retained_for_remote_compaction_v2(item))
+        .filter(|item| should_keep_compacted_history_item(item))
         .cloned()
         .collect::<Vec<_>>();
+    let mut retained =
+        truncate_retained_messages_for_remote_compaction(retained, RETAINED_MESSAGE_TOKEN_BUDGET);
     retained.push(compaction_output);
     retained
 }
@@ -358,6 +370,98 @@ fn is_retained_for_remote_compaction_v2(item: &ResponseItem) -> bool {
     };
 
     matches!(role.as_str(), "user" | "developer" | "system")
+}
+
+fn truncate_retained_messages_for_remote_compaction(
+    items: Vec<ResponseItem>,
+    max_tokens: usize,
+) -> Vec<ResponseItem> {
+    let mut remaining = max_tokens;
+    let mut truncated_reversed = Vec::with_capacity(items.len());
+    for item in items.into_iter().rev() {
+        if remaining == 0 {
+            continue;
+        }
+
+        let token_count = message_text_token_count(&item).max(1);
+        if token_count <= remaining {
+            truncated_reversed.push(item);
+            remaining = remaining.saturating_sub(token_count);
+        } else if let Some(truncated_item) =
+            truncate_message_text_to_token_budget(item, /*max_tokens*/ remaining)
+        {
+            truncated_reversed.push(truncated_item);
+            remaining = 0;
+        }
+    }
+    truncated_reversed.reverse();
+    truncated_reversed
+}
+
+fn message_text_token_count(item: &ResponseItem) -> usize {
+    let ResponseItem::Message { content, .. } = item else {
+        return 0;
+    };
+
+    content
+        .iter()
+        .map(|item| match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                approx_token_count(text)
+            }
+            ContentItem::InputImage { .. } => 0,
+        })
+        .sum()
+}
+
+fn truncate_message_text_to_token_budget(
+    item: ResponseItem,
+    max_tokens: usize,
+) -> Option<ResponseItem> {
+    let ResponseItem::Message {
+        id,
+        role,
+        content,
+        phase,
+    } = item
+    else {
+        return Some(item);
+    };
+
+    let mut remaining = max_tokens;
+    let mut truncated_content = Vec::with_capacity(content.len());
+    for mut content_item in content {
+        match &mut content_item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                if remaining == 0 {
+                    continue;
+                }
+
+                let token_count = approx_token_count(text);
+                if token_count <= remaining {
+                    remaining = remaining.saturating_sub(token_count);
+                } else {
+                    *text = truncate_text(text, TruncationPolicy::Tokens(remaining));
+                    remaining = 0;
+                }
+                if !text.is_empty() {
+                    truncated_content.push(content_item);
+                }
+            }
+            ContentItem::InputImage { .. } => truncated_content.push(content_item),
+        }
+    }
+
+    if truncated_content.is_empty() {
+        return None;
+    }
+
+    Some(ResponseItem::Message {
+        id,
+        role,
+        content: truncated_content,
+        phase,
+    })
 }
 
 #[cfg(test)]
@@ -395,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn build_v2_compacted_history_matches_prod_retention_shape() {
+    fn build_v2_compacted_history_filters_to_installed_retention_shape() {
         let input = vec![
             message("developer", "dev", /*phase*/ None),
             message("system", "sys", /*phase*/ None),
@@ -421,13 +525,143 @@ mod tests {
 
         assert_eq!(
             history,
+            vec![message("user", "user", /*phase*/ None), output]
+        );
+    }
+
+    #[test]
+    fn build_v2_compacted_history_discards_messages_before_truncating() {
+        let old = message("user", "old", /*phase*/ None);
+        let new = message("user", "new", /*phase*/ None);
+        let huge_developer_message = "d".repeat((RETAINED_MESSAGE_TOKEN_BUDGET + 1) * 4);
+        let huge_contextual_message = format!(
+            "<environment_context>\n{}\n</environment_context>",
+            "c".repeat((RETAINED_MESSAGE_TOKEN_BUDGET + 1) * 4)
+        );
+        let input = vec![
+            old.clone(),
+            message("developer", &huge_developer_message, /*phase*/ None),
+            message("user", &huge_contextual_message, /*phase*/ None),
+            new.clone(),
+        ];
+        let output = ResponseItem::Compaction {
+            encrypted_content: "new".to_string(),
+        };
+
+        let history = build_v2_compacted_history(&input, output.clone());
+
+        assert_eq!(history, vec![old, new, output]);
+    }
+
+    #[test]
+    fn retained_history_truncation_keeps_newest_messages_first() {
+        let middle = message("user", "middle1234", /*phase*/ None);
+        let new = message("user", "new", /*phase*/ None);
+        let retained = vec![
+            message("user", "old-old", /*phase*/ None),
+            middle,
+            new.clone(),
+        ];
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 3);
+
+        assert_eq!(
+            truncated,
             vec![
-                message("developer", "dev", /*phase*/ None),
-                message("system", "sys", /*phase*/ None),
-                message("user", "user", /*phase*/ None),
-                output,
+                message("user", "midd…1 tokens truncated…1234", /*phase*/ None),
+                new,
             ]
         );
+    }
+
+    #[test]
+    fn retained_history_truncation_preserves_images_and_truncates_later_text_parts() {
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "abcdef".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                    detail: None,
+                },
+                ContentItem::OutputText {
+                    text: "uvwxyz".to_string(),
+                },
+            ],
+            phase: None,
+        };
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 3);
+
+        assert_eq!(
+            truncated,
+            vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "abcdef".to_string(),
+                    },
+                    ContentItem::InputImage {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                        detail: None,
+                    },
+                    ContentItem::OutputText {
+                        text: "uv…1 tokens truncated…yz".to_string(),
+                    },
+                ],
+                phase: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn retained_history_truncation_charges_image_only_messages() {
+        let image_only_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            }],
+            phase: None,
+        };
+        let newest = message("user", "new", /*phase*/ None);
+        let retained = vec![
+            message("user", "old", /*phase*/ None),
+            image_only_message.clone(),
+            newest.clone(),
+        ];
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 2);
+
+        assert_eq!(truncated, vec![image_only_message, newest]);
+    }
+
+    #[test]
+    fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
+        let image_only_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            }],
+            phase: None,
+        };
+        let newest = message("user", "new", /*phase*/ None);
+        let retained = vec![image_only_message, newest.clone()];
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 1);
+
+        assert_eq!(truncated, vec![newest]);
     }
 
     #[tokio::test]

@@ -45,8 +45,8 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
         ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_request_plugin_install_tool())
+    fn spec(&self) -> ToolSpec {
+        create_request_plugin_install_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

@@ -859,6 +859,7 @@ async fn replayed_in_progress_mcp_tool_call_stays_active() {
             status: codex_app_server_protocol::McpToolCallStatus::InProgress,
             arguments: json!({"action": "wait"}),
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: None,
             error: None,
             duration_ms: None,

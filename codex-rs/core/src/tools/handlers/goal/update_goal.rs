@@ -26,8 +26,8 @@ impl ToolExecutor<ToolInvocation> for UpdateGoalHandler {
         ToolName::plain(UPDATE_GOAL_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_update_goal_tool())
+    fn spec(&self) -> ToolSpec {
+        create_update_goal_tool()
     }
 
     async fn handle(

@@ -386,6 +386,7 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_permissions: Option<Vec<String>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
@@ -434,6 +435,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "SubagentStart")]
     #[ts(rename = "SubagentStart")]
     pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStop")]
+    #[ts(rename = "SubagentStop")]
+    pub subagent_stop: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,

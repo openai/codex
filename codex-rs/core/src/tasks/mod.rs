@@ -655,7 +655,8 @@ impl Session {
                     "false"
                 },
             );
-            let network_proxy_active = match self.services.network_proxy.as_ref() {
+            let network_proxy = self.services.network_proxy.load_full();
+            let network_proxy_active = match network_proxy.as_ref() {
                 Some(started_network_proxy) => {
                     match started_network_proxy.proxy().current_cfg().await {
                         Ok(config) => config.network.enabled,

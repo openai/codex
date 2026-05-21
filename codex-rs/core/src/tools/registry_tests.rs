@@ -11,6 +11,10 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
         self.tool_name.clone()
     }
 
+    fn spec(&self) -> codex_tools::ToolSpec {
+        test_spec(&self.tool_name)
+    }
+
     async fn handle(
         &self,
         _invocation: ToolInvocation,
@@ -40,6 +44,10 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
         self.tool_name.clone()
     }
 
+    fn spec(&self) -> codex_tools::ToolSpec {
+        test_spec(&self.tool_name)
+    }
+
     async fn handle(
         &self,
         _invocation: ToolInvocation,
@@ -59,6 +67,17 @@ impl ToolExecutor<ToolInvocation> for LifecycleTestHandler {
 }
 
 impl CoreToolRuntime for LifecycleTestHandler {}
+
+fn test_spec(tool_name: &codex_tools::ToolName) -> codex_tools::ToolSpec {
+    codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+        name: tool_name.name.clone(),
+        description: "Test tool.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: codex_tools::JsonSchema::default(),
+        output_schema: None,
+    })
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum RecordedToolLifecycle {

@@ -1,12 +1,18 @@
 use std::collections::BTreeMap;
 
 use crate::merge::merge_toml_values;
+use codex_network_proxy::InjectedHeaderConfig;
+use codex_network_proxy::MitmHookActionsConfig;
+use codex_network_proxy::MitmHookBodyConfig;
+use codex_network_proxy::MitmHookConfig;
+use codex_network_proxy::MitmHookMatchConfig;
 use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
 use codex_network_proxy::normalize_host;
 use codex_protocol::permissions::FileSystemAccessMode;
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -350,6 +356,38 @@ pub struct NetworkToml {
     pub domains: Option<NetworkDomainPermissionsToml>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
+    pub mitm: Option<NetworkMitmToml>,
+}
+
+#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkMitmToml {
+    #[schemars(with = "Option<BTreeMap<String, NetworkMitmHookToml>>")]
+    pub hooks: Option<IndexMap<String, NetworkMitmHookToml>>,
+    #[schemars(with = "Option<BTreeMap<String, NetworkMitmActionToml>>")]
+    pub actions: Option<IndexMap<String, NetworkMitmActionToml>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkMitmTomlUnchecked {
+    pub hooks: Option<IndexMap<String, NetworkMitmHookToml>>,
+    pub actions: Option<IndexMap<String, NetworkMitmActionToml>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkMitmHookToml {
+    pub host: String,
+    pub methods: Vec<String>,
+    pub path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub query: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, Vec<String>>,
+    #[schemars(with = "Option<MitmHookBodyConfigSchema>")]
+    pub body: Option<MitmHookBodyConfig>,
+    pub action: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -357,6 +395,114 @@ pub struct NetworkToml {
 enum NetworkModeSchema {
     Limited,
     Full,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+pub struct NetworkMitmActionToml {
+    pub strip_request_headers: Vec<String>,
+    pub inject_request_headers: Vec<NetworkMitmInjectedHeaderToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+pub struct NetworkMitmInjectedHeaderToml {
+    pub name: String,
+    pub secret_env_var: Option<String>,
+    pub secret_file: Option<String>,
+    pub prefix: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(transparent)]
+struct MitmHookBodyConfigSchema(pub serde_json::Value);
+
+impl<'de> Deserialize<'de> for NetworkMitmToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let unchecked = NetworkMitmTomlUnchecked::deserialize(deserializer)?;
+        let mitm = Self {
+            hooks: unchecked.hooks,
+            actions: unchecked.actions,
+        };
+        mitm.validate_action_definitions()
+            .map_err(serde::de::Error::custom)?;
+        Ok(mitm)
+    }
+}
+
+impl NetworkMitmToml {
+    pub fn validate_action_definitions(&self) -> Result<(), String> {
+        if let Some(actions) = self.actions.as_ref() {
+            for (action_name, action) in actions {
+                if action.is_empty() {
+                    return Err(format!(
+                        "network.mitm.actions.{action_name} must define at least one operation"
+                    ));
+                }
+            }
+        }
+
+        let Some(hooks) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+
+        for (hook_name, hook) in hooks {
+            if hook.action.is_empty() {
+                return Err(format!(
+                    "network.mitm.hooks.{hook_name}.action must not be empty"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_action_references(
+        &self,
+        actions_by_name: &IndexMap<String, NetworkMitmActionToml>,
+    ) -> Result<(), String> {
+        self.validate_action_definitions()?;
+
+        let Some(hooks) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+
+        for (hook_name, hook) in hooks {
+            for action_name in &hook.action {
+                if !actions_by_name.contains_key(action_name) {
+                    return Err(format!(
+                        "network.mitm.hooks.{hook_name}.action references undefined action `{action_name}`"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn to_runtime_hooks(
+        &self,
+        actions_by_name: Option<&IndexMap<String, NetworkMitmActionToml>>,
+    ) -> Vec<MitmHookConfig> {
+        self.hooks
+            .as_ref()
+            .map(|hooks| {
+                hooks
+                    .values()
+                    .map(|hook| hook.to_runtime(actions_by_name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl NetworkMitmActionToml {
+    pub fn is_empty(&self) -> bool {
+        self.strip_request_headers.is_empty() && self.inject_request_headers.is_empty()
+    }
 }
 
 impl NetworkToml {
@@ -411,12 +557,72 @@ impl NetworkToml {
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
         }
+        if let Some(mitm) = self.mitm.as_ref() {
+            config.network.mitm_hooks = mitm.to_runtime_hooks(mitm.actions.as_ref());
+        }
+        config.network.mitm =
+            config.network.mode == NetworkMode::Limited || !config.network.mitm_hooks.is_empty();
     }
 
     pub fn to_network_proxy_config(&self) -> NetworkProxyConfig {
         let mut config = NetworkProxyConfig::default();
         self.apply_to_network_proxy_config(&mut config);
         config
+    }
+}
+
+impl NetworkMitmHookToml {
+    fn to_runtime(
+        &self,
+        actions_by_name: Option<&IndexMap<String, NetworkMitmActionToml>>,
+    ) -> MitmHookConfig {
+        MitmHookConfig {
+            host: self.host.clone(),
+            matcher: MitmHookMatchConfig {
+                methods: self.methods.clone(),
+                path_prefixes: self.path_prefixes.clone(),
+                query: self.query.clone(),
+                headers: self.headers.clone(),
+                body: self.body.clone(),
+            },
+            actions: self.selected_actions(actions_by_name),
+        }
+    }
+
+    fn selected_actions(
+        &self,
+        actions_by_name: Option<&IndexMap<String, NetworkMitmActionToml>>,
+    ) -> MitmHookActionsConfig {
+        let Some(actions_by_name) = actions_by_name else {
+            return MitmHookActionsConfig::default();
+        };
+
+        let mut selected = MitmHookActionsConfig::default();
+        for action_name in &self.action {
+            if let Some(action) = actions_by_name.get(action_name) {
+                selected
+                    .strip_request_headers
+                    .extend(action.strip_request_headers.clone());
+                selected.inject_request_headers.extend(
+                    action
+                        .inject_request_headers
+                        .iter()
+                        .map(NetworkMitmInjectedHeaderToml::to_runtime),
+                );
+            }
+        }
+        selected
+    }
+}
+
+impl NetworkMitmInjectedHeaderToml {
+    fn to_runtime(&self) -> InjectedHeaderConfig {
+        InjectedHeaderConfig {
+            name: self.name.clone(),
+            secret_env_var: self.secret_env_var.clone(),
+            secret_file: self.secret_file.clone(),
+            prefix: self.prefix.clone(),
+        }
     }
 }
 
