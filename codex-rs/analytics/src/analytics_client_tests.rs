@@ -348,6 +348,7 @@ fn sample_turn_completed_notification(
                 message: "turn failed".to_string(),
                 codex_error_info: Some(codex_error_info),
                 additional_details: None,
+                data: None,
             }),
             started_at: None,
             completed_at: Some(456),
@@ -434,6 +435,7 @@ fn non_steerable_review_error() -> JSONRPCErrorError {
                     turn_kind: NonSteerableTurnKind::Review,
                 }),
                 additional_details: None,
+                data: None,
             })
             .expect("serialize turn error"),
         ),
