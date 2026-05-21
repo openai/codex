@@ -22,7 +22,6 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolExposure;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -41,7 +40,6 @@ enum ShellCommandBackend {
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
     options: ShellCommandHandlerOptions,
-    exposure: ToolExposure,
 }
 
 #[derive(Clone, Copy)]
@@ -53,23 +51,11 @@ pub(crate) struct ShellCommandHandlerOptions {
 
 impl ShellCommandHandler {
     pub(crate) fn new(options: ShellCommandHandlerOptions) -> Self {
-        Self::with_exposure(options, ToolExposure::Direct)
-    }
-
-    pub(crate) fn hidden(options: ShellCommandHandlerOptions) -> Self {
-        Self::with_exposure(options, ToolExposure::Hidden)
-    }
-
-    fn with_exposure(options: ShellCommandHandlerOptions, exposure: ToolExposure) -> Self {
         let backend = match options.backend_config {
             ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
             ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
         };
-        Self {
-            backend,
-            options,
-            exposure,
-        }
+        Self { backend, options }
     }
 
     fn shell_runtime_backend(&self) -> ShellRuntimeBackend {
@@ -130,7 +116,7 @@ impl ShellCommandHandler {
 
 impl From<ShellCommandBackendConfig> for ShellCommandHandler {
     fn from(backend_config: ShellCommandBackendConfig) -> Self {
-        Self::hidden(ShellCommandHandlerOptions {
+        Self::new(ShellCommandHandlerOptions {
             backend_config,
             allow_login_shell: false,
             exec_permission_approvals_enabled: false,
@@ -151,12 +137,8 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         })
     }
 
-    fn exposure(&self) -> ToolExposure {
-        self.exposure
-    }
-
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.exposure != ToolExposure::Hidden
+        true
     }
 
     async fn handle(
