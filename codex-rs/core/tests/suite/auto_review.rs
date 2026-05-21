@@ -7,6 +7,7 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
@@ -96,6 +97,11 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
                     .to_string(),
                 ),
                 ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-3"),
+                ev_assistant_message("msg-parent", "done"),
+                ev_completed("resp-parent-3"),
             ]),
         ],
     )
@@ -193,8 +199,13 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
     let guardian_request = responses
         .requests()
         .into_iter()
-        .find(|request| request.body_contains_text("auto-review-model-override.txt"))
-        .expect("expected Guardian request for strict apply_patch");
+        .find(|request| {
+            request.body_contains_text("auto-review-model-override.txt")
+                && request
+                    .instructions_text()
+                    .starts_with("You are judging one planned coding-agent action.")
+        })
+        .expect("expected Guardian request for apply_patch");
     assert_eq!(
         guardian_request.body_json()["model"].as_str(),
         Some(review_model)
@@ -231,7 +242,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         support_verbosity: false,
         default_verbosity: None,
         availability_nux: None,
-        apply_patch_tool_type: None,
+        apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
