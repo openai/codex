@@ -533,29 +533,13 @@ impl App {
                     && !self.config.features.enabled(Feature::GuardianApproval)
                 {
                     show_overridden_message = false;
-                    self.sync_active_thread_permission_settings_to_cached_session()
-                        .await;
-                    let op = AppCommand::override_turn_context(
-                        /*cwd*/ None,
+                    self.submit_permission_settings_override(
                         /*approval_policy*/ None,
                         Some(ApprovalsReviewer::User),
                         /*permission_profile*/ None,
                         /*active_permission_profile*/ None,
-                        /*windows_sandbox_level*/ None,
-                        /*model*/ None,
-                        /*effort*/ None,
-                        /*summary*/ None,
-                        /*service_tier*/ None,
-                        /*collaboration_mode*/ None,
-                        /*personality*/ None,
-                    );
-                    let replay_state_op = ThreadEventStore::op_can_change_pending_replay_state(&op)
-                        .then(|| op.clone());
-                    let submitted = self.chat_widget.submit_op(op);
-                    if submitted && let Some(op) = replay_state_op.as_ref() {
-                        self.note_active_thread_outbound_op(op).await;
-                        self.refresh_pending_thread_approvals().await;
-                    }
+                    )
+                    .await;
                 }
                 self.sync_auto_review_runtime_state_from_effective_config(
                     &effective_config,
@@ -630,34 +614,18 @@ impl App {
             || approvals_reviewer_override.is_some()
             || permission_profile_override.is_some()
         {
-            self.sync_active_thread_permission_settings_to_cached_session()
-                .await;
             // This uses `OverrideTurnContext` intentionally: toggling the
             // experiment should update the active thread's effective approval
             // settings immediately, just like a `/permissions` selection. Without
             // this runtime patch, the config edit would only affect future
             // sessions or turns recreated from disk.
-            let op = AppCommand::override_turn_context(
-                /*cwd*/ None,
+            self.submit_permission_settings_override(
                 approval_policy_override,
                 approvals_reviewer_override,
                 permission_profile_override,
                 active_permission_profile_override,
-                /*windows_sandbox_level*/ None,
-                /*model*/ None,
-                /*effort*/ None,
-                /*summary*/ None,
-                /*service_tier*/ None,
-                /*collaboration_mode*/ None,
-                /*personality*/ None,
-            );
-            let replay_state_op =
-                ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
-            let submitted = self.chat_widget.submit_op(op);
-            if submitted && let Some(op) = replay_state_op.as_ref() {
-                self.note_active_thread_outbound_op(op).await;
-                self.refresh_pending_thread_approvals().await;
-            }
+            )
+            .await;
         }
 
         if windows_sandbox_changed {
@@ -951,16 +919,32 @@ impl App {
 
         self.runtime_permission_profile_override =
             Some(RuntimePermissionProfileOverride::from_config(&self.config));
-        self.sync_active_thread_permission_settings_to_cached_session()
-            .await;
 
         let approval_policy = AskForApproval::from(self.config.permissions.approval_policy.value());
-        let op = AppCommand::override_turn_context(
-            /*cwd*/ None,
+        self.submit_permission_settings_override(
             Some(approval_policy),
             Some(self.config.approvals_reviewer),
             /*permission_profile*/ None,
             Some(auto_review_preset.active_permission_profile),
+        )
+        .await;
+    }
+
+    async fn submit_permission_settings_override(
+        &mut self,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) {
+        self.sync_active_thread_permission_settings_to_cached_session()
+            .await;
+        let op = AppCommand::override_turn_context(
+            /*cwd*/ None,
+            approval_policy,
+            approvals_reviewer,
+            permission_profile,
+            active_permission_profile,
             /*windows_sandbox_level*/ None,
             /*model*/ None,
             /*effort*/ None,
