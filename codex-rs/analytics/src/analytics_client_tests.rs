@@ -3628,6 +3628,7 @@ async fn turn_event_counts_completed_tool_items() {
             status: McpToolCallStatus::Completed,
             arguments: json!({}),
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: None,
             error: None,
             duration_ms: Some(2),

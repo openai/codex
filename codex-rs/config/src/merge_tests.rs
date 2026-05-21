@@ -98,3 +98,29 @@ disable_on_external_context = true
     );
     assert_eq!(base, expected);
 }
+
+#[test]
+fn merge_toml_values_normalizes_permission_network_domains_before_overlaying() {
+    let mut base = parse_toml(
+        r#"
+[permissions.dev.network.domains]
+"example.com" = "deny"
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[permissions.dev.network.domains]
+"EXAMPLE.COM" = "allow"
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[permissions.dev.network.domains]
+"example.com" = "allow"
+"#,
+    );
+    assert_eq!(base, expected);
+}

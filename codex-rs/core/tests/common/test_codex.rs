@@ -28,7 +28,6 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -431,7 +430,7 @@ impl TestCodexBuilder {
         } else {
             codex_exec_server::EnvironmentManager::create_for_tests(
                 exec_server_url,
-                local_runtime_paths,
+                Some(local_runtime_paths),
             )
             .await
         });
@@ -667,13 +666,13 @@ impl TestCodex {
     pub async fn submit_turn_with_service_tier(
         &self,
         prompt: &str,
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<&str>,
     ) -> Result<()> {
         self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
             PermissionProfile::Disabled,
-            Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
+            Some(service_tier.map(str::to_string)),
             /*environments*/ None,
         )
         .await

@@ -26,6 +26,9 @@ jobs:
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
+      - name: Test Codex package builder
+        run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
+
       - name: Setup pnpm
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
@@ -53,14 +56,16 @@ jobs:
           # Passing the workflow URL directly avoids relying on old rust-v*
           # branches remaining discoverable via `gh run list --branch ...`.
           CODEX_VERSION=0.125.0
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/24901475298"
+          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26131514935"
           OUTPUT_DIR="${RUNNER_TEMP}"
-          # This reused workflow predates the standalone bwrap artifact.
+          # This reused workflow predates codex-package archive artifacts, so
+          # CI synthesizes the package layout from the older per-binary
+          # artifacts. Release staging must use real package archives.
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
             --package codex \
-            --allow-missing-native-component bwrap \
+            --allow-legacy-codex-package \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"

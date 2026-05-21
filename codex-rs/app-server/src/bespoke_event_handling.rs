@@ -4,6 +4,7 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
+use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -60,6 +61,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -1199,6 +1201,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                     notification,
                 ))
                 .await;
+        }
+        EventMsg::ThreadSettingsApplied(thread_settings_event) => {
+            let thread_settings =
+                thread_settings_from_core_snapshot(thread_settings_event.thread_settings);
+            let changed = {
+                let mut state = thread_state.lock().await;
+                state.note_thread_settings(thread_settings.clone())
+            };
+            if changed {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadSettingsUpdated(
+                        ThreadSettingsUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            thread_settings,
+                        },
+                    ))
+                    .await;
+            }
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(conversation_id, &event_turn_id, turn_diff_event, &outgoing).await;

@@ -2321,6 +2321,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "hmac",
  "pretty_assertions",
  "serde",
@@ -2433,6 +2434,7 @@ dependencies = [
  "dunce",
  "futures",
  "gethostname",
+ "indexmap 2.13.0",
  "libc",
  "multimap",
  "pretty_assertions",
@@ -2952,12 +2954,19 @@ dependencies = [
 name = "codex-goal-extension"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "chrono",
  "codex-extension-api",
  "codex-protocol",
+ "codex-state",
  "codex-tools",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2997,6 +3006,7 @@ dependencies = [
 name = "codex-install-context"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "pretty_assertions",
  "tempfile",
@@ -3016,6 +3026,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-install-context",
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
@@ -3756,6 +3767,7 @@ dependencies = [
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-string",
  "pretty_assertions",
@@ -4131,7 +4143,6 @@ dependencies = [
  "tokio",
  "windows 0.58.0",
  "windows-sys 0.52.0",
- "winres",
 ]
 
 [[package]]
@@ -14714,15 +14725,6 @@ checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
 dependencies = [
  "cfg-if",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "winres"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b68db261ef59e9e52806f688020631e987592bd83619edccda9c47d42cde4f6c"
-dependencies = [
- "toml 0.5.11",
 ]
 
 [[package]]

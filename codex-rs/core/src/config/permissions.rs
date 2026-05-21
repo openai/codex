@@ -13,6 +13,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionToml;
 use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
+use codex_config::permissions_toml::ResolvedPermissionProfileToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_features::NetworkProxyConfigToml;
@@ -185,19 +186,34 @@ pub(crate) fn apply_network_proxy_feature_config(
             }
         }),
         allow_local_binding: feature_config.allow_local_binding,
+        mitm: None,
     }
     .apply_to_network_proxy_config(config);
 }
 
-pub(crate) fn resolve_permission_profile<'a>(
-    permissions: &'a PermissionsToml,
+pub(crate) fn resolve_permission_profile(
+    permissions: &PermissionsToml,
     profile_name: &str,
-) -> io::Result<&'a PermissionProfileToml> {
-    permissions.entries.get(profile_name).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("default_permissions refers to undefined profile `{profile_name}`"),
-        )
+) -> io::Result<ResolvedPermissionProfileToml> {
+    permissions
+        .resolve_profile(profile_name, extensible_builtin_parent_profile_marker)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
+}
+
+/// Built-in parents provide their runtime permissions below. Resolution only
+/// needs an empty profile marker so inheritance can terminate while preserving
+/// the built-in parent id in `inherited_profile_names`.
+fn extensible_builtin_parent_profile_marker(profile_name: &str) -> Option<PermissionProfileToml> {
+    matches!(
+        profile_name,
+        BUILT_IN_READ_ONLY_PROFILE | BUILT_IN_WORKSPACE_PROFILE
+    )
+    .then_some(PermissionProfileToml {
+        description: None,
+        extends: None,
+        workspace_roots: None,
+        filesystem: None,
+        network: None,
     })
 }
 
@@ -216,7 +232,7 @@ pub(crate) fn network_proxy_config_for_profile_selection(
             "default_permissions requires a `[permissions]` table",
         )
     })?;
-    let profile = resolve_permission_profile(permissions, profile_name)?;
+    let profile = resolve_permission_profile(permissions, profile_name)?.profile;
     Ok(network_proxy_config_from_profile_network(
         profile.network.as_ref(),
     ))
@@ -228,11 +244,27 @@ pub(crate) fn compile_permission_profile(
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
-    let profile = resolve_permission_profile(permissions, profile_name)?;
-
-    let mut entries = Vec::new();
+    let ResolvedPermissionProfileToml {
+        profile,
+        inherited_profile_names,
+    } = resolve_permission_profile(permissions, profile_name)?;
+    let base_permissions = inherited_profile_names.iter().find_map(|name| {
+        match name.as_str() {
+            BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
+            BUILT_IN_WORKSPACE_PROFILE => Some(PermissionProfile::workspace_write()),
+            _ => None,
+        }
+        .map(|profile| profile.to_runtime_permissions())
+    });
+    let (mut file_system_sandbox_policy, base_network_sandbox_policy) = base_permissions
+        .unwrap_or_else(|| {
+            (
+                FileSystemSandboxPolicy::restricted(Vec::new()),
+                NetworkSandboxPolicy::Restricted,
+            )
+        });
     if let Some(filesystem) = profile.filesystem.as_ref() {
-        if filesystem.is_empty() {
+        if filesystem.is_empty() && file_system_sandbox_policy.entries.is_empty() {
             push_warning(
                 startup_warnings,
                 missing_filesystem_entries_warning(profile_name),
@@ -243,7 +275,7 @@ pub(crate) fn compile_permission_profile(
                     push_warning(
                         startup_warnings,
                         format!(
-                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `none` deny-read globs are supported."
+                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `deny` globs are supported."
                         ),
                     );
                 }
@@ -257,15 +289,17 @@ pub(crate) fn compile_permission_profile(
                 }
             }
             for (path, permission) in &filesystem.entries {
-                entries.extend(compile_filesystem_permission(
-                    path,
-                    permission,
-                    policy_cwd,
-                    startup_warnings,
-                )?);
+                file_system_sandbox_policy
+                    .entries
+                    .extend(compile_filesystem_permission(
+                        path,
+                        permission,
+                        policy_cwd,
+                        startup_warnings,
+                    )?);
             }
         }
-    } else {
+    } else if file_system_sandbox_policy.entries.is_empty() {
         push_warning(
             startup_warnings,
             missing_filesystem_entries_warning(profile_name),
@@ -277,10 +311,11 @@ pub(crate) fn compile_permission_profile(
             .as_ref()
             .and_then(|filesystem| filesystem.glob_scan_max_depth),
     )?;
-
-    let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
-    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
-    file_system_sandbox_policy.glob_scan_max_depth = glob_scan_max_depth;
+    if let Some(glob_scan_max_depth) = glob_scan_max_depth {
+        file_system_sandbox_policy.glob_scan_max_depth = Some(glob_scan_max_depth);
+    }
+    let network_sandbox_policy =
+        compile_network_sandbox_policy(profile.network.as_ref(), base_network_sandbox_policy);
     Ok((file_system_sandbox_policy, network_sandbox_policy))
 }
 
@@ -323,7 +358,7 @@ pub(crate) fn compile_permission_profile_workspace_roots(
     })?;
     let profile = resolve_permission_profile(permissions, profile_name)?;
     Ok(compile_workspace_roots(
-        profile.workspace_roots.as_ref(),
+        profile.profile.workspace_roots.as_ref(),
         policy_cwd,
     ))
 }
@@ -340,7 +375,7 @@ fn compile_workspace_roots(
     })
 }
 
-fn reject_unknown_builtin_permission_profile(profile_name: &str) -> io::Result<()> {
+pub(crate) fn reject_unknown_builtin_permission_profile(profile_name: &str) -> io::Result<()> {
     if profile_name.starts_with(':') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -382,14 +417,18 @@ pub(crate) fn get_readable_roots_required_for_codex_runtime(
     readable_roots
 }
 
-fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandboxPolicy {
+fn compile_network_sandbox_policy(
+    network: Option<&NetworkToml>,
+    base_network_sandbox_policy: NetworkSandboxPolicy,
+) -> NetworkSandboxPolicy {
     let Some(network) = network else {
-        return NetworkSandboxPolicy::Restricted;
+        return base_network_sandbox_policy;
     };
 
     match network.enabled {
         Some(true) => NetworkSandboxPolicy::Enabled,
-        _ => NetworkSandboxPolicy::Restricted,
+        Some(false) => NetworkSandboxPolicy::Restricted,
+        None => base_network_sandbox_policy,
     }
 }
 
@@ -414,7 +453,7 @@ fn compile_filesystem_permission(
                     Some(FileSystemSpecialPath::ProjectRoots { .. }) | None => true,
                     Some(_) => false,
                 };
-                if has_glob && *access == FileSystemAccessMode::None && can_compile_as_pattern {
+                if has_glob && *access == FileSystemAccessMode::Deny && can_compile_as_pattern {
                     // Scoped glob syntax is a first-class filesystem policy
                     // pattern entry. Literal scoped paths continue through the
                     // exact-path parser so existing path semantics stay intact.
@@ -449,7 +488,7 @@ fn compile_filesystem_access_path(
         return compile_filesystem_path(path, startup_warnings);
     }
 
-    if access == FileSystemAccessMode::None {
+    if access == FileSystemAccessMode::Deny {
         // At this point `path` is an unscoped filesystem table key. Top-level
         // glob deny entries still go through the absolute-path parser before
         // becoming policy patterns; relative project-root glob syntax is
@@ -520,10 +559,10 @@ fn compile_scoped_filesystem_pattern(
     // Pattern entries currently mean deny-read only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
     // sandbox policy does not express yet.
-    if access != FileSystemAccessMode::None {
+    if access != FileSystemAccessMode::Deny {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("filesystem glob subpath `{subpath}` only supports `none` access"),
+            format!("filesystem glob subpath `{subpath}` only supports `deny` access"),
         ));
     }
     let subpath = parse_relative_subpath(subpath)?;
@@ -559,7 +598,7 @@ fn compile_read_write_glob_path(path: &str, access: FileSystemAccessMode) -> io:
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "filesystem glob path `{path}` only supports `none` access; use an exact path or trailing `/**` for `{access}` subtree access"
+            "filesystem glob path `{path}` only supports `deny` access; use an exact path or trailing `/**` for `{access}` subtree access"
         ),
     ))
 }
@@ -569,7 +608,7 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
     for (path, permission) in &filesystem.entries {
         match permission {
             FilesystemPermissionToml::Access(access) => {
-                if *access != FileSystemAccessMode::None
+                if *access != FileSystemAccessMode::Deny
                     && contains_glob_chars(remove_trailing_glob_suffix(path))
                 {
                     patterns.push(path.clone());
@@ -577,7 +616,7 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
             }
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access != FileSystemAccessMode::None
+                    if *access != FileSystemAccessMode::Deny
                         && contains_glob_chars(remove_trailing_glob_suffix(subpath))
                     {
                         patterns.push(format!("{path}/{subpath}"));
@@ -597,7 +636,7 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
     let mut patterns = Vec::new();
     for (path, permission) in &filesystem.entries {
         match permission {
-            FilesystemPermissionToml::Access(FileSystemAccessMode::None) => {
+            FilesystemPermissionToml::Access(FileSystemAccessMode::Deny) => {
                 if path.contains("**") {
                     patterns.push(path.clone());
                 }
@@ -605,7 +644,7 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
             FilesystemPermissionToml::Access(_) => {}
             FilesystemPermissionToml::Scoped(scoped_entries) => {
                 for (subpath, access) in scoped_entries {
-                    if *access == FileSystemAccessMode::None && subpath.contains("**") {
+                    if *access == FileSystemAccessMode::Deny && subpath.contains("**") {
                         patterns.push(format!("{path}/{subpath}"));
                     }
                 }

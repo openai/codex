@@ -145,9 +145,17 @@ fn network_access_from_policy(network_policy: NetworkSandboxPolicy) -> NetworkAc
 }
 
 impl ContextualUserFragment for PermissionsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<permissions instructions>";
-    const END_MARKER: &'static str = "</permissions instructions>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<permissions instructions>", "</permissions instructions>")
+    }
 
     fn body(&self) -> String {
         self.text.clone()

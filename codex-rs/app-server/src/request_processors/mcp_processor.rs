@@ -205,17 +205,14 @@ impl McpRequestProcessor {
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
-        };
+        // Status listing has no turn cwd. Prefer the configured default env,
+        // then configured local if present; do not manufacture a hidden local
+        // env in no-local modes.
+        let runtime_environment = McpRuntimeEnvironment::new(
+            environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment(),
+            config.cwd.to_path_buf(),
+        );
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
@@ -369,15 +366,15 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = {
-            let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
-                .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-        };
+        let environment_manager = self.thread_manager.environment_manager();
+        // Resource reads without a thread have no turn cwd. Prefer the
+        // configured default env, then configured local if present; do not
+        // manufacture a hidden local env in no-local modes.
+        let runtime_environment = McpRuntimeEnvironment::new(
+            environment_manager.default_or_local_environment(),
+            environment_manager.try_local_environment(),
+            config.cwd.to_path_buf(),
+        );
         let request_id = request_id.clone();
 
         tokio::spawn(async move {

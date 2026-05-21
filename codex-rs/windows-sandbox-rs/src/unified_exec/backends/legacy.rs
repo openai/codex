@@ -10,6 +10,7 @@ use crate::process::StdinMode;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
+use crate::spawn_prep::SpawnPrepOptions;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
 use crate::spawn_prep::legacy_session_capability_roots;
@@ -283,12 +284,15 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
         policy_json_or_preset,
+        sandbox_policy_cwd,
         codex_home,
         cwd,
         &mut env_map,
         &command,
-        /*inherit_path*/ false,
-        /*add_git_safe_directory*/ false,
+        SpawnPrepOptions {
+            inherit_path: false,
+            add_git_safe_directory: false,
+        },
     )?;
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
@@ -311,11 +315,10 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     );
     let security =
         prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
-    allow_null_device_for_workspace_write(common.is_workspace_write);
+    allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
     apply_legacy_session_acl_rules(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         codex_home,
         &common.current_dir,
         &env_map,

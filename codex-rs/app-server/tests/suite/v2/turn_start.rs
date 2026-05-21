@@ -1004,10 +1004,14 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
     assert!(
         err.error
             .message
-            .contains("invalid thread settings override")
+            .contains("`approval_policy = \"never\"` cannot be used"),
+        "unexpected error message: {}",
+        err.error.message
     );
     assert!(
-        err.error.message.contains("allowed set [ReadOnly]"),
+        err.error
+            .message
+            .contains("requirements do not allow `sandbox_mode = \"danger-full-access\"`"),
         "unexpected error message: {}",
         err.error.message
     );
@@ -2910,7 +2914,12 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
         responses::sse(vec![
             responses::ev_response_created("resp-turn1-1"),
-            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
             responses::ev_completed("resp-turn1-1"),
         ]),
     )
@@ -3107,7 +3116,12 @@ async fn turn_start_emits_spawn_agent_item_with_effective_role_model_metadata_v2
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
         responses::sse(vec![
             responses::ev_response_created("resp-turn1-1"),
-            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
             responses::ev_completed("resp-turn1-1"),
         ]),
     )

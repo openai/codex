@@ -195,7 +195,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -267,7 +267,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -372,7 +372,7 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
     let mut policy = FileSystemSandboxPolicy::default();
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern { pattern },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     });
 
     let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());

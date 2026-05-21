@@ -85,6 +85,7 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -159,6 +160,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
@@ -301,6 +303,7 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let environment_manager_for_requests = Arc::clone(&environment_manager);
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -329,6 +332,7 @@ impl MessageProcessor {
         let thread_list_state_permit = Arc::new(Semaphore::new(/*permits*/ 1));
         let workspace_settings_cache =
             Arc::new(workspace_settings::WorkspaceSettingsCache::default());
+        let app_list_shutdown_token = CancellationToken::new();
         let account_processor = AccountRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -342,6 +346,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             Arc::clone(&workspace_settings_cache),
+            app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
             auth_manager.clone(),
@@ -355,8 +360,12 @@ impl MessageProcessor {
             Arc::clone(&config),
             outgoing.clone(),
             config_manager.clone(),
+            Arc::clone(&environment_manager_for_requests),
         );
-        let process_exec_processor = ProcessExecRequestProcessor::new(outgoing.clone());
+        let process_exec_processor = ProcessExecRequestProcessor::new(
+            outgoing.clone(),
+            Arc::clone(&environment_manager_for_requests),
+        );
         let feedback_processor = FeedbackRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -443,7 +452,6 @@ impl MessageProcessor {
                     Some(on_effective_plugins_changed),
                 );
         }
-        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
@@ -462,11 +470,8 @@ impl MessageProcessor {
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
         let fs_processor = FsRequestProcessor::new(
-            thread_manager
-                .environment_manager()
-                .local_environment()
-                .get_filesystem(),
-            fs_watch_manager,
+            Arc::clone(&environment_manager_for_requests),
+            FsWatchManager::new(outgoing.clone()),
         );
         let windows_sandbox_processor = WindowsSandboxRequestProcessor::new(
             outgoing.clone(),
@@ -476,6 +481,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            skills_watcher,
             account_processor,
             apps_processor,
             catalog_processor,
@@ -503,6 +509,8 @@ impl MessageProcessor {
 
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
+        self.apps_processor.shutdown();
+        self.skills_watcher.shutdown();
     }
 
     pub(crate) async fn process_request(
@@ -1032,6 +1040,11 @@ impl MessageProcessor {
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
+            ClientRequest::ThreadSettingsUpdate { params, .. } => {
+                self.turn_processor
+                    .thread_settings_update(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
             }
@@ -1147,6 +1160,9 @@ impl MessageProcessor {
                 self.catalog_processor
                     .experimental_feature_list(params)
                     .await
+            }
+            ClientRequest::PermissionProfileList { params, .. } => {
+                self.catalog_processor.permission_profile_list(params).await
             }
             ClientRequest::CollaborationModeList { params, .. } => {
                 self.catalog_processor.collaboration_mode_list(params).await

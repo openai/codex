@@ -686,7 +686,7 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+          "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
           "type": "string"
         },
         "tools": {
@@ -836,13 +836,23 @@
       "type": "object"
     },
     "FileSystemAccessMode": {
-      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `deny` beats `write`, and `write` beats `read`.",
+      "oneOf": [
+        {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`none` is a legacy input alias retained temporarily for compatibility.",
+          "enum": [
+            "deny"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "FilesystemPermissionToml": {
       "anyOf": [
@@ -1106,6 +1116,20 @@
           "type": "array"
         },
         "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SubagentStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SubagentStop": {
           "default": [],
           "items": {
             "$ref": "#/definitions/MatcherGroup"
@@ -1560,6 +1584,118 @@
     "NetworkDomainPermissionsToml": {
       "type": "object"
     },
+    "NetworkMitmActionToml": {
+      "properties": {
+        "inject_request_headers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/NetworkMitmInjectedHeaderToml"
+          },
+          "type": "array"
+        },
+        "strip_request_headers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmHookToml": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": true,
+        "headers": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "host": {
+          "type": "string"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_prefixes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "query": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "action",
+        "host",
+        "methods",
+        "path_prefixes"
+      ],
+      "type": "object"
+    },
+    "NetworkMitmInjectedHeaderToml": {
+      "properties": {
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "prefix": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_env_var": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_file": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmToml": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmActionToml"
+          },
+          "type": "object"
+        },
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmHookToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "NetworkModeSchema": {
       "enum": [
         "limited",
@@ -1662,6 +1798,9 @@
         },
         "enabled": {
           "type": "boolean"
+        },
+        "mitm": {
+          "$ref": "#/definitions/NetworkMitmToml"
         },
         "mode": {
           "$ref": "#/definitions/NetworkModeSchema"
@@ -1985,6 +2124,12 @@
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string"
+        },
+        "extends": {
+          "type": "string"
+        },
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
         },
@@ -4753,7 +4898,7 @@
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
     "service_tier": {
-      "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+      "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
       "type": "string"
     },
     "shell_environment_policy": {

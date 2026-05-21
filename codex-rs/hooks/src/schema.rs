@@ -27,6 +27,10 @@ const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.js
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
 const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
+const SUBAGENT_START_INPUT_FIXTURE: &str = "subagent-start.command.input.schema.json";
+const SUBAGENT_START_OUTPUT_FIXTURE: &str = "subagent-start.command.output.schema.json";
+const SUBAGENT_STOP_INPUT_FIXTURE: &str = "subagent-stop.command.input.schema.json";
+const SUBAGENT_STOP_OUTPUT_FIXTURE: &str = "subagent-stop.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
 
@@ -87,6 +91,10 @@ pub(crate) enum HookEventNameWire {
     SessionStart,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
+    #[serde(rename = "SubagentStart")]
+    SubagentStart,
+    #[serde(rename = "SubagentStop")]
+    SubagentStop,
     #[serde(rename = "Stop")]
     Stop,
 }
@@ -348,6 +356,17 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent-start.command.output")]
+pub(crate) struct SubagentStartCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub hook_specific_output: Option<SessionStartHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.output")]
 pub(crate) struct UserPromptSubmitCommandOutputWire {
     #[serde(flatten)]
@@ -374,6 +393,21 @@ pub(crate) struct UserPromptSubmitHookSpecificOutputWire {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "stop.command.output")]
 pub(crate) struct StopCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub decision: Option<BlockDecisionWire>,
+    /// Claude requires `reason` when `decision` is `block`; we enforce that
+    /// semantic rule during output parsing rather than in the JSON schema.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent-stop.command.output")]
+pub(crate) struct SubagentStopCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
@@ -429,6 +463,24 @@ impl SessionStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent-start.command.input")]
+pub(crate) struct SubagentStartCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "subagent_start_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub agent_id: String,
+    pub agent_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
@@ -459,6 +511,27 @@ pub(crate) struct StopCommandInput {
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub stop_hook_active: bool,
+    pub last_assistant_message: NullableString,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "subagent-stop.command.input")]
+pub(crate) struct SubagentStopCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub agent_transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "subagent_stop_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub stop_hook_active: bool,
+    pub agent_id: String,
+    pub agent_type: String,
     pub last_assistant_message: NullableString,
 }
 
@@ -521,6 +594,22 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_OUTPUT_FIXTURE),
         schema_json::<UserPromptSubmitCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(SUBAGENT_START_INPUT_FIXTURE),
+        schema_json::<SubagentStartCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(SUBAGENT_START_OUTPUT_FIXTURE),
+        schema_json::<SubagentStartCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(SUBAGENT_STOP_INPUT_FIXTURE),
+        schema_json::<SubagentStopCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(SUBAGENT_STOP_OUTPUT_FIXTURE),
+        schema_json::<SubagentStopCommandOutputWire>()?,
     )?;
     write_schema(
         &generated_dir.join(STOP_INPUT_FIXTURE),
@@ -613,6 +702,14 @@ fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Sche
     string_const_schema("UserPromptSubmit")
 }
 
+fn subagent_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SubagentStart")
+}
+
+fn subagent_stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SubagentStop")
+}
+
 fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
 }
@@ -628,7 +725,7 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_enum_schema(&["startup", "resume", "clear"])
+    string_enum_schema(&["startup", "resume", "clear", "compact"])
 }
 
 fn compaction_trigger_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -683,7 +780,13 @@ mod tests {
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
     use super::STOP_OUTPUT_FIXTURE;
+    use super::SUBAGENT_START_INPUT_FIXTURE;
+    use super::SUBAGENT_START_OUTPUT_FIXTURE;
+    use super::SUBAGENT_STOP_INPUT_FIXTURE;
+    use super::SUBAGENT_STOP_OUTPUT_FIXTURE;
     use super::StopCommandInput;
+    use super::SubagentStartCommandInput;
+    use super::SubagentStopCommandInput;
     use super::USER_PROMPT_SUBMIT_INPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
     use super::UserPromptSubmitCommandInput;
@@ -737,6 +840,18 @@ mod tests {
             USER_PROMPT_SUBMIT_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/user-prompt-submit.command.output.schema.json")
             }
+            SUBAGENT_START_INPUT_FIXTURE => {
+                include_str!("../schema/generated/subagent-start.command.input.schema.json")
+            }
+            SUBAGENT_START_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/subagent-start.command.output.schema.json")
+            }
+            SUBAGENT_STOP_INPUT_FIXTURE => {
+                include_str!("../schema/generated/subagent-stop.command.input.schema.json")
+            }
+            SUBAGENT_STOP_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/subagent-stop.command.output.schema.json")
+            }
             STOP_INPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.input.schema.json")
             }
@@ -772,6 +887,10 @@ mod tests {
             SESSION_START_OUTPUT_FIXTURE,
             USER_PROMPT_SUBMIT_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_OUTPUT_FIXTURE,
+            SUBAGENT_START_INPUT_FIXTURE,
+            SUBAGENT_START_OUTPUT_FIXTURE,
+            SUBAGENT_STOP_INPUT_FIXTURE,
+            SUBAGENT_STOP_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
         ] {
@@ -814,6 +933,16 @@ mod tests {
                 .expect("serialize user prompt submit input schema"),
         )
         .expect("parse user prompt submit input schema");
+        let subagent_start: Value = serde_json::from_slice(
+            &schema_json::<SubagentStartCommandInput>()
+                .expect("serialize subagent start input schema"),
+        )
+        .expect("parse subagent start input schema");
+        let subagent_stop: Value = serde_json::from_slice(
+            &schema_json::<SubagentStopCommandInput>()
+                .expect("serialize subagent stop input schema"),
+        )
+        .expect("parse subagent stop input schema");
         let stop: Value = serde_json::from_slice(
             &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
         )
@@ -826,6 +955,8 @@ mod tests {
             &pre_compact,
             &post_compact,
             &user_prompt_submit,
+            &subagent_start,
+            &subagent_stop,
             &stop,
         ] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");

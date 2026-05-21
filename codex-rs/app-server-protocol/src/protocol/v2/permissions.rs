@@ -178,7 +178,7 @@ v2_enum_from_core!(
     pub enum FileSystemAccessMode from CoreFileSystemAccessMode {
         Read,
         Write,
-        None
+        Deny
     }
 );
 
@@ -287,6 +287,41 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to the full result set.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional working directory to resolve project config layers.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileSummary {
+    /// Available permission profile identifier.
+    pub id: String,
+    /// Optional user-facing description for display in clients.
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileListResponse {
+    pub data: Vec<PermissionProfileSummary>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -294,8 +329,8 @@ pub struct ActivePermissionProfile {
     /// Identifier from `default_permissions` or the implicit built-in default,
     /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
     pub id: String,
-    /// Parent profile identifier once permissions profiles support
-    /// inheritance. This is currently always `null`.
+    /// Parent profile identifier from the selected permissions profile's
+    /// `extends` setting, when present.
     #[serde(default)]
     pub extends: Option<String>,
 }

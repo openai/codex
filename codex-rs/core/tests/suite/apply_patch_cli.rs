@@ -148,7 +148,7 @@ fn workspace_write_with_unreadable_path(unreadable_path: AbsolutePathBuf) -> Per
             path: FileSystemPath::Path {
                 path: unreadable_path,
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {

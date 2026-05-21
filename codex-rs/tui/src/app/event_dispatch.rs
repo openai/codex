@@ -23,6 +23,10 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::StartupThreadStarted { result } => {
+                self.handle_startup_thread_started(app_server, result)
+                    .await?;
+            }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
@@ -57,10 +61,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
-                    &match self.remote_app_server_endpoint.clone() {
-                        Some(endpoint) => crate::AppServerTarget::Remote { endpoint },
-                        None => crate::AppServerTarget::Embedded,
-                    },
+                    &self.app_server_target,
                     self.state_db.clone(),
                     self.environment_manager.clone(),
                 )
@@ -759,12 +760,20 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.sync_active_thread_reasoning_setting(app_server, effort)
+                    .await;
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                self.sync_active_thread_model_setting(app_server, model)
+                    .await;
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
+                self.sync_active_thread_personality_setting(app_server, personality)
+                    .await;
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
@@ -1123,6 +1132,7 @@ impl App {
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
+                                        /*permission_profile*/ None,
                                         /*active_permission_profile*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
@@ -1148,6 +1158,7 @@ impl App {
                                         /*cwd*/ None,
                                         Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
+                                        Some(preset.permission_profile.clone()),
                                         Some(preset.active_permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
@@ -1323,9 +1334,6 @@ impl App {
                     profile,
                     service_tier.as_deref(),
                 );
-                if service_tier.is_none() {
-                    self.config.notices.fast_default_opt_out = Some(true);
-                }
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {
@@ -1552,6 +1560,8 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.sync_active_thread_plan_mode_reasoning_setting(app_server)
+                    .await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::for_config(&self.config)
@@ -1685,7 +1695,7 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
-                        if !app_server.is_remote()
+                        if !app_server.uses_remote_workspace()
                             && let Err(err) = self.refresh_in_memory_config_from_disk().await
                         {
                             tracing::warn!(
@@ -1729,7 +1739,7 @@ impl App {
                 {
                     Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
-                        if !app_server.is_remote()
+                        if !app_server.uses_remote_workspace()
                             && let Err(err) = self.refresh_in_memory_config_from_disk().await
                         {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");

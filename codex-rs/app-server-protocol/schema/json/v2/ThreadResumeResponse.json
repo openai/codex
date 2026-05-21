@@ -9,7 +9,7 @@
       "properties": {
         "extends": {
           "default": null,
-          "description": "Parent profile identifier once permissions profiles support inheritance. This is currently always `null`.",
+          "description": "Parent profile identifier from the selected permissions profile's `extends` setting, when present.",
           "type": [
             "string",
             "null"
@@ -1416,6 +1416,12 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pluginId": {
               "type": [
                 "string",
                 "null"
