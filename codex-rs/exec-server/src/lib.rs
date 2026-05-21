@@ -25,6 +25,8 @@ mod server;
 
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
+pub use client::http_client::HTTP_REQUEST_NO_PROXY_HEADER;
+pub use client::http_client::HTTP_REQUEST_NO_REDIRECTS_HEADER;
 pub use client::http_client::HttpResponseBodyStream;
 pub use client::http_client::ReqwestHttpClient;
 pub use client_api::ExecServerClientConnectOptions;

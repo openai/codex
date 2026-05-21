@@ -1,6 +1,8 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
+use codex_exec_server::HTTP_REQUEST_NO_PROXY_HEADER;
+use codex_exec_server::HTTP_REQUEST_NO_REDIRECTS_HEADER;
 use codex_exec_server::HttpHeader;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
@@ -137,6 +139,28 @@ pub(crate) fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
             })
         })
         .collect()
+}
+
+pub(crate) fn oauth_discovery_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+    internal_request_headers(protocol_headers(headers), [HTTP_REQUEST_NO_PROXY_HEADER])
+}
+
+pub(crate) fn oauth_token_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+    internal_request_headers(
+        protocol_headers(headers),
+        [HTTP_REQUEST_NO_REDIRECTS_HEADER],
+    )
+}
+
+fn internal_request_headers<const N: usize>(
+    mut headers: Vec<HttpHeader>,
+    internal_header_names: [&str; N],
+) -> Vec<HttpHeader> {
+    headers.extend(internal_header_names.into_iter().map(|name| HttpHeader {
+        name: name.to_string(),
+        value: "true".to_string(),
+    }));
+    headers
 }
 
 #[cfg(unix)]
