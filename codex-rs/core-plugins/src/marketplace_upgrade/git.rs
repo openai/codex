@@ -168,6 +168,7 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

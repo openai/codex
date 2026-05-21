@@ -89,6 +89,7 @@ fn run_delayed_output_after_exit_parent(release_path: &Path) {
             std::process::exit(1);
         }
     };
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     match Command::new(current_exe)
         .arg(DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG)
         .arg(release_path)

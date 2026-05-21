@@ -72,6 +72,7 @@ fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<Str
 }
 
 fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path, timeout: Duration) -> bool {
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = match Command::new(system_bwrap_path)
         .args([
             "--unshare-user",

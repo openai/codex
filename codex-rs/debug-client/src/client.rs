@@ -63,6 +63,7 @@ impl AppServerClient {
             cmd.arg("--config").arg(override_kv);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = cmd
             .arg("app-server")
             .stdin(Stdio::piped())

@@ -177,6 +177,7 @@ impl PidBackend {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {

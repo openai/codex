@@ -38,6 +38,7 @@ pub(crate) async fn run_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {

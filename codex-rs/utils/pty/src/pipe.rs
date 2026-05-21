@@ -147,6 +147,7 @@ async fn spawn_process_with_stdin_mode(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = command.spawn()?;
     let pid = child
         .id()

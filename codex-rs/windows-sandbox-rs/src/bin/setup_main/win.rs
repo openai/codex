@@ -163,6 +163,7 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_b64 = BASE64.encode(payload_json);
     let exe = std::env::current_exe().context("locate setup helper")?;
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     Command::new(&exe)
         .arg(payload_b64)
         .stdin(Stdio::null())

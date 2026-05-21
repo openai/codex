@@ -206,6 +206,7 @@ impl McpProcess {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()

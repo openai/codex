@@ -60,6 +60,7 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
 
+                #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
                 match command.spawn() {
                     Ok(_) => HookResult::Success,
                     Err(err) => HookResult::FailedContinue(err.into()),

@@ -345,6 +345,7 @@ async fn handle_escalate_session_with_policy(
                     Ok(())
                 });
             }
+            #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
             let mut child = command.spawn()?;
             let exit_status = tokio::select! {
                 status = child.wait() => status?,

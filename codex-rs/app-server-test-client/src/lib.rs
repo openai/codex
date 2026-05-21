@@ -482,6 +482,7 @@ impl BackgroundAppServer {
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
         }
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let process = cmd
             .arg("app-server")
             .arg("--listen")
@@ -535,6 +536,7 @@ fn serve(codex_bin: &Path, config_overrides: &[String], listen: &str, kill: bool
     }
     cmdline.push_str(&format!(" app-server --listen {}", shell_quote(listen)));
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let child = Command::new("nohup")
         .arg("sh")
         .arg("-c")
@@ -1444,6 +1446,7 @@ impl CodexClient {
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
         }
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut codex_app_server = cmd
             .arg("app-server")
             .stdin(Stdio::piped())

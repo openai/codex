@@ -262,6 +262,10 @@ fn arboard_copy(_text: &str) -> Result<Option<ClipboardLease>, String> {
 /// Copy text into the Windows clipboard from a WSL process.
 #[cfg(target_os = "linux")]
 fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Grandfathered-in usage."
+    )]
     let mut child = std::process::Command::new("powershell.exe")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -321,6 +325,7 @@ fn tmux_clipboard_copy(text: &str) -> Result<(), String> {
         || tmux_command_output(["info"]),
     )?;
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = std::process::Command::new("tmux")
         .args(["load-buffer", "-w", "-"])
         .stdin(std::process::Stdio::piped())

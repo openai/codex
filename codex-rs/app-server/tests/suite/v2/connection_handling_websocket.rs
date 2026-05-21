@@ -396,6 +396,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
         .env("RUST_LOG", "warn");
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut process = cmd
         .kill_on_drop(true)
         .spawn()

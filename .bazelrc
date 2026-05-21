@@ -95,6 +95,7 @@ build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_invalid_type
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_lock
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::disallowed_methods
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::expect_used
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::identity_op
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_clamp

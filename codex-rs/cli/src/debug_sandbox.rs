@@ -491,6 +491,7 @@ async fn spawn_debug_sandbox_child(
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

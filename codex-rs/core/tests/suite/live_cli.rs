@@ -60,6 +60,7 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = cmd.spawn().expect("failed to spawn codex-rs");
 
     // Send the terminating newline so Session::run exits after the first turn.

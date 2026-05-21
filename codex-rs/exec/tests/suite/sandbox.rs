@@ -76,6 +76,7 @@ async fn spawn_command_under_sandbox(
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     child.kill_on_drop(true).spawn()
 }
 

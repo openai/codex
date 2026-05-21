@@ -89,6 +89,7 @@ fn start_log_stream() -> Option<Child> {
 
     const PREDICATE: &str = r#"(((processID == 0) AND (senderImagePath CONTAINS "/Sandbox")) OR (subsystem == "com.apple.sandbox.reporting"))"#;
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     tokio::process::Command::new("log")
         .args(["stream", "--style", "ndjson", "--predicate", PREDICATE])
         .stdin(Stdio::null())

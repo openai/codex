@@ -290,6 +290,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn list_child_pids_includes_spawned_child() {
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new("/bin/sleep")
             .arg("5")
             .stdin(Stdio::null())
@@ -319,6 +320,7 @@ mod tests {
     async fn pid_tracker_collects_spawned_children() {
         let tracker = PidTracker::new(std::process::id() as i32).expect("failed to create tracker");
 
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new("/bin/sleep")
             .arg("0.1")
             .stdin(Stdio::null())
@@ -347,6 +349,7 @@ mod tests {
     async fn pid_tracker_collects_bash_subshell_descendants() {
         let tracker = PidTracker::new(std::process::id() as i32).expect("failed to create tracker");
 
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let child = Command::new("/bin/bash")
             .arg("-c")
             .arg("(sleep 0.1 & echo $!; wait)")

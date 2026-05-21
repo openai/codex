@@ -222,6 +222,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
         });
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     command.spawn()
 }
 

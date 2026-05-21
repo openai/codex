@@ -164,6 +164,7 @@ async fn install_latest_standalone() -> Result<()> {
         .await
         .context("failed to read standalone Codex updater")?;
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = Command::new("/bin/sh")
         .arg("-s")
         .stdin(Stdio::piped())

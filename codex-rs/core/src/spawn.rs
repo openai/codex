@@ -122,5 +122,6 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     cmd.kill_on_drop(true).spawn()
 }

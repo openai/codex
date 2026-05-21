@@ -76,6 +76,7 @@ where
     child.kill_on_drop(true);
     child.env("CODEX_HOME", codex_home.path());
     child.envs(env);
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;

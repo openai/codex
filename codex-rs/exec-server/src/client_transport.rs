@@ -82,6 +82,7 @@ impl ExecServerClient {
     pub(crate) async fn connect_stdio_command(
         args: StdioExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = stdio_command_process(&args.command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

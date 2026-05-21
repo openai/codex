@@ -113,6 +113,7 @@ struct PowershellParserProcess {
 
 impl PowershellParserProcess {
     fn spawn(executable: &str) -> std::io::Result<Self> {
+        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new(executable)
             .args([
                 "-NoLogo",

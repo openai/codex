@@ -158,6 +158,7 @@ async fn spawn_process_portable(
         command_builder.env(key, value);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = pair.slave.spawn_command(command_builder)?;
     #[cfg(unix)]
     // portable-pty establishes the spawned PTY child as a new session leader on
@@ -322,6 +323,7 @@ async fn spawn_process_preserving_fds(
             });
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = command.spawn()?;
     drop(slave);
     let process_group_id = child.id();

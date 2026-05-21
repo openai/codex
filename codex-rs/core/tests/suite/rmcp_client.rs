@@ -2099,6 +2099,7 @@ async fn start_streamable_http_test_server(
     if let Some(expected_token) = expected_token {
         command.env("MCP_EXPECT_BEARER", expected_token);
     }
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = command.spawn()?;
 
     wait_for_local_streamable_http_server(&mut child, &server_url, Duration::from_secs(5)).await?;

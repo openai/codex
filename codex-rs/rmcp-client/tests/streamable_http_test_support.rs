@@ -199,6 +199,7 @@ pub(crate) async fn spawn_streamable_http_server() -> anyhow::Result<(Child, Str
 
     let bind_addr = format!("127.0.0.1:{port}");
     let base_url = format!("http://{bind_addr}");
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = Command::new(streamable_http_server_bin()?)
         .kill_on_drop(true)
         .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
@@ -225,6 +226,7 @@ impl Drop for ExecServerProcess {
 /// Starts a local exec-server and connects an initialized `ExecServerClient`.
 pub(crate) async fn spawn_exec_server() -> anyhow::Result<ExecServerProcess> {
     let codex_home = TempDir::new()?;
+    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
         .stdin(Stdio::null())
