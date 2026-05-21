@@ -828,6 +828,58 @@ fn parse_large_tool_input_schema_stops_after_descriptions_when_under_budget() {
 }
 
 #[test]
+fn parse_large_tool_input_schema_ignores_dropped_metadata_for_budget() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "event": {
+                "type": "object",
+                "title": "Calendar event",
+                "properties": {
+                    "recurrence": {
+                        "type": "object",
+                        "examples": [
+                            {
+                                "payload": "x".repeat(4_500)
+                            }
+                        ],
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "title": "Recurrence pattern"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "event": {
+                    "type": "object",
+                    "properties": {
+                        "recurrence": {
+                            "type": "object",
+                            "properties": {
+                                "pattern": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    );
+}
+
+#[test]
 fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_under_budget() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
@@ -881,8 +933,106 @@ fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_unde
                         }
                     }
                 },
-                "metadata": {
-                    "$ref": "#/$defs/metadata"
+                "metadata": {}
+            }
+        })
+    );
+}
+
+#[test]
+fn parse_large_tool_input_schema_rewrites_root_definition_ref_before_dropping_definitions() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "$ref": "#/$defs/Arguments",
+        "$defs": {
+            "Arguments": {
+                "type": "object",
+                "properties": many_string_properties(300),
+                "required": ["property_1"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(schema, JsonSchema::default());
+}
+
+#[test]
+fn parse_large_tool_input_schema_rewrites_nested_definition_refs_before_dropping_definitions() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "description": "x".repeat(4_500),
+        "properties": {
+            "container": {
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "$ref": "#/$defs/User"
+                    }
+                }
+            },
+            "list": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/$defs/User"
+                }
+            },
+            "map": {
+                "type": "object",
+                "additionalProperties": {
+                    "$ref": "#/$defs/User"
+                }
+            },
+            "choice": {
+                "anyOf": [
+                    {
+                        "$ref": "#/$defs/User"
+                    },
+                    {
+                        "$ref": "#/definitions/Legacy"
+                    }
+                ]
+            }
+        },
+        "$defs": {
+            "User": {
+                "type": "object",
+                "properties": many_string_properties(300)
+            }
+        },
+        "definitions": {
+            "Legacy": {
+                "type": "object",
+                "properties": many_string_properties(300)
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "anyOf": [
+                        {},
+                        {}
+                    ]
+                },
+                "container": {
+                    "type": "object",
+                    "properties": {
+                        "user": {}
+                    }
+                },
+                "list": {
+                    "type": "array",
+                    "items": {}
+                },
+                "map": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
                 }
             }
         })
