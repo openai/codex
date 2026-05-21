@@ -20,9 +20,10 @@ from urllib.request import urlopen
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = CODEX_CLI_ROOT.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/26131514935"  # rust-v0.132.0
 VENDOR_DIR_NAME = "vendor"
-RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
+RG_MANIFEST = REPO_ROOT / "scripts" / "codex_package" / "rg"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
