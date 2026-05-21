@@ -70,7 +70,7 @@ impl TestToolServer {
             Self::echo_dash_tool(),
             Self::cwd_tool(),
             Self::sync_tool(),
-            Self::sync_mutable_tool(),
+            Self::sync_readonly_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
             sandbox_meta_tool,
@@ -167,16 +167,6 @@ impl TestToolServer {
     }
 
     fn sync_tool() -> Tool {
-        let mut tool = Self::build_sync_tool("sync");
-        tool.annotations = Some(ToolAnnotations::new().read_only(true));
-        tool
-    }
-
-    fn sync_mutable_tool() -> Tool {
-        Self::build_sync_tool("sync_mutable")
-    }
-
-    fn build_sync_tool(name: &'static str) -> Tool {
         #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
@@ -199,7 +189,7 @@ impl TestToolServer {
         .expect("sync tool schema should deserialize");
 
         let mut tool = Tool::new(
-            Cow::Borrowed(name),
+            Cow::Borrowed("sync"),
             Cow::Borrowed(
                 "Synchronize concurrent test calls and optionally delay before or after the barrier.",
             ),
@@ -216,6 +206,13 @@ impl TestToolServer {
         }))
         .expect("sync tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
+        tool
+    }
+
+    fn sync_readonly_tool() -> Tool {
+        let mut tool = Self::sync_tool();
+        tool.name = Cow::Borrowed("sync_readonly");
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }
 
@@ -561,8 +558,8 @@ impl ServerHandler for TestToolServer {
                 let args = Self::parse_call_args::<SyncArgs>(&request, "sync")?;
                 Self::sync_result(args).await
             }
-            "sync_mutable" => {
-                let args = Self::parse_call_args::<SyncArgs>(&request, "sync_mutable")?;
+            "sync_readonly" => {
+                let args = Self::parse_call_args::<SyncArgs>(&request, "sync_readonly")?;
                 Self::sync_result(args).await
             }
             other => Err(McpError::invalid_params(

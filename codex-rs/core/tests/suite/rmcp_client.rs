@@ -824,18 +824,8 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(
-                first_call_id,
-                &namespace,
-                "sync_mutable",
-                &args,
-            ),
-            responses::ev_function_call_with_namespace(
-                second_call_id,
-                &namespace,
-                "sync_mutable",
-                &args,
-            ),
+            responses::ev_function_call_with_namespace(first_call_id, &namespace, "sync", &args),
+            responses::ev_function_call_with_namespace(second_call_id, &namespace, "sync", &args),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -868,9 +858,12 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
         .await?;
     fixture
         .codex
+        // Keep this baseline on the mutable sync tool so read-only hints do not
+        // make the call parallel-safe. Bypass read-only turn permissions so
+        // approval behavior does not block the scheduling assertion.
         .submit(auto_approved_user_turn(
             &fixture,
-            "call the rmcp sync_mutable tool twice",
+            "call the rmcp sync tool twice",
         ))
         .await?;
 
@@ -955,8 +948,18 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(first_call_id, &namespace, "sync", &args),
-            responses::ev_function_call_with_namespace(second_call_id, &namespace, "sync", &args),
+            responses::ev_function_call_with_namespace(
+                first_call_id,
+                &namespace,
+                "sync_readonly",
+                &args,
+            ),
+            responses::ev_function_call_with_namespace(
+                second_call_id,
+                &namespace,
+                "sync_readonly",
+                &args,
+            ),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -991,7 +994,7 @@ async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
         .codex
         .submit(read_only_user_turn(
             &fixture,
-            "call the rmcp read-only sync tool twice",
+            "call the rmcp sync_readonly tool twice",
         ))
         .await?;
 
@@ -1037,18 +1040,8 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(
-                first_call_id,
-                &namespace,
-                "sync_mutable",
-                &args,
-            ),
-            responses::ev_function_call_with_namespace(
-                second_call_id,
-                &namespace,
-                "sync_mutable",
-                &args,
-            ),
+            responses::ev_function_call_with_namespace(first_call_id, &namespace, "sync", &args),
+            responses::ev_function_call_with_namespace(second_call_id, &namespace, "sync", &args),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -1081,9 +1074,12 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
         .await?;
     fixture
         .codex
+        // Exercise the server opt-in with the mutable sync tool rather than the
+        // read-only sync_readonly tool. Bypass read-only turn permissions so
+        // approval behavior does not block the scheduling assertion.
         .submit(auto_approved_user_turn(
             &fixture,
-            "call the rmcp sync_mutable tool twice",
+            "call the rmcp sync tool twice",
         ))
         .await?;
 

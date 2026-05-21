@@ -36,15 +36,6 @@ impl McpHandler {
         let spec = create_tool_spec(&tool_info)?;
         Ok(Self { tool_info, spec })
     }
-
-    fn has_read_only_hint(&self) -> bool {
-        self.tool_info
-            .tool
-            .annotations
-            .as_ref()
-            .and_then(|annotations| annotations.read_only_hint)
-            .unwrap_or(false)
-    }
 }
 
 #[async_trait::async_trait]
@@ -60,7 +51,14 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
     fn supports_parallel_tool_calls(&self) -> bool {
         // Correctly implemented MCP servers should tolerate parallel calls to
         // tools that advertise themselves as read-only.
-        self.tool_info.supports_parallel_tool_calls || self.has_read_only_hint()
+        self.tool_info.supports_parallel_tool_calls
+            || self
+                .tool_info
+                .tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+                .unwrap_or(false)
     }
 
     async fn handle(
