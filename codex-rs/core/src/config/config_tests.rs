@@ -5184,7 +5184,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             assert_eq!(args, &vec!["hello".to_string()]);
             assert!(env.is_none());
             assert!(env_vars.is_empty());
-            assert!(cwd.is_none());
+            assert_eq!(cwd, &Some(codex_home.path().to_path_buf()));
         }
         other => panic!("unexpected transport {other:?}"),
     }
