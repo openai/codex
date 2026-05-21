@@ -46,6 +46,25 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
     }
 }
 
+fn windows_sandbox_requirements_stack(
+    allowed_sandbox_implementations: Vec<WindowsSandboxModeToml>,
+) -> ConfigLayerStack {
+    let requirements_toml = codex_config::ConfigRequirementsToml {
+        windows: Some(codex_config::WindowsRequirementsToml {
+            allowed_sandbox_implementations: Some(allowed_sandbox_implementations),
+        }),
+        ..Default::default()
+    };
+    let mut requirements_with_sources = codex_config::ConfigRequirementsWithSources::default();
+    requirements_with_sources
+        .merge_unset_fields(RequirementSource::Unknown, requirements_toml.clone());
+    let requirements = codex_config::ConfigRequirements::try_from(requirements_with_sources)
+        .expect("windows sandbox requirements");
+
+    ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+        .expect("test config layer stack")
+}
+
 #[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -230,17 +249,8 @@ async fn startup_windows_sandbox_prompt_blocks_disallowed_unelevated_fallback() 
 
     chat.set_feature_enabled(Feature::WindowsSandbox, /*enabled*/ false);
     chat.set_feature_enabled(Feature::WindowsSandboxElevated, /*enabled*/ false);
-    chat.config.config_layer_stack = ConfigLayerStack::new(
-        Vec::new(),
-        codex_config::ConfigRequirements::default(),
-        codex_config::ConfigRequirementsToml {
-            windows: Some(codex_config::WindowsRequirementsToml {
-                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
-            }),
-            ..Default::default()
-        },
-    )
-    .expect("test config layer stack");
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
 
     chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
 
@@ -259,17 +269,8 @@ async fn startup_windows_sandbox_prompt_blocks_disallowed_unelevated_fallback() 
 async fn windows_sandbox_required_enable_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.config.config_layer_stack = ConfigLayerStack::new(
-        Vec::new(),
-        codex_config::ConfigRequirements::default(),
-        codex_config::ConfigRequirementsToml {
-            windows: Some(codex_config::WindowsRequirementsToml {
-                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
-            }),
-            ..Default::default()
-        },
-    )
-    .expect("test config layer stack");
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
     let preset = builtin_approval_presets()
         .into_iter()
         .find(|preset| preset.id == "auto")
@@ -288,20 +289,10 @@ async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevate
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
-    chat.config.config_layer_stack = ConfigLayerStack::new(
-        Vec::new(),
-        codex_config::ConfigRequirements::default(),
-        codex_config::ConfigRequirementsToml {
-            windows: Some(codex_config::WindowsRequirementsToml {
-                allowed_sandbox_implementations: Some(vec![
-                    WindowsSandboxModeToml::Elevated,
-                    WindowsSandboxModeToml::Unelevated,
-                ]),
-            }),
-            ..Default::default()
-        },
-    )
-    .expect("test config layer stack");
+    chat.config.config_layer_stack = windows_sandbox_requirements_stack(vec![
+        WindowsSandboxModeToml::Elevated,
+        WindowsSandboxModeToml::Unelevated,
+    ]);
     let preset = builtin_approval_presets()
         .into_iter()
         .find(|preset| preset.id == "auto")
@@ -320,17 +311,8 @@ async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevate
 async fn windows_sandbox_required_fallback_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.config.config_layer_stack = ConfigLayerStack::new(
-        Vec::new(),
-        codex_config::ConfigRequirements::default(),
-        codex_config::ConfigRequirementsToml {
-            windows: Some(codex_config::WindowsRequirementsToml {
-                allowed_sandbox_implementations: Some(vec![WindowsSandboxModeToml::Elevated]),
-            }),
-            ..Default::default()
-        },
-    )
-    .expect("test config layer stack");
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
     let preset = builtin_approval_presets()
         .into_iter()
         .find(|preset| preset.id == "auto")

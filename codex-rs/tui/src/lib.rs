@@ -1671,10 +1671,10 @@ async fn run_ratatui_app(
         == WindowsSandboxLevel::Elevated
         && config
             .config_layer_stack
-            .requirements_toml()
-            .windows
-            .as_ref()
-            .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
+            .requirements()
+            .windows_sandbox_mode
+            .source
+            .is_some()
         && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
             config.codex_home.as_path(),
         );

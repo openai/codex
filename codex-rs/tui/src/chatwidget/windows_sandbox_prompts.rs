@@ -7,11 +7,10 @@ impl ChatWidget {
     pub(crate) fn windows_sandbox_mode_allowed(&self, mode: WindowsSandboxModeToml) -> bool {
         self.config
             .config_layer_stack
-            .requirements_toml()
-            .windows
-            .as_ref()
-            .and_then(|windows| windows.allowed_sandbox_implementations.as_ref())
-            .is_none_or(|implementations| implementations.contains(&mode))
+            .requirements()
+            .windows_sandbox_mode
+            .can_set(&Some(mode))
+            .is_ok()
     }
 
     #[cfg(any(target_os = "windows", test))]
@@ -20,10 +19,10 @@ impl ChatWidget {
             && self
                 .config
                 .config_layer_stack
-                .requirements_toml()
-                .windows
-                .as_ref()
-                .is_some_and(|windows| windows.allowed_sandbox_implementations.is_some())
+                .requirements()
+                .windows_sandbox_mode
+                .source
+                .is_some()
             && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
                 self.config.codex_home.as_path(),
             )

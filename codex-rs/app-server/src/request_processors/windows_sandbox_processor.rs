@@ -154,6 +154,71 @@ fn determine_windows_sandbox_readiness_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+    use codex_config::CloudRequirementsLoader;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::LoaderOverrides;
+    use codex_config::types::WindowsSandboxModeToml;
+
+    #[tokio::test]
+    async fn windows_sandbox_setup_start_rejects_disallowed_mode() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .build()
+            .await
+            .expect("config");
+        let config_manager = ConfigManager::new_for_tests(
+            codex_home.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::without_managed_config_for_tests(),
+            CloudRequirementsLoader::new(async {
+                Ok(Some(ConfigRequirementsToml {
+                    windows: Some(codex_config::WindowsRequirementsToml {
+                        allowed_sandbox_implementations: Some(vec![
+                            WindowsSandboxModeToml::Elevated,
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }),
+        );
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
+        let processor = WindowsSandboxRequestProcessor::new(
+            Arc::new(OutgoingMessageSender::new(
+                outgoing_tx,
+                codex_analytics::AnalyticsEventsClient::disabled(),
+            )),
+            Arc::new(config),
+            config_manager,
+        );
+
+        let err = processor
+            .windows_sandbox_setup_start_inner(
+                &ConnectionRequestId {
+                    connection_id: ConnectionId(1),
+                    request_id: RequestId::Integer(1),
+                },
+                WindowsSandboxSetupStartParams {
+                    mode: WindowsSandboxSetupMode::Unelevated,
+                    cwd: None,
+                },
+            )
+            .await
+            .expect_err("unelevated setup should be rejected");
+
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert!(
+            err.message.contains("invalid Windows sandbox setup mode"),
+            "{err:?}"
+        );
+        assert!(
+            outgoing_rx.try_recv().is_err(),
+            "disallowed setup should not send a started response"
+        );
+    }
 
     #[test]
     fn determine_windows_sandbox_readiness_reports_not_configured_when_disabled() {
