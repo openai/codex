@@ -1032,6 +1032,60 @@ B = \"2\"
 }
 
 #[test]
+fn blocking_point_mcp_server_edits_preserve_sibling_overrides() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[mcp_servers.base]
+enabled = false
+"#,
+    )
+    .expect("seed");
+
+    let docs = McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "docs-server".to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    };
+    ConfigEditsBuilder::new(codex_home)
+        .set_mcp_server("docs", &docs)
+        .apply_blocking()
+        .expect("set docs");
+    ConfigEditsBuilder::new(codex_home)
+        .set_mcp_server_disabled_override("docs")
+        .apply_blocking()
+        .expect("disable docs");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[mcp_servers.base]
+enabled = false
+
+[mcp_servers.docs]
+enabled = false
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
 fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

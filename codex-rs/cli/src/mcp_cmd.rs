@@ -6,6 +6,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -14,7 +15,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::LoaderOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::selected_user_mcp_servers;
 use codex_core_plugins::PluginsManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::ResolvedMcpOAuthScopes;
@@ -28,6 +28,7 @@ use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
+use toml::Value as TomlValue;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -265,12 +266,12 @@ async fn run_add(config: &Config, add_args: AddArgs) -> Result<()> {
 
     validate_server_name(&name)?;
 
-    let mut servers = selected_user_mcp_servers(config).with_context(|| {
-        format!(
-            "failed to load MCP servers from {}",
-            config.codex_home.display()
-        )
-    })?;
+    let server_layers = user_mcp_server_layers(config, &name);
+    if server_layers.inherited {
+        bail!(
+            "MCP server '{name}' is inherited from the base user config; choose a different name for the profile server"
+        );
+    }
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -329,10 +330,8 @@ async fn run_add(config: &Config, add_args: AddArgs) -> Result<()> {
         tools: HashMap::new(),
     };
 
-    servers.insert(name.clone(), new_entry);
-
     ConfigEditsBuilder::for_config(config)
-        .replace_mcp_servers(&servers)
+        .set_mcp_server(&name, &new_entry)
         .apply()
         .await
         .with_context(|| {
@@ -381,17 +380,10 @@ async fn run_remove(config: &Config, remove_args: RemoveArgs) -> Result<()> {
 
     validate_server_name(&name)?;
 
-    let mut servers = selected_user_mcp_servers(config).with_context(|| {
-        format!(
-            "failed to load MCP servers from {}",
-            config.codex_home.display()
-        )
-    })?;
-    let removed = servers.remove(&name).is_some();
-
-    if removed {
+    let server_layers = user_mcp_server_layers(config, &name);
+    if server_layers.inherited {
         ConfigEditsBuilder::for_config(config)
-            .replace_mcp_servers(&servers)
+            .set_mcp_server_disabled_override(&name)
             .apply()
             .await
             .with_context(|| {
@@ -400,15 +392,55 @@ async fn run_remove(config: &Config, remove_args: RemoveArgs) -> Result<()> {
                     config.codex_home.display()
                 )
             })?;
-    }
-
-    if removed {
+        println!("Disabled inherited MCP server '{name}'.");
+    } else if server_layers.selected {
+        ConfigEditsBuilder::for_config(config)
+            .remove_mcp_server(&name)
+            .apply()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write MCP servers to {}",
+                    config.codex_home.display()
+                )
+            })?;
         println!("Removed global MCP server '{name}'.");
     } else {
         println!("No MCP server named '{name}' found.");
     }
 
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct UserMcpServerLayers {
+    selected: bool,
+    inherited: bool,
+}
+
+fn user_mcp_server_layers(config: &Config, name: &str) -> UserMcpServerLayers {
+    let user_layers = config.config_layer_stack.get_user_layers(
+        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    let selected = user_layers
+        .first()
+        .is_some_and(|layer| config_has_mcp_server(&layer.config, name));
+    let inherited = user_layers
+        .iter()
+        .skip(1)
+        .any(|layer| config_has_mcp_server(&layer.config, name));
+    UserMcpServerLayers {
+        selected,
+        inherited,
+    }
+}
+
+fn config_has_mcp_server(config: &TomlValue, name: &str) -> bool {
+    config
+        .get("mcp_servers")
+        .and_then(TomlValue::as_table)
+        .is_some_and(|servers| servers.contains_key(name))
 }
 
 async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {

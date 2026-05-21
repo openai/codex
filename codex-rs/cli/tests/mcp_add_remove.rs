@@ -128,6 +128,126 @@ async fn profile_add_list_and_remove_only_mutate_profile_config() -> Result<()> 
 }
 
 #[tokio::test]
+async fn profile_add_and_remove_preserve_partial_inherited_server_override() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_base_cmd = codex_command(codex_home.path())?;
+    add_base_cmd
+        .args(["mcp", "add", "base", "--", "base-server"])
+        .assert()
+        .success();
+
+    let profile_path = codex_home.path().join("work.config.toml");
+    std::fs::write(
+        &profile_path,
+        r#"[mcp_servers.base]
+enabled = false
+"#,
+    )?;
+
+    let mut add_profile_cmd = codex_command(codex_home.path())?;
+    add_profile_cmd
+        .args([
+            "--profile",
+            "work",
+            "mcp",
+            "add",
+            "docs",
+            "--",
+            "docs-server",
+        ])
+        .assert()
+        .success();
+
+    let profile_contents = std::fs::read_to_string(&profile_path)?;
+    assert!(profile_contents.contains("[mcp_servers.base]"));
+    assert!(profile_contents.contains("enabled = false"));
+    assert!(profile_contents.contains("[mcp_servers.docs]"));
+
+    let mut remove_profile_cmd = codex_command(codex_home.path())?;
+    remove_profile_cmd
+        .args(["--profile", "work", "mcp", "remove", "docs"])
+        .assert()
+        .success();
+
+    let profile_contents = std::fs::read_to_string(profile_path)?;
+    assert!(profile_contents.contains("[mcp_servers.base]"));
+    assert!(profile_contents.contains("enabled = false"));
+    assert!(!profile_contents.contains("[mcp_servers.docs]"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_remove_disables_inherited_server() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_base_cmd = codex_command(codex_home.path())?;
+    add_base_cmd
+        .args(["mcp", "add", "base", "--", "base-server"])
+        .assert()
+        .success();
+
+    let mut remove_profile_cmd = codex_command(codex_home.path())?;
+    remove_profile_cmd
+        .args(["--profile", "work", "mcp", "remove", "base"])
+        .assert()
+        .success()
+        .stdout(contains("Disabled inherited MCP server 'base'."));
+
+    let profile_contents = std::fs::read_to_string(codex_home.path().join("work.config.toml"))?;
+    assert!(profile_contents.contains("[mcp_servers.base]"));
+    assert!(profile_contents.contains("enabled = false"));
+
+    let mut get_profile_cmd = codex_command(codex_home.path())?;
+    let get_profile_output = get_profile_cmd
+        .args(["--profile", "work", "mcp", "get", "base", "--json"])
+        .output()?;
+    assert!(get_profile_output.status.success());
+    let stdout = String::from_utf8(get_profile_output.stdout)?;
+    assert!(stdout.contains("\"enabled\": false"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_add_rejects_inherited_server_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_base_cmd = codex_command(codex_home.path())?;
+    add_base_cmd
+        .args(["mcp", "add", "docs", "--", "base-docs-server"])
+        .assert()
+        .success();
+
+    let mut add_profile_cmd = codex_command(codex_home.path())?;
+    add_profile_cmd
+        .args([
+            "--profile",
+            "work",
+            "mcp",
+            "add",
+            "docs",
+            "--url",
+            "https://profile.example/mcp",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "MCP server 'docs' is inherited from the base user config",
+        ));
+
+    let mut list_profile_cmd = codex_command(codex_home.path())?;
+    list_profile_cmd
+        .args(["--profile", "work", "mcp", "list"])
+        .assert()
+        .success()
+        .stdout(contains("base-docs-server"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     let codex_home = TempDir::new()?;
 
