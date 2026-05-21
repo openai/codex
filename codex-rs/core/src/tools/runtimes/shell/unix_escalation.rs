@@ -21,6 +21,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
+use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
@@ -94,6 +95,18 @@ fn approval_sandbox_permissions(
         SandboxPermissions::UseDefault
     } else {
         sandbox_permissions
+    }
+}
+
+fn approval_sandbox_permissions_for_policy(
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions_preapproved: bool,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> SandboxPermissions {
+    if unsandboxed_execution_allowed(file_system_sandbox_policy) {
+        approval_sandbox_permissions(sandbox_permissions, additional_permissions_preapproved)
+    } else {
+        SandboxPermissions::UseDefault
     }
 }
 
@@ -196,9 +209,10 @@ pub(super) async fn try_run_zsh_fork(
     if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
         cancel_token = cancel_when_either(cancel_token, cancellation);
     }
-    let approval_sandbox_permissions = approval_sandbox_permissions(
+    let approval_sandbox_permissions = approval_sandbox_permissions_for_policy(
         req.sandbox_permissions,
         req.additional_permissions_preapproved,
+        &command_executor.file_system_sandbox_policy,
     );
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
@@ -283,9 +297,10 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
         sandbox_permissions: req.sandbox_permissions,
-        approval_sandbox_permissions: approval_sandbox_permissions(
+        approval_sandbox_permissions: approval_sandbox_permissions_for_policy(
             req.sandbox_permissions,
             req.additional_permissions_preapproved,
+            &exec_request.file_system_sandbox_policy,
         ),
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: Stopwatch::unlimited(),
@@ -367,11 +382,18 @@ impl CoreShellActionProvider {
     fn shell_request_escalation_execution(
         sandbox_permissions: SandboxPermissions,
         permission_profile: &PermissionProfile,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
         additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> EscalationExecution {
         match sandbox_permissions {
             SandboxPermissions::UseDefault => EscalationExecution::TurnDefault,
-            SandboxPermissions::RequireEscalated => EscalationExecution::Unsandboxed,
+            SandboxPermissions::RequireEscalated => {
+                if unsandboxed_execution_allowed(file_system_sandbox_policy) {
+                    EscalationExecution::Unsandboxed
+                } else {
+                    EscalationExecution::TurnDefault
+                }
+            }
             SandboxPermissions::WithAdditionalPermissions => additional_permissions
                 .map(|_| {
                     // Shell request additional permissions were already normalized and
@@ -611,8 +633,10 @@ impl EscalationPolicy for CoreShellActionProvider {
         // fallback function.
         let decision_driven_by_policy =
             Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
-        let needs_escalation =
-            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
+        let unsandboxed_allowed = unsandboxed_execution_allowed(&self.file_system_sandbox_policy);
+        let needs_escalation = unsandboxed_allowed
+            && (self.sandbox_permissions.requires_escalated_permissions()
+                || decision_driven_by_policy);
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -620,10 +644,12 @@ impl EscalationPolicy for CoreShellActionProvider {
             DecisionSource::UnmatchedCommandFallback
         };
         let escalation_execution = match decision_source {
-            DecisionSource::PrefixRule => EscalationExecution::Unsandboxed,
+            DecisionSource::PrefixRule if unsandboxed_allowed => EscalationExecution::Unsandboxed,
+            DecisionSource::PrefixRule => EscalationExecution::TurnDefault,
             DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
                 self.sandbox_permissions,
                 &self.permission_profile,
+                &self.file_system_sandbox_policy,
                 self.prompt_permissions.as_ref(),
             ),
         };
