@@ -10,7 +10,7 @@
     "node": ">=16"
   },
   "files": [
-    "bin",
+    "bin/codex.js",
     "vendor"
   ],
   "repository": {
