@@ -8,11 +8,14 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
+use codex_features::FEATURES;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -94,12 +97,64 @@ pub(crate) fn build_service_tier_selection_edits(
     vec![service_tier_edit]
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn build_windows_sandbox_mode_edits(
+    profile: Option<&str>,
+    elevated_enabled: bool,
+) -> Vec<ConfigEdit> {
+    let feature_key_path =
+        |feature: &str| profile_scoped_key_path(profile, &format!("features.{feature}"));
+    vec![
+        replace_config_value(
+            profile_scoped_key_path(profile, "windows.sandbox"),
+            serde_json::json!(if elevated_enabled {
+                "elevated"
+            } else {
+                "unelevated"
+            }),
+        ),
+        clear_config_value(feature_key_path("experimental_windows_sandbox")),
+        clear_config_value(feature_key_path("elevated_windows_sandbox")),
+        clear_config_value(feature_key_path("enable_experimental_windows_sandbox")),
+    ]
+}
+
+pub(crate) fn build_feature_enabled_edit(
+    profile: Option<&str>,
+    feature_key: &str,
+    enabled: bool,
+) -> ConfigEdit {
+    let key_path = profile_scoped_key_path(profile, &format!("features.{feature_key}"));
+    let is_default_false_feature = FEATURES
+        .iter()
+        .find(|spec| spec.key == feature_key)
+        .is_some_and(|spec| !spec.default_enabled);
+    if enabled || profile.is_some() || !is_default_false_feature {
+        replace_config_value(key_path, serde_json::json!(enabled))
+    } else {
+        clear_config_value(key_path)
+    }
+}
+
+pub(crate) fn build_memory_settings_edits(
+    use_memories: bool,
+    generate_memories: bool,
+) -> Vec<ConfigEdit> {
+    vec![
+        replace_config_value("memories.use_memories", serde_json::json!(use_memories)),
+        replace_config_value(
+            "memories.generate_memories",
+            serde_json::json!(generate_memories),
+        ),
+    ]
+}
+
 pub(crate) async fn write_config_batch(
     request_handle: AppServerRequestHandle,
     edits: Vec<ConfigEdit>,
-) -> Result<()> {
+) -> Result<ConfigWriteResponse> {
     let request_id = RequestId::String(format!("tui-config-write-{}", Uuid::new_v4()));
-    let _: ConfigWriteResponse = request_handle
+    request_handle
         .request_typed(ClientRequest::ConfigBatchWrite {
             request_id,
             params: ConfigBatchWriteParams {
@@ -110,8 +165,24 @@ pub(crate) async fn write_config_batch(
             },
         })
         .await
-        .wrap_err("config/batchWrite failed in TUI")?;
-    Ok(())
+        .wrap_err("config/batchWrite failed in TUI")
+}
+
+pub(crate) async fn read_effective_config(
+    request_handle: AppServerRequestHandle,
+    cwd: String,
+) -> Result<ConfigReadResponse> {
+    let request_id = RequestId::String(format!("tui-config-read-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigRead {
+            request_id,
+            params: ConfigReadParams {
+                include_layers: false,
+                cwd: Some(cwd),
+            },
+        })
+        .await
+        .wrap_err("config/read failed in TUI")
 }
 
 pub(crate) async fn write_skill_enabled(

@@ -1203,16 +1203,21 @@ impl App {
                         );
                         return Ok(AppRunControl::Continue);
                     }
-                    let builder = ConfigEditsBuilder::for_config(&self.config)
-                        .with_profile(profile)
-                        .set_windows_sandbox_mode(if elevated_enabled {
-                            "elevated"
-                        } else {
-                            "unelevated"
-                        })
-                        .clear_legacy_windows_sandbox_keys();
-                    match builder.apply().await {
-                        Ok(()) => {
+                    let edits = crate::config_update::build_windows_sandbox_mode_edits(
+                        profile,
+                        elevated_enabled,
+                    );
+                    match crate::config_update::write_config_batch(
+                        app_server.request_handle(),
+                        edits,
+                    )
+                    .await
+                    {
+                        Ok(response) if response.status == WriteStatus::OkOverridden => {
+                            self.sync_windows_sandbox_after_overridden_write(app_server, &response)
+                                .await;
+                        }
+                        Ok(_) => {
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
                                 self.config
@@ -1350,7 +1355,7 @@ impl App {
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let effort_label = effort
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
@@ -1431,7 +1436,7 @@ impl App {
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let label = Self::personality_label(personality);
                         let mut message = format!("Personality set to {label}");
                         if let Some(profile) = profile {
@@ -1471,7 +1476,7 @@ impl App {
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let mut message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
                         } else {
@@ -1668,7 +1673,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                self.update_feature_flags(updates).await;
+                self.update_feature_flags(app_server, updates).await;
             }
             AppEvent::UpdateMemorySettings {
                 use_memories,
