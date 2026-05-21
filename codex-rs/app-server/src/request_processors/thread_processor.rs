@@ -1984,10 +1984,7 @@ impl ThreadRequestProcessor {
                 if let Some(status) = statuses.get(&thread.id) {
                     thread.status = status.clone();
                 }
-                ThreadSearchResult {
-                    thread,
-                    search_preview: ThreadSearchPreview::ContentMatch { snippet },
-                }
+                ThreadSearchResult { thread, snippet }
             })
             .collect();
 

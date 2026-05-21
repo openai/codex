@@ -15264,39 +15264,17 @@
       "title": "ThreadRollbackResponse",
       "type": "object"
     },
-    "ThreadSearchPreview": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "contentMatch"
-              ],
-              "type": "string"
-            },
-            "snippet": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "snippet"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "ThreadSearchResult": {
       "properties": {
-        "searchPreview": {
-          "$ref": "#/definitions/ThreadSearchPreview"
+        "snippet": {
+          "type": "string"
         },
         "thread": {
           "$ref": "#/definitions/Thread"
         }
       },
       "required": [
-        "searchPreview",
+        "snippet",
         "thread"
       ],
       "type": "object"

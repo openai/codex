@@ -5,7 +5,6 @@ use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadItem;
-use super::ThreadSearchPreview;
 use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
@@ -1063,7 +1062,7 @@ pub struct ThreadListResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchResult {
     pub thread: Thread,
-    pub search_preview: ThreadSearchPreview,
+    pub snippet: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

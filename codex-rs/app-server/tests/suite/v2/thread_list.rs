@@ -17,7 +17,6 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadSearchPreview;
 use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -719,12 +718,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
         .map(|result| result.thread.id.as_str())
         .collect();
     assert_eq!(ids, vec![newer_match, older_match]);
-    assert_eq!(
-        data[0].search_preview,
-        ThreadSearchPreview::ContentMatch {
-            snippet: "needle suffix".to_string(),
-        }
-    );
+    assert_eq!(data[0].snippet, "needle suffix");
 
     Ok(())
 }
@@ -765,12 +759,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
 
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].thread.id, thread_id);
-    assert_eq!(
-        data[0].search_preview,
-        ThreadSearchPreview::ContentMatch {
-            snippet: search_term.to_string(),
-        }
-    );
+    assert_eq!(data[0].snippet, search_term);
 
     Ok(())
 }

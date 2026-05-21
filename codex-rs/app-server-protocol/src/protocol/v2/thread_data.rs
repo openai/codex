@@ -148,13 +148,6 @@ pub struct Thread {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-#[ts(tag = "kind", rename_all = "camelCase", export_to = "v2/")]
-pub enum ThreadSearchPreview {
-    ContentMatch { snippet: String },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Turn {
