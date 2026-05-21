@@ -3674,7 +3674,7 @@ fn turn_start_params_round_trip_environments() {
     assert_eq!(
         params.environments,
         Some(vec![TurnEnvironmentParams {
-            environment_id: "local".to_string(),
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             cwd: cwd.clone(),
         }])
     );

@@ -145,7 +145,7 @@ fn remote_aware_environment_id() -> String {
     // parameterizing each stdio MCP test with its own local/remote cases.
     std::env::var_os(remote_env_env_var())
         .map(|_| REMOTE_MCP_ENVIRONMENT.to_string())
-        .unwrap_or_else(|| "local".to_string())
+        .unwrap_or_else(|| codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
 }
 
 /// Returns the stdio MCP test server command path for the active test placement.
@@ -296,7 +296,7 @@ struct TestMcpServerOptions {
 impl Default for TestMcpServerOptions {
     fn default() -> Self {
         Self {
-            environment_id: "local".to_string(),
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             supports_parallel_tool_calls: false,
             tool_timeout_sec: None,
         }
