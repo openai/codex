@@ -866,12 +866,6 @@ impl UnifiedExecProcessManager {
 
         #[cfg(target_os = "windows")]
         if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
-            let sandbox_policy = request.compatibility_sandbox_policy();
-            let policy_json = serde_json::to_string(&sandbox_policy).map_err(|err| {
-                UnifiedExecError::create_process(format!(
-                    "failed to serialize Windows sandbox policy: {err}"
-                ))
-            })?;
             let codex_home = crate::config::find_codex_home().map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "windows sandbox: failed to resolve codex_home: {err}"
@@ -923,7 +917,7 @@ impl UnifiedExecProcessManager {
                 codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
                 | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
-                        policy_json.as_str(),
+                        &request.permission_profile,
                         request.windows_sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         request.command.clone(),
