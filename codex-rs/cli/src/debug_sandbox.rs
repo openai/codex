@@ -338,24 +338,15 @@ async fn run_command_under_windows_session(
     config: &Config,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
-    sandbox_policy_cwd: AbsolutePathBuf,
+    permission_profile_cwd: AbsolutePathBuf,
     env: std::collections::HashMap<String, String>,
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::spawn_windows_sandbox_session_elevated;
+    use codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile;
     use codex_windows_sandbox::spawn_windows_sandbox_session_legacy;
 
-    let sandbox_policy = config
-        .permissions
-        .legacy_sandbox_policy(sandbox_policy_cwd.as_path());
-    let policy_str = match serde_json::to_string(&sandbox_policy) {
-        Ok(policy_str) => policy_str,
-        Err(err) => {
-            eprintln!("windows sandbox failed to serialize policy: {err}");
-            std::process::exit(1);
-        }
-    };
+    let permission_profile = config.permissions.effective_permission_profile();
 
     let use_elevated = matches!(
         WindowsSandboxLevel::from_config(config),
@@ -363,9 +354,9 @@ async fn run_command_under_windows_session(
     );
 
     let spawned = if use_elevated {
-        spawn_windows_sandbox_session_elevated(
-            policy_str.as_str(),
-            sandbox_policy_cwd.as_path(),
+        spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &permission_profile,
+            permission_profile_cwd.as_path(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),
@@ -383,8 +374,8 @@ async fn run_command_under_windows_session(
         .await
     } else {
         spawn_windows_sandbox_session_legacy(
-            policy_str.as_str(),
-            sandbox_policy_cwd.as_path(),
+            &permission_profile,
+            permission_profile_cwd.as_path(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),

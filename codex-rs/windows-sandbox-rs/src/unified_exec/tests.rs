@@ -5,6 +5,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
@@ -73,6 +74,10 @@ fn sandbox_log(codex_home: &Path) -> String {
     let log_path = codex_home.join(".sandbox").join("sandbox.log");
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
+}
+
+fn workspace_write_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write()
 }
 
 fn wait_for_frame_count(frames_path: &Path, expected_frames: usize) -> Vec<Message> {
@@ -149,8 +154,9 @@ fn legacy_non_tty_cmd_emits_output() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-non-tty-cmd");
         println!("cmd codex_home={}", codex_home.path().display());
+        let permission_profile = workspace_write_profile();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -189,8 +195,9 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
         let secret_path =
             AbsolutePathBuf::from_absolute_path(cwd.join("legacy-non-tty-deny-read-secret.env"))
                 .expect("absolute deny-read fixture path");
+        let permission_profile = workspace_write_profile();
         let err = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -228,8 +235,9 @@ fn legacy_non_tty_powershell_emits_output() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-non-tty-pwsh");
         println!("pwsh codex_home={}", codex_home.path().display());
+        let permission_profile = workspace_write_profile();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -413,8 +421,9 @@ fn legacy_capture_powershell_emits_output() {
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
+    let permission_profile = workspace_write_profile();
     let result = run_windows_sandbox_capture(
-        "workspace-write",
+        &permission_profile,
         cwd.as_path(),
         codex_home.path(),
         vec![
@@ -452,8 +461,9 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-tty-pwsh");
         println!("tty pwsh codex_home={}", codex_home.path().display());
+        let permission_profile = workspace_write_profile();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -505,8 +515,9 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-tty-cmd");
         println!("tty cmd codex_home={}", codex_home.path().display());
+        let permission_profile = workspace_write_profile();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -558,8 +569,9 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             "tty cmd default desktop codex_home={}",
             codex_home.path().display()
         );
+        let permission_profile = workspace_write_profile();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
