@@ -74,6 +74,8 @@ use serde_json::json;
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use toml::toml;
 use uuid::Uuid;
@@ -3026,6 +3028,140 @@ async fn env_var_overrides_loaded_auth() {
 
 fn create_dummy_codex_auth() -> CodexAuth {
     CodexAuth::create_dummy_chatgpt_auth_for_testing()
+}
+
+async fn create_chatgpt_auth_with_plan(
+    plan_type: &str,
+    chatgpt_base_url: &str,
+) -> anyhow::Result<(TempDir, CodexAuth)> {
+    let codex_home = TempDir::new()?;
+    write_auth_json(
+        &codex_home,
+        /*openai_api_key*/ None,
+        plan_type,
+        "Access-123",
+        Some("acc-123"),
+    );
+    let auth = CodexAuth::from_auth_storage(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        Some(chatgpt_base_url),
+    )
+    .await?
+    .expect("auth.json should load ChatGPT auth");
+    Ok((codex_home, auth))
+}
+
+async fn submit_hello_turn(codex: &codex_core::CodexThread) -> anyhow::Result<()> {
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
+async fn wait_for_turn_analytics_event(server: &MockServer) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == "codex_turn_event")
+                        .cloned()
+                })
+            })
+        {
+            return event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for turn analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_analytics_uses_authenticated_provider_plan() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let chatgpt_base_url = server.uri();
+    let (_auth_home, auth) = create_chatgpt_auth_with_plan("pro", &chatgpt_base_url).await?;
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url);
+    let codex = builder.build(&server).await?.codex;
+
+    submit_hello_turn(&codex).await?;
+
+    let event = wait_for_turn_analytics_event(&server).await;
+    assert_eq!(event["event_params"]["plan_type"], json!("pro"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_analytics_omits_plan_for_provider_without_openai_auth() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        query_params: None,
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+    let chatgpt_base_url = server.uri();
+    let (_auth_home, auth) = create_chatgpt_auth_with_plan("pro", &chatgpt_base_url).await?;
+    let mut builder = test_codex().with_auth(auth).with_config(move |config| {
+        config.model_provider = provider;
+        config.model_provider_id = "custom".to_string();
+        config.chatgpt_base_url = chatgpt_base_url;
+    });
+    let codex = builder.build(&server).await?.codex;
+
+    submit_hello_turn(&codex).await?;
+
+    let event = wait_for_turn_analytics_event(&server).await;
+    assert_eq!(event["event_params"]["plan_type"], json!(null));
+    Ok(())
 }
 
 /// Scenario:

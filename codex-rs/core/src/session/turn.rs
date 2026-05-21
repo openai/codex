@@ -70,6 +70,7 @@ use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
+use codex_protocol::account::ProviderAccount;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -599,11 +600,15 @@ async fn track_turn_resolved_config_analytics(
         let mut state = sess.state.lock().await;
         state.take_next_turn_is_first()
     };
-    let plan_type = sess
-        .services
-        .auth_manager
-        .auth_cached()
-        .and_then(|auth| auth.account_plan_type());
+    let plan_type = match turn_context
+        .provider
+        .account_state()
+        .ok()
+        .and_then(|state| state.account)
+    {
+        Some(ProviderAccount::Chatgpt { plan_type, .. }) => Some(plan_type),
+        Some(ProviderAccount::ApiKey) | Some(ProviderAccount::AmazonBedrock) | None => None,
+    };
     sess.services
         .analytics_events_client
         .track_turn_resolved_config(TurnResolvedConfigFact {
