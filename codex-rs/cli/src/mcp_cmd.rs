@@ -15,7 +15,11 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core_plugins::PluginsManager;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
+use codex_exec_server::HttpClient;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
@@ -24,7 +28,7 @@ use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
-use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::perform_oauth_login_with_http_client;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
 
@@ -198,13 +202,14 @@ async fn perform_oauth_login_retry_without_scopes(
     store_mode: codex_config::types::OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_client: Arc<dyn HttpClient>,
     resolved_scopes: &ResolvedMcpOAuthScopes,
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
-    match perform_oauth_login(
+    match perform_oauth_login_with_http_client(
         name,
         url,
         store_mode,
@@ -215,13 +220,14 @@ async fn perform_oauth_login_retry_without_scopes(
         oauth_resource,
         callback_port,
         callback_url,
+        Arc::clone(&http_client),
     )
     .await
     {
         Ok(()) => Ok(()),
         Err(err) if should_retry_without_scopes(resolved_scopes, &err) => {
             println!("OAuth provider rejected discovered scopes. Retrying without scopes…");
-            perform_oauth_login(
+            perform_oauth_login_with_http_client(
                 name,
                 url,
                 store_mode,
@@ -232,11 +238,26 @@ async fn perform_oauth_login_retry_without_scopes(
                 oauth_resource,
                 callback_port,
                 callback_url,
+                http_client,
             )
             .await
         }
         Err(err) => Err(err),
     }
+}
+
+async fn threadless_mcp_runtime_context(config: &Config) -> Result<McpRuntimeContext> {
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?;
+    Ok(McpRuntimeContext::new(
+        Arc::new(environment_manager),
+        config.cwd.to_path_buf(),
+    ))
 }
 
 async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
@@ -317,7 +338,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         tools: HashMap::new(),
     };
 
-    servers.insert(name.clone(), new_entry);
+    servers.insert(name.clone(), new_entry.clone());
 
     ConfigEditsBuilder::new(&codex_home)
         .replace_mcp_servers(&servers)
@@ -327,7 +348,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     println!("Added global MCP server '{name}'.");
 
-    match oauth_login_support(&transport).await {
+    let runtime_context = threadless_mcp_runtime_context(&config).await?;
+    match oauth_login_support(&name, &new_entry, &runtime_context).await {
         McpOAuthLoginSupport::Supported(oauth_config) => {
             println!("Detected OAuth support. Starting OAuth flow…");
             let resolved_scopes = resolve_oauth_scopes(
@@ -341,6 +363,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 config.mcp_oauth_credentials_store_mode,
                 oauth_config.http_headers,
                 oauth_config.env_http_headers,
+                runtime_context
+                    .resolve_streamable_http_client(&name, &new_entry)
+                    .map_err(anyhow::Error::msg)?,
                 &resolved_scopes,
                 /*oauth_client_id*/ None,
                 /*oauth_resource*/ None,
@@ -421,8 +446,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     };
 
     let explicit_scopes = (!scopes.is_empty()).then_some(scopes);
+    let runtime_context = threadless_mcp_runtime_context(&config).await?;
     let discovered_scopes = if explicit_scopes.is_none() && server.scopes.is_none() {
-        discover_supported_scopes(&server.transport).await
+        discover_supported_scopes(&name, server, &runtime_context).await
     } else {
         None
     };
@@ -435,6 +461,9 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         config.mcp_oauth_credentials_store_mode,
         http_headers,
         env_http_headers,
+        runtime_context
+            .resolve_streamable_http_client(&name, server)
+            .map_err(anyhow::Error::msg)?,
         &resolved_scopes,
         server.oauth_client_id(),
         server.oauth_resource.as_deref(),
@@ -497,6 +526,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         effective_mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         /*auth*/ None,
+        threadless_mcp_runtime_context(&config).await?,
     )
     .await;
 

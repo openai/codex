@@ -45,8 +45,6 @@ use codex_async_utils::OrCancelExt;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_exec_server::HttpClient;
-use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
@@ -569,6 +567,7 @@ async fn make_rmcp_client(
     let resolved_environment = runtime_context
         .resolve_server_environment(server_name, &config)
         .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
+    let http_config = config.clone();
     let is_local_environment = config.is_local_environment();
     let McpServerConfig { transport, .. } = config;
 
@@ -615,10 +614,9 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            let http_client = resolved_environment.as_ref().map_or_else(
-                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
-                |environment| environment.get_http_client(),
-            );
+            let http_client = runtime_context
+                .resolve_streamable_http_client(server_name, &http_config)
+                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

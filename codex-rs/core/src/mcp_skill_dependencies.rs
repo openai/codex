@@ -11,7 +11,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::perform_oauth_login_with_http_client;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -136,8 +136,21 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
+    let runtime_context = match turn_context.environments.primary() {
+        Some(turn_environment) => codex_mcp::McpRuntimeContext::new(
+            std::sync::Arc::clone(&sess.services.environment_manager),
+            turn_environment.cwd.to_path_buf(),
+        ),
+        None => codex_mcp::McpRuntimeContext::new(
+            std::sync::Arc::clone(&sess.services.environment_manager),
+            #[allow(deprecated)]
+            turn_context.cwd.to_path_buf(),
+        ),
+    };
+
     for (name, server_config) in added {
-        let oauth_config = match oauth_login_support(&server_config.transport).await {
+        let oauth_config = match oauth_login_support(&name, &server_config, &runtime_context).await
+        {
             McpOAuthLoginSupport::Supported(config) => config,
             McpOAuthLoginSupport::Unsupported => continue,
             McpOAuthLoginSupport::Unknown(err) => {
@@ -151,8 +164,16 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             server_config.scopes.clone(),
             oauth_config.discovered_scopes.clone(),
         );
+        let http_client =
+            match runtime_context.resolve_streamable_http_client(&name, &server_config) {
+                Ok(http_client) => http_client,
+                Err(err) => {
+                    warn!("failed to resolve MCP server {name} for dependency login: {err}");
+                    continue;
+                }
+            };
         let oauth_client_id = server_config.oauth_client_id();
-        let first_attempt = perform_oauth_login(
+        let first_attempt = perform_oauth_login_with_http_client(
             &name,
             &oauth_config.url,
             config.mcp_oauth_credentials_store_mode,
@@ -163,12 +184,13 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             server_config.oauth_resource.as_deref(),
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
+            std::sync::Arc::clone(&http_client),
         )
         .await;
 
         if let Err(err) = first_attempt {
             if should_retry_without_scopes(&resolved_scopes, &err) {
-                if let Err(err) = perform_oauth_login(
+                if let Err(err) = perform_oauth_login_with_http_client(
                     &name,
                     &oauth_config.url,
                     config.mcp_oauth_credentials_store_mode,
@@ -179,6 +201,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     server_config.oauth_resource.as_deref(),
                     config.mcp_oauth_callback_port,
                     config.mcp_oauth_callback_url.as_deref(),
+                    http_client,
                 )
                 .await
                 {

@@ -272,6 +272,7 @@ pub async fn read_mcp_resource(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth,
+        runtime_context.clone(),
     )
     .await;
     let (tx_event, rx_event) = unbounded();
@@ -341,6 +342,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth,
+        runtime_context.clone(),
     )
     .await;
 

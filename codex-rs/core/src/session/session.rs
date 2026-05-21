@@ -616,15 +616,21 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let environment_manager_for_mcp = Arc::clone(&environment_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
+            let mcp_runtime_context = McpRuntimeContext::new(
+                environment_manager_for_mcp,
+                config_for_mcp.cwd.to_path_buf(),
+            );
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
                 auth.as_ref(),
+                mcp_runtime_context,
             )
             .await;
             (auth, mcp_servers, auth_statuses)
