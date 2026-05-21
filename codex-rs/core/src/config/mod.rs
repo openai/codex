@@ -33,6 +33,7 @@ use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::project_trust_key;
+use codex_config::permissions_toml::PermissionsToml;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
@@ -1366,6 +1367,7 @@ impl Config {
             cfg,
             ConfigOverrides {
                 cwd: Some(self.cwd.to_path_buf()),
+                default_zsh_path: refreshed_config.zsh_path.clone(),
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
@@ -1962,6 +1964,38 @@ struct PermissionSelectionToml {
     sandbox_mode: Option<SandboxMode>,
 }
 
+// Resolve the named-profile catalog and selected profile id together. Runtime
+// profile constraints are applied later after this selection compiles into a
+// concrete `PermissionProfile`.
+#[derive(Debug)]
+struct EffectivePermissionSelection<'a> {
+    profiles: Option<PermissionsToml>,
+    selected_profile_id: Option<&'a str>,
+    requirements_force_profile_selection: bool,
+}
+
+impl EffectivePermissionSelection<'_> {
+    fn has_profiles(&self) -> bool {
+        self.profiles
+            .as_ref()
+            .is_some_and(|profiles| !profiles.is_empty())
+    }
+
+    fn profiles_are_active(
+        &self,
+        default_permissions_override: Option<&str>,
+        permission_config_syntax: Option<PermissionConfigSyntax>,
+    ) -> bool {
+        self.requirements_force_profile_selection
+            || default_permissions_override.is_some()
+            || matches!(
+                permission_config_syntax,
+                Some(PermissionConfigSyntax::Profiles)
+            )
+            || permission_config_syntax.is_none()
+    }
+}
+
 fn resolve_permission_config_syntax(
     config_layer_stack: &ConfigLayerStack,
     cfg: &ConfigToml,
@@ -2072,6 +2106,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
     pub zsh_path: Option<PathBuf>,
+    pub default_zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -2469,6 +2504,7 @@ impl Config {
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
             zsh_path: zsh_path_override,
+            default_zsh_path,
             base_instructions,
             developer_instructions,
             personality,
@@ -2586,20 +2622,21 @@ impl Config {
             sandbox_mode,
             config_profile.sandbox_mode,
         );
-        let has_permission_profiles = cfg
-            .permissions
-            .as_ref()
-            .is_some_and(|profiles| !profiles.is_empty());
-        let default_permissions = default_permissions_override
-            .as_deref()
-            .or(cfg.default_permissions.as_deref());
-        validate_user_permission_profile_names(cfg.permissions.as_ref())?;
-        if has_permission_profiles
+        let requirements_toml = config_layer_stack.requirements_toml();
+        let effective_permission_selection = resolve_effective_permission_selection(
+            cfg.permissions.as_ref(),
+            default_permissions_override.as_deref(),
+            cfg.default_permissions.as_deref(),
+            requirements_toml,
+            &mut startup_warnings,
+        )?;
+        if effective_permission_selection.has_profiles()
             && !matches!(
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Legacy)
             )
-            && default_permissions.is_none()
+            && effective_permission_selection.selected_profile_id.is_none()
+            && !effective_permission_selection.requirements_force_profile_selection
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2616,12 +2653,10 @@ impl Config {
         std::fs::create_dir_all(&memories_root)?;
         let internal_writable_roots = vec![memories_root];
 
-        let profiles_are_active = default_permissions_override.is_some()
-            || matches!(
-                permission_config_syntax,
-                Some(PermissionConfigSyntax::Profiles)
-            )
-            || permission_config_syntax.is_none();
+        let profiles_are_active = effective_permission_selection.profiles_are_active(
+            default_permissions_override.as_deref(),
+            permission_config_syntax,
+        );
         let explicit_permission_profile_mode = default_permissions_override.is_some()
             || matches!(
                 permission_config_syntax,
@@ -2633,9 +2668,11 @@ impl Config {
             .map_or_else(Vec::new, |permissions| {
                 permissions.entries.keys().cloned().collect()
             });
-        let using_implicit_builtin_profile =
-            permission_config_syntax.is_none() && default_permissions.is_none();
-        let should_seed_legacy_workspace_roots = default_permissions.is_none()
+        let using_implicit_builtin_profile = permission_config_syntax.is_none()
+            && effective_permission_selection.selected_profile_id.is_none();
+        let should_seed_legacy_workspace_roots = effective_permission_selection
+            .selected_profile_id
+            .is_none()
             && matches!(
                 permission_config_syntax,
                 None | Some(PermissionConfigSyntax::Legacy)
@@ -2685,14 +2722,16 @@ impl Config {
                     // PermissionProfile carries the active network sandbox bit, not the configured
                     // proxy/allowlist policy. Keep that config so active profiles can round-trip
                     // without broadening network behavior.
-                    let default_permissions = default_permissions.unwrap_or_else(|| {
-                        default_builtin_permission_profile_name(
-                            &active_project,
-                            windows_sandbox_level,
-                        )
-                    });
+                    let default_permissions = effective_permission_selection
+                        .selected_profile_id
+                        .unwrap_or_else(|| {
+                            default_builtin_permission_profile_name(
+                                &active_project,
+                                windows_sandbox_level,
+                            )
+                        });
                     network_proxy_config_for_profile_selection(
-                        cfg.permissions.as_ref(),
+                        effective_permission_selection.profiles.as_ref(),
                         default_permissions,
                     )?
                 } else {
@@ -2730,28 +2769,30 @@ impl Config {
                 Vec::new(),
             )
         } else if profiles_are_active {
-            let default_permissions = default_permissions.unwrap_or_else(|| {
-                default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
-            });
+            let default_permissions = effective_permission_selection
+                .selected_profile_id
+                .unwrap_or_else(|| {
+                    default_builtin_permission_profile_name(&active_project, windows_sandbox_level)
+                });
             let builtin_workspace_write_settings = if using_implicit_builtin_profile {
                 cfg.sandbox_workspace_write.as_ref()
             } else {
                 None
             };
             let configured_network_proxy_config = network_proxy_config_for_profile_selection(
-                cfg.permissions.as_ref(),
+                effective_permission_selection.profiles.as_ref(),
                 default_permissions,
             )?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 compile_permission_profile_selection(
-                    cfg.permissions.as_ref(),
+                    effective_permission_selection.profiles.as_ref(),
                     default_permissions,
                     builtin_workspace_write_settings,
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
-                cfg.permissions.as_ref(),
+                effective_permission_selection.profiles.as_ref(),
                 default_permissions,
                 resolved_cwd.as_path(),
             )?;
@@ -3235,7 +3276,8 @@ impl Config {
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let zsh_path = zsh_path_override
             .or(config_profile.zsh_path.map(Into::into))
-            .or(cfg.zsh_path.map(Into::into));
+            .or(cfg.zsh_path.map(Into::into))
+            .or(default_zsh_path);
 
         let review_model = override_review_model.or(cfg.review_model);
 
@@ -3709,6 +3751,126 @@ fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
     normalize_guardian_policy_config(requirements_toml.guardian_policy_config.as_deref())
+}
+
+fn merge_managed_permission_profiles(
+    configured_permissions: Option<&PermissionsToml>,
+    requirements_toml: &ConfigRequirementsToml,
+) -> std::io::Result<Option<PermissionsToml>> {
+    let managed_profiles = requirements_toml
+        .permissions
+        .as_ref()
+        .map(|permissions| &permissions.profiles)
+        .filter(|profiles| !profiles.is_empty());
+    let Some(managed_profiles) = managed_profiles else {
+        return Ok(configured_permissions.cloned());
+    };
+
+    let mut merged_permissions = configured_permissions.cloned().unwrap_or_default();
+    for (profile_id, managed_profile) in managed_profiles {
+        if merged_permissions.entries.contains_key(profile_id) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "requirements.toml permissions profile `{profile_id}` conflicts with a config-defined profile of the same name"
+                ),
+            ));
+        }
+        merged_permissions
+            .entries
+            .insert(profile_id.clone(), managed_profile.clone());
+    }
+
+    Ok(Some(merged_permissions))
+}
+
+fn resolve_effective_permission_selection<'a>(
+    configured_permissions: Option<&PermissionsToml>,
+    default_permissions_override: Option<&'a str>,
+    configured_default_permissions: Option<&'a str>,
+    requirements_toml: &'a ConfigRequirementsToml,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<EffectivePermissionSelection<'a>> {
+    let profiles = merge_managed_permission_profiles(configured_permissions, requirements_toml)?;
+    validate_user_permission_profile_names(profiles.as_ref())?;
+    validate_required_permission_profile_catalog(requirements_toml, profiles.as_ref())?;
+    let selected_profile_id = resolve_default_permissions(
+        default_permissions_override,
+        configured_default_permissions,
+        requirements_toml,
+        startup_warnings,
+    )?;
+
+    Ok(EffectivePermissionSelection {
+        profiles,
+        selected_profile_id,
+        requirements_force_profile_selection: requirements_toml.allowed_permissions.is_some(),
+    })
+}
+
+fn resolve_default_permissions<'a>(
+    default_permissions_override: Option<&'a str>,
+    configured_default_permissions: Option<&'a str>,
+    requirements_toml: &'a ConfigRequirementsToml,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<Option<&'a str>> {
+    let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
+    let mut default_permissions = default_permissions_override.or(configured_default_permissions);
+    if let (Some(selected_permissions), Some(allowed_permissions)) =
+        (default_permissions, allowed_permissions)
+        && !is_builtin_permission_profile_name(selected_permissions)
+        && !allowed_permissions
+            .iter()
+            .any(|allowed_permission| allowed_permission == selected_permissions)
+    {
+        let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "requirements.toml allowed_permissions must include at least one profile",
+            ));
+        };
+        startup_warnings.push(format!(
+            "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+        ));
+        default_permissions = Some(fallback_permissions);
+    }
+
+    Ok(default_permissions)
+}
+
+fn validate_required_permission_profile_catalog(
+    requirements_toml: &ConfigRequirementsToml,
+    available_permissions: Option<&PermissionsToml>,
+) -> std::io::Result<()> {
+    let is_known_profile = |profile_id: &str| {
+        is_builtin_permission_profile_name(profile_id)
+            || available_permissions
+                .as_ref()
+                .is_some_and(|permissions| permissions.entries.contains_key(profile_id))
+    };
+
+    let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+        return Ok(());
+    };
+    if allowed_permissions.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml allowed_permissions must include at least one profile",
+        ));
+    }
+
+    for profile_id in allowed_permissions {
+        if !is_known_profile(profile_id) {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "requirements.toml allowed_permissions refers to undefined profile `{profile_id}`"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

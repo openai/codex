@@ -22,6 +22,8 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
@@ -68,6 +70,29 @@ pub(crate) fn exec_env_for_sandbox_permissions(
         }
     }
     env
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_zsh_fork_path_prepend(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    shell_zsh_path: &Path,
+) {
+    let Some(zsh_bin_dir) = shell_zsh_path.parent() else {
+        return;
+    };
+    let zsh_bin_dir = zsh_bin_dir.to_string_lossy().to_string();
+    let updated_path = match env.get("PATH") {
+        Some(path) if !path.is_empty() => std::iter::once(zsh_bin_dir.as_str())
+            .chain(path.split(':').filter(|entry| *entry != zsh_bin_dir))
+            .collect::<Vec<_>>()
+            .join(":"),
+        _ => zsh_bin_dir,
+    };
+    env.insert("PATH".to_string(), updated_path.clone());
+    // Snapshot wrapping restores explicit overrides after sourcing the shell
+    // snapshot, so capture this PATH override there as well.
+    explicit_env_overrides.insert("PATH".to_string(), updated_path);
 }
 
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(

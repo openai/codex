@@ -70,6 +70,7 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
+use codex_install_context::InstallContext;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
@@ -424,6 +425,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         zsh_path: None,
+        default_zsh_path: InstallContext::current()
+            .bundled_zsh_path()
+            .map(AbsolutePathBuf::into_path_buf),
         base_instructions: None,
         developer_instructions: None,
         personality: None,

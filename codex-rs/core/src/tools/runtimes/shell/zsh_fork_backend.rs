@@ -7,6 +7,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::SpawnLifecycleHandle;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_tools::ZshForkConfig;
+use std::collections::HashMap;
 
 pub(crate) struct PreparedUnifiedExecSpawn {
     pub(crate) exec_request: ExecRequest,
@@ -23,8 +24,9 @@ pub(crate) async fn maybe_run_shell_command(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     command: &[String],
+    env: &HashMap<String, String>,
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-    imp::maybe_run_shell_command(req, attempt, ctx, command).await
+    imp::maybe_run_shell_command(req, attempt, ctx, command, env).await
 }
 
 /// Prepares unified exec to launch through the zsh-fork backend when the
@@ -76,8 +78,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        env: &HashMap<String, String>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command).await
+        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command, env).await
     }
 
     pub(super) async fn maybe_prepare_unified_exec(
@@ -118,8 +121,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        env: &HashMap<String, String>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        let _ = (req, attempt, ctx, command);
+        let _ = (req, attempt, ctx, command, env);
         Ok(None)
     }
 
