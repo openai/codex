@@ -8826,6 +8826,7 @@ impl ChatWidget {
         let accept_otel = self.session_telemetry.clone();
         let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
+        let skip_otel = self.session_telemetry.clone();
         let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
@@ -8856,6 +8857,20 @@ impl ChatWidget {
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Continue without sandbox (WSL2 / don't warn again)".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    skip_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_skip",
+                        /*inc*/ 1,
+                        &[],
+                    );
+                    tx.send(AppEvent::AcknowledgeWindowsSandboxSetup);
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -8982,6 +8997,7 @@ impl ChatWidget {
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
         if show_now
+            && !self.config.windows_wsl_setup_acknowledged
             && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
@@ -9061,6 +9077,11 @@ impl ChatWidget {
                     WindowsSandboxLevel::RestrictedToken
                 ),
         );
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn set_windows_wsl_setup_acknowledged(&mut self, acknowledged: bool) {
+        self.config.windows_wsl_setup_acknowledged = acknowledged;
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

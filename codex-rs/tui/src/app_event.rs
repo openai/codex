@@ -664,6 +664,10 @@ pub(crate) enum AppEvent {
         mode: WindowsSandboxEnableMode,
     },
 
+    /// Record that the Windows sandbox onboarding has been acknowledged.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    AcknowledgeWindowsSandboxSetup,
+
     /// Update the Windows sandbox feature mode without changing approval presets.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 

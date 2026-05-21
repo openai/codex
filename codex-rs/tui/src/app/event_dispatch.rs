@@ -1139,6 +1139,27 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
+            AppEvent::AcknowledgeWindowsSandboxSetup => {
+                #[cfg(target_os = "windows")]
+                {
+                    match ConfigEditsBuilder::new(&self.config.codex_home)
+                        .set_windows_wsl_setup_acknowledged(true)
+                        .apply()
+                        .await
+                    {
+                        Ok(()) => {
+                            self.config.windows_wsl_setup_acknowledged = true;
+                            self.chat_widget.set_windows_wsl_setup_acknowledged(true);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to persist Windows sandbox onboarding acknowledgement"
+                            );
+                        }
+                    }
+                }
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)

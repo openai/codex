@@ -221,6 +221,10 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         "expected startup prompt to offer non-admin fallback: {popup}"
     );
     assert!(
+        popup.contains("Continue without sandbox"),
+        "expected startup prompt to offer WSL/skip fallback: {popup}"
+    );
+    assert!(
         popup.contains("Quit"),
         "expected startup prompt to offer quit action: {popup}"
     );
@@ -238,6 +242,22 @@ async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
     assert!(
         chat.bottom_pane.no_modal_or_popup_active(),
         "expected no startup sandbox NUX popup when startup trigger is false"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_does_not_prompt_for_windows_sandbox_after_acknowledgement() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, /*enabled*/ false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, /*enabled*/ false);
+    chat.set_windows_wsl_setup_acknowledged(true);
+    chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
+
+    assert!(
+        chat.bottom_pane.no_modal_or_popup_active(),
+        "expected no startup sandbox NUX popup after acknowledgement"
     );
 }
 
