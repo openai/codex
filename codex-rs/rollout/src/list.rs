@@ -145,7 +145,7 @@ impl Cursor {
         Self { ts }
     }
 
-    pub(crate) fn timestamp(&self) -> OffsetDateTime {
+    pub fn timestamp(&self) -> OffsetDateTime {
         self.ts
     }
 }
@@ -816,12 +816,16 @@ async fn build_thread_item(
 /// metadata/preview extraction as list operations without scanning the whole
 /// sessions tree.
 pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
+    let updated_at = file_modified_time(&path)
+        .await
+        .unwrap_or(None)
+        .and_then(format_rfc3339);
     build_thread_item(
         path,
         &[],
         /*provider_matcher*/ None,
         /*cwd_filters*/ None,
-        /*updated_at*/ None,
+        updated_at,
     )
     .await
 }
