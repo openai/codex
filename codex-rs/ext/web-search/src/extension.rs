@@ -36,8 +36,8 @@ struct WebSearchExtensionConfig {
     settings: SearchSettings,
 }
 
-impl WebSearchExtensionConfig {
-    fn from_config(config: &Config) -> Self {
+impl From<&Config> for WebSearchExtensionConfig {
+    fn from(config: &Config) -> Self {
         let web_search_mode = config.web_search_mode.value();
         Self {
             enabled: config.features.enabled(Feature::StandaloneWebSearch)
@@ -87,7 +87,7 @@ impl ThreadLifecycleContributor<Config> for WebSearchExtension {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
         input
             .thread_store
-            .insert(WebSearchExtensionConfig::from_config(input.config));
+            .insert(WebSearchExtensionConfig::from(input.config));
     }
 }
 
@@ -99,7 +99,7 @@ impl ConfigContributor<Config> for WebSearchExtension {
         _previous_config: &Config,
         new_config: &Config,
     ) {
-        thread_store.insert(WebSearchExtensionConfig::from_config(new_config));
+        thread_store.insert(WebSearchExtensionConfig::from(new_config));
     }
 }
 

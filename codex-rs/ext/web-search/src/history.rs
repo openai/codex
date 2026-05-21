@@ -11,8 +11,8 @@ const ASSISTANT_CONTEXT_TOKEN_LIMIT: usize = 1_000;
 
 /// Builds the persisted conversation tail for standalone web search.
 ///
-/// The tail keeps the previous user message, up to 1k tokens of assistant text
-/// that followed it, and the current user message.
+/// The tail keeps the previous user text message, up to 1k tokens of assistant
+/// text that followed it, and the current user text message.
 pub(crate) fn recent_input(items: &[RolloutItem]) -> Option<SearchInput> {
     let messages = recent_messages(items);
     (!messages.is_empty()).then_some(SearchInput::Items(messages))
@@ -46,11 +46,29 @@ fn recent_messages(items: &[RolloutItem]) -> Vec<ResponseItem> {
 }
 
 fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
-    if matches!(
-        item,
-        ResponseItem::Message { role, .. } if role == "user" || role == "assistant"
-    ) {
-        messages.push(item.clone());
+    match item {
+        ResponseItem::Message { role, .. } if role == "assistant" => messages.push(item.clone()),
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            phase,
+        } if role == "user" => {
+            let content = content
+                .iter()
+                .filter(|item| matches!(item, ContentItem::InputText { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !content.is_empty() {
+                messages.push(ResponseItem::Message {
+                    id: id.clone(),
+                    role: role.clone(),
+                    content,
+                    phase: phase.clone(),
+                });
+            }
+        }
+        _ => {}
     }
 }
 
@@ -119,7 +137,6 @@ fn cap_assistant_text(messages: &mut Vec<ResponseItem>) {
 mod tests {
     use codex_api::SearchInput;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ImageDetail;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::RolloutItem;
@@ -206,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_image_content_from_recent_user_messages() {
+    fn keeps_only_text_from_recent_user_messages() {
         let previous_user = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -216,7 +233,7 @@ mod tests {
                 },
                 ContentItem::InputImage {
                     image_url: "data:image/png;base64,image".to_string(),
-                    detail: Some(ImageDetail::High),
+                    detail: None,
                 },
             ],
             phase: None,
@@ -230,7 +247,7 @@ mod tests {
         assert_eq!(
             recent_input(&items),
             Some(SearchInput::Items(vec![
-                previous_user,
+                message("user", "previous user"),
                 message("assistant", "previous assistant"),
                 message("user", "current user"),
             ]))
