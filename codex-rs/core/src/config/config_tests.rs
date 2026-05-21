@@ -26,6 +26,9 @@ use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
+use codex_config::permissions_toml::NetworkMitmActionToml;
+use codex_config::permissions_toml::NetworkMitmHookToml;
+use codex_config::permissions_toml::NetworkMitmToml;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
@@ -70,6 +73,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -95,6 +99,7 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
+use indexmap::IndexMap;
 use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -127,7 +132,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
             env_vars: Vec::new(),
             cwd: None,
         },
-        experimental_environment: None,
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
@@ -152,7 +157,7 @@ fn http_mcp(url: &str) -> McpServerConfig {
             http_headers: None,
             env_http_headers: None,
         },
-        experimental_environment: None,
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
@@ -759,6 +764,15 @@ mode = "full"
 
 [permissions.dev.network.domains]
 "openai.com" = "allow"
+
+[permissions.dev.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST", "PUT"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.dev.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
@@ -816,10 +830,165 @@ mode = "full"
                         }),
                         unix_sockets: None,
                         allow_local_binding: None,
+                        mitm: Some(NetworkMitmToml {
+                            hooks: Some(IndexMap::from([(
+                                "github_write".to_string(),
+                                NetworkMitmHookToml {
+                                    host: "api.github.com".to_string(),
+                                    methods: vec!["POST".to_string(), "PUT".to_string()],
+                                    path_prefixes: vec!["/repos/openai/".to_string()],
+                                    query: BTreeMap::new(),
+                                    headers: BTreeMap::new(),
+                                    body: None,
+                                    action: vec!["strip_auth".to_string()],
+                                },
+                            )])),
+                            actions: Some(IndexMap::from([(
+                                "strip_auth".to_string(),
+                                NetworkMitmActionToml {
+                                    strip_request_headers: vec!["authorization".to_string()],
+                                    inject_request_headers: Vec::new(),
+                                },
+                            )])),
+                        }),
                     }),
                 },
             )]),
         }
+    );
+}
+
+#[test]
+fn config_toml_rejects_empty_mitm_action_reference_list() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = []
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
+"#;
+
+    let err =
+        toml::from_str::<ConfigToml>(toml).expect_err("empty MITM action refs should fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("network.mitm.hooks.github_write.action must not be empty"),
+        "{err}"
+    );
+}
+
+#[test]
+fn config_toml_rejects_empty_mitm_action_definition() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+"#;
+
+    let err = toml::from_str::<ConfigToml>(toml)
+        .expect_err("empty MITM action definitions should fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("network.mitm.actions.strip_auth must define at least one operation"),
+        "{err}"
+    );
+}
+
+#[test]
+fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
+    let network = NetworkToml {
+        mode: Some(NetworkMode::Full),
+        mitm: Some(NetworkMitmToml {
+            hooks: Some(IndexMap::from([(
+                "github_write".to_string(),
+                NetworkMitmHookToml {
+                    host: "api.github.com".to_string(),
+                    methods: vec!["POST".to_string()],
+                    path_prefixes: vec!["/repos/openai/".to_string()],
+                    action: vec!["strip_auth".to_string()],
+                    ..NetworkMitmHookToml::default()
+                },
+            )])),
+            actions: Some(IndexMap::from([(
+                "strip_auth".to_string(),
+                NetworkMitmActionToml {
+                    strip_request_headers: vec!["authorization".to_string()],
+                    inject_request_headers: Vec::new(),
+                },
+            )])),
+        }),
+        ..NetworkToml::default()
+    };
+
+    let config = network.to_network_proxy_config();
+
+    assert_eq!(config.network.mode, NetworkMode::Full);
+    assert!(config.network.mitm);
+    assert_eq!(config.network.mitm_hooks.len(), 1);
+    assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+    assert_eq!(
+        config.network.mitm_hooks[0].matcher.methods,
+        vec!["POST".to_string()]
+    );
+    assert_eq!(
+        config.network.mitm_hooks[0].actions.strip_request_headers,
+        vec!["authorization".to_string()]
+    );
+}
+
+#[test]
+fn permissions_profile_network_to_proxy_config_preserves_mitm_hook_declaration_order() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm.actions.noop]
+strip_request_headers = ["authorization"]
+
+[permissions.workspace.network.mitm.hooks.z_first]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
+action = ["noop"]
+
+[permissions.workspace.network.mitm.hooks.a_second]
+host = "api.github.com"
+methods = ["POST"]
+path_prefixes = ["/repos/"]
+action = ["noop"]
+"#;
+    let cfg: ConfigToml = toml::from_str(toml).expect("permissions profile should deserialize");
+    let permissions = cfg.permissions.expect("permissions should deserialize");
+    let network = permissions
+        .entries
+        .get("workspace")
+        .expect("workspace profile should exist")
+        .network
+        .as_ref()
+        .expect("network profile should exist");
+
+    let config = network.to_network_proxy_config();
+
+    assert_eq!(config.network.mitm_hooks.len(), 2);
+    assert_eq!(
+        config.network.mitm_hooks[0].matcher.path_prefixes,
+        vec!["/repos/openai/".to_string()]
+    );
+    assert_eq!(
+        config.network.mitm_hooks[1].matcher.path_prefixes,
+        vec!["/repos/".to_string()]
     );
 }
 
@@ -4975,9 +5144,9 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
                 args: vec!["hello".to_string()],
                 env: None,
                 env_vars: Vec::new(),
-                cwd: None,
+                cwd: Some(codex_home.path().to_path_buf()),
             },
-            experimental_environment: Some("remote".to_string()),
+            environment_id: "remote".to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5015,13 +5184,13 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             assert_eq!(args, &vec!["hello".to_string()]);
             assert!(env.is_none());
             assert!(env_vars.is_empty());
-            assert!(cwd.is_none());
+            assert_eq!(cwd, &Some(codex_home.path().to_path_buf()));
         }
         other => panic!("unexpected transport {other:?}"),
     }
     assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(3)));
     assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));
-    assert_eq!(docs.experimental_environment.as_deref(), Some("remote"));
+    assert_eq!(docs.environment_id, "remote");
     assert!(docs.enabled);
 
     let empty = BTreeMap::new();
@@ -5324,7 +5493,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5401,7 +5570,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
                 env_vars: vec!["ALPHA".into(), "BETA".into()],
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5463,7 +5632,7 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
                 ],
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5515,7 +5684,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: Some(cwd_path.clone()),
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5570,7 +5739,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5641,7 +5810,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
                     "DOCS_AUTH".to_string(),
                 )])),
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5724,7 +5893,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
                     "DOCS_AUTH".to_string(),
                 )])),
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5760,7 +5929,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5831,7 +6000,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                         "DOCS_AUTH".to_string(),
                     )])),
                 },
-                experimental_environment: None,
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -5857,7 +6026,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                     env_vars: Vec::new(),
                     cwd: None,
                 },
-                experimental_environment: None,
+                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -5946,7 +6115,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: false,
             required: false,
             supports_parallel_tool_calls: false,
@@ -5997,7 +6166,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: true,
             supports_parallel_tool_calls: false,
@@ -6048,7 +6217,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -6103,7 +6272,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
                 http_headers: None,
                 env_http_headers: None,
             },
-            experimental_environment: None,
+            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
@@ -8277,7 +8446,7 @@ alpha = "one\ntwo"
 }
 
 #[tokio::test]
-async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
+async fn explicit_null_service_tier_override_maps_to_default_service_tier() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -8291,8 +8460,33 @@ async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std:
     )
     .await?;
 
-    assert_eq!(config.service_tier, None);
-    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
+    assert_eq!(config.notices.fast_default_opt_out, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_service_tier_override_uses_default_request_value() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(Some("default".to_string())),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
     Ok(())
 }
 
@@ -8897,6 +9091,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        allowed_permissions: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         allow_managed_hooks_only: None,
@@ -9682,6 +9877,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+        allowed_permissions: None,
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
         allow_managed_hooks_only: None,
@@ -9751,6 +9947,73 @@ sandbox = "unelevated"
             .contains("Configured value for `windows.sandbox` is disallowed by requirements")),
         "{:?}",
         config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn danger_full_access_with_never_is_rejected_when_requirements_force_read_only()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await
+        .expect_err("requirements-constrained yolo should require sandbox approval");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Choose an `approval_policy` based on what you need, such as `on-request`, or choose an allowed sandbox mode."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_full_access_profile_with_never_is_rejected_when_requirements_force_read_only()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approval_policy = "never"
+default_permissions = "dev"
+
+[permissions.dev.filesystem]
+":root" = "write"
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await
+        .expect_err("requirements-constrained full-access profile should require sandbox approval");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Choose an `approval_policy` based on what you need, such as `on-request`, or choose an allowed sandbox mode."
     );
     Ok(())
 }

@@ -80,6 +80,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ActivePermissionProfile;
@@ -1628,6 +1629,91 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
 }
 
 #[tokio::test]
+async fn apply_permission_profile_selection_preserves_loader_overrides() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    let selected_config = codex_home.path().join("work.config.toml");
+    std::fs::write(
+        &selected_config,
+        r#"
+default_permissions = "locked-down"
+
+[permissions.locked-down.filesystem]
+":minimal" = "read"
+"#,
+    )?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.loader_overrides.user_config_path = Some(selected_config.abs());
+    app.harness_overrides.sandbox_mode = Some(SandboxMode::WorkspaceWrite);
+    app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
+
+    assert!(
+        app.apply_permission_profile_selection(PermissionProfileSelection {
+            profile_id: "locked-down".to_string(),
+            approval_policy: None,
+            approvals_reviewer: None,
+            display_label: "locked-down".to_string(),
+        })
+        .await
+    );
+
+    assert_eq!(
+        app.config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some("locked-down")
+    );
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some("locked-down")
+    );
+    assert_eq!(
+        app.runtime_permission_profile_override,
+        Some(RuntimePermissionProfileOverride::from_config(&app.config))
+    );
+    let op = match app_event_rx.try_recv() {
+        Ok(AppEvent::CodexOp(op)) => op,
+        other => panic!("expected CodexOp event, got {other:?}"),
+    };
+    assert_eq!(
+        op,
+        Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            permission_profile: Some(app.config.permissions.permission_profile().clone()),
+            active_permission_profile: app.config.permissions.active_permission_profile(),
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        }
+    );
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = cell
+        .display_lines(/*width*/ 120)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Permissions updated to locked-down"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
@@ -1687,7 +1773,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(
         app.runtime_permission_profile_override,
-        Some(auto_review.permission_profile())
+        Some(RuntimePermissionProfileOverride::from_config(&app.config))
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1695,6 +1781,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
+            permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1787,6 +1874,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: None,
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1865,6 +1953,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
+            permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1922,6 +2011,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: None,
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1981,6 +2071,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
+            permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -2068,6 +2159,7 @@ guardian_approval = true
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: None,
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -5276,6 +5368,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             /*cwd*/ None,
             Some(AskForApproval::OnRequest),
             Some(ApprovalsReviewer::AutoReview),
+            /*permission_profile*/ None,
             Some(ActivePermissionProfile::new(
                 codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),

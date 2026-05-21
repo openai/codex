@@ -79,6 +79,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+                plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
                         "type": "text",
@@ -120,6 +121,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+                plugin_id: Some("sample@test".to_string()),
                 result: Some(Box::new(redacted_mcp_tool_call_result())),
                 error: None,
                 duration_ms: Some(8),
@@ -136,6 +138,7 @@ mod tests {
             status: McpToolCallStatus::Failed,
             arguments: serde_json::json!({"secret":"argument"}),
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: None,
             error: Some(McpToolCallError {
                 message: "secret error".to_string(),
@@ -154,6 +157,7 @@ mod tests {
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: REDACTED_PAYLOAD.to_string(),

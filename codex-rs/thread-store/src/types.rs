@@ -199,12 +199,46 @@ pub struct ListThreadsParams {
     pub use_state_db_only: bool,
 }
 
+/// Parameters for searching thread content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchThreadsParams {
+    /// Maximum number of threads to return.
+    pub page_size: usize,
+    /// Opaque cursor returned by a previous search call.
+    pub cursor: Option<String>,
+    /// Sort order requested by the caller.
+    pub sort_key: ThreadSortKey,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
+    /// Allowed session sources. Empty means implementation default.
+    pub allowed_sources: Vec<SessionSource>,
+    /// Whether archived threads should be searched instead of active threads.
+    pub archived: bool,
+    /// Visible thread content to search for.
+    pub search_term: String,
+}
+
 /// A page of stored thread records.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadPage {
     /// Threads returned for this page.
     pub items: Vec<StoredThread>,
     /// Opaque cursor to continue listing.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredThreadSearchResult {
+    pub thread: StoredThread,
+    pub snippet: String,
+}
+
+/// A page of thread-search results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreadSearchPage {
+    /// Search results returned for this page.
+    pub items: Vec<StoredThreadSearchResult>,
+    /// Opaque cursor to continue searching.
     pub next_cursor: Option<String>,
 }
 

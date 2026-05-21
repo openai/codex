@@ -5,7 +5,13 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
+
+from .targets import REPO_ROOT
+
+
+ZSTD_DOTSLASH = REPO_ROOT / ".github" / "workflows" / "zstd"
 
 
 def write_archive(package_dir: Path, archive_path: Path, *, force: bool) -> None:
@@ -63,14 +69,33 @@ def write_tar_archive(package_dir: Path, archive_path: Path, *, mode: str) -> No
 
 
 def write_tar_zst_archive(package_dir: Path, archive_path: Path) -> None:
-    zstd = shutil.which("zstd")
-    if zstd is None:
-        raise RuntimeError("zstd is required to write .tar.zst archives.")
+    zstd_command = resolve_zstd_command()
 
     with tempfile.TemporaryDirectory(prefix="codex-package-archive-") as temp_dir_str:
         tar_path = Path(temp_dir_str) / "package.tar"
         write_tar_archive(package_dir, tar_path, mode="w")
-        subprocess.check_call([zstd, "-T0", "-19", "-f", str(tar_path), "-o", str(archive_path)])
+        subprocess.check_call(
+            [*zstd_command, "-T0", "-19", "-f", str(tar_path), "-o", str(archive_path)]
+        )
+
+
+def resolve_zstd_command(
+    *,
+    dotslash_manifest: Path = ZSTD_DOTSLASH,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    zstd = which("zstd")
+    if zstd is not None:
+        return [zstd]
+
+    dotslash = which("dotslash")
+    if dotslash is not None and dotslash_manifest.is_file():
+        return [dotslash, str(dotslash_manifest)]
+
+    raise RuntimeError(
+        "zstd is required to write .tar.zst archives. Install zstd, or install "
+        f"DotSlash so the repository wrapper can run: {dotslash_manifest}"
+    )
 
 
 def write_zip_archive(package_dir: Path, archive_path: Path) -> None:

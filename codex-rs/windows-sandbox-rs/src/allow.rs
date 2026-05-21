@@ -1,4 +1,3 @@
-use crate::policy::SandboxPolicy;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use dunce::canonicalize;
 use std::collections::HashMap;
@@ -10,17 +9,6 @@ use std::path::PathBuf;
 pub struct AllowDenyPaths {
     pub allow: HashSet<PathBuf>,
     pub deny: HashSet<PathBuf>,
-}
-
-pub(crate) fn compute_allow_paths(
-    policy: &SandboxPolicy,
-    _policy_cwd: &Path,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-) -> AllowDenyPaths {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, command_cwd);
-    compute_allow_paths_for_permissions(&permissions, command_cwd, env_map)
 }
 
 pub(crate) fn compute_allow_paths_for_permissions(
@@ -61,6 +49,17 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn compute_allow_paths(
+        policy: &SandboxPolicy,
+        policy_cwd: &Path,
+        command_cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> AllowDenyPaths {
+        let permissions =
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, policy_cwd);
+        compute_allow_paths_for_permissions(&permissions, command_cwd, env_map)
+    }
+
     #[test]
     fn includes_additional_writable_roots() {
         let tmp = TempDir::new().expect("tempdir");
@@ -87,6 +86,35 @@ mod tests {
             paths
                 .allow
                 .contains(&dunce::canonicalize(&extra_root).unwrap())
+        );
+        assert!(paths.deny.is_empty(), "no deny paths expected");
+    }
+
+    #[test]
+    fn uses_policy_cwd_for_legacy_workspace_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_cwd = tmp.path().join("workspace");
+        let command_cwd = policy_cwd.join("subdir");
+        fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let paths = compute_allow_paths(&policy, &policy_cwd, &command_cwd, &HashMap::new());
+
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&policy_cwd).unwrap())
+        );
+        assert!(
+            !paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
         );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
