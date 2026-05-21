@@ -3181,19 +3181,19 @@ mod tests {
                     message: error_message.to_string(),
                     codex_error_info: Some(crate::protocol::v2::CodexErrorInfo::BadRequest),
                     additional_details: None,
-                    data: Some(serde_json::json!({
-                        "reason": "dynamicToolInputSchema",
-                        "backend": "Responses API",
-                        "tool": {
-                            "index": 0,
-                            "namespace": "repro",
-                            "name": "create",
-                            "qualifiedName": "repro.create"
-                        },
-                        "schemaPath": "dynamicTools[0].inputSchema.anyOf",
-                        "underlyingError": error_message,
-                        "remediation": "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema."
-                    })),
+                    data: Some(crate::protocol::v2::TurnErrorData::DynamicToolInputSchema {
+                        backend: "Responses API".to_string(),
+                        tool: Some(crate::protocol::v2::DynamicToolSchemaErrorTool {
+                            index: 0,
+                            namespace: Some("repro".to_string()),
+                            name: "create".to_string(),
+                            qualified_name: "repro.create".to_string(),
+                        }),
+                        tool_candidates: Vec::new(),
+                        schema_path: Some("dynamicTools[0].inputSchema.anyOf".to_string()),
+                        underlying_error: error_message.to_string(),
+                        remediation: "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema.".to_string(),
+                    }),
                 }),
                 started_at: None,
                 completed_at: None,

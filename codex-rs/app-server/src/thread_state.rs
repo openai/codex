@@ -136,7 +136,12 @@ impl ThreadState {
     }
 
     pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {
-        self.current_turn_history.active_turn_snapshot()
+        self.current_turn_history
+            .active_turn_snapshot()
+            .map(|mut turn| {
+                Self::overlay_last_error(&mut turn, self.turn_summary.last_error.clone());
+                turn
+            })
     }
 
     pub(crate) fn last_terminal_turn_snapshot(&self) -> Option<Turn> {
@@ -146,6 +151,7 @@ impl ThreadState {
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
+            self.turn_summary.last_error = None;
             self.last_terminal_turn_id = None;
             self.last_terminal_turn = None;
         }
@@ -155,15 +161,19 @@ impl ThreadState {
         {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             let mut terminal_turn = self.current_turn_history.active_turn_snapshot();
-            if let Some(turn) = terminal_turn.as_mut()
-                && let Some(error) = self.turn_summary.last_error.clone()
-            {
-                turn.status = TurnStatus::Failed;
-                turn.error = Some(error);
+            if let Some(turn) = terminal_turn.as_mut() {
+                Self::overlay_last_error(turn, self.turn_summary.last_error.clone());
             }
             self.last_terminal_turn = terminal_turn
                 .filter(|turn| turn.error.is_some() || matches!(turn.status, TurnStatus::Failed));
             self.current_turn_history.reset();
+        }
+    }
+
+    fn overlay_last_error(turn: &mut Turn, error: Option<TurnError>) {
+        if let Some(error) = error {
+            turn.status = TurnStatus::Failed;
+            turn.error = Some(error);
         }
     }
 
@@ -211,11 +221,50 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::ApprovalsReviewer;
     use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::SandboxPolicy;
+    use codex_app_server_protocol::TurnStatus;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+    use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn active_turn_snapshot_overlays_enriched_last_error() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        );
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::Error(ErrorEvent {
+                message: "raw error".to_string(),
+                codex_error_info: Some(CoreCodexErrorInfo::BadRequest),
+            }),
+        );
+        state.turn_summary.last_error = Some(TurnError {
+            message: "enriched error".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+            additional_details: None,
+            data: None,
+        });
+
+        let turn = state
+            .active_turn_snapshot()
+            .expect("active turn snapshot should exist");
+
+        assert_eq!(turn.status, TurnStatus::Failed);
+        assert_eq!(turn.error, state.turn_summary.last_error);
+    }
 
     #[test]
     fn note_thread_settings_reports_only_effective_changes() {

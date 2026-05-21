@@ -8,6 +8,7 @@ use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::DynamicToolCallStatus;
+use codex_app_server_protocol::DynamicToolSchemaErrorTool;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -21,6 +22,7 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnErrorData;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -418,20 +420,20 @@ async fn backend_dynamic_tool_schema_error_is_reported_to_clients() -> Result<()
     Ok(())
 }
 
-fn expected_dynamic_tool_schema_error_data(underlying_error: &str) -> Value {
-    json!({
-        "reason": "dynamicToolInputSchema",
-        "backend": "Responses API",
-        "tool": {
-            "index": 0,
-            "namespace": "repro",
-            "name": "create",
-            "qualifiedName": "repro.create"
-        },
-        "schemaPath": "dynamicTools[0].inputSchema.anyOf",
-        "underlyingError": underlying_error,
-        "remediation": "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema."
-    })
+fn expected_dynamic_tool_schema_error_data(underlying_error: &str) -> TurnErrorData {
+    TurnErrorData::DynamicToolInputSchema {
+        backend: "Responses API".to_string(),
+        tool: Some(DynamicToolSchemaErrorTool {
+            index: 0,
+            namespace: Some("repro".to_string()),
+            name: "create".to_string(),
+            qualified_name: "repro.create".to_string(),
+        }),
+        tool_candidates: Vec::new(),
+        schema_path: Some("dynamicTools[0].inputSchema.anyOf".to_string()),
+        underlying_error: underlying_error.to_string(),
+        remediation: "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema.".to_string(),
+    }
 }
 
 /// Exercises the full dynamic tool call path (server request, client response, model output).

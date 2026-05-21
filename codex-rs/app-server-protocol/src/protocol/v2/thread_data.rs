@@ -12,7 +12,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use serde_json::json;
 use std::path::PathBuf;
 use thiserror::Error;
 use ts_rs::TS;
@@ -198,7 +197,34 @@ pub struct TurnError {
     #[serde(default)]
     pub additional_details: Option<String>,
     #[serde(default)]
-    pub data: Option<JsonValue>,
+    pub data: Option<TurnErrorData>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "reason", rename_all = "camelCase")]
+#[ts(tag = "reason")]
+#[ts(export_to = "v2/")]
+pub enum TurnErrorData {
+    #[serde(rename = "dynamicToolInputSchema", rename_all = "camelCase")]
+    #[ts(rename = "dynamicToolInputSchema", rename_all = "camelCase")]
+    DynamicToolInputSchema {
+        backend: String,
+        tool: Option<DynamicToolSchemaErrorTool>,
+        tool_candidates: Vec<DynamicToolSchemaErrorTool>,
+        schema_path: Option<String>,
+        underlying_error: String,
+        remediation: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolSchemaErrorTool {
+    pub index: usize,
+    pub namespace: Option<String>,
+    pub name: String,
+    pub qualified_name: String,
 }
 
 impl TurnError {
@@ -221,38 +247,45 @@ impl TurnError {
 fn dynamic_tool_input_schema_error_data(
     message: &str,
     dynamic_tools: &[CoreDynamicToolSpec],
-) -> Option<JsonValue> {
+) -> Option<TurnErrorData> {
     let underlying_error = underlying_backend_error_message(message);
     let backend_function_name = backend_function_name_from_schema_error(&underlying_error)?;
     let matching_tools = dynamic_tools
         .iter()
         .enumerate()
-        .filter(|(_, tool)| {
-            backend_function_name == tool.name
-                || backend_function_name == qualified_dynamic_tool_name(tool)
-        })
+        .filter(|(_, tool)| dynamic_tool_matches_backend_name(tool, backend_function_name))
         .collect::<Vec<_>>();
 
-    let [(index, tool)] = matching_tools.as_slice() else {
+    if matching_tools.is_empty() {
         return None;
+    }
+    let (tool, tool_candidates, schema_path) = match matching_tools.as_slice() {
+        [(index, tool)] => (
+            Some(dynamic_tool_error_tool(*index, tool)),
+            Vec::new(),
+            Some(dynamic_tool_schema_path(*index, &tool.input_schema)),
+        ),
+        _ => (
+            None,
+            matching_tools
+                .iter()
+                .map(|(index, tool)| dynamic_tool_error_tool(*index, tool))
+                .collect(),
+            None,
+        ),
     };
-    let qualified_name = qualified_dynamic_tool_name(tool);
-    let schema_path = dynamic_tool_schema_path(*index, &tool.input_schema);
 
-    Some(json!({
-        "reason": "dynamicToolInputSchema",
-        "backend": "Responses API",
-        "tool": {
-            "index": index,
-            "namespace": tool.namespace,
-            "name": tool.name,
-            "qualifiedName": qualified_name,
-        },
-        "schemaPath": schema_path,
-        "underlyingError": underlying_error,
-        "remediation": "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema.",
-    }))
+    Some(TurnErrorData::DynamicToolInputSchema {
+        backend: "Responses API".to_string(),
+        tool,
+        tool_candidates,
+        schema_path,
+        underlying_error,
+        remediation: DYNAMIC_TOOL_INPUT_SCHEMA_REMEDIATION.to_string(),
+    })
 }
+
+const DYNAMIC_TOOL_INPUT_SCHEMA_REMEDIATION: &str = "Adjust the dynamic tool inputSchema to the JSON Schema subset accepted by the model backend. For discriminated unions, wrap the union in a top-level object property or flatten it into one object schema.";
 
 fn underlying_backend_error_message(message: &str) -> String {
     let Ok(value) = serde_json::from_str::<JsonValue>(message) else {
@@ -305,9 +338,170 @@ fn dynamic_tool_schema_path(index: usize, input_schema: &JsonValue) -> String {
     format!("dynamicTools[{index}].inputSchema{suffix}")
 }
 
+fn dynamic_tool_matches_backend_name(
+    tool: &CoreDynamicToolSpec,
+    backend_function_name: &str,
+) -> bool {
+    backend_function_name == tool.name || backend_function_name == qualified_dynamic_tool_name(tool)
+}
+
+fn dynamic_tool_error_tool(index: usize, tool: &CoreDynamicToolSpec) -> DynamicToolSchemaErrorTool {
+    DynamicToolSchemaErrorTool {
+        index,
+        namespace: tool.namespace.clone(),
+        name: tool.name.clone(),
+        qualified_name: qualified_dynamic_tool_name(tool),
+    }
+}
+
 fn qualified_dynamic_tool_name(tool: &CoreDynamicToolSpec) -> String {
     match tool.namespace.as_deref() {
         Some(namespace) if !namespace.is_empty() => format!("{namespace}.{}", tool.name),
         Some(_) | None => tool.name.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DynamicToolSchemaErrorTool;
+    use super::TurnError;
+    use super::TurnErrorData;
+    use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ErrorEvent;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn dynamic_tool_schema_error_extracts_json_backend_message() {
+        let backend_error = "invalid_function_parameters ... Invalid schema for function 'create': schema must be a JSON Schema of 'type: \"object\"', got 'type: \"None\"";
+        let error = TurnError::from_core_error_event(
+            &ErrorEvent {
+                message: json!({
+                    "error": {
+                        "message": backend_error,
+                        "type": "invalid_request_error",
+                        "code": "invalid_function_parameters"
+                    }
+                })
+                .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Some(&[dynamic_tool(Some("repro"), "create", json!({"anyOf": []}))]),
+        );
+
+        assert_eq!(
+            error.data,
+            Some(TurnErrorData::DynamicToolInputSchema {
+                backend: "Responses API".to_string(),
+                tool: Some(DynamicToolSchemaErrorTool {
+                    index: 0,
+                    namespace: Some("repro".to_string()),
+                    name: "create".to_string(),
+                    qualified_name: "repro.create".to_string(),
+                }),
+                tool_candidates: Vec::new(),
+                schema_path: Some("dynamicTools[0].inputSchema.anyOf".to_string()),
+                underlying_error: backend_error.to_string(),
+                remediation: super::DYNAMIC_TOOL_INPUT_SCHEMA_REMEDIATION.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_schema_error_matches_namespaced_backend_name() {
+        let error = TurnError::from_core_error_event(
+            &ErrorEvent {
+                message: "Invalid schema for function 'repro.create'".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Some(&[
+                dynamic_tool(Some("other"), "create", json!({"anyOf": []})),
+                dynamic_tool(Some("repro"), "create", json!({"oneOf": []})),
+            ]),
+        );
+
+        assert_eq!(
+            error.data,
+            Some(TurnErrorData::DynamicToolInputSchema {
+                backend: "Responses API".to_string(),
+                tool: Some(DynamicToolSchemaErrorTool {
+                    index: 1,
+                    namespace: Some("repro".to_string()),
+                    name: "create".to_string(),
+                    qualified_name: "repro.create".to_string(),
+                }),
+                tool_candidates: Vec::new(),
+                schema_path: Some("dynamicTools[1].inputSchema.oneOf".to_string()),
+                underlying_error: "Invalid schema for function 'repro.create'".to_string(),
+                remediation: super::DYNAMIC_TOOL_INPUT_SCHEMA_REMEDIATION.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_schema_error_reports_ambiguous_bare_name_candidates() {
+        let error = TurnError::from_core_error_event(
+            &ErrorEvent {
+                message: "Invalid schema for function 'create'".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Some(&[
+                dynamic_tool(Some("alpha"), "create", json!({"anyOf": []})),
+                dynamic_tool(Some("beta"), "create", json!({"oneOf": []})),
+            ]),
+        );
+
+        assert_eq!(
+            error.data,
+            Some(TurnErrorData::DynamicToolInputSchema {
+                backend: "Responses API".to_string(),
+                tool: None,
+                tool_candidates: vec![
+                    DynamicToolSchemaErrorTool {
+                        index: 0,
+                        namespace: Some("alpha".to_string()),
+                        name: "create".to_string(),
+                        qualified_name: "alpha.create".to_string(),
+                    },
+                    DynamicToolSchemaErrorTool {
+                        index: 1,
+                        namespace: Some("beta".to_string()),
+                        name: "create".to_string(),
+                        qualified_name: "beta.create".to_string(),
+                    },
+                ],
+                schema_path: None,
+                underlying_error: "Invalid schema for function 'create'".to_string(),
+                remediation: super::DYNAMIC_TOOL_INPUT_SCHEMA_REMEDIATION.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_schema_error_ignores_unknown_function_name() {
+        let error = TurnError::from_core_error_event(
+            &ErrorEvent {
+                message: "Invalid schema for function 'shell'".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Some(&[dynamic_tool(Some("repro"), "create", json!({"anyOf": []}))]),
+        );
+
+        assert_eq!(error.data, None);
+    }
+
+    fn dynamic_tool(
+        namespace: Option<&str>,
+        name: &str,
+        input_schema: serde_json::Value,
+    ) -> DynamicToolSpec {
+        DynamicToolSpec {
+            namespace: namespace.map(str::to_string),
+            name: name.to_string(),
+            description: "test".to_string(),
+            input_schema,
+            defer_loading: false,
+        }
     }
 }

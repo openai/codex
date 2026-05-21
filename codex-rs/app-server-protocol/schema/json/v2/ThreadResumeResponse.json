@@ -470,6 +470,33 @@
       ],
       "type": "string"
     },
+    "DynamicToolSchemaErrorTool": {
+      "properties": {
+        "index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "qualifiedName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "name",
+        "qualifiedName"
+      ],
+      "type": "object"
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -1951,6 +1978,14 @@
           ]
         },
         "data": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         },
         "message": {
@@ -1961,6 +1996,59 @@
         "message"
       ],
       "type": "object"
+    },
+    "TurnErrorData": {
+      "oneOf": [
+        {
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "dynamicToolInputSchema"
+              ],
+              "type": "string"
+            },
+            "remediation": {
+              "type": "string"
+            },
+            "schemaPath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/DynamicToolSchemaErrorTool"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "toolCandidates": {
+              "items": {
+                "$ref": "#/definitions/DynamicToolSchemaErrorTool"
+              },
+              "type": "array"
+            },
+            "underlyingError": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend",
+            "reason",
+            "remediation",
+            "toolCandidates",
+            "underlyingError"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "TurnItemsView": {
       "oneOf": [

@@ -85,6 +85,7 @@ export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputCo
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";
 export type { DynamicToolCallResponse } from "./DynamicToolCallResponse";
 export type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
+export type { DynamicToolSchemaErrorTool } from "./DynamicToolSchemaErrorTool";
 export type { DynamicToolSpec } from "./DynamicToolSpec";
 export type { ErrorNotification } from "./ErrorNotification";
 export type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
@@ -436,6 +437,7 @@ export type { TurnCompletedNotification } from "./TurnCompletedNotification";
 export type { TurnDiffUpdatedNotification } from "./TurnDiffUpdatedNotification";
 export type { TurnEnvironmentParams } from "./TurnEnvironmentParams";
 export type { TurnError } from "./TurnError";
+export type { TurnErrorData } from "./TurnErrorData";
 export type { TurnInterruptParams } from "./TurnInterruptParams";
 export type { TurnInterruptResponse } from "./TurnInterruptResponse";
 export type { TurnItemsView } from "./TurnItemsView";

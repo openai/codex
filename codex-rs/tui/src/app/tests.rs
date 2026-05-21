@@ -4557,6 +4557,7 @@ fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
             turn_kind: AppServerNonSteerableTurnKind::Review,
         }),
         additional_details: None,
+        data: None,
     };
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),

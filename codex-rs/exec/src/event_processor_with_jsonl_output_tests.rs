@@ -40,6 +40,7 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
                     message: "turn failed".to_string(),
                     additional_details: None,
                     codex_error_info: None,
+                    data: None,
                 }),
                 started_at: None,
                 completed_at: Some(0),

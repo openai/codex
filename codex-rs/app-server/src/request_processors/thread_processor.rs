@@ -2131,11 +2131,15 @@ impl ThreadRequestProcessor {
         };
         let active_turn = if loaded_thread.is_some() {
             // Persisted history may not yet include the currently running turn. The
-            // app-server listener has already projected live turn events into ThreadState,
-            // so merge that in-memory snapshot before paginating.
+            // app-server listener has already projected live turn events into
+            // ThreadState, so merge that in-memory snapshot before paginating. A
+            // failed turn may also complete before its error event is persisted, so
+            // bridge the latest terminal failed snapshot too.
             let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
             let state = thread_state.lock().await;
-            state.active_turn_snapshot()
+            state
+                .active_turn_snapshot()
+                .or_else(|| state.last_terminal_turn_snapshot())
         } else {
             None
         };

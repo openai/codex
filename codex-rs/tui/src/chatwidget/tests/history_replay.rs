@@ -719,6 +719,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
                 message: "Reconnecting... 1/5".to_string(),
                 codex_error_info: None,
                 additional_details: Some("Idle timeout waiting for SSE".to_string()),
+                data: None,
             },
             will_retry: true,
             thread_id: "thread-1".to_string(),
