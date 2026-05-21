@@ -104,7 +104,10 @@ impl EnvironmentManager {
         codex_home: impl AsRef<std::path::Path>,
     ) -> Result<Self, ExecServerError> {
         let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
-        Self::from_snapshot(without_local_environment(provider.snapshot().await?), None)
+        Self::from_snapshot(
+            without_local_environment(provider.snapshot().await?),
+            /*local_runtime_paths*/ None,
+        )
     }
 
     /// Builds a manager from the legacy environment-variable provider without
