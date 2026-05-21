@@ -562,7 +562,10 @@ async fn validate_runtime_root(
         .join("bin")
         .join(node_executable_name(target_platform));
     let node_modules_path = node_root.join("node_modules");
-    let python_path = find_python_path(runtime_root, bundle_format_version, target_platform).await;
+    require_runtime_file(&node_path, "node executable").await?;
+    require_runtime_directory(&node_modules_path, "node modules directory").await?;
+    let python_path =
+        find_python_path(runtime_root, bundle_format_version, target_platform).await?;
     let bundled_plugin_marketplace_paths = runtime_contained_paths(
         runtime_root,
         metadata.bundled_plugins.unwrap_or_default(),
@@ -588,7 +591,7 @@ async fn find_python_path(
     runtime_root: &Path,
     bundle_format_version: u32,
     target_platform: &str,
-) -> PathBuf {
+) -> Result<PathBuf, JSONRPCErrorError> {
     let python_root = if bundle_format_version >= 2 {
         runtime_root.join("dependencies").join("python")
     } else {
@@ -607,12 +610,23 @@ async fn find_python_path(
             python_root.join("bin").join("python"),
         ]
     };
-    for candidate in candidates.iter() {
-        if path_exists(candidate).await {
-            return candidate.clone();
+    for candidate in &candidates {
+        match fs::metadata(candidate).await {
+            Ok(metadata) if metadata.is_file() => return Ok(candidate.clone()),
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to inspect runtime python executable {}: {err}",
+                    candidate.display()
+                )));
+            }
         }
     }
-    candidates[0].clone()
+    Err(invalid_params(format!(
+        "runtime python executable is missing under {}",
+        python_root.display()
+    )))
 }
 
 fn runtime_contained_paths(
@@ -675,6 +689,42 @@ fn python_executable_name(target_platform: &str) -> &'static str {
 
 async fn path_exists(path: &Path) -> bool {
     fs::metadata(path).await.is_ok()
+}
+
+async fn require_runtime_file(path: &Path, label: &str) -> Result<(), JSONRPCErrorError> {
+    match fs::metadata(path).await {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(invalid_params(format!(
+            "runtime {label} is not a file: {}",
+            path.display()
+        ))),
+        Err(err) if err.kind() == ErrorKind::NotFound => Err(invalid_params(format!(
+            "runtime {label} is missing: {}",
+            path.display()
+        ))),
+        Err(err) => Err(internal_error(format!(
+            "failed to inspect runtime {label} {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+async fn require_runtime_directory(path: &Path, label: &str) -> Result<(), JSONRPCErrorError> {
+    match fs::metadata(path).await {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(invalid_params(format!(
+            "runtime {label} is not a directory: {}",
+            path.display()
+        ))),
+        Err(err) if err.kind() == ErrorKind::NotFound => Err(invalid_params(format!(
+            "runtime {label} is missing: {}",
+            path.display()
+        ))),
+        Err(err) => Err(internal_error(format!(
+            "failed to inspect runtime {label} {}: {err}",
+            path.display()
+        ))),
+    }
 }
 
 async fn remove_dir_if_exists(path: &Path) -> Result<(), JSONRPCErrorError> {
@@ -776,6 +826,71 @@ mod tests {
             )
             .expect("absolute path")
         );
+    }
+
+    #[tokio::test]
+    async fn validate_runtime_root_rejects_missing_node_executable() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_root = temp_dir.path().join(PUBLISHED_ARTIFACT_NAME);
+        create_runtime_root(&runtime_root, "v1").await;
+        fs::remove_file(
+            runtime_root
+                .join("dependencies")
+                .join("node")
+                .join("bin")
+                .join(node_executable_name(target_platform())),
+        )
+        .await
+        .expect("remove node");
+
+        let error = validate_runtime_root(&runtime_root, Some(2), target_platform())
+            .await
+            .expect_err("node executable should be required");
+
+        assert!(error.message.contains("node executable is missing"));
+    }
+
+    #[tokio::test]
+    async fn validate_runtime_root_rejects_missing_node_modules_directory() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_root = temp_dir.path().join(PUBLISHED_ARTIFACT_NAME);
+        create_runtime_root(&runtime_root, "v1").await;
+        fs::remove_dir(
+            runtime_root
+                .join("dependencies")
+                .join("node")
+                .join("node_modules"),
+        )
+        .await
+        .expect("remove node_modules");
+
+        let error = validate_runtime_root(&runtime_root, Some(2), target_platform())
+            .await
+            .expect_err("node_modules directory should be required");
+
+        assert!(error.message.contains("node modules directory is missing"));
+    }
+
+    #[tokio::test]
+    async fn validate_runtime_root_rejects_missing_python_executable() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_root = temp_dir.path().join(PUBLISHED_ARTIFACT_NAME);
+        create_runtime_root(&runtime_root, "v1").await;
+        fs::remove_file(
+            runtime_root
+                .join("dependencies")
+                .join("python")
+                .join("bin")
+                .join(python_executable_name(target_platform())),
+        )
+        .await
+        .expect("remove python");
+
+        let error = validate_runtime_root(&runtime_root, Some(2), target_platform())
+            .await
+            .expect_err("python executable should be required");
+
+        assert!(error.message.contains("python executable is missing"));
     }
 
     #[tokio::test]
