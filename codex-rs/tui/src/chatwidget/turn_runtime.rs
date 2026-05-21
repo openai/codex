@@ -398,7 +398,9 @@ impl ChatWidget {
                 self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::Credits);
             }
             Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
-                self.on_error(message);
+                self.on_error(
+                    "Request a limit increase from your owner to continue using codex.".to_string(),
+                );
                 self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
             }
             Some(RateLimitReachedType::RateLimitReached) | None => {
