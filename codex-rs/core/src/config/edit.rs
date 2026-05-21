@@ -300,8 +300,8 @@ mod document_helpers {
         if !config.enabled {
             entry["enabled"] = value(false);
         }
-        if let Some(environment) = &config.experimental_environment {
-            entry["experimental_environment"] = value(environment.clone());
+        if !config.is_local_environment() {
+            entry["environment_id"] = value(config.environment_id.clone());
         }
         if config.required {
             entry["required"] = value(true);

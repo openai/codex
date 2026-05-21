@@ -13,8 +13,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("followup_task")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_followup_task_tool())
+    fn spec(&self) -> ToolSpec {
+        create_followup_task_tool()
     }
 
     async fn handle(

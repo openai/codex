@@ -60,8 +60,8 @@ impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
         ToolName::plain(LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_available_plugins_to_install_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_available_plugins_to_install_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

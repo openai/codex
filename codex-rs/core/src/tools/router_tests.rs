@@ -49,8 +49,8 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         ToolName::namespaced("extension/", "echo")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(ResponsesApiNamespace {
             name: "extension/".to_string(),
             description: default_namespace_description("extension/"),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -69,7 +69,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
                 output_schema: None,
                 defer_loading: None,
             })],
-        }))
+        })
     }
 
     async fn handle(

@@ -66,15 +66,6 @@ def parse_args() -> argparse.Namespace:
             "Intended for CI compatibility only; release staging should not use this."
         ),
     )
-    parser.add_argument(
-        "--allow-legacy-codex-package",
-        action="store_true",
-        help=(
-            "Allow codex-package layouts to be synthesized from legacy per-binary "
-            "workflow artifacts. Intended for CI compatibility only; release staging "
-            "should not use this."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -131,15 +122,11 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
-    *,
-    allow_legacy_codex_package: bool,
 ) -> None:
     if not components:
         return
 
     cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
-    if allow_legacy_codex_package:
-        cmd.append("--allow-legacy-codex-package")
     for component in sorted(components):
         cmd.extend(["--component", component])
     cmd.append(str(vendor_root))
@@ -187,7 +174,6 @@ def main() -> int:
                 workflow_url,
                 native_components_to_install,
                 vendor_temp_root,
-                allow_legacy_codex_package=args.allow_legacy_codex_package,
             )
             vendor_src = vendor_temp_root / "vendor"
 

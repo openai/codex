@@ -220,7 +220,7 @@ impl ConfigRequestProcessor {
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &config,
                     /*force_refetch*/ true,
-                    &environment_manager,
+                    Arc::clone(&environment_manager),
                 ),
             );
             let all_connectors = match all_connectors_result {

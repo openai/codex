@@ -2304,7 +2304,7 @@
           },
           "type": "array"
         },
-        "experimental_environment": {
+        "environment_id": {
           "default": null,
           "type": "string"
         },

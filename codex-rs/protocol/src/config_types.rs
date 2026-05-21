@@ -114,7 +114,7 @@ impl fmt::Display for ProfileV2NameParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid --profile-v2 value `{}`; pass a plain name such as `work`",
+            "invalid --profile value `{}`; pass a plain name such as `work`",
             self.value
         )
     }
