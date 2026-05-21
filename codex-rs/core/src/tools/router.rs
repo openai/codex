@@ -17,6 +17,7 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -34,6 +35,9 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    usage_contributors: Vec<crate::usage::UsagePromptContributor>,
+    usage_contributors_by_tool_name:
+        HashMap<ToolName, Vec<codex_protocol::protocol::UsageContributor>>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -49,15 +53,39 @@ impl ToolRouter {
         build_tool_router(turn_context, params)
     }
 
-    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
+    pub(crate) fn from_parts(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        usage_contributors: Vec<crate::usage::UsagePromptContributor>,
+        usage_contributors_by_tool_name: HashMap<
+            ToolName,
+            Vec<codex_protocol::protocol::UsageContributor>,
+        >,
+    ) -> Self {
         Self {
             registry,
             model_visible_specs,
+            usage_contributors,
+            usage_contributors_by_tool_name,
         }
     }
 
     pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
+    }
+
+    pub(crate) fn usage_contributors(&self) -> Vec<crate::usage::UsagePromptContributor> {
+        self.usage_contributors.clone()
+    }
+
+    pub(crate) fn usage_contributors_for_tool_name(
+        &self,
+        tool_name: &ToolName,
+    ) -> Vec<codex_protocol::protocol::UsageContributor> {
+        self.usage_contributors_by_tool_name
+            .get(tool_name)
+            .cloned()
+            .unwrap_or_default()
     }
 
     #[cfg(test)]

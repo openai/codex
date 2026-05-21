@@ -914,6 +914,15 @@ ON CONFLICT(thread_id, position) DO NOTHING
         {
             return Err(err);
         }
+        for item in items {
+            if let RolloutItem::UsageAttribution(attribution) = item {
+                self.record_usage_sample(&crate::UsageSample {
+                    thread_id: builder.id,
+                    attribution: attribution.clone(),
+                })
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -1036,6 +1045,7 @@ pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
+        | RolloutItem::UsageAttribution(_)
         | RolloutItem::EventMsg(_) => None,
     })
 }
@@ -1046,6 +1056,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
+        | RolloutItem::UsageAttribution(_)
         | RolloutItem::EventMsg(_) => None,
     })
 }

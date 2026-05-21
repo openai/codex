@@ -58,6 +58,7 @@ mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
 mod title_setup;
+mod usage_view;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
@@ -71,6 +72,8 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
+pub(crate) use usage_view::USAGE_VIEW_ID;
+pub(crate) use usage_view::UsageView;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

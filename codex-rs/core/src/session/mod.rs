@@ -3001,6 +3001,38 @@ impl Session {
         }
     }
 
+    pub(crate) async fn record_usage_attribution(
+        &self,
+        turn_context: &TurnContext,
+        prompt: &crate::client_common::Prompt,
+        response_id: &str,
+        token_usage: Option<&TokenUsage>,
+    ) {
+        let Some(token_usage) = token_usage else {
+            return;
+        };
+        let occurred_at = chrono::Utc::now().timestamp();
+        let attribution = prompt.usage_attribution.complete(
+            format!("{}:{response_id}", self.conversation_id),
+            turn_context.sub_id.clone(),
+            response_id.to_string(),
+            occurred_at,
+            token_usage.clone(),
+        );
+        self.persist_rollout_items(&[RolloutItem::UsageAttribution(attribution.clone())])
+            .await;
+        if let Some(state_db) = self.state_db()
+            && let Err(err) = state_db
+                .record_usage_sample(&codex_state::UsageSample {
+                    thread_id: self.conversation_id,
+                    attribution,
+                })
+                .await
+        {
+            warn!("failed to persist usage sample: {err}");
+        }
+    }
+
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;

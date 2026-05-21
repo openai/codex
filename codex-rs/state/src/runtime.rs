@@ -65,6 +65,7 @@ mod remote_control;
 #[cfg(test)]
 mod test_support;
 mod threads;
+mod usage;
 
 pub use goals::GoalAccountingMode;
 pub use goals::GoalAccountingOutcome;

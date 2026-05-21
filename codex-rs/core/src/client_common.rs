@@ -1,3 +1,4 @@
+use crate::usage::UsagePromptAttribution;
 pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
@@ -33,6 +34,8 @@ pub struct Prompt {
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
 
+    pub(crate) usage_attribution: UsagePromptAttribution,
+
     pub base_instructions: BaseInstructions,
 
     /// Optionally specify the personality of the model.
@@ -51,6 +54,7 @@ impl Default for Prompt {
             input: Vec::new(),
             tools: Vec::new(),
             parallel_tool_calls: false,
+            usage_attribution: UsagePromptAttribution::default(),
             base_instructions: BaseInstructions::default(),
             personality: None,
             output_schema: None,

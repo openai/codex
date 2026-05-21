@@ -15,6 +15,9 @@ use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
+use codex_app_server_protocol::UsageRange;
+use codex_app_server_protocol::UsageReadParams;
+use codex_app_server_protocol::UsageReadResponse;
 
 use codex_app_server_protocol::RequestId;
 
@@ -124,6 +127,26 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+        });
+    }
+
+    pub(super) fn fetch_usage(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+        range: UsageRange,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_usage(request_handle, range)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::UsageLoaded {
+                request_id,
+                range,
+                result,
+            });
         });
     }
 
@@ -575,6 +598,20 @@ impl App {
             overlay.replace_cells(self.transcript_cells.clone());
         }
     }
+}
+
+async fn fetch_usage(
+    request_handle: AppServerRequestHandle,
+    range: UsageRange,
+) -> Result<UsageReadResponse> {
+    let request_id = RequestId::String(format!("usage-read-{}", uuid::Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::UsageRead {
+            request_id,
+            params: UsageReadParams { range },
+        })
+        .await
+        .map_err(Into::into)
 }
 
 pub(super) async fn fetch_all_mcp_server_statuses(

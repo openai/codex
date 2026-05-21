@@ -17,6 +17,7 @@ pub enum EventPersistenceMode {
 pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
+        RolloutItem::UsageAttribution(_) => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {

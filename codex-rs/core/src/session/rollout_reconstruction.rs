@@ -207,7 +207,9 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
                 }
-                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::EventMsg(_)
+                | RolloutItem::SessionMeta(_)
+                | RolloutItem::UsageAttribution(_) => {}
             }
 
             if base_replacement_history.is_some()
@@ -276,7 +278,8 @@ impl Session {
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
-                | RolloutItem::SessionMeta(_) => {}
+                | RolloutItem::SessionMeta(_)
+                | RolloutItem::UsageAttribution(_) => {}
             }
         }
 

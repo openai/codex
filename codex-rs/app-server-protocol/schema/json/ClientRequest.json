@@ -4030,6 +4030,24 @@
       ],
       "type": "object"
     },
+    "UsageRange": {
+      "enum": [
+        "day",
+        "week"
+      ],
+      "type": "string"
+    },
+    "UsageReadParams": {
+      "properties": {
+        "range": {
+          "$ref": "#/definitions/UsageRange"
+        }
+      },
+      "required": [
+        "range"
+      ],
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -4827,6 +4845,30 @@
         "params"
       ],
       "title": "Plugin/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "usage/read"
+          ],
+          "title": "Usage/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/UsageReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Usage/readRequest",
       "type": "object"
     },
     {

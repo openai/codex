@@ -1901,6 +1901,46 @@ pub struct TokenUsage {
     pub total_tokens: i64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UsageContributorKind {
+    Skill,
+    Subagent,
+    App,
+    McpServer,
+    Plugin,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct UsageContributor {
+    pub kind: UsageContributorKind,
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct UsageAttributionContributor {
+    pub contributor: UsageContributor,
+    #[ts(type = "number")]
+    pub source_estimated_tokens: i64,
+    #[ts(type = "number")]
+    pub attributed_tokens: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct UsageAttributionItem {
+    pub sample_id: String,
+    pub turn_id: String,
+    pub response_id: String,
+    #[ts(type = "number")]
+    pub occurred_at: i64,
+    pub token_usage: TokenUsage,
+    #[ts(type = "number")]
+    pub prompt_estimated_tokens: i64,
+    pub contributors: Vec<UsageAttributionContributor>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
@@ -2688,6 +2728,7 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    UsageAttribution(UsageAttributionItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),

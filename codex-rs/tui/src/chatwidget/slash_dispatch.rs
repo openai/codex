@@ -382,6 +382,9 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Usage => {
+                self.open_usage(codex_app_server_protocol::UsageRange::Day);
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -929,6 +932,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

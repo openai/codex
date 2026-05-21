@@ -123,6 +123,8 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            next_usage_request_id: 0,
+            active_usage_request_id: None,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),

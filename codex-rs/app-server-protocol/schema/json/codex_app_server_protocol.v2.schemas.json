@@ -1562,6 +1562,30 @@
             },
             "method": {
               "enum": [
+                "usage/read"
+              ],
+              "title": "Usage/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/UsageReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Usage/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/installed"
               ],
               "title": "Plugin/installedRequestMethod",
@@ -16377,6 +16401,169 @@
         "turnId"
       ],
       "title": "TurnSteerResponse",
+      "type": "object"
+    },
+    "UsageContributorKind": {
+      "enum": [
+        "skill",
+        "subagent",
+        "app",
+        "mcpServer",
+        "plugin"
+      ],
+      "type": "string"
+    },
+    "UsageEntry": {
+      "properties": {
+        "attributedTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/UsageContributorKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "percentOfUsage": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attributedTokens",
+        "id",
+        "kind",
+        "label",
+        "percentOfUsage"
+      ],
+      "type": "object"
+    },
+    "UsageHeadline": {
+      "properties": {
+        "entry": {
+          "$ref": "#/definitions/UsageEntry"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "type": "object"
+    },
+    "UsageRange": {
+      "enum": [
+        "day",
+        "week"
+      ],
+      "type": "string"
+    },
+    "UsageReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "range": {
+          "$ref": "#/definitions/UsageRange"
+        }
+      },
+      "required": [
+        "range"
+      ],
+      "title": "UsageReadParams",
+      "type": "object"
+    },
+    "UsageReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "report": {
+          "$ref": "#/definitions/UsageReport"
+        }
+      },
+      "required": [
+        "report"
+      ],
+      "title": "UsageReadResponse",
+      "type": "object"
+    },
+    "UsageReport": {
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
+        "generatedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "headline": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UsageHeadline"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcpServers": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
+        "range": {
+          "$ref": "#/definitions/UsageRange"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
+        "subagents": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
+        "totalTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "trackedFrom": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "apps",
+        "generatedAt",
+        "mcpServers",
+        "plugins",
+        "range",
+        "skills",
+        "subagents",
+        "totalTokens"
+      ],
       "type": "object"
     },
     "UserInput": {

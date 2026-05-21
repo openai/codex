@@ -889,10 +889,16 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
+    let usage_attribution = crate::usage::UsagePromptAttribution::from_prompt(
+        &input,
+        router,
+        base_instructions.text.as_str(),
+    );
     Prompt {
         input,
         tools: router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        usage_attribution,
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
@@ -2019,6 +2025,13 @@ async fn try_run_sampling_request(
                     &turn_context,
                     plan_mode_state.as_mut(),
                     &mut assistant_message_stream_parsers,
+                )
+                .await;
+                sess.record_usage_attribution(
+                    &turn_context,
+                    prompt,
+                    response_id.as_str(),
+                    token_usage.as_ref(),
                 )
                 .await;
                 sess.record_token_usage_info(&turn_context, token_usage.as_ref())

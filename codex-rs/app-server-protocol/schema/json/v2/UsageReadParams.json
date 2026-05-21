@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "UsageRange": {
+      "enum": [
+        "day",
+        "week"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "range": {
+      "$ref": "#/definitions/UsageRange"
+    }
+  },
+  "required": [
+    "range"
+  ],
+  "title": "UsageReadParams",
+  "type": "object"
+}

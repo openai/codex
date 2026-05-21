@@ -28,6 +28,7 @@ use crate::util::error_or_panic;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::UsageContributor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
@@ -68,6 +69,10 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         _result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         None
+    }
+
+    fn usage_contributors(&self) -> Vec<UsageContributor> {
+        Vec::new()
     }
 
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
