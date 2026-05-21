@@ -379,7 +379,11 @@ fn truncate_retained_messages_for_remote_compaction(
     let mut remaining = max_tokens;
     let mut truncated_reversed = Vec::with_capacity(items.len());
     for item in items.into_iter().rev() {
-        let token_count = message_text_token_count(&item);
+        if remaining == 0 {
+            continue;
+        }
+
+        let token_count = message_text_token_count(&item).max(1);
         if token_count <= remaining {
             truncated_reversed.push(item);
             remaining = remaining.saturating_sub(token_count);
@@ -614,6 +618,50 @@ mod tests {
                 phase: None,
             }]
         );
+    }
+
+    #[test]
+    fn retained_history_truncation_charges_image_only_messages() {
+        let image_only_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            }],
+            phase: None,
+        };
+        let newest = message("user", "new", /*phase*/ None);
+        let retained = vec![
+            message("user", "old", /*phase*/ None),
+            image_only_message.clone(),
+            newest.clone(),
+        ];
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 2);
+
+        assert_eq!(truncated, vec![image_only_message, newest]);
+    }
+
+    #[test]
+    fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
+        let image_only_message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            }],
+            phase: None,
+        };
+        let newest = message("user", "new", /*phase*/ None);
+        let retained = vec![image_only_message, newest.clone()];
+
+        let truncated =
+            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 1);
+
+        assert_eq!(truncated, vec![newest]);
     }
 
     #[tokio::test]
