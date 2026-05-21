@@ -42,6 +42,12 @@ pub(crate) struct GoalProgressSnapshot {
     pub(crate) token_delta: i64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct IdleGoalProgressSnapshot {
+    pub(crate) expected_goal_id: String,
+    pub(crate) time_delta_seconds: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BudgetLimitedGoalDisposition {
     KeepActive,
@@ -103,9 +109,7 @@ impl GoalAccountingState {
     pub(crate) fn mark_turn_goal_active(&self, turn_id: &str, goal_id: impl Into<String>) {
         let mut inner = self.inner();
         let goal_id = goal_id.into();
-        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
-            inner.budget_limit_reported_goal_id = None;
-        }
+        inner.budget_limit_reported_goal_id = None;
         if let Some(turn) = inner.turns.get_mut(turn_id) {
             turn.active_goal_id = Some(goal_id.clone());
             if inner.current_turn_id.as_deref() == Some(turn_id) {
@@ -121,14 +125,18 @@ impl GoalAccountingState {
         let mut inner = self.inner();
         let turn_id = inner.current_turn_id.clone()?;
         let goal_id = goal_id.into();
-        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
-            inner.budget_limit_reported_goal_id = None;
-        }
+        inner.budget_limit_reported_goal_id = None;
         let turn = inner.turns.get_mut(turn_id.as_str())?;
         turn.active_goal_id = Some(goal_id.clone());
         turn.reset_baseline_to_current();
         inner.wall_clock.mark_active_goal(goal_id);
         Some(turn_id)
+    }
+
+    pub(crate) fn mark_idle_goal_active(&self, goal_id: impl Into<String>) {
+        let mut inner = self.inner();
+        inner.budget_limit_reported_goal_id = None;
+        inner.wall_clock.mark_active_goal(goal_id);
     }
 
     pub(crate) fn clear_current_turn_goal(&self) -> Option<String> {
@@ -140,6 +148,17 @@ impl GoalAccountingState {
         inner.wall_clock.clear_active_goal();
         inner.budget_limit_reported_goal_id = None;
         Some(turn_id)
+    }
+
+    pub(crate) fn clear_active_goal(&self) {
+        let mut inner = self.inner();
+        if let Some(turn_id) = inner.current_turn_id.clone()
+            && let Some(turn) = inner.turns.get_mut(turn_id.as_str())
+        {
+            turn.active_goal_id = None;
+        }
+        inner.wall_clock.clear_active_goal();
+        inner.budget_limit_reported_goal_id = None;
     }
 
     pub(crate) fn progress_snapshot(&self, turn_id: &str) -> Option<GoalProgressSnapshot> {
@@ -164,6 +183,19 @@ impl GoalAccountingState {
             expected_goal_id,
             time_delta_seconds,
             token_delta,
+        })
+    }
+
+    pub(crate) fn idle_progress_snapshot(&self) -> Option<IdleGoalProgressSnapshot> {
+        let inner = self.inner();
+        let expected_goal_id = inner.wall_clock.active_goal_id.clone()?;
+        let time_delta_seconds = inner.wall_clock.time_delta_since_last_accounting();
+        if time_delta_seconds == 0 {
+            return None;
+        }
+        Some(IdleGoalProgressSnapshot {
+            expected_goal_id,
+            time_delta_seconds,
         })
     }
 
@@ -197,6 +229,30 @@ impl GoalAccountingState {
         if inner.current_turn_id.as_deref() == Some(turn_id) {
             inner.current_turn_id = None;
         }
+    }
+
+    pub(crate) fn mark_idle_progress_accounted_for_status(
+        &self,
+        snapshot: &IdleGoalProgressSnapshot,
+        status: ThreadGoalStatus,
+        budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
+    ) {
+        let clear_active_goal = should_clear_active_goal(status, budget_limited_goal_disposition);
+        let mut inner = self.inner();
+        inner.wall_clock.mark_accounted(snapshot.time_delta_seconds);
+        if clear_active_goal {
+            inner.wall_clock.clear_active_goal();
+        }
+        if status != ThreadGoalStatus::BudgetLimited {
+            inner.budget_limit_reported_goal_id = None;
+        }
+    }
+
+    pub(crate) fn reset_idle_progress_baseline_and_clear_active_goal(&self) {
+        let mut inner = self.inner();
+        inner.wall_clock.reset_baseline();
+        inner.wall_clock.clear_active_goal();
+        inner.budget_limit_reported_goal_id = None;
     }
 
     pub(crate) fn mark_budget_limit_reported_if_new(&self, goal_id: &str) -> bool {

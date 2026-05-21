@@ -9,3 +9,4 @@ pub use events::NoopExtensionEventSink;
 pub use response_items::NoopResponseItemInjector;
 pub use response_items::ResponseItemInjectionFuture;
 pub use response_items::ResponseItemInjector;
+pub use response_items::ResponseItemInjectorSlot;
