@@ -235,7 +235,7 @@ pub async fn load_config_layers_state(
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "--profile-v2 `{active_user_profile}` cannot be used while {} contains legacy `[profiles.{active_user_profile}]` config; move those settings into {} or remove `[profiles.{active_user_profile}]`",
+                "--profile `{active_user_profile}` cannot be used while {} contains legacy `[profiles.{active_user_profile}]` config; move those settings into {} or remove `[profiles.{active_user_profile}]`",
                 base_user_file.as_path().display(),
                 active_user_file.as_path().display()
             ),
