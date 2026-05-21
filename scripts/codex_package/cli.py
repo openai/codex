@@ -50,9 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--archive-output",
         type=Path,
+        action="append",
+        default=[],
         help=(
-            "Optional archive output path. Supported suffixes: .tar.gz, .tgz, "
-            ".tar.zst, .zip."
+            "Optional archive output path. May be repeated. Supported suffixes: "
+            ".tar.gz, .tgz, .tar.zst, .zip."
         ),
     )
     parser.add_argument(
@@ -82,6 +84,32 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--bwrap-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt Linux bwrap executable. If omitted for Linux "
+            "targets, bwrap is built with Cargo."
+        ),
+    )
+    parser.add_argument(
+        "--codex-command-runner-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt Windows codex-command-runner.exe executable. "
+            "If omitted for Windows targets, codex-command-runner is built "
+            "with Cargo."
+        ),
+    )
+    parser.add_argument(
+        "--codex-windows-sandbox-setup-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt Windows codex-windows-sandbox-setup.exe "
+            "executable. If omitted for Windows targets, "
+            "codex-windows-sandbox-setup is built with Cargo."
+        ),
+    )
+    parser.add_argument(
         "--rg-bin",
         type=Path,
         help=(
@@ -108,14 +136,25 @@ def main() -> int:
         variant,
         cargo=args.cargo,
         profile=args.cargo_profile,
-        entrypoint_bin=(
-            resolve_input_path(
-                args.entrypoint_bin,
-                "prebuilt entrypoint executable",
-                "--entrypoint-bin",
-            )
-            if args.entrypoint_bin is not None
-            else None
+        entrypoint_bin=resolve_optional_input_path(
+            args.entrypoint_bin,
+            "prebuilt entrypoint executable",
+            "--entrypoint-bin",
+        ),
+        bwrap_bin=resolve_optional_input_path(
+            args.bwrap_bin,
+            "prebuilt Linux bwrap executable",
+            "--bwrap-bin",
+        ),
+        codex_command_runner_bin=resolve_optional_input_path(
+            args.codex_command_runner_bin,
+            "prebuilt Windows codex-command-runner.exe executable",
+            "--codex-command-runner-bin",
+        ),
+        codex_windows_sandbox_setup_bin=resolve_optional_input_path(
+            args.codex_windows_sandbox_setup_bin,
+            "prebuilt Windows codex-windows-sandbox-setup.exe executable",
+            "--codex-windows-sandbox-setup-bin",
         ),
     )
     version = read_workspace_version()
@@ -130,11 +169,21 @@ def main() -> int:
     build_package_dir(package_dir, version, variant, spec, inputs)
     validate_package_dir(package_dir, variant, spec)
 
-    archive_output = args.archive_output
-    if archive_output is not None:
+    for archive_output in args.archive_output:
         archive_path = archive_output.resolve()
         write_archive(package_dir, archive_path, force=args.force)
         print(f"Built Codex package archive at {archive_path}")
 
     print(f"Built Codex package directory at {package_dir}")
     return 0
+
+
+def resolve_optional_input_path(
+    explicit_path: Path | None,
+    description: str,
+    flag_name: str,
+) -> Path | None:
+    if explicit_path is None:
+        return None
+
+    return resolve_input_path(explicit_path, description, flag_name)

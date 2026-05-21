@@ -767,6 +767,8 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.sync_active_thread_model_setting(app_server, model)
                     .await;
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -1125,6 +1127,7 @@ impl App {
                                         /*cwd*/ None,
                                         /*approval_policy*/ None,
                                         /*approvals_reviewer*/ None,
+                                        /*permission_profile*/ None,
                                         /*active_permission_profile*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
@@ -1150,6 +1153,7 @@ impl App {
                                         /*cwd*/ None,
                                         Some(AskForApproval::from(preset.approval)),
                                         Some(self.config.approvals_reviewer),
+                                        Some(preset.permission_profile.clone()),
                                         Some(preset.active_permission_profile.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
@@ -1325,9 +1329,6 @@ impl App {
                     profile,
                     service_tier.as_deref(),
                 );
-                if service_tier.is_none() {
-                    self.config.notices.fast_default_opt_out = Some(true);
-                }
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {

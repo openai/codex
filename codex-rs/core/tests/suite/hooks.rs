@@ -6,6 +6,8 @@ use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::built_in_model_providers;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::items::parse_hook_prompt_fragment;
@@ -26,11 +28,13 @@ use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -72,6 +76,15 @@ fn network_workspace_write_profile() -> PermissionProfile {
         /*exclude_tmpdir_env_var*/ false,
         /*exclude_slash_tmp*/ false,
     )
+}
+
+fn non_openai_model_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
+    let mut provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    provider.name = "OpenAI (test)".into();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    provider
 }
 
 fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSource>) {
@@ -225,6 +238,66 @@ if payload.get("prompt") == {blocked_prompt_json}:
     });
 
     fs::write(&script_path, script).context("write user prompt submit hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_session_start_and_user_prompt_submit_order_hooks(home: &Path) -> Result<()> {
+    let session_start_script_path = home.join("session_start_order_hook.py");
+    let user_prompt_submit_script_path = home.join("user_prompt_submit_order_hook.py");
+    let log_path = home.join("hook_order_log.jsonl");
+
+    let session_start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({{
+        "hook_event_name": payload.get("hook_event_name"),
+        "source": payload.get("source"),
+    }}) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let user_prompt_submit_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({{
+        "hook_event_name": payload.get("hook_event_name"),
+        "prompt": payload.get("prompt"),
+    }}) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", session_start_script_path.display()),
+                    "statusMessage": "running session start order hook",
+                }]
+            }],
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", user_prompt_submit_script_path.display()),
+                    "statusMessage": "running user prompt submit order hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&session_start_script_path, session_start_script)
+        .context("write session start order hook script")?;
+    fs::write(&user_prompt_submit_script_path, user_prompt_submit_script)
+        .context("write user prompt submit order hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -705,6 +778,109 @@ print(json.dumps({{
     Ok(())
 }
 
+fn write_compact_session_start_hook_with_context(
+    home: &Path,
+    additional_context: &str,
+) -> Result<()> {
+    let script_path = home.join("compact_session_start_hook.py");
+    let log_path = home.join("session_start_hook_log.jsonl");
+    let additional_context_json = serde_json::to_string(additional_context)
+        .context("serialize compact session start additional context for test")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": {additional_context_json}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "compact",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running compact session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write compact session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_resume_and_compact_session_start_hook_with_context(
+    home: &Path,
+    resume_context: &str,
+    compact_context: &str,
+) -> Result<()> {
+    let script_path = home.join("resume_and_compact_session_start_hook.py");
+    let log_path = home.join("session_start_hook_log.jsonl");
+    let resume_context_json = serde_json::to_string(resume_context)
+        .context("serialize resume session start additional context for test")?;
+    let compact_context_json = serde_json::to_string(compact_context)
+        .context("serialize compact session start additional context for test")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+contexts = {{
+    "resume": {resume_context_json},
+    "compact": {compact_context_json},
+}}
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "SessionStart",
+        "additionalContext": contexts[payload["source"]]
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "resume",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running resume session start hook",
+                }]
+            }, {
+                "matcher": "compact",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running compact session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script)
+        .context("write resume and compact session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
@@ -835,6 +1011,10 @@ fn read_user_prompt_submit_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse user prompt submit hook log line"))
         .collect()
+}
+
+fn read_hook_order_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    read_hook_inputs_from_log(home.join("hook_order_log.jsonl").as_path())
 }
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
@@ -1021,6 +1201,54 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 }
 
 #[tokio::test]
+async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello after hooks"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_and_user_prompt_submit_order_hooks(home) {
+                panic!("failed to write hook ordering fixtures: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let hook_inputs = read_hook_order_inputs(test.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .map(|input| input["hook_event_name"]
+                .as_str()
+                .expect("hook input event name"))
+            .collect::<Vec<_>>(),
+        vec!["SessionStart", "UserPromptSubmit"],
+    );
+    assert_eq!(
+        hook_inputs[0].get("source").and_then(Value::as_str),
+        Some("startup")
+    );
+    assert_eq!(
+        hook_inputs[1].get("prompt").and_then(Value::as_str),
+        Some("hello")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn session_start_hook_spills_large_additional_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1121,6 +1349,188 @@ async fn pre_tool_use_hook_spills_large_additional_context() -> Result<()> {
     assert!(developer_message.contains("tokens truncated"));
     let path = spilled_hook_output_path(developer_message).context("spill path")?;
     assert_eq!(fs::read_to_string(path)?, additional_context);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn compact_session_start_hook_records_additional_context_for_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "hello before compact"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "summary after compact"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "hello after compact"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let additional_context = "remember the compacted reef";
+    let model_provider = non_openai_model_provider(&server);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) =
+                write_compact_session_start_hook_with_context(home, additional_context)
+            {
+                panic!("failed to write compact session start hook fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello before compact").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("hello after compact").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        !requests[0]
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message == additional_context),
+        "compact matcher should not run for initial startup",
+    );
+    assert!(
+        requests[2]
+            .message_input_texts("developer")
+            .iter()
+            .any(|message| message == additional_context),
+        "compact matcher should inject additional context before the next model turn",
+    );
+
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0].get("source").and_then(Value::as_str),
+        Some("compact")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let limit = 200_000;
+    let over_limit_tokens = 250_000;
+    let remote_summary = "remote compact summary";
+    let resume_context = "remember the resumed reef";
+    let compact_context = "remember the compacted reef";
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: remote_summary.to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "encrypted compact summary".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Err(error) = write_resume_and_compact_session_start_hook_with_context(
+                home,
+                resume_context,
+                compact_context,
+            ) {
+                panic!("failed to write resume/compact session start hook fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config.model_auto_compact_token_limit = Some(limit);
+            trust_discovered_hooks(config);
+        });
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello before resume"),
+            ev_completed_with_tokens("resp-1", over_limit_tokens),
+        ]),
+    )
+    .await;
+    initial.submit_turn("hello before resume").await?;
+    assert!(compact_mock.requests().is_empty());
+
+    let mut resume_builder = test_codex().with_config(move |config| {
+        config.model_auto_compact_token_limit = Some(limit);
+        trust_discovered_hooks(config);
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let follow_up = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "hello after resume"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    resumed.submit_turn("hello after resume").await?;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let developer_messages = follow_up.single_request().message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message == resume_context),
+        "resume matcher should inject additional context before the next model turn",
+    );
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message == compact_context),
+        "compact matcher should inject additional context before the next model turn",
+    );
+
+    let hook_inputs = read_session_start_hook_inputs(resumed.codex_home_path())?;
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .filter_map(|input| input.get("source").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["resume", "compact"],
+    );
 
     Ok(())
 }

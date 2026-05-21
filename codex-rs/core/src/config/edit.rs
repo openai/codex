@@ -40,8 +40,6 @@ pub enum ConfigEdit {
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
     SetNoticeHideWorldWritableWarning(bool),
-    /// Toggle the opt-out marker for Codex-managed fast defaults.
-    SetNoticeFastDefaultOptOut(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
     /// Toggle the model migration prompt acknowledgement flag.
@@ -552,6 +550,8 @@ impl ConfigDocument {
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
                 &["service_tier"],
                 service_tier.as_ref().map(|service_tier| {
+                    // Keep the legacy config spelling stable. Runtime values use
+                    // `priority`, but config.toml continues to store it as `fast`.
                     let config_value = match ServiceTier::from_request_value(service_tier) {
                         Some(ServiceTier::Fast) => "fast",
                         Some(ServiceTier::Flex) => "flex",
@@ -573,11 +573,6 @@ impl ConfigDocument {
                 Scope::Global,
                 &[NOTICE_TABLE_KEY, "hide_world_writable_warning"],
                 value(*acknowledged),
-            )),
-            ConfigEdit::SetNoticeFastDefaultOptOut(opted_out) => Ok(self.write_value(
-                Scope::Global,
-                &[NOTICE_TABLE_KEY, "fast_default_opt_out"],
-                value(*opted_out),
             )),
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
                 Scope::Global,
@@ -1179,12 +1174,6 @@ impl ConfigEditsBuilder {
     pub fn set_hide_world_writable_warning(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged));
-        self
-    }
-
-    pub fn set_fast_default_opt_out(mut self, opted_out: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetNoticeFastDefaultOptOut(opted_out));
         self
     }
 

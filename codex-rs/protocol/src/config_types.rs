@@ -432,6 +432,12 @@ pub enum ServiceTier {
     Flex,
 }
 
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
+
 impl ServiceTier {
     pub const fn request_value(self) -> &'static str {
         match self {

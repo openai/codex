@@ -22,6 +22,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
+use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
@@ -263,6 +264,7 @@ pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
     pub local_version: Option<String>,
+    pub installed_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
@@ -1207,7 +1209,7 @@ impl PluginsManager {
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplace_outcome =
-            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
+            self.discover_marketplaces_for_config(config, additional_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1225,15 +1227,21 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let plugin_id =
+                            PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
                         let installed = installed_plugins.contains(&plugin_key);
+                        let installed_version = installed.then_some(()).and_then(|_| {
+                            plugin_id
+                                .as_ref()
+                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
+                        });
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
-                            && let Ok(plugin_id) =
-                                PluginId::new(plugin.name.clone(), marketplace_name.clone())
-                            && let Some(plugin_root) = self.store.active_plugin_root(&plugin_id)
+                            && let Some(plugin_id) = plugin_id.as_ref()
+                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
                             local_version = manifest.version.clone();
@@ -1251,6 +1259,7 @@ impl PluginsManager {
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
                             id: plugin_key,
+                            installed_version,
                             installed,
                             enabled,
                             name: plugin.name,
@@ -1278,6 +1287,18 @@ impl PluginsManager {
         })
     }
 
+    pub fn discover_marketplaces_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(MarketplaceListOutcome::default());
+        }
+
+        list_marketplaces(&self.marketplace_roots(config, additional_roots))
+    }
+
     pub async fn read_plugin_for_config(
         &self,
         config: &PluginsConfigInput,
@@ -1298,6 +1319,12 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let installed = installed_plugins.contains(&plugin_key);
+        let installed_version = if installed {
+            self.store.active_plugin_version(&plugin.plugin_id)
+        } else {
+            None
+        };
         let plugin = self
             .read_plugin_detail_for_marketplace_plugin(
                 config,
@@ -1309,6 +1336,7 @@ impl PluginsManager {
                         .manifest
                         .as_ref()
                         .and_then(|manifest| manifest.version.clone()),
+                    installed_version,
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
@@ -1317,7 +1345,7 @@ impl PluginsManager {
                         .as_ref()
                         .map(|manifest| manifest.keywords.clone())
                         .unwrap_or_default(),
-                    installed: installed_plugins.contains(&plugin_key),
+                    installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
             )
