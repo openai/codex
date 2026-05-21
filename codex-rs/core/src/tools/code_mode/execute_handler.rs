@@ -94,8 +94,8 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         ToolName::plain(PUBLIC_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     async fn handle(

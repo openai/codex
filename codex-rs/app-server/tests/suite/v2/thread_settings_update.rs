@@ -22,6 +22,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::test_support::all_model_presets;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -136,7 +137,7 @@ async fn thread_settings_update_while_turn_is_active_emits_notification() -> Res
 }
 
 #[tokio::test]
-async fn thread_settings_update_clears_service_tier() -> Result<()> {
+async fn thread_settings_update_null_service_tier_uses_default() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_final_assistant_message_sse_response("done")?,
     ])
@@ -181,7 +182,10 @@ async fn thread_settings_update_clears_service_tier() -> Result<()> {
     let clear_updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(clear_updated.thread_id, thread.id);
     assert_eq!(clear_updated.thread_settings.model, model_id);
-    assert_eq!(clear_updated.thread_settings.service_tier, None);
+    assert_eq!(
+        clear_updated.thread_settings.service_tier.as_deref(),
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE)
+    );
 
     start_text_turn(&mut mcp, thread.id).await?;
     timeout(

@@ -569,18 +569,10 @@ jobs:
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
             stage-runtime
             "$stage_dir"
-            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex"
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz"
             --codex-version "${GITHUB_REF_NAME}"
             --platform-tag "$platform_tag"
           )
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            # Keep bwrap in the runtime wheel so Linux sandbox fallback behavior
-            # matches the standalone release bundle on hosts without system bwrap.
-            stage_runtime_args+=(
-              --resource-binary
-              "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/bwrap"
-            )
-          fi
           python3 "${stage_runtime_args[@]}"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
@@ -800,6 +792,20 @@ jobs:
             cp "$dmg_source" "$dest/$dmg_name"
           fi
 
+      - name: Build Codex package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "dist/${TARGET}" \
+            --archive-dir "dist/${TARGET}" \
+            --target-suffixed-entrypoint
+
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
         shell: bash
@@ -828,24 +834,10 @@ jobs:
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "${GITHUB_WORKSPACE}/codex-rs/dist/${{ matrix.target }}/codex-${{ matrix.target }}" \
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
-
-      - name: Build Codex package archive
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-          BUNDLE: ${{ matrix.bundle }}
-        run: |
-          set -euo pipefail
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
-            --target "$TARGET" \
-            --bundle "$BUNDLE" \
-            --entrypoint-dir "dist/${TARGET}" \
-            --archive-dir "dist/${TARGET}" \
-            --target-suffixed-entrypoint
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}

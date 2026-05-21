@@ -246,15 +246,14 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
-    let service_tiers = if supports_fast_mode {
-        vec![json!({
+    let mut service_tiers = Vec::new();
+    if supports_fast_mode {
+        service_tiers.push(json!({
             "id": ServiceTier::Fast.request_value(),
             "name": "fast",
             "description": "Fastest inference with increased plan usage"
-        })]
-    } else {
-        Vec::new()
-    };
+        }));
+    }
     serde_json::from_value(json!({
         "slug": slug,
         "display_name": slug,
@@ -267,6 +266,7 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "priority": priority,
         "additional_speed_tiers": [],
         "service_tiers": service_tiers,
+        "default_service_tier": null,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",

@@ -261,7 +261,7 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
         self.handler.tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.handler.spec()
     }
 
@@ -270,7 +270,7 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.handler.supports_parallel_tool_calls()
+        self.exposure != ToolExposure::Hidden && self.handler.supports_parallel_tool_calls()
     }
 
     async fn handle(

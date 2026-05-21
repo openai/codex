@@ -56,7 +56,7 @@ Windows packages. This keeps package archive creation as a pure staging step
 after signing instead of rebuilding resources.
 
 `rg` is not built from this repository, so the builder fetches it from the
-DotSlash manifest at `codex-cli/bin/rg`. Downloaded archives are cached under
-`$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded size
-and SHA-256 digest have been verified. Pass `--rg-bin` to use a local ripgrep
-executable instead.
+DotSlash manifest at `scripts/codex_package/rg`. Downloaded archives are cached
+under `$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded
+size and SHA-256 digest have been verified. Pass `--rg-bin` to use a local
+ripgrep executable instead.

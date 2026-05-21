@@ -16,6 +16,7 @@ use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::bytes::Bytes;
@@ -97,6 +98,8 @@ impl std::fmt::Debug for MitmState {
 
 impl MitmState {
     pub(crate) fn new(config: MitmUpstreamConfig) -> Result<Self> {
+        ensure_rustls_crypto_provider();
+
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
         // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and

@@ -13,8 +13,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("send_message")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_send_message_tool())
+    fn spec(&self) -> ToolSpec {
+        create_send_message_tool()
     }
 
     async fn handle(

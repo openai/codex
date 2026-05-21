@@ -32,7 +32,7 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -43,6 +43,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -3390,92 +3391,143 @@ fn session_telemetry(
     )
 }
 
-#[test]
-fn get_service_tier_defaults_enterprise_accounts_to_fast() {
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Enterprise),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::EnterpriseCbpUsageBased),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Business),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Team),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::SelfServeBusinessUsageBased),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
+fn model_with_default_service_tier(default_service_tier: Option<&str>) -> ModelInfo {
+    let mut model_info = model_info::model_info_from_slug("gpt-5.4");
+    model_info.service_tiers = vec![ModelServiceTier {
+        id: ServiceTier::Fast.request_value().to_string(),
+        name: "Fast".to_string(),
+        description: "Priority processing.".to_string(),
+    }];
+    model_info.default_service_tier = default_service_tier.map(str::to_string);
+    model_info
 }
 
 #[test]
-fn get_service_tier_respects_fast_default_opt_out() {
+fn get_service_tier_does_not_use_model_default_when_absent_and_fast_mode_enabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ true,
-            Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ true,
+            &model_info,
         ),
         None
     );
 }
 
 #[test]
-fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
+fn get_service_tier_does_not_use_model_default_when_fast_mode_disabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Pro),
-            /*fast_mode_enabled*/ true,
-        ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_keeps_supported_explicit_tier() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[test]
+fn get_service_tier_does_not_default_when_model_has_no_default() {
+    let model_info = model_with_default_service_tier(/*default_service_tier*/ None);
+
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some("unsupported".to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Flex.request_value().to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
+}
+
+#[test]
+fn get_service_tier_ignores_configured_tier_when_fast_mode_disabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some("unsupported".to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_mode_enabled*/ false,
+            &model_info,
         ),
         None
     );
 }
 
 #[tokio::test]
-async fn session_settings_null_service_tier_update_clears_service_tier() {
+async fn session_settings_null_service_tier_update_uses_default_service_tier() {
     let session_configuration = make_session_configuration_for_tests().await;
 
     let updated = session_configuration
@@ -3485,7 +3537,10 @@ async fn session_settings_null_service_tier_update_clears_service_tier() {
         })
         .expect("null service tier update should apply");
 
-    assert_eq!(updated.service_tier, None);
+    assert_eq!(
+        updated.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
 }
 
 #[tokio::test]

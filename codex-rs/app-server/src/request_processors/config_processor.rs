@@ -220,7 +220,7 @@ impl ConfigRequestProcessor {
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &config,
                     /*force_refetch*/ true,
-                    &environment_manager,
+                    Arc::clone(&environment_manager),
                 ),
             );
             let all_connectors = match all_connectors_result {
@@ -419,6 +419,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_permissions: requirements.allowed_permissions,
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
                 .into_iter()
@@ -638,10 +639,21 @@ mod tests {
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allowed_permissions: Some(vec![
+                "managed-standard".to_string(),
+                "managed-build".to_string(),
+            ]),
             allow_managed_hooks_only: Some(true),
             ..ConfigRequirementsToml::default()
         });
 
+        assert_eq!(
+            mapped.allowed_permissions,
+            Some(vec![
+                "managed-standard".to_string(),
+                "managed-build".to_string(),
+            ])
+        );
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
         assert_eq!(mapped.hooks, None);
     }

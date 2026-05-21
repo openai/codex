@@ -7744,6 +7744,15 @@
               "null"
             ]
           },
+          "allowedPermissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "allowedSandboxModes": {
             "items": {
               "$ref": "#/definitions/v2/SandboxMode"
@@ -11345,6 +11354,14 @@
           },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
+          },
+          "defaultServiceTier": {
+            "default": null,
+            "description": "Catalog default service tier id for this model, when one is configured.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "description": {
             "type": "string"
@@ -16311,6 +16328,12 @@
                   "null"
                 ]
               },
+              "pluginId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "result": {
                 "anyOf": [
                   {
@@ -17415,6 +17438,21 @@
           "thread"
         ],
         "title": "ThreadRollbackResponse",
+        "type": "object"
+      },
+      "ThreadSearchResult": {
+        "properties": {
+          "snippet": {
+            "type": "string"
+          },
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "snippet",
+          "thread"
+        ],
         "type": "object"
       },
       "ThreadSetNameParams": {

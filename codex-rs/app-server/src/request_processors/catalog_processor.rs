@@ -612,15 +612,10 @@ impl CatalogRequestProcessor {
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
-            let plugin_outcome = if plugins_enabled && config.features.enabled(Feature::PluginHooks)
-            {
+            let plugin_outcome = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
                 plugins_manager
-                    .plugins_for_layer_stack(
-                        &config.config_layer_stack,
-                        &plugins_input,
-                        /*plugin_hooks_feature_enabled*/ true,
-                    )
+                    .plugins_for_layer_stack(&config.config_layer_stack, &plugins_input)
                     .await
             } else {
                 PluginLoadOutcome::default()
