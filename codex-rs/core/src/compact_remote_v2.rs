@@ -10,6 +10,7 @@ use crate::compact::compaction_status_from_result;
 use crate::compact_remote::build_compact_request_log_data;
 use crate::compact_remote::log_remote_compact_failure;
 use crate::compact_remote::process_compacted_history;
+use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote::trim_function_call_history_to_fit_context_window;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -354,6 +355,7 @@ fn build_v2_compacted_history(
     let retained = prompt_input
         .iter()
         .filter(|item| is_retained_for_remote_compaction_v2(item))
+        .filter(|item| should_keep_compacted_history_item(item))
         .cloned()
         .collect::<Vec<_>>();
     let mut retained =
@@ -493,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn build_v2_compacted_history_matches_prod_retention_shape() {
+    fn build_v2_compacted_history_filters_to_installed_retention_shape() {
         let input = vec![
             message("developer", "dev", /*phase*/ None),
             message("system", "sys", /*phase*/ None),
@@ -519,13 +521,32 @@ mod tests {
 
         assert_eq!(
             history,
-            vec![
-                message("developer", "dev", /*phase*/ None),
-                message("system", "sys", /*phase*/ None),
-                message("user", "user", /*phase*/ None),
-                output,
-            ]
+            vec![message("user", "user", /*phase*/ None), output]
         );
+    }
+
+    #[test]
+    fn build_v2_compacted_history_discards_messages_before_truncating() {
+        let old = message("user", "old", /*phase*/ None);
+        let new = message("user", "new", /*phase*/ None);
+        let huge_developer_message = "d".repeat((RETAINED_MESSAGE_TOKEN_BUDGET + 1) * 4);
+        let huge_contextual_message = format!(
+            "<environment_context>\n{}\n</environment_context>",
+            "c".repeat((RETAINED_MESSAGE_TOKEN_BUDGET + 1) * 4)
+        );
+        let input = vec![
+            old.clone(),
+            message("developer", &huge_developer_message, /*phase*/ None),
+            message("user", &huge_contextual_message, /*phase*/ None),
+            new.clone(),
+        ];
+        let output = ResponseItem::Compaction {
+            encrypted_content: "new".to_string(),
+        };
+
+        let history = build_v2_compacted_history(&input, output.clone());
+
+        assert_eq!(history, vec![old, new, output]);
     }
 
     #[test]
@@ -546,32 +567,6 @@ mod tests {
             vec![
                 message("user", "midd…1 tokens truncated…1234", /*phase*/ None),
                 new,
-            ]
-        );
-    }
-
-    #[test]
-    fn retained_history_truncation_budgets_developer_and_system_messages() {
-        let system = message("system", "system1234", /*phase*/ None);
-        let user = message("user", "new", /*phase*/ None);
-        let retained = vec![
-            message("developer", "developer-old-big", /*phase*/ None),
-            system,
-            user.clone(),
-        ];
-
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(retained, /*max_tokens*/ 3);
-
-        assert_eq!(
-            truncated,
-            vec![
-                message(
-                    "system",
-                    "syst…1 tokens truncated…1234",
-                    /*phase*/ None
-                ),
-                user,
             ]
         );
     }
