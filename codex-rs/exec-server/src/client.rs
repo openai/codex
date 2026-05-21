@@ -912,6 +912,8 @@ mod tests {
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -925,19 +927,23 @@ mod tests {
     use tokio::io::BufReader;
     use tokio::io::duplex;
     use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
     #[cfg(unix)]
     use tokio::time::sleep;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
+    use super::LazyRemoteExecServerClient;
     use crate::ProcessId;
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
-    #[cfg(not(windows))]
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
@@ -976,6 +982,96 @@ mod tests {
             .write_all(format!("{encoded}\n").as_bytes())
             .await
             .expect("json-rpc line should write");
+    }
+
+    async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed")
+    }
+
+    async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> JSONRPCMessage {
+        loop {
+            match timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("json-rpc websocket read should not time out")
+                .expect("websocket should stay open")
+                .expect("websocket frame should read")
+            {
+                Message::Text(text) => {
+                    return serde_json::from_str(text.as_ref())
+                        .expect("json-rpc text frame should parse");
+                }
+                Message::Binary(bytes) => {
+                    return serde_json::from_slice(bytes.as_ref())
+                        .expect("json-rpc binary frame should parse");
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
+                other => panic!("expected json-rpc websocket frame, got {other:?}"),
+            }
+        }
+    }
+
+    async fn write_jsonrpc_websocket(
+        websocket: &mut WebSocketStream<TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        let encoded = serde_json::to_string(&message).expect("json-rpc should serialize");
+        websocket
+            .send(Message::Text(encoded.into()))
+            .await
+            .expect("json-rpc websocket frame should write");
+    }
+
+    async fn complete_websocket_initialize(
+        websocket: &mut WebSocketStream<TcpStream>,
+        session_id: &str,
+        expected_resume_session_id: Option<&str>,
+    ) {
+        let initialize = read_jsonrpc_websocket(websocket).await;
+        let request = match initialize {
+            JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+            other => panic!("expected initialize request, got {other:?}"),
+        };
+        let params: crate::protocol::InitializeParams =
+            serde_json::from_value(request.params.expect("initialize params should exist"))
+                .expect("initialize params should deserialize");
+        assert_eq!(
+            params.resume_session_id.as_deref(),
+            expected_resume_session_id
+        );
+        write_jsonrpc_websocket(
+            websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(InitializeResponse {
+                    session_id: session_id.to_string(),
+                })
+                .expect("initialize response should serialize"),
+            }),
+        )
+        .await;
+
+        let initialized = read_jsonrpc_websocket(websocket).await;
+        match initialized {
+            JSONRPCMessage::Notification(notification)
+                if notification.method == INITIALIZED_METHOD => {}
+            other => panic!("expected initialized notification, got {other:?}"),
+        }
+    }
+
+    async fn wait_for_disconnect(client: &ExecServerClient) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if client.is_disconnected() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("client should observe disconnect");
     }
 
     #[cfg(not(windows))]
