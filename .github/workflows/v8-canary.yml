@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: dist/${{ matrix.target }}
-          key: v8-canary-windows-ptrcomp-sandbox-${{ matrix.target }}-${{ needs.metadata.outputs.v8_version }}-${{ hashFiles('.github/scripts/rusty_v8_bazel.py') }}
+          key: v8-canary-windows-ptrcomp-sandbox-${{ matrix.target }}-${{ needs.metadata.outputs.v8_version }}-${{ hashFiles('.github/workflows/v8-canary.yml', '.github/scripts/rusty_v8_bazel.py') }}
 
       - name: Configure git for upstream checkout
         if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
@@ -423,6 +423,7 @@ jobs:
 
       - name: Save staged Windows sandbox artifacts
         if: steps.windows_sandbox_artifacts.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: dist/${{ matrix.target }}
