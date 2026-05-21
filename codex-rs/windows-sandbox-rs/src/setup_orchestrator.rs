@@ -54,6 +54,12 @@ const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".npm",
     ".pki",
     ".terraform.d",
+    // AppData covers both %APPDATA% and %LOCALAPPDATA% descendants.
+    "AppData",
+    "OneDrive",
+    "Documents",
+    "Desktop",
+    "Downloads",
 ];
 const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Windows",
@@ -1108,17 +1114,27 @@ mod tests {
     fn profile_read_roots_excludes_configured_top_level_entries() {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path();
-        let allowed_dir = user_profile.join("Documents");
+        let allowed_dir = user_profile.join("Projects");
         let allowed_file = user_profile.join("settings.json");
         let excluded_dir = user_profile.join(".ssh");
         let excluded_tsh = user_profile.join(".tsh");
         let excluded_case_variant = user_profile.join(".AWS");
+        let excluded_app_data = user_profile.join("AppData");
+        let excluded_documents = user_profile.join("Documents");
+        let excluded_desktop = user_profile.join("Desktop");
+        let excluded_downloads = user_profile.join("Downloads");
+        let excluded_onedrive = user_profile.join("OneDrive");
 
         fs::create_dir_all(&allowed_dir).expect("create allowed dir");
         fs::write(&allowed_file, "safe").expect("create allowed file");
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::create_dir_all(&excluded_tsh).expect("create excluded tsh dir");
         fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
+        fs::create_dir_all(&excluded_app_data).expect("create excluded app data");
+        fs::create_dir_all(&excluded_documents).expect("create excluded documents");
+        fs::create_dir_all(&excluded_desktop).expect("create excluded desktop");
+        fs::create_dir_all(&excluded_downloads).expect("create excluded downloads");
+        fs::create_dir_all(&excluded_onedrive).expect("create excluded onedrive");
 
         let roots = profile_read_roots(user_profile);
         let actual: HashSet<PathBuf> = roots.into_iter().collect();
@@ -1143,21 +1159,39 @@ mod tests {
         let user_profile = tmp.path().join("user-profile");
         let documents = user_profile.join("Documents");
         let app_data = user_profile.join("AppData");
+        let desktop = user_profile.join("Desktop");
+        let downloads = user_profile.join("Downloads");
+        let onedrive = user_profile.join("OneDrive");
         let ssh_child = user_profile.join(".ssh").join("config");
         let tsh_child = user_profile.join(".tsh").join("keys");
         let other_root = tmp.path().join("other-root");
         fs::create_dir_all(&documents).expect("create documents");
         fs::create_dir_all(&app_data).expect("create app data");
+        fs::create_dir_all(&desktop).expect("create desktop");
+        fs::create_dir_all(&downloads).expect("create downloads");
+        fs::create_dir_all(&onedrive).expect("create onedrive");
         fs::create_dir_all(&ssh_child).expect("create ssh child");
         fs::create_dir_all(&tsh_child).expect("create tsh child");
         fs::create_dir_all(&other_root).expect("create other root");
 
-        assert!(!super::is_user_profile_root_exclusion(
+        assert!(super::is_user_profile_root_exclusion(
             &documents,
             &user_profile
         ));
-        assert!(!super::is_user_profile_root_exclusion(
+        assert!(super::is_user_profile_root_exclusion(
             &app_data,
+            &user_profile
+        ));
+        assert!(super::is_user_profile_root_exclusion(
+            &desktop,
+            &user_profile
+        ));
+        assert!(super::is_user_profile_root_exclusion(
+            &downloads,
+            &user_profile
+        ));
+        assert!(super::is_user_profile_root_exclusion(
+            &onedrive,
             &user_profile
         ));
         assert!(super::is_user_profile_root_exclusion(
@@ -1246,9 +1280,9 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path().join("user-profile");
         let codex_home = user_profile.join("CodexHome");
-        let documents = user_profile.join("Documents");
+        let projects = user_profile.join("Projects");
         fs::create_dir_all(&codex_home).expect("create codex home");
-        fs::create_dir_all(&documents).expect("create documents");
+        fs::create_dir_all(&projects).expect("create projects");
 
         let mut roots =
             super::expand_user_profile_root_for(vec![user_profile.clone()], &user_profile);
@@ -1257,7 +1291,7 @@ mod tests {
         roots.retain(|root| !super::is_user_profile_root_exclusion(root, &user_profile));
         let roots = super::filter_sensitive_write_roots(roots, &codex_home);
 
-        assert_eq!(vec![documents], roots);
+        assert_eq!(vec![projects], roots);
     }
 
     #[test]
