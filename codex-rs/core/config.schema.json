@@ -503,6 +503,9 @@
             "personality": {
               "type": "boolean"
             },
+            "plugin_hooks": {
+              "type": "boolean"
+            },
             "plugin_sharing": {
               "type": "boolean"
             },
@@ -4429,6 +4432,9 @@
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugin_hooks": {
           "type": "boolean"
         },
         "plugin_sharing": {
