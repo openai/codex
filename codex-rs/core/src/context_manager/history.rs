@@ -359,6 +359,8 @@ impl ContextManager {
     /// 2. every output has a corresponding call entry
     /// 3. when images are unsupported, image content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        normalize_legacy_context_compaction_items(&mut self.items);
+
         // all function/tool calls must have a corresponding output
         normalize::ensure_call_outputs_present(&mut self.items);
 
@@ -389,6 +391,11 @@ impl ContextManager {
                 call_id: call_id.clone(),
                 name: name.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
+            },
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+            } => ResponseItem::Compaction {
+                encrypted_content: encrypted_content.clone(),
             },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
@@ -454,6 +461,21 @@ impl ContextManager {
     }
 }
 
+fn normalize_legacy_context_compaction_items(items: &mut Vec<ResponseItem>) {
+    *items = std::mem::take(items)
+        .into_iter()
+        .filter_map(|item| match item {
+            ResponseItem::ContextCompaction {
+                encrypted_content: Some(encrypted_content),
+            } => Some(ResponseItem::Compaction { encrypted_content }),
+            ResponseItem::ContextCompaction {
+                encrypted_content: None,
+            } => None,
+            item => Some(item),
+        })
+        .collect();
+}
+
 pub(crate) fn truncate_function_output_payload(
     output: &FunctionCallOutputPayload,
     policy: TruncationPolicy,
@@ -490,9 +512,14 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
-        | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::CompactionTrigger => false,
-        ResponseItem::Other => false,
+        | ResponseItem::ContextCompaction {
+            encrypted_content: Some(_),
+        } => true,
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        }
+        | ResponseItem::CompactionTrigger
+        | ResponseItem::Other => false,
     }
 }
 

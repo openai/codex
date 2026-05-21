@@ -307,6 +307,46 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
+fn legacy_context_compaction_items_are_not_sent_to_prompt() {
+    let legacy_compaction = ResponseItem::ContextCompaction {
+        encrypted_content: Some("encrypted-legacy-context".to_string()),
+    };
+    let lifecycle_marker = ResponseItem::ContextCompaction {
+        encrypted_content: None,
+    };
+    let history = create_history_with_items(vec![legacy_compaction, lifecycle_marker]);
+
+    assert_eq!(
+        history.raw_items(),
+        vec![ResponseItem::Compaction {
+            encrypted_content: "encrypted-legacy-context".to_string(),
+        }]
+    );
+
+    let user = user_msg("after compaction");
+    let mut history = ContextManager::new();
+    history.replace(vec![
+        ResponseItem::ContextCompaction {
+            encrypted_content: Some("encrypted-legacy-context".to_string()),
+        },
+        ResponseItem::ContextCompaction {
+            encrypted_content: None,
+        },
+        user.clone(),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            ResponseItem::Compaction {
+                encrypted_content: "encrypted-legacy-context".to_string(),
+            },
+            user,
+        ]
+    );
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");
