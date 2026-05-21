@@ -1,17 +1,16 @@
 use super::*;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> PermissionProfile {
-    AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -45,7 +44,6 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
             glob_scan_max_depth: None,
         },
     }
-    .into()
 }
 
 #[tokio::test]
@@ -127,9 +125,9 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
         .into_iter()
         .find(|p| p.id == "read-only")
         .expect("read-only preset exists");
-    let current_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    let current_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -146,8 +144,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             ],
             glob_scan_max_depth: None,
         },
-    }
-    .into();
+    };
     let cwd = test_path_buf("/tmp/project").abs();
 
     assert!(
@@ -169,7 +166,9 @@ async fn full_access_confirmation_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset, /*return_to_permissions*/ false);
+    chat.open_full_access_confirmation(
+        preset, /*return_to_permissions*/ false, /*profile_selection*/ None,
+    );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("full_access_confirmation_popup", popup);
@@ -184,7 +183,7 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
         .into_iter()
         .find(|preset| preset.id == "auto")
         .expect("auto preset");
-    chat.open_windows_sandbox_enable_prompt(preset);
+    chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
@@ -584,8 +583,11 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         permission_profile: PermissionProfile::workspace_write(),
         active_permission_profile: None,
         cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -631,8 +633,11 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         permission_profile,
         active_permission_profile: None,
         cwd,
+        runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -741,6 +746,9 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             permission_profile: Some(PermissionProfile::workspace_write()),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -749,6 +757,20 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             collaboration_mode: None,
             personality: None,
         }
+    );
+
+    let active_permission_profile_update = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::UpdateActivePermissionProfile(active_permission_profile) => {
+                Some(active_permission_profile)
+            }
+            _ => None,
+        })
+        .expect("expected UpdateActivePermissionProfile event");
+
+    assert_eq!(
+        active_permission_profile_update,
+        ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
     );
 }
 
@@ -779,8 +801,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                profile_selection,
             } => {
-                open_confirmation_event = Some((preset, return_to_permissions));
+                open_confirmation_event = Some((preset, return_to_permissions, profile_selection));
             }
             _ => {}
         }
@@ -791,9 +814,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             "did not expect history cell before confirming full access"
         );
     }
-    let (preset, return_to_permissions) =
+    let (preset, return_to_permissions, profile_selection) =
         open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset, return_to_permissions);
+    chat.open_full_access_confirmation(preset, return_to_permissions, profile_selection);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(

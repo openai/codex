@@ -1039,6 +1039,57 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_share_update_targets_rejects_when_plugin_sharing_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api"
+
+[features]
+plugins = true
+remote_plugin = true
+plugin_sharing = false
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "plugin/share/updateTargets",
+            Some(json!({
+                "remotePluginId": "plugins_123",
+                "discoverability": "UNLISTED",
+                "shareTargets": [],
+            })),
+        )
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(error.error.message, "plugin sharing is disabled");
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

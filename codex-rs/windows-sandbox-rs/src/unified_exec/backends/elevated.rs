@@ -5,11 +5,15 @@ use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
+use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
+use crate::policy::parse_policy;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::spawn_runner_transport;
-use crate::spawn_prep::prepare_elevated_spawn_context;
+use crate::spawn_prep::prepare_elevated_spawn_context_for_permissions;
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
@@ -21,9 +25,9 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn spawn_windows_sandbox_session_elevated(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
+    permission_profile: &PermissionProfile,
+    permission_profile_cwd: &Path,
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -46,9 +50,12 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
-    let elevated = prepare_elevated_spawn_context(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+        permission_profile,
+        permission_profile_cwd,
+    )?;
+    let elevated = prepare_elevated_spawn_context_for_permissions(
+        permissions,
         codex_home,
         cwd,
         &mut env_map,
@@ -64,9 +71,9 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         command: command.clone(),
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
-        policy_json_or_preset: policy_json_or_preset.to_string(),
-        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-        codex_home: elevated.common.sandbox_base.clone(),
+        permission_profile: permission_profile.clone(),
+        permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+        codex_home: elevated.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
         timeout_ms,
@@ -77,7 +84,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
     let codex_home = codex_home.to_path_buf();
     let cwd = cwd.to_path_buf();
     let sandbox_creds = elevated.sandbox_creds.clone();
-    let logs_base_dir = elevated.common.logs_base_dir.clone();
+    let logs_base_dir = elevated.logs_base_dir.clone();
     let transport = tokio::task::spawn_blocking(move || -> Result<_> {
         spawn_runner_transport(
             &codex_home,
@@ -106,7 +113,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         let outbound_tx = outbound_tx.clone();
         Some(Box::new(move || {
             let _ = outbound_tx.send(FramedMessage {
-                version: 1,
+                version: IPC_PROTOCOL_VERSION,
                 message: Message::Terminate {
                     payload: EmptyPayload::default(),
                 },
@@ -137,4 +144,45 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated(
         },
         stdin_open,
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_windows_sandbox_session_elevated(
+    policy_json_or_preset: &str,
+    sandbox_policy_cwd: &Path,
+    codex_home: &Path,
+    command: Vec<String>,
+    cwd: &Path,
+    env_map: HashMap<String, String>,
+    timeout_ms: Option<u64>,
+    read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_read_paths_override: &[AbsolutePathBuf],
+    deny_write_paths_override: &[AbsolutePathBuf],
+    tty: bool,
+    stdin_open: bool,
+    use_private_desktop: bool,
+) -> Result<SpawnedProcess> {
+    let policy = parse_policy(policy_json_or_preset)?;
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, sandbox_policy_cwd);
+    spawn_windows_sandbox_session_elevated_for_permission_profile(
+        &permission_profile,
+        sandbox_policy_cwd,
+        codex_home,
+        command,
+        cwd,
+        env_map,
+        timeout_ms,
+        read_roots_override,
+        read_roots_include_platform_defaults,
+        write_roots_override,
+        deny_read_paths_override,
+        deny_write_paths_override,
+        tty,
+        stdin_open,
+        use_private_desktop,
+    )
+    .await
 }

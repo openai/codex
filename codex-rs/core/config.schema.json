@@ -309,6 +309,25 @@
         }
       ]
     },
+    "AutoCompactTokenLimitScope": {
+      "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
+      "oneOf": [
+        {
+          "description": "Count the full active context against the limit.",
+          "enum": [
+            "total"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Count sampled output and later growth after the carried window prefix.",
+          "enum": [
+            "body_after_prefix"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "AutoReviewToml": {
       "properties": {
         "policy": {
@@ -455,9 +474,6 @@
               "type": "boolean"
             },
             "in_app_browser": {
-              "type": "boolean"
-            },
-            "include_apply_patch_tool": {
               "type": "boolean"
             },
             "js_repl": {
@@ -670,7 +686,7 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+          "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
           "type": "string"
         },
         "tools": {
@@ -820,13 +836,23 @@
       "type": "object"
     },
     "FileSystemAccessMode": {
-      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `deny` beats `write`, and `write` beats `read`.",
+      "oneOf": [
+        {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`none` is a legacy input alias retained temporarily for compatibility.",
+          "enum": [
+            "deny"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "FilesystemPermissionToml": {
       "anyOf": [
@@ -851,6 +877,20 @@
         }
       },
       "type": "object"
+    },
+    "ForcedChatgptWorkspaceIds": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Backward-compatible shape for ChatGPT workspace login restrictions in config.toml."
     },
     "ForcedLoginMethod": {
       "enum": [
@@ -1082,6 +1122,20 @@
           },
           "type": "array"
         },
+        "SubagentStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SubagentStop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {
@@ -1199,6 +1253,17 @@
           "type": "object"
         }
       ]
+    },
+    "McpServerOAuthConfig": {
+      "additionalProperties": false,
+      "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
+      "properties": {
+        "client_id": {
+          "description": "Explicit OAuth client identifier to present during authorization and token exchange.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "McpServerToolConfig": {
       "additionalProperties": false,
@@ -1494,6 +1559,12 @@
         "subagent_usage_hint_text": {
           "type": "string"
         },
+        "tool_namespace": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },
@@ -1511,6 +1582,118 @@
       "type": "string"
     },
     "NetworkDomainPermissionsToml": {
+      "type": "object"
+    },
+    "NetworkMitmActionToml": {
+      "properties": {
+        "inject_request_headers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/NetworkMitmInjectedHeaderToml"
+          },
+          "type": "array"
+        },
+        "strip_request_headers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmHookToml": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": true,
+        "headers": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "host": {
+          "type": "string"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_prefixes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "query": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "action",
+        "host",
+        "methods",
+        "path_prefixes"
+      ],
+      "type": "object"
+    },
+    "NetworkMitmInjectedHeaderToml": {
+      "properties": {
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "prefix": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_env_var": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_file": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmToml": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmActionToml"
+          },
+          "type": "object"
+        },
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmHookToml"
+          },
+          "type": "object"
+        }
+      },
       "type": "object"
     },
     "NetworkModeSchema": {
@@ -1615,6 +1798,9 @@
         },
         "enabled": {
           "type": "boolean"
+        },
+        "mitm": {
+          "$ref": "#/definitions/NetworkMitmToml"
         },
         "mode": {
           "$ref": "#/definitions/NetworkModeSchema"
@@ -1938,11 +2124,20 @@
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string"
+        },
+        "extends": {
+          "type": "string"
+        },
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
         },
         "network": {
           "$ref": "#/definitions/NetworkToml"
+        },
+        "workspace_roots": {
+          "$ref": "#/definitions/WorkspaceRootsToml"
         }
       },
       "type": "object"
@@ -2109,7 +2304,7 @@
           },
           "type": "array"
         },
-        "experimental_environment": {
+        "environment_id": {
           "default": null,
           "type": "string"
         },
@@ -2123,6 +2318,14 @@
           "default": null,
           "description": "Legacy display-name field accepted for backward compatibility.",
           "type": "string"
+        },
+        "oauth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerOAuthConfig"
+            }
+          ],
+          "default": null
         },
         "oauth_resource": {
           "default": null,
@@ -3930,6 +4133,9 @@
           "type": "string"
         }
       ]
+    },
+    "WorkspaceRootsToml": {
+      "type": "object"
     }
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
@@ -3979,6 +4185,10 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "apps_mcp_product_sku": {
+      "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",
+      "type": "string"
     },
     "audio": {
       "allOf": [
@@ -4036,6 +4246,12 @@
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
+    },
+    "desktop": {
+      "additionalProperties": true,
+      "default": null,
+      "description": "Opaque desktop settings stored alongside the rest of config.toml.",
+      "type": "object"
     },
     "developer_instructions": {
       "default": null,
@@ -4189,9 +4405,6 @@
           "type": "boolean"
         },
         "in_app_browser": {
-          "type": "boolean"
-        },
-        "include_apply_patch_tool": {
           "type": "boolean"
         },
         "js_repl": {
@@ -4364,9 +4577,13 @@
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme."
     },
     "forced_chatgpt_workspace_id": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ForcedChatgptWorkspaceIds"
+        }
+      ],
       "default": null,
-      "description": "When set, restricts ChatGPT login to a specific workspace identifier.",
-      "type": "string"
+      "description": "When set, restricts ChatGPT login to one or more workspace identifiers."
     },
     "forced_login_method": {
       "allOf": [
@@ -4490,6 +4707,14 @@
       "description": "Token usage threshold triggering auto-compaction of conversation history.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_auto_compact_token_limit_scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoCompactTokenLimitScope"
+        }
+      ],
+      "description": "Controls whether the auto-compaction limit applies to the full context or only to tokens after the carried prefix in the current compaction window."
     },
     "model_catalog_json": {
       "allOf": [
@@ -4673,7 +4898,7 @@
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
     "service_tier": {
-      "description": "Optional explicit service tier request id for new turns (for example `priority` or `flex`; legacy `fast` also works).",
+      "description": "Optional explicit service tier request id for new turns (for example `default`, `priority`, or `flex`; legacy `fast` also works).",
       "type": "string"
     },
     "shell_environment_policy": {
@@ -4761,10 +4986,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "windows_wsl_setup_acknowledged": {
-      "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
-      "type": "boolean"
     },
     "zsh_path": {
       "allOf": [

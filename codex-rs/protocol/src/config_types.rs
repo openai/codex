@@ -9,7 +9,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroU64;
+use std::ops::Deref;
+use std::str::FromStr;
 use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
@@ -17,6 +20,21 @@ use ts_rs::TS;
 use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
+
+/// Selects which part of the active context is charged against
+/// `model_auto_compact_token_limit`.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AutoCompactTokenLimitScope {
+    /// Count the full active context against the limit.
+    #[default]
+    Total,
+    /// Count sampled output and later growth after the carried window prefix.
+    BodyAfterPrefix,
+}
 
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
@@ -75,6 +93,65 @@ pub enum SandboxMode {
 
     #[serde(rename = "danger-full-access")]
     DangerFullAccess,
+}
+
+/// Validated plain profile-v2 name used to select `$CODEX_HOME/<name>.config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileV2Name(String);
+
+impl ProfileV2Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProfileV2NameParseError {
+    value: String,
+}
+
+impl fmt::Display for ProfileV2NameParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid --profile value `{}`; pass a plain name such as `work`",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ProfileV2NameParseError {}
+
+impl FromStr for ProfileV2Name {
+    type Err = ProfileV2NameParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ProfileV2NameParseError {
+                value: value.to_string(),
+            });
+        }
+
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl Deref for ProfileV2Name {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for ProfileV2Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
@@ -354,6 +431,12 @@ pub enum ServiceTier {
     Fast,
     Flex,
 }
+
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
 
 impl ServiceTier {
     pub const fn request_value(self) -> &'static str {
@@ -688,6 +771,24 @@ mod tests {
             };
             assert_eq!(expected, reviewer);
         }
+    }
+
+    #[test]
+    fn profile_v2_name_rejects_paths_and_empty_names() {
+        assert_eq!(
+            ProfileV2Name::from_str("../foo"),
+            Err(ProfileV2NameParseError {
+                value: "../foo".to_string(),
+            }),
+            "dots and slashes are disallowed to prevent reading arbitrary files"
+        );
+        assert_eq!(
+            ProfileV2Name::from_str(""),
+            Err(ProfileV2NameParseError {
+                value: String::new(),
+            }),
+            "profile name cannot be empty"
+        );
     }
 
     #[test]

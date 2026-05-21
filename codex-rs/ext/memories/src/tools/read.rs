@@ -1,7 +1,6 @@
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolFuture;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
@@ -34,7 +33,8 @@ pub(super) struct ReadTool<B> {
     pub(super) backend: B,
 }
 
-impl<B> ExtensionToolExecutor for ReadTool<B>
+#[async_trait::async_trait]
+impl<B> ToolExecutor<ToolCall> for ReadTool<B>
 where
     B: MemoriesBackend,
 {
@@ -42,27 +42,29 @@ where
         memory_tool_name(READ_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<ReadArgs, ReadMemoryResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<ReadArgs, ReadMemoryResponse>(
             READ_TOOL_NAME,
             "Read a Codex memory file by relative path, optionally starting at a 1-indexed line offset and limiting the number of lines returned.",
-        ))
+        )
     }
 
-    fn handle(&self, call: ToolCall) -> ExtensionToolFuture<'_> {
+    async fn handle(
+        &self,
+        call: ToolCall,
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
-        Box::pin(async move {
-            let args: ReadArgs = parse_args(&call)?;
-            let response = backend
-                .read(ReadMemoryRequest {
-                    path: args.path,
-                    line_offset: args.line_offset.unwrap_or(1),
-                    max_lines: args.max_lines,
-                    max_tokens: DEFAULT_READ_MAX_TOKENS,
-                })
-                .await
-                .map_err(backend_error_to_function_call)?;
-            Ok(JsonToolOutput::new(json!(response)))
-        })
+        let args: ReadArgs = parse_args(&call)?;
+        let response = backend
+            .read(ReadMemoryRequest {
+                path: args.path,
+                line_offset: args.line_offset.unwrap_or(1),
+                max_lines: args.max_lines,
+                max_tokens: DEFAULT_READ_MAX_TOKENS,
+            })
+            .await
+            .map_err(backend_error_to_function_call)?;
+        Ok(Box::new(JsonToolOutput::new(json!(response))))
     }
 }

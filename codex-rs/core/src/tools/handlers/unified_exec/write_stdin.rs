@@ -1,11 +1,11 @@
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolHandler;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -14,7 +14,6 @@ use codex_tools::ToolSpec;
 use serde::Deserialize;
 
 use super::super::shell_spec::create_write_stdin_tool;
-use super::effective_max_output_tokens;
 use super::post_unified_exec_tool_use_payload;
 
 #[derive(Debug, Deserialize)]
@@ -31,18 +30,20 @@ struct WriteStdinArgs {
 
 pub struct WriteStdinHandler;
 
+#[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
-    type Output = ExecCommandToolOutput;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("write_stdin")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_write_stdin_tool())
+    fn spec(&self) -> ToolSpec {
+        create_write_stdin_tool()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -60,8 +61,6 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         };
 
         let args: WriteStdinArgs = parse_arguments(&arguments)?;
-        let max_output_tokens =
-            effective_max_output_tokens(args.max_output_tokens, turn.truncation_policy);
         let response = session
             .services
             .unified_exec_manager
@@ -69,27 +68,35 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
                 process_id: args.session_id,
                 input: &args.chars,
                 yield_time_ms: args.yield_time_ms,
-                max_output_tokens: Some(max_output_tokens),
+                max_output_tokens: args.max_output_tokens,
+                truncation_policy: turn.truncation_policy,
             })
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
             })?;
 
-        let interaction = TerminalInteractionEvent {
-            call_id: response.event_call_id.clone(),
-            process_id: args.session_id.to_string(),
-            stdin: args.chars.clone(),
-        };
-        session
-            .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
-            .await;
+        // Empty stdin is a background poll, so emit it only while there is
+        // still a live process for the UI to wait on. Non-empty stdin is a real
+        // terminal interaction and should remain visible even if it completes
+        // the process before the response returns.
+        if !args.chars.is_empty() || response.process_id.is_some() {
+            let process_id = response.process_id.unwrap_or(args.session_id);
+            let interaction = TerminalInteractionEvent {
+                call_id: response.event_call_id.clone(),
+                process_id: process_id.to_string(),
+                stdin: args.chars.clone(),
+            };
+            session
+                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                .await;
+        }
 
-        Ok(response)
+        Ok(boxed_tool_output(response))
     }
 }
 
-impl ToolHandler for WriteStdinHandler {
+impl CoreToolRuntime for WriteStdinHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -97,7 +104,7 @@ impl ToolHandler for WriteStdinHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &Self::Output,
+        result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
         post_unified_exec_tool_use_payload(invocation, result)
     }

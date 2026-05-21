@@ -54,6 +54,7 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-extension = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider = { workspace = true }

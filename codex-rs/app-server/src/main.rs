@@ -17,6 +17,7 @@ const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH"
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 #[derive(Debug, Parser)]
+#[command(version)]
 struct AppServerArgs {
     /// Transport endpoint URL. Supported values: `stdio://` (default),
     /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
@@ -48,6 +49,10 @@ struct AppServerArgs {
     #[cfg(debug_assertions)]
     #[arg(long = "disable-plugin-startup-tasks-for-tests", hide = true)]
     disable_plugin_startup_tasks_for_tests: bool,
+
+    /// Enable remote control for this app-server process.
+    #[arg(long = "remote-control", hide = true)]
+    remote_control: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,6 +64,7 @@ fn main() -> anyhow::Result<()> {
             strict_config,
             #[cfg(debug_assertions)]
             disable_plugin_startup_tasks_for_tests,
+            remote_control,
         } = AppServerArgs::parse();
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
@@ -74,6 +80,7 @@ fn main() -> anyhow::Result<()> {
         if disable_plugin_startup_tasks_for_tests {
             runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
         }
+        runtime_options.remote_control_enabled = remote_control;
 
         run_main_with_transport_options(
             arg0_paths,

@@ -71,10 +71,6 @@ fn explicit_non_original_detail_is_preserved() {
     let model_info = model_info();
 
     assert_eq!(
-        normalize_output_image_detail(&model_info, Some(ImageDetail::Low)),
-        Some(ImageDetail::Low)
-    );
-    assert_eq!(
         normalize_output_image_detail(&model_info, Some(ImageDetail::High)),
         Some(ImageDetail::High)
     );
@@ -92,7 +88,7 @@ fn sanitize_original_falls_back_to_high_without_support() {
         },
         FunctionCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,BBB".to_string(),
-            detail: Some(ImageDetail::Low),
+            detail: Some(ImageDetail::High),
         },
     ];
 
@@ -110,7 +106,7 @@ fn sanitize_original_falls_back_to_high_without_support() {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BBB".to_string(),
-                detail: Some(ImageDetail::Low),
+                detail: Some(ImageDetail::High),
             },
         ]
     );

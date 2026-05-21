@@ -71,7 +71,6 @@ async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> 
             .features
             .enable(Feature::UnifiedExec)
             .expect("unified exec should enable for test");
-        config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;
 
@@ -381,7 +380,7 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
                     path: FileSystemPath::GlobPattern {
                         pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 });
             config
                 .permissions

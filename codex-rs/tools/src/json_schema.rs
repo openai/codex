@@ -166,6 +166,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
+/// - Coerces object schemas with no recognized schema hints into `{}`.
 fn sanitize_json_schema(value: &mut JsonValue) {
     match value {
         JsonValue::Bool(_) => {
@@ -228,7 +229,8 @@ fn sanitize_json_schema(value: &mut JsonValue) {
                 {
                     schema_types.push(JsonSchemaPrimitiveType::Number);
                 } else {
-                    schema_types.push(JsonSchemaPrimitiveType::String);
+                    map.clear();
+                    return;
                 }
             }
 

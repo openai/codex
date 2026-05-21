@@ -3,7 +3,6 @@
 use std::fs;
 
 use assert_matches::assert_matches;
-use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::plan_tool::StepStatus;
@@ -103,24 +102,29 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -179,24 +183,29 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -265,24 +274,29 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -324,12 +338,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ApplyPatchFreeform)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
@@ -366,24 +375,29 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -467,12 +481,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ApplyPatchFreeform)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
@@ -504,24 +513,29 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: cwd_path,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd_path),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 

@@ -62,6 +62,10 @@ impl ConfigManager {
         self.codex_home.as_path()
     }
 
+    pub(crate) fn user_config_path(&self) -> std::io::Result<AbsolutePathBuf> {
+        self.loader_overrides.user_config_path(self.codex_home())
+    }
+
     pub(crate) fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
         self.cli_overrides
             .read()
@@ -164,6 +168,16 @@ impl ConfigManager {
             self.current_cli_overrides(),
         )
         .await?;
+        if self.loader_overrides.user_config_path.is_some()
+            || self.loader_overrides.user_config_profile.is_some()
+        {
+            let user_config_path = self.loader_overrides.user_config_path(self.codex_home())?;
+            config.config_layer_stack = config.config_layer_stack.with_user_config_profile(
+                &user_config_path,
+                self.loader_overrides.user_config_profile.as_ref(),
+                TomlValue::Table(toml::map::Map::new()),
+            );
+        }
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)

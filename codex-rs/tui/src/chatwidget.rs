@@ -61,6 +61,7 @@ use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
+use crate::legacy_core::config::PermissionProfileSnapshot;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
@@ -114,6 +115,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSettings;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -127,7 +130,6 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_skills::model::SkillMetadata;
-use codex_exec_server::EnvironmentManager;
 use codex_features::FEATURES;
 use codex_features::Feature;
 #[cfg(test)]
@@ -165,6 +167,7 @@ use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cli::resume_hint;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -253,6 +256,7 @@ fn queued_message_edit_hint_binding(
 
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -374,8 +378,9 @@ use self::rate_limits::RateLimitErrorKind;
 use self::rate_limits::RateLimitSwitchPromptState;
 use self::rate_limits::RateLimitWarningState;
 use self::rate_limits::app_server_rate_limit_error_kind;
-pub(crate) use self::rate_limits::get_limits_duration;
+pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
+pub(crate) use self::rate_limits::limit_label_for_window;
 mod realtime;
 mod rendering;
 mod replay;
@@ -441,6 +446,7 @@ use crate::workspace_command::WorkspaceCommandRunner;
 use chrono::Local;
 use codex_app_server_protocol::AskForApproval;
 use codex_file_search::FileMatch;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
@@ -454,6 +460,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const AUTO_REVIEW_DESCRIPTION: &str = "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent.";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 const MAX_AGENT_COPY_HISTORY: usize = 32;
@@ -461,7 +468,6 @@ const MAX_AGENT_COPY_HISTORY: usize = 32;
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
-    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     /// App-server-backed runner used by status surfaces for workspace metadata probes.
@@ -513,7 +519,6 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     transcript: TranscriptState,
     config: Config,
-    environment_manager: Arc<EnvironmentManager>,
     raw_output_mode: bool,
     /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
     effective_service_tier: Option<String>,
@@ -1274,6 +1279,10 @@ impl ChatWidget {
             .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.bottom_pane.show_shutdown_in_progress();
+    }
+
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
@@ -1433,16 +1442,14 @@ impl ChatWidget {
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
-        let resume_cmd = crate::legacy_core::util::resume_command(Some(name), thread_id)
-            .unwrap_or_else(|| format!("codex resume {name}"));
-        let name = name.to_string();
-        let line = vec![
+        let mut line = vec![
             "• ".into(),
             "Thread renamed to ".into(),
-            name.cyan(),
-            ", to resume this thread run ".into(),
-            resume_cmd.cyan(),
+            name.to_string().cyan(),
         ];
+        if let Some(hint) = resume_hint(Some(name), thread_id) {
+            line.extend([". To resume this thread run ".into(), hint.cyan()]);
+        }
         PlainHistoryCell::new(vec![line.into()])
     }
 

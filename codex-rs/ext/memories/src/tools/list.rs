@@ -1,7 +1,6 @@
-use codex_extension_api::ExtensionToolExecutor;
-use codex_extension_api::ExtensionToolFuture;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ToolCall;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
@@ -35,7 +34,8 @@ pub(super) struct ListTool<B> {
     pub(super) backend: B,
 }
 
-impl<B> ExtensionToolExecutor for ListTool<B>
+#[async_trait::async_trait]
+impl<B> ToolExecutor<ToolCall> for ListTool<B>
 where
     B: MemoriesBackend,
 {
@@ -43,30 +43,32 @@ where
         memory_tool_name(LIST_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<ListArgs, ListMemoriesResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<ListArgs, ListMemoriesResponse>(
             LIST_TOOL_NAME,
             "List immediate files and directories under a path in the Codex memories store.",
-        ))
+        )
     }
 
-    fn handle(&self, call: ToolCall) -> ExtensionToolFuture<'_> {
+    async fn handle(
+        &self,
+        call: ToolCall,
+    ) -> Result<Box<dyn codex_extension_api::ToolOutput>, codex_extension_api::FunctionCallError>
+    {
         let backend = self.backend.clone();
-        Box::pin(async move {
-            let args: ListArgs = parse_args(&call)?;
-            let response = backend
-                .list(ListMemoriesRequest {
-                    path: args.path,
-                    cursor: args.cursor,
-                    max_results: clamp_max_results(
-                        args.max_results,
-                        DEFAULT_LIST_MAX_RESULTS,
-                        MAX_LIST_RESULTS,
-                    ),
-                })
-                .await
-                .map_err(backend_error_to_function_call)?;
-            Ok(JsonToolOutput::new(json!(response)))
-        })
+        let args: ListArgs = parse_args(&call)?;
+        let response = backend
+            .list(ListMemoriesRequest {
+                path: args.path,
+                cursor: args.cursor,
+                max_results: clamp_max_results(
+                    args.max_results,
+                    DEFAULT_LIST_MAX_RESULTS,
+                    MAX_LIST_RESULTS,
+                ),
+            })
+            .await
+            .map_err(backend_error_to_function_call)?;
+        Ok(Box::new(JsonToolOutput::new(json!(response))))
     }
 }

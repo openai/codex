@@ -206,10 +206,11 @@ class MockResponsesServer:
 class AppServerHarness:
     """Test fixture that points a pinned runtime app-server at MockResponsesServer."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, *, requires_openai_auth: bool = False) -> None:
         self.tmp_path = tmp_path
         self.codex_home = tmp_path / "codex-home"
         self.workspace = tmp_path / "workspace"
+        self.requires_openai_auth = requires_openai_auth
         self.responses = MockResponsesServer()
 
     def __enter__(self) -> AppServerHarness:
@@ -238,6 +239,7 @@ class AppServerHarness:
     def _write_config(self) -> None:
         """Write config.toml that routes model calls to the mock server."""
         config_toml = self.codex_home / "config.toml"
+        requires_openai_auth = "requires_openai_auth = true\n" if self.requires_openai_auth else ""
         config_toml.write_text(
             f"""
 model = "mock-model"
@@ -252,6 +254,7 @@ base_url = "{self.responses.url}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+{requires_openai_auth}
 """.lstrip()
         )
 

@@ -152,12 +152,13 @@ impl ChatWidget {
             return None;
         }
 
+        let composer = self.bottom_pane.composer_draft_snapshot();
         let existing_message = UserMessage {
-            text: self.bottom_pane.composer_text(),
-            text_elements: self.bottom_pane.composer_text_elements(),
-            local_images: self.bottom_pane.composer_local_images(),
-            remote_image_urls: self.bottom_pane.remote_image_urls(),
-            mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            text: composer.text,
+            text_elements: composer.text_elements,
+            local_images: composer.local_images,
+            remote_image_urls: composer.remote_image_urls,
+            mention_bindings: composer.mention_bindings,
         };
 
         let rejected_messages = self
@@ -236,13 +237,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
+        let draft = self.bottom_pane.composer_draft_snapshot();
         let composer = ThreadComposerState {
-            text: self.bottom_pane.composer_text(),
-            text_elements: self.bottom_pane.composer_text_elements(),
-            local_images: self.bottom_pane.composer_local_images(),
-            remote_image_urls: self.bottom_pane.remote_image_urls(),
-            mention_bindings: self.bottom_pane.composer_mention_bindings(),
-            pending_pastes: self.bottom_pane.composer_pending_pastes(),
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_images: draft.local_images,
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft.mention_bindings,
+            pending_pastes: draft.pending_pastes,
         };
         Some(ThreadInputState {
             composer: composer.has_content().then_some(composer),

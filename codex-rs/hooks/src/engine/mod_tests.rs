@@ -224,6 +224,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
+        subagent: None,
         cwd: cwd.clone(),
         transcript_path: None,
         model: "gpt-test".to_string(),
@@ -240,6 +241,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         .run_pre_tool_use(PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd,
             transcript_path: None,
             model: "gpt-test".to_string(),
@@ -311,6 +313,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
         .run_pre_tool_use(PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: cwd(),
             transcript_path: None,
             model: "gpt-test".to_string(),
@@ -435,7 +438,10 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             user_config,
         )],
         ConfigRequirements {
@@ -499,6 +505,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
                     file: user_config_path,
+                    profile: None,
                 },
                 config_with_hook_state(&managed_key, /*enabled*/ false),
             ),
@@ -627,7 +634,10 @@ fn trusted_plugin_hook_stack(
 
     ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config,
         )],
         ConfigRequirements::default(),
@@ -689,6 +699,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
+        subagent: None,
         cwd,
         transcript_path: None,
         model: "gpt-test".to_string(),
@@ -716,7 +727,10 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/user-hook.py"),
         )],
         requirements,
@@ -767,7 +781,10 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml,
         )],
         ConfigRequirements::default(),
@@ -834,7 +851,10 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
     );
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: config_path },
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
             config_toml_with_pre_tool_use("python3 /tmp/toml-hook.py"),
         )],
         requirements,
@@ -1085,6 +1105,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
+        subagent: None,
         cwd,
         transcript_path: None,
         model: "gpt-test".to_string(),
@@ -1170,6 +1191,7 @@ print(json.dumps({
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
         session_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
+        subagent: None,
         cwd: cwd(),
         transcript_path: None,
         model: "gpt-test".to_string(),
@@ -1201,6 +1223,7 @@ print(json.dumps({
         .run_pre_tool_use(PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: cwd(),
             transcript_path: None,
             model: "gpt-test".to_string(),

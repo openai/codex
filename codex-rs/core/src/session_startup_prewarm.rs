@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -235,9 +234,6 @@ async fn schedule_startup_prewarm_inner(
     let startup_router = built_tools(
         session.as_ref(),
         startup_turn_context.as_ref(),
-        &[],
-        &HashSet::new(),
-        /*skills_outcome*/ None,
         &startup_cancellation_token,
     )
     .await?;

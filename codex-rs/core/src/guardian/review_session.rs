@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::PermissionProfile;
@@ -138,6 +139,7 @@ struct GuardianReviewSessionReuseKey {
     model_provider: ModelProviderInfo,
     model_context_window: Option<i64>,
     model_auto_compact_token_limit: Option<i64>,
+    model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
     model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
     permissions: Permissions,
@@ -151,7 +153,6 @@ struct GuardianReviewSessionReuseKey {
     main_execve_wrapper_exe: Option<PathBuf>,
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
-    include_apply_patch_tool: bool,
     use_experimental_unified_exec_tool: bool,
 }
 
@@ -163,6 +164,7 @@ impl GuardianReviewSessionReuseKey {
             model_provider: spawn_config.model_provider.clone(),
             model_context_window: spawn_config.model_context_window,
             model_auto_compact_token_limit: spawn_config.model_auto_compact_token_limit,
+            model_auto_compact_token_limit_scope: spawn_config.model_auto_compact_token_limit_scope,
             model_reasoning_effort: spawn_config.model_reasoning_effort,
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
@@ -176,7 +178,6 @@ impl GuardianReviewSessionReuseKey {
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
-            include_apply_patch_tool: spawn_config.include_apply_patch_tool,
             use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
         }
     }
@@ -701,26 +702,36 @@ async fn run_review_on_session(
         .total_token_usage()
         .await
         .unwrap_or_default();
+    // The legacy SandboxPolicy should match the PermissionProfile.
+    let guardian_permission_profile = PermissionProfile::read_only();
+    let legacy_sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
-        Box::pin(review_session.codex.submit(Op::UserTurn {
-            environments: None,
+        Box::pin(review_session.codex.submit(Op::UserInput {
             items: prompt_items.items,
-            #[allow(deprecated)]
-            cwd: params.parent_turn.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            permission_profile: None,
-            model: params.model.clone(),
-            effort: params.reasoning_effort,
-            summary: Some(params.reasoning_summary),
-            service_tier: None,
+            environments: None,
             final_output_json_schema: Some(params.schema.clone()),
-            collaboration_mode: None,
-            personality: params.personality,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                #[allow(deprecated)]
+                cwd: Some(params.parent_turn.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(legacy_sandbox_policy),
+                permission_profile: Some(guardian_permission_profile),
+                summary: Some(params.reasoning_summary),
+                personality: params.personality,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: params.model.clone(),
+                        reasoning_effort: params.reasoning_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })),
     )
     .await;
@@ -895,15 +906,11 @@ pub(crate) fn build_guardian_review_session_config(
     );
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    guardian_config.permissions.permission_profile = Constrained::allow_only(
-        PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
-    );
     guardian_config
         .permissions
-        .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())
+        .set_permission_profile(PermissionProfile::read_only())
         .map_err(|err| {
-            anyhow::anyhow!("guardian review session could not set sandbox policy: {err}")
+            anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
     guardian_config.include_apps_instructions = false;
     guardian_config
@@ -924,7 +931,7 @@ pub(crate) fn build_guardian_review_session_config(
         guardian_config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
             live_network_config,
             network_constraints,
-            guardian_config.permissions.permission_profile.get(),
+            guardian_config.permissions.permission_profile(),
         )?);
     }
     for feature in [
@@ -1149,6 +1156,34 @@ mod tests {
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
         );
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_compact_scope_change_invalidates_cached_session() {
+        let parent_config = crate::config::test_config().await;
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
+        let cached_reuse_key =
+            GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
+
+        let mut changed_parent_config = parent_config;
+        changed_parent_config.model_auto_compact_token_limit_scope =
+            AutoCompactTokenLimitScope::BodyAfterPrefix;
+        let next_spawn_config = build_guardian_review_session_config(
+            &changed_parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("next guardian config");
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
+
+        assert_ne!(cached_reuse_key, next_reuse_key);
     }
 
     #[tokio::test]
