@@ -1331,7 +1331,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     root_remote_auth_token_env.as_deref(),
                     "debug clear-memories",
                 )?;
-                run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;
+                run_debug_clear_memories_command(&root_config_overrides).await?;
             }
         },
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
@@ -1381,14 +1381,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "exec-server",
             )?;
             let strict_config = cmd.strict_config || root_strict_config;
-            run_exec_server_command(
-                cmd,
-                &arg0_paths,
-                &root_config_overrides,
-                interactive.config_profile.clone(),
-                strict_config,
-            )
-            .await?;
+            run_exec_server_command(cmd, &arg0_paths, &root_config_overrides, strict_config)
+                .await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1397,7 +1391,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     root_remote_auth_token_env.as_deref(),
                     "features list",
                 )?;
-                // Respect root-level `-c` overrides plus top-level flags like `--profile`.
                 let mut cli_kv_overrides = root_config_overrides
                     .parse_overrides()
                     .map_err(anyhow::Error::msg)?;
@@ -1410,15 +1403,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     ));
                 }
 
-                // Thread through relevant top-level flags (at minimum, `--profile`).
-                let overrides = ConfigOverrides {
-                    config_profile: interactive.config_profile.clone(),
-                    ..Default::default()
-                };
-
                 let config = ConfigBuilder::default()
                     .cli_overrides(cli_kv_overrides)
-                    .harness_overrides(overrides)
                     .build()
                     .await?;
                 let mut rows = Vec::with_capacity(FEATURES.len());
@@ -1444,7 +1430,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     root_remote_auth_token_env.as_deref(),
                     "features enable",
                 )?;
-                enable_feature_in_config(&interactive, &feature).await?;
+                enable_feature_in_config(&feature).await?;
             }
             FeaturesSubcommand::Disable(FeatureSetArgs { feature }) => {
                 reject_remote_mode_for_subcommand(
@@ -1452,7 +1438,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     root_remote_auth_token_env.as_deref(),
                     "features disable",
                 )?;
-                disable_feature_in_config(&interactive, &feature).await?;
+                disable_feature_in_config(&feature).await?;
             }
         },
     }
@@ -1486,7 +1472,6 @@ async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
     root_config_overrides: &CliConfigOverrides,
-    config_profile: Option<String>,
     strict_config: bool,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
@@ -1501,8 +1486,7 @@ async fn run_exec_server_command(
         let environment_id = cmd
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
-        let config =
-            load_exec_server_config(root_config_overrides, config_profile, strict_config).await?;
+        let config = load_exec_server_config(root_config_overrides, strict_config).await?;
         let auth_provider =
             load_exec_server_remote_auth_provider(&config, cmd.use_agent_identity_auth).await?;
         let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
@@ -1520,8 +1504,7 @@ async fn run_exec_server_command(
             // Local exec-server startup does not consume Config, but strict
             // mode should still reject unknown fields before opening a listener.
             let _validated_config =
-                load_exec_server_config(root_config_overrides, config_profile, strict_config)
-                    .await?;
+                load_exec_server_config(root_config_overrides, strict_config).await?;
         }
         let listen_url = cmd
             .listen
@@ -1564,7 +1547,6 @@ async fn load_exec_server_remote_auth_provider(
 
 async fn load_exec_server_config(
     root_config_overrides: &CliConfigOverrides,
-    config_profile: Option<String>,
     strict_config: bool,
 ) -> anyhow::Result<codex_core::config::Config> {
     let cli_kv_overrides = root_config_overrides
@@ -1572,10 +1554,6 @@ async fn load_exec_server_config(
         .map_err(anyhow::Error::msg)?;
     Ok(ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
-        .harness_overrides(ConfigOverrides {
-            config_profile,
-            ..Default::default()
-        })
         .strict_config(strict_config)
         .build()
         .await?)
@@ -1602,24 +1580,22 @@ async fn load_exec_server_remote_auth(
     Ok(auth)
 }
 
-async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+async fn enable_feature_in_config(feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
-        .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ true)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
-    maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
+    maybe_print_under_development_feature_warning(&codex_home, feature);
     Ok(())
 }
 
-async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
+async fn disable_feature_in_config(feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
-        .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;
@@ -1643,15 +1619,7 @@ fn loader_overrides_for_profile(
     }
 }
 
-fn maybe_print_under_development_feature_warning(
-    codex_home: &std::path::Path,
-    interactive: &TuiCli,
-    feature: &str,
-) {
-    if interactive.config_profile.is_some() {
-        return;
-    }
-
+fn maybe_print_under_development_feature_warning(codex_home: &std::path::Path, feature: &str) {
     let Some(spec) = FEATURES.iter().find(|spec| spec.key == feature) else {
         return;
     };
@@ -1709,7 +1677,6 @@ async fn run_debug_prompt_input_command(
     };
     let overrides = ConfigOverrides {
         model: shared.model,
-        config_profile: shared.config_profile,
         approval_policy,
         sandbox_mode,
         cwd: shared.cwd,
@@ -1777,18 +1744,12 @@ async fn run_debug_models_command(
 
 async fn run_debug_clear_memories_command(
     root_config_overrides: &CliConfigOverrides,
-    interactive: &TuiCli,
 ) -> anyhow::Result<()> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let overrides = ConfigOverrides {
-        config_profile: interactive.config_profile.clone(),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
-        .harness_overrides(overrides)
         .build()
         .await?;
 
@@ -2771,7 +2732,6 @@ mod tests {
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.oss);
-        assert_eq!(interactive.config_profile.as_deref(), None);
         assert_eq!(interactive.config_profile_v2.as_deref(), Some("my-config"));
         assert_matches!(
             interactive.sandbox_mode,
