@@ -2086,14 +2086,12 @@ impl ThreadRequestProcessor {
                 .load_history(/*include_archived*/ true)
                 .await
                 .map_err(|err| thread_read_history_load_error(thread_id, err))?;
-            let live_turn = {
+            let live_turns = {
                 let thread_state = self.thread_state_manager.thread_state(thread_id).await;
                 let state = thread_state.lock().await;
-                state
-                    .active_turn_snapshot()
-                    .or_else(|| state.last_terminal_turn_snapshot())
+                state.live_turn_snapshots()
             };
-            populate_thread_turns_from_history(thread, &history.items, live_turn.as_ref());
+            populate_thread_turns_from_history(thread, &history.items, live_turns.as_slice());
         }
 
         Ok(())
@@ -2129,19 +2127,17 @@ impl ThreadRequestProcessor {
             Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
             None => false,
         };
-        let active_turn = if loaded_thread.is_some() {
+        let live_turns = if loaded_thread.is_some() {
             // Persisted history may not yet include the currently running turn. The
             // app-server listener has already projected live turn events into
-            // ThreadState, so merge that in-memory snapshot before paginating. A
-            // failed turn may also complete before its error event is persisted, so
-            // bridge the latest terminal failed snapshot too.
+            // ThreadState, so merge those in-memory snapshots before paginating.
+            // A failed turn may also complete before its error event is persisted,
+            // so bridge terminal failed snapshots too.
             let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
             let state = thread_state.lock().await;
-            state
-                .active_turn_snapshot()
-                .or_else(|| state.last_terminal_turn_snapshot())
+            state.live_turn_snapshots()
         } else {
-            None
+            Vec::new()
         };
         let mut turns = reconstruct_thread_turns_for_turns_list(
             &items,
@@ -2149,7 +2145,7 @@ impl ThreadRequestProcessor {
                 .loaded_status_for_thread(&thread_uuid.to_string())
                 .await,
             has_live_running_thread,
-            active_turn,
+            live_turns.as_slice(),
         );
         for turn in &mut turns {
             match items_view {
@@ -2866,11 +2862,7 @@ impl ThreadRequestProcessor {
         let (mut thread, history) =
             thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
         if include_turns && let Some(history) = history {
-            populate_thread_turns_from_history(
-                &mut thread,
-                &history.items,
-                /*active_turn*/ None,
-            );
+            populate_thread_turns_from_history(&mut thread, &history.items, &[]);
         }
         thread
     }
@@ -2979,11 +2971,7 @@ impl ThreadRequestProcessor {
         thread.path = Some(rollout_path.to_path_buf());
         if include_turns {
             let history_items = thread_history.get_rollout_items();
-            populate_thread_turns_from_history(
-                &mut thread,
-                &history_items,
-                /*active_turn*/ None,
-            );
+            populate_thread_turns_from_history(&mut thread, &history_items, &[]);
         }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
@@ -3177,11 +3165,7 @@ impl ThreadRequestProcessor {
             thread.preview = preview_from_rollout_items(&history_items);
             thread.forked_from_id = Some(source_thread_id.to_string());
             if include_turns {
-                populate_thread_turns_from_history(
-                    &mut thread,
-                    &history_items,
-                    /*active_turn*/ None,
-                );
+                populate_thread_turns_from_history(&mut thread, &history_items, &[]);
             }
             thread
         };
@@ -3545,16 +3529,16 @@ fn reconstruct_thread_turns_for_turns_list(
     items: &[RolloutItem],
     loaded_status: ThreadStatus,
     has_live_running_thread: bool,
-    active_turn: Option<Turn>,
+    live_turns: &[Turn],
 ) -> Vec<Turn> {
     let has_live_in_progress_turn = has_live_running_thread
-        || active_turn
-            .as_ref()
-            .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
+        || live_turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress));
     let mut turns = build_api_turns_from_rollout_items(items);
     normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
-    if let Some(active_turn) = active_turn {
-        merge_turn_history_with_active_turn(&mut turns, active_turn);
+    for turn in live_turns {
+        merge_turn_history_with_live_turn(&mut turns, turn.clone());
     }
     turns
 }

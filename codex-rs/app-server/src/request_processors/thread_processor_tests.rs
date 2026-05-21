@@ -274,10 +274,85 @@ mod thread_processor_behavior_tests {
             &persisted_items,
             ThreadStatus::Idle,
             /*has_live_running_thread*/ false,
-            Some(active_turn.clone()),
+            std::slice::from_ref(&active_turn),
         );
 
         assert_eq!(turns.last(), Some(&active_turn));
+    }
+
+    #[test]
+    fn thread_turns_list_merges_terminal_failure_and_active_turn() {
+        let persisted_items = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "persisted".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            },
+        ))];
+        let failed_terminal_turn = Turn {
+            id: "turn-1".to_string(),
+            items: Vec::new(),
+            items_view: TurnItemsView::Full,
+            error: Some(TurnError {
+                message: "schema failed".to_string(),
+                codex_error_info: None,
+                additional_details: None,
+                data: None,
+            }),
+            status: TurnStatus::Failed,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+        let active_turn = Turn {
+            id: "turn-2".to_string(),
+            items: Vec::new(),
+            items_view: TurnItemsView::Full,
+            error: None,
+            status: TurnStatus::InProgress,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+
+        let turns = reconstruct_thread_turns_for_turns_list(
+            &persisted_items,
+            ThreadStatus::Idle,
+            /*has_live_running_thread*/ false,
+            &[failed_terminal_turn.clone(), active_turn.clone()],
+        );
+
+        assert!(turns.contains(&failed_terminal_turn));
+        assert_eq!(turns.last(), Some(&active_turn));
+    }
+
+    #[test]
+    fn app_server_history_replay_preserves_limited_error_events() {
+        let error = "schema failed";
+        let turns = build_api_turns_from_rollout_items(&[
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "persisted".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                    ..Default::default()
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+                message: error.to_string(),
+                codex_error_info: None,
+            })),
+        ]);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].status, TurnStatus::Failed);
+        assert_eq!(
+            turns[0].error.as_ref().map(|error| error.message.as_str()),
+            Some(error)
+        );
     }
 
     #[test]

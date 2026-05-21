@@ -148,12 +148,22 @@ impl ThreadState {
         self.last_terminal_turn.clone()
     }
 
+    pub(crate) fn live_turn_snapshots(&self) -> Vec<Turn> {
+        let mut turns = Vec::new();
+        if let Some(turn) = self.last_terminal_turn_snapshot() {
+            turns.push(turn);
+        }
+        if let Some(turn) = self.active_turn_snapshot() {
+            turns.retain(|existing| existing.id != turn.id);
+            turns.push(turn);
+        }
+        turns
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
             self.turn_summary.last_error = None;
-            self.last_terminal_turn_id = None;
-            self.last_terminal_turn = None;
         }
         self.current_turn_history.handle_event(event);
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
@@ -229,6 +239,7 @@ mod tests {
     use codex_protocol::config_types::Settings;
     use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
+    use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
 
@@ -264,6 +275,59 @@ mod tests {
 
         assert_eq!(turn.status, TurnStatus::Failed);
         assert_eq!(turn.error, state.turn_summary.last_error);
+    }
+
+    #[test]
+    fn live_turn_snapshots_preserve_failed_terminal_turn_after_next_turn_starts() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event("turn-1", &turn_started_event("turn-1"));
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::Error(ErrorEvent {
+                message: "raw error".to_string(),
+                codex_error_info: Some(CoreCodexErrorInfo::BadRequest),
+            }),
+        );
+        state.turn_summary.last_error = Some(TurnError {
+            message: "enriched error".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+            additional_details: None,
+            data: None,
+        });
+        state.track_current_turn_event("turn-1", &turn_complete_event("turn-1"));
+        state.track_current_turn_event("turn-2", &turn_started_event("turn-2"));
+
+        let turns = state.live_turn_snapshots();
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].id, "turn-1");
+        assert_eq!(turns[0].status, TurnStatus::Failed);
+        assert_eq!(
+            turns[0].error,
+            state.last_terminal_turn_snapshot().unwrap().error
+        );
+        assert_eq!(turns[1].id, "turn-2");
+        assert_eq!(turns[1].status, TurnStatus::InProgress);
+        assert_eq!(turns[1].error, None);
+    }
+
+    fn turn_started_event(turn_id: &str) -> EventMsg {
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })
+    }
+
+    fn turn_complete_event(turn_id: &str) -> EventMsg {
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_id.to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })
     }
 
     #[test]

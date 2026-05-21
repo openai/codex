@@ -526,23 +526,24 @@ pub(super) async fn handle_pending_thread_resume_request(
     pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
-    let active_turn = {
+    let live_turns = {
         let state = thread_state.lock().await;
-        state.active_turn_snapshot()
+        state.live_turn_snapshots()
     };
+    let latest_live_turn = live_turns.last();
     tracing::debug!(
         thread_id = %conversation_id,
         request_id = ?pending.request_id,
-        active_turn_present = active_turn.is_some(),
-        active_turn_id = ?active_turn.as_ref().map(|turn| turn.id.as_str()),
-        active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
+        live_turn_present = latest_live_turn.is_some(),
+        latest_live_turn_id = ?latest_live_turn.as_ref().map(|turn| turn.id.as_str()),
+        latest_live_turn_status = ?latest_live_turn.as_ref().map(|turn| &turn.status),
         "composing running thread resume response"
     );
     let has_live_in_progress_turn =
         matches!(conversation.agent_status().await, AgentStatus::Running)
-            || active_turn
-                .as_ref()
-                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
+            || live_turns
+                .iter()
+                .any(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
@@ -551,7 +552,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         populate_thread_turns_from_history(
             &mut thread,
             &pending.history_items,
-            active_turn.as_ref(),
+            live_turns.as_slice(),
         );
     }
 
@@ -716,11 +717,11 @@ pub(super) async fn send_thread_goal_snapshot_notification(
 pub(crate) fn populate_thread_turns_from_history(
     thread: &mut Thread,
     items: &[RolloutItem],
-    active_turn: Option<&Turn>,
+    live_turns: &[Turn],
 ) {
     let mut turns = build_api_turns_from_rollout_items(items);
-    if let Some(active_turn) = active_turn {
-        merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
+    for turn in live_turns {
+        merge_turn_history_with_live_turn(&mut turns, turn.clone());
     }
     thread.turns = turns;
 }
@@ -750,9 +751,9 @@ pub(super) async fn resolve_pending_server_request(
         .await;
 }
 
-pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
-    turns.retain(|turn| turn.id != active_turn.id);
-    turns.push(active_turn);
+pub(super) fn merge_turn_history_with_live_turn(turns: &mut Vec<Turn>, live_turn: Turn) {
+    turns.retain(|turn| turn.id != live_turn.id);
+    turns.push(live_turn);
 }
 
 pub(super) fn set_thread_status_and_interrupt_stale_turns(

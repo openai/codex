@@ -151,6 +151,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TurnComplete(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_) => Some(EventPersistenceMode::Limited),
+        EventMsg::Error(event) if event.affects_turn_status() => {
+            Some(EventPersistenceMode::Limited)
+        }
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
@@ -217,5 +220,38 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ErrorEvent;
+
+    #[test]
+    fn limited_persistence_includes_turn_affecting_errors() {
+        let item = RolloutItem::EventMsg(EventMsg::Error(ErrorEvent {
+            message: "backend schema failed".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }));
+
+        assert!(is_persisted_rollout_item(
+            &item,
+            EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn limited_persistence_skips_non_turn_affecting_errors() {
+        let item = RolloutItem::EventMsg(EventMsg::Error(ErrorEvent {
+            message: "rollback failed".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        }));
+
+        assert!(!is_persisted_rollout_item(
+            &item,
+            EventPersistenceMode::Limited
+        ));
     }
 }
