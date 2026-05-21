@@ -14,7 +14,6 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolTelemetryTags;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use codex_mcp::ToolInfo;
@@ -30,24 +29,12 @@ use serde_json::Value;
 pub struct McpHandler {
     tool_info: ToolInfo,
     spec: ToolSpec,
-    exposure: ToolExposure,
 }
 
 impl McpHandler {
     pub fn new(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
-        Self::with_exposure(tool_info, ToolExposure::Direct)
-    }
-
-    pub fn with_exposure(
-        tool_info: ToolInfo,
-        exposure: ToolExposure,
-    ) -> Result<Self, serde_json::Error> {
         let spec = create_tool_spec(&tool_info)?;
-        Ok(Self {
-            tool_info,
-            spec,
-            exposure,
-        })
+        Ok(Self { tool_info, spec })
     }
 }
 
@@ -59,10 +46,6 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
 
     fn spec(&self) -> ToolSpec {
         self.spec.clone()
-    }
-
-    fn exposure(&self) -> ToolExposure {
-        self.exposure
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

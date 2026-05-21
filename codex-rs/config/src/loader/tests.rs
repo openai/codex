@@ -131,6 +131,10 @@ model = "gpt-work"
         message.contains("[profiles.work]"),
         "unexpected error message: {message}"
     );
+    assert!(
+        message.contains("https://developers.openai.com/codex/config-advanced#profiles"),
+        "unexpected error message: {message}"
+    );
 }
 
 #[tokio::test]
