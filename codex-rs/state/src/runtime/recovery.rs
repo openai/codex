@@ -18,6 +18,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
+mod lost_and_found;
 mod recover_api;
 
 const SQLITE_CORRUPT: i32 = 11;
@@ -206,6 +207,7 @@ async fn run_recovery(path: &Path, recovered_path: &Path, migrator: &Migrator) -
     .context("sqlite recovery task panicked")??;
 
     let pool = open_recovered_pool(recovered_path.as_path()).await?;
+    lost_and_found::rebuild_from_recovered_schema_if_needed(&pool).await?;
     assert_recovered_schema(&pool).await?;
     assert_integrity_ok(&pool).await?;
     match migrator.run(&pool).await {
@@ -509,6 +511,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sqlx::migrate::Migrator;
     use std::fs::OpenOptions;
+    use std::io::Read;
     use std::io::Seek;
     use std::io::SeekFrom;
     use std::io::Write;
@@ -655,6 +658,90 @@ INSERT INTO threads (
     }
 
     #[tokio::test]
+    async fn recovery_rebuilds_when_header_and_schema_root_are_lost() -> Result<()> {
+        let temp_dir = super::super::test_support::unique_temp_dir();
+        tokio::fs::create_dir_all(temp_dir.as_path()).await?;
+        let db_path = temp_dir.join(super::super::STATE_DB.filename);
+        let migrator = crate::migrations::runtime_state_migrator();
+        let pool = open_migrated_pool(db_path.as_path(), &migrator).await?;
+        let thread_id = "00000000-0000-0000-0000-000000000789";
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode
+) VALUES (?, ?, 1, 1, 'cli', 'test-provider', ?, 'schema root lost', 'read-only', 'on-request')
+            "#,
+        )
+        .bind(thread_id)
+        .bind(temp_dir.join("session.jsonl").display().to_string())
+        .bind(temp_dir.as_path().display().to_string())
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            r#"
+INSERT INTO thread_dynamic_tools (
+    thread_id,
+    position,
+    name,
+    description,
+    input_schema
+) VALUES (?, 0, 'shell', 'run a command', '{"type":"object"}')
+            "#,
+        )
+        .bind(thread_id)
+        .execute(&pool)
+        .await?;
+        let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+            .fetch_one(&pool)
+            .await?;
+        let threads_root_page: i64 =
+            sqlx::query_scalar("SELECT rootpage FROM sqlite_schema WHERE name = 'threads'")
+                .fetch_one(&pool)
+                .await?;
+        pool.close().await;
+
+        overwrite_page_with_page(
+            db_path.as_path(),
+            page_size.try_into()?,
+            threads_root_page.try_into()?,
+            /*destination_page*/ 1,
+        )?;
+
+        let err = anyhow::anyhow!("file is not a database");
+        recover_database(db_path.as_path(), super::super::STATE_DB, &migrator, &err).await?;
+
+        let pool = open_recovered_pool(db_path.as_path()).await?;
+        let title: String = sqlx::query_scalar("SELECT title FROM threads WHERE id = ?")
+            .bind(thread_id)
+            .fetch_one(&pool)
+            .await?;
+        let tool_schema: String =
+            sqlx::query_scalar("SELECT input_schema FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id)
+                .fetch_one(&pool)
+                .await?;
+        let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await?;
+        pool.close().await;
+
+        assert_eq!(title, "schema root lost");
+        assert_eq!(tool_schema, r#"{"type":"object"}"#);
+        assert_eq!(migration_count, migrator.migrations.len() as i64);
+        let _ = tokio::fs::remove_dir_all(temp_dir.as_path()).await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn recovery_rejects_output_without_user_tables() -> Result<()> {
         let temp_dir = super::super::test_support::unique_temp_dir();
         tokio::fs::create_dir_all(temp_dir.as_path()).await?;
@@ -718,6 +805,27 @@ INSERT INTO threads (
         let mut file = OpenOptions::new().write(true).open(path)?;
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(&[0; 16])?;
+        Ok(())
+    }
+
+    fn overwrite_page_with_page(
+        path: &Path,
+        page_size: u64,
+        source_page: u64,
+        destination_page: u64,
+    ) -> Result<()> {
+        let mut page = vec![0; page_size.try_into()?];
+        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+        let source_offset = page_size
+            .checked_mul(source_page.saturating_sub(1))
+            .context("source page offset overflowed")?;
+        file.seek(SeekFrom::Start(source_offset))?;
+        file.read_exact(page.as_mut_slice())?;
+        let destination_offset = page_size
+            .checked_mul(destination_page.saturating_sub(1))
+            .context("destination page offset overflowed")?;
+        file.seek(SeekFrom::Start(destination_offset))?;
+        file.write_all(page.as_slice())?;
         Ok(())
     }
 }
