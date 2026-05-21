@@ -2617,6 +2617,8 @@ impl Config {
         )?;
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
+        // Keep the configured mode separate so a requirement-constrained mode
+        // does not look like it was explicitly selected in config.
         let selected_windows_sandbox_mode = configured_windows_sandbox_mode.or_else(|| {
             match WindowsSandboxLevel::from_features(&features) {
                 WindowsSandboxLevel::Elevated => Some(WindowsSandboxModeToml::Elevated),
