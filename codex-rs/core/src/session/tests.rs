@@ -103,6 +103,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -147,9 +148,11 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
@@ -177,6 +180,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use wiremock::ResponseTemplate;
 
 mod guardian_tests;
 
@@ -184,6 +188,11 @@ struct InstructionsTestCase {
     slug: &'static str,
     expects_apply_patch_description: bool,
 }
+
+const INVALID_IMAGE_PLACEHOLDER: &str =
+    "Image omitted: Responses could not read this image URL/data.";
+const INVALID_IMAGE_HISTORY_CHECKPOINT: &str =
+    "Sanitized an invalid image from conversation history.";
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -194,6 +203,76 @@ fn user_message(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+fn invalid_image_download_response() -> ResponseTemplate {
+    ResponseTemplate::new(400).set_body_json(json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": "Error while downloading http://127.0.0.1:8787/image.png. Upstream status code: 407.",
+            "param": "url",
+        }
+    }))
+}
+
+fn invalid_image_data_response() -> ResponseTemplate {
+    ResponseTemplate::new(400).set_body_json(json!({
+        "error": {
+            "message": "The image data you provided does not represent a valid image. Please check your input and try again.",
+            "type": "invalid_request_error",
+            "param": "input[0].content[1].image_url",
+            "code": "invalid_value",
+        }
+    }))
+}
+
+fn response_items_have_images(items: &[ResponseItem]) -> bool {
+    items.iter().any(|item| match item {
+        ResponseItem::Message { content, .. } => content
+            .iter()
+            .any(|item| matches!(item, ContentItem::InputImage { .. })),
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            output.content_items().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| matches!(item, FunctionCallOutputContentItem::InputImage { .. }))
+            })
+        }
+        _ => false,
+    })
+}
+
+fn assert_no_images_in_sanitized_history(items: &[RolloutItem]) -> &[ResponseItem] {
+    let replacement_history = items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(compacted)
+                if compacted.message == INVALID_IMAGE_HISTORY_CHECKPOINT =>
+            {
+                compacted.replacement_history.as_deref()
+            }
+            _ => None,
+        })
+        .expect("sanitized checkpoint");
+    assert!(!response_items_have_images(replacement_history));
+    replacement_history
+}
+
+fn response_item_has_tool_image_placeholder(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCallOutput { output, .. }
+            if output.content_items().is_some_and(|items| items.iter().any(|item| matches!(
+                item,
+                FunctionCallOutputContentItem::InputText { text }
+                    if text == INVALID_IMAGE_PLACEHOLDER
+            )))
+    )
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -2927,6 +3006,151 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
 
     let history = sess.clone_history().await;
     assert_eq!(initial_context, history.raw_items());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_user_image_is_sanitized_before_follow_up_turn() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            invalid_image_download_response(),
+            sse_response(sse(vec![
+                ev_assistant_message("msg-1", "ok"),
+                ev_completed("resp-2"),
+            ])),
+        ],
+    )
+    .await;
+
+    let image_url = "http://127.0.0.1:8787/image.png".to_string();
+    let first_turn_id = test
+        .codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Image {
+                image_url: image_url.clone(),
+                detail: None,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let error = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error) => Some(error.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::BadRequest));
+    assert!(error.message.contains("removed that image from history"));
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) if event.turn_id == first_turn_id => Some(()),
+        _ => None,
+    })
+    .await;
+
+    test.submit_turn("say ok").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].message_input_image_urls("user"),
+        vec![image_url]
+    );
+    assert!(requests[1].message_input_image_urls("user").is_empty());
+    assert!(requests[1].body_contains_text(INVALID_IMAGE_PLACEHOLDER));
+
+    test.codex.flush_rollout().await?;
+    let stored_history = test.codex.load_history(/*include_archived*/ false).await?;
+    assert_no_images_in_sanitized_history(&stored_history.items);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_tool_image_is_replaced_and_returned_to_model() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    test.codex
+        .inject_response_items(vec![
+            user_message("capture a screenshot"),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "view_image".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-image".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-image".to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "screenshot captured".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,not-really-an-image".to_string(),
+                        detail: None,
+                    },
+                ]),
+            },
+        ])
+        .await?;
+
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            invalid_image_data_response(),
+            sse_response(sse(vec![
+                ev_assistant_message("msg-1", "I could not inspect the image."),
+                ev_completed("resp-2"),
+            ])),
+        ],
+    )
+    .await;
+
+    test.submit_turn("continue").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .function_call_output("call-image")
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.get("type").and_then(serde_json::Value::as_str)
+                    == Some("input_image")))
+    );
+    let sanitized_output = requests[1].function_call_output("call-image");
+    assert_eq!(
+        sanitized_output.get("output"),
+        Some(&json!([
+            {
+                "type": "input_text",
+                "text": "screenshot captured",
+            },
+            {
+                "type": "input_text",
+                "text": INVALID_IMAGE_PLACEHOLDER,
+            }
+        ]))
+    );
+
+    test.codex.flush_rollout().await?;
+    let stored_history = test.codex.load_history(/*include_archived*/ false).await?;
+    assert!(
+        assert_no_images_in_sanitized_history(&stored_history.items)
+            .iter()
+            .any(response_item_has_tool_image_placeholder)
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

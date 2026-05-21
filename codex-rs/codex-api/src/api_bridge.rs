@@ -56,8 +56,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
-                        && let Some(error) = parsed.get("error")
+                    let parsed = serde_json::from_str::<Value>(&body_text).ok();
+                    if let Some(error) = parsed.as_ref().and_then(|parsed| parsed.get("error"))
                         && error.get("code").and_then(Value::as_str)
                             == Some(CYBER_POLICY_ERROR_CODE)
                     {
@@ -68,9 +68,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                             .map(str::to_string)
                             .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
                         CodexErr::CyberPolicy { message }
-                    } else if body_text
-                        .contains("The image data you provided does not represent a valid image")
-                    {
+                    } else if is_invalid_image_response_error(&body_text, parsed.as_ref()) {
                         CodexErr::InvalidImageRequest()
                     } else {
                         CodexErr::InvalidRequest(body_text)
@@ -141,6 +139,35 @@ const X_ERROR_JSON_HEADER: &str = "x-error-json";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";
+const INVALID_IMAGE_ERROR_MESSAGE: &str =
+    "The image data you provided does not represent a valid image";
+const EMPTY_BASE64_IMAGE_ERROR_MESSAGE: &str = concat!(
+    "Expected a base64-encoded data URL with an image MIME type, ",
+    "but got empty base64-encoded bytes."
+);
+
+fn is_invalid_image_response_error(body_text: &str, parsed: Option<&Value>) -> bool {
+    if body_text.contains(INVALID_IMAGE_ERROR_MESSAGE)
+        || body_text.contains(EMPTY_BASE64_IMAGE_ERROR_MESSAGE)
+    {
+        return true;
+    }
+
+    let Some(error) = parsed.and_then(|parsed| parsed.get("error")) else {
+        return false;
+    };
+    if error.get("code").and_then(Value::as_str) != Some("invalid_value") {
+        return false;
+    }
+    let param = error.get("param").and_then(Value::as_str);
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    param.is_some_and(|param| param == "image_url" || param.ends_with(".image_url"))
+        || (param == Some("url") && message.contains("Error while downloading "))
+}
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]

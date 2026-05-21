@@ -16,6 +16,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context_manager::ImageSanitizationSource;
 use crate::feedback_tags;
 use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::inspect_pending_input;
@@ -86,11 +87,13 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -113,6 +116,15 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+const INVALID_IMAGE_FEEDBACK_PLACEHOLDER: &str =
+    "Image omitted: Responses could not read this image URL/data.";
+const INVALID_IMAGE_USER_ERROR_MESSAGE: &str = concat!(
+    "Responses could not read one of the images in this conversation, ",
+    "so Codex removed that image from history. Please try again with a different image."
+);
+const INVALID_IMAGE_HISTORY_CHECKPOINT_MESSAGE: &str =
+    "Sanitized an invalid image from conversation history.";
 
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
@@ -410,19 +422,15 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
+                warn!("Responses rejected an image; sanitizing history to prevent replay");
+                if sanitize_invalid_image_history(&sess).await
+                    == Some(ImageSanitizationSource::Tool)
                 {
-                    let mut state = sess.state.lock().await;
-                    error_or_panic(
-                        "Invalid image detected; sanitizing tool output to prevent poisoning",
-                    );
-                    if state.history.replace_last_turn_images("Invalid image") {
-                        continue;
-                    }
+                    continue;
                 }
 
                 let event = EventMsg::Error(ErrorEvent {
-                    message: "Invalid image in your last message. Please remove it and try again."
-                        .to_string(),
+                    message: INVALID_IMAGE_USER_ERROR_MESSAGE.to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 });
                 sess.send_event(&turn_context, event).await;
@@ -448,6 +456,27 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn sanitize_invalid_image_history(sess: &Session) -> Option<ImageSanitizationSource> {
+    let (source, replacement_history) = {
+        let mut state = sess.state.lock().await;
+        let source = state
+            .history
+            .replace_newest_images(INVALID_IMAGE_FEEDBACK_PLACEHOLDER)?;
+        (source, state.history.raw_items().to_vec())
+    };
+
+    sess.persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+        message: INVALID_IMAGE_HISTORY_CHECKPOINT_MESSAGE.to_string(),
+        replacement_history: Some(replacement_history),
+    })])
+    .await;
+    if let Err(err) = sess.flush_rollout().await {
+        warn!("failed to persist invalid-image history sanitization: {err}");
+    }
+
+    Some(source)
 }
 
 #[expect(

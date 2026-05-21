@@ -671,61 +671,148 @@ fn remove_last_item_removes_matching_call_for_output() {
     assert_eq!(h.raw_items(), vec![user_msg("before tool call")]);
 }
 
+fn tool_text(text: &str) -> FunctionCallOutputContentItem {
+    FunctionCallOutputContentItem::InputText {
+        text: text.to_string(),
+    }
+}
+
+fn tool_image(base64: &str) -> FunctionCallOutputContentItem {
+    FunctionCallOutputContentItem::InputImage {
+        image_url: format!("data:image/png;base64,{base64}"),
+        detail: Some(DEFAULT_IMAGE_DETAIL),
+    }
+}
+
+fn user_image(base64: &str) -> ContentItem {
+    ContentItem::InputImage {
+        image_url: format!("data:image/png;base64,{base64}"),
+        detail: Some(DEFAULT_IMAGE_DETAIL),
+    }
+}
+
+fn tool_output_content(item: &ResponseItem) -> &[FunctionCallOutputContentItem] {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => output
+            .content_items()
+            .expect("expected content-item tool output"),
+        _ => panic!("expected tool output"),
+    }
+}
+
+fn assert_tool_output_texts(item: &ResponseItem, expected: Vec<&str>) {
+    let texts = tool_output_content(item)
+        .iter()
+        .map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => text.as_str(),
+            _ => panic!("expected sanitized output to contain only text"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(texts, expected);
+}
+
+fn assert_message_texts(content: &[ContentItem], expected: Vec<&str>) {
+    let texts = content
+        .iter()
+        .map(|item| match item {
+            ContentItem::InputText { text } => text.as_str(),
+            _ => panic!("expected sanitized message to contain only text"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(texts, expected);
+}
+
 #[test]
-fn replace_last_turn_images_replaces_tool_output_images() {
+fn replace_newest_images_replaces_tool_output_images() {
+    let cases = [
+        (
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![tool_image("AAA")]),
+                    success: Some(true),
+                },
+            },
+            vec!["Image omitted"],
+        ),
+        (
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-1".to_string(),
+                name: Some("tool".to_string()),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    tool_text("before"),
+                    tool_image("AAA"),
+                ]),
+            },
+            vec!["before", "Image omitted"],
+        ),
+    ];
+
+    for (tool_output, expected_texts) in cases {
+        let mut history = create_history_with_items(vec![user_input_text_msg("hi"), tool_output]);
+
+        assert_eq!(
+            history.replace_newest_images("Image omitted"),
+            Some(ImageSanitizationSource::Tool)
+        );
+        assert_tool_output_texts(&history.raw_items()[1], expected_texts);
+    }
+}
+
+#[test]
+fn replace_newest_images_replaces_user_images() {
+    let items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "look".to_string(),
+            },
+            user_image("AAA"),
+        ],
+        phase: None,
+    }];
+    let mut history = create_history_with_items(items);
+
+    assert_eq!(
+        history.replace_newest_images("Image omitted"),
+        Some(ImageSanitizationSource::User)
+    );
+
+    let ResponseItem::Message { content, .. } = &history.raw_items()[0] else {
+        panic!("expected user message");
+    };
+    assert_message_texts(content, vec!["look", "Image omitted"]);
+}
+
+#[test]
+fn replace_newest_images_replaces_newest_image_bearing_item() {
     let items = vec![
-        user_input_text_msg("hi"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![user_image("user")],
+            phase: None,
+        },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::ContentItems(vec![
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "data:image/png;base64,AAA".to_string(),
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    },
-                ]),
-                success: Some(true),
-            },
+            output: FunctionCallOutputPayload::from_content_items(vec![tool_image("tool")]),
         },
     ];
     let mut history = create_history_with_items(items);
 
-    assert!(history.replace_last_turn_images("Invalid image"));
-
     assert_eq!(
-        history.raw_items(),
-        vec![
-            user_input_text_msg("hi"),
-            ResponseItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::ContentItems(vec![
-                        FunctionCallOutputContentItem::InputText {
-                            text: "Invalid image".to_string(),
-                        },
-                    ]),
-                    success: Some(true),
-                },
-            },
-        ]
+        history.replace_newest_images("Image omitted"),
+        Some(ImageSanitizationSource::Tool)
     );
-}
 
-#[test]
-fn replace_last_turn_images_does_not_touch_user_images() {
-    let items = vec![ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputImage {
-            image_url: "data:image/png;base64,AAA".to_string(),
-            detail: Some(DEFAULT_IMAGE_DETAIL),
-        }],
-        phase: None,
-    }];
-    let mut history = create_history_with_items(items.clone());
-
-    assert!(!history.replace_last_turn_images("Invalid image"));
-    assert_eq!(history.raw_items(), items);
+    let raw_items = history.raw_items();
+    let ResponseItem::Message { content, .. } = &raw_items[0] else {
+        panic!("expected user message");
+    };
+    assert!(matches!(content[0], ContentItem::InputImage { .. }));
+    assert_tool_output_texts(&raw_items[1], vec!["Image omitted"]);
 }
 
 #[test]

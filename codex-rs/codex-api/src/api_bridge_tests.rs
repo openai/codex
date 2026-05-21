@@ -2,6 +2,15 @@ use super::*;
 use base64::Engine;
 use pretty_assertions::assert_eq;
 
+fn map_bad_request(body: String) -> CodexErr {
+    map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }))
+}
+
 #[test]
 fn map_api_error_maps_server_overloaded() {
     let err = map_api_error(ApiError::ServerOverloaded);
@@ -122,6 +131,43 @@ fn map_api_error_keeps_unknown_400_errors_generic() {
         panic!("expected CodexErr::InvalidRequest, got {err:?}");
     };
     assert_eq!(message, body);
+}
+
+#[test]
+fn map_api_error_maps_image_400s_to_invalid_image_request() {
+    let cases = [
+        serde_json::json!({
+            "error": {
+                "message": "The image data you provided does not represent a valid image. Please check your input and try again.",
+                "type": "invalid_request_error",
+                "param": "input[0].content[1].image_url",
+                "code": "invalid_value"
+            }
+        }),
+        serde_json::json!({
+            "type": "error",
+            "status": 400,
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_value",
+                "message": "Error while downloading http://127.0.0.1:8787/image.png. Upstream status code: 407.",
+                "param": "url"
+            }
+        }),
+        serde_json::json!({
+            "error": {
+                "message": "Expected a base64-encoded data URL with an image MIME type, but got empty base64-encoded bytes.",
+                "code": "invalid_value"
+            }
+        }),
+    ];
+
+    for body in cases {
+        assert!(matches!(
+            map_bad_request(body.to_string()),
+            CodexErr::InvalidImageRequest()
+        ));
+    }
 }
 
 #[test]

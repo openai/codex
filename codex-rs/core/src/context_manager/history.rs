@@ -58,6 +58,12 @@ pub(crate) struct TotalTokenUsageBreakdown {
     pub estimated_bytes_of_items_added_since_last_successful_api_response: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageSanitizationSource {
+    User,
+    Tool,
+}
+
 impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
@@ -184,38 +190,33 @@ impl ContextManager {
         self.history_version = self.history_version.saturating_add(1);
     }
 
-    /// Replace image content in the last turn if it originated from a tool output.
-    /// Returns true when a tool image was replaced, false otherwise.
-    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
-        let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ResponseItem::FunctionCallOutput { .. }) || is_user_turn_boundary(item)
-        }) else {
-            return false;
-        };
+    /// Replace images in the newest image-bearing history item and report their source.
+    pub(crate) fn replace_newest_images(
+        &mut self,
+        placeholder: &str,
+    ) -> Option<ImageSanitizationSource> {
+        let placeholder = placeholder.to_string();
+        for item in self.items.iter_mut().rev() {
+            let source = match item {
+                ResponseItem::Message { role, content, .. } if role == "user" => {
+                    replace_message_images(content, &placeholder)
+                        .then_some(ImageSanitizationSource::User)
+                }
+                ResponseItem::FunctionCallOutput { output, .. }
+                | ResponseItem::CustomToolCallOutput { output, .. } => {
+                    replace_tool_output_images(output, &placeholder)
+                        .then_some(ImageSanitizationSource::Tool)
+                }
+                _ => None,
+            };
 
-        match &mut self.items[index] {
-            ResponseItem::FunctionCallOutput { output, .. } => {
-                let Some(content_items) = output.content_items_mut() else {
-                    return false;
-                };
-                let mut replaced = false;
-                let placeholder = placeholder.to_string();
-                for item in content_items.iter_mut() {
-                    if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
-                        *item = FunctionCallOutputContentItem::InputText {
-                            text: placeholder.clone(),
-                        };
-                        replaced = true;
-                    }
-                }
-                if replaced {
-                    self.history_version = self.history_version.saturating_add(1);
-                }
-                replaced
+            if let Some(source) = source {
+                self.history_version = self.history_version.saturating_add(1);
+                return Some(source);
             }
-            ResponseItem::Message { .. } => false,
-            _ => false,
         }
+
+        None
     }
 
     /// Drop the last `num_turns` instruction turns from this history.
@@ -727,6 +728,36 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::Other => false,
     }
+}
+
+fn replace_message_images(content: &mut [ContentItem], placeholder: &str) -> bool {
+    let mut replaced = false;
+    for item in content.iter_mut() {
+        if matches!(item, ContentItem::InputImage { .. }) {
+            *item = ContentItem::InputText {
+                text: placeholder.to_string(),
+            };
+            replaced = true;
+        }
+    }
+    replaced
+}
+
+fn replace_tool_output_images(output: &mut FunctionCallOutputPayload, placeholder: &str) -> bool {
+    let Some(content_items) = output.content_items_mut() else {
+        return false;
+    };
+
+    let mut replaced = false;
+    for item in content_items.iter_mut() {
+        if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
+            *item = FunctionCallOutputContentItem::InputText {
+                text: placeholder.to_string(),
+            };
+            replaced = true;
+        }
+    }
+    replaced
 }
 
 pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {

@@ -24,6 +24,8 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+#[cfg(not(debug_assertions))]
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -1500,6 +1502,18 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         ))
         .await?;
 
+    let error = wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::Error(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+    let EventMsg::Error(error) = error else {
+        panic!("expected error event");
+    };
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::BadRequest));
+    assert!(error.message.contains("removed that image from history"));
+
     wait_for_event_with_timeout(
         &codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
@@ -1513,14 +1527,10 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         "initial request should include the uploaded image"
     );
 
-    let second_request = completion_mock.single_request();
-    let second_body = second_request.body_json();
     assert!(
-        find_image_message(&second_body).is_none(),
-        "second request should replace the invalid image"
+        completion_mock.requests().is_empty(),
+        "bad user image should not trigger an immediate model retry"
     );
-    let user_texts = second_request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "Invalid image"));
 
     Ok(())
 }
