@@ -375,7 +375,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let run_cloud_requirements = cloud_requirements.clone();
 
     let model_provider = if oss {
-        let resolved = resolve_oss_provider(oss_provider.as_deref(), &config_toml, None);
+        let resolved = resolve_oss_provider(
+            oss_provider.as_deref(),
+            &config_toml,
+            /*config_profile*/ None,
+        );
 
         if let Some(provider) = resolved {
             Some(provider)
