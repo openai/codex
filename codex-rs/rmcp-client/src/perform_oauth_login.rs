@@ -15,6 +15,7 @@ use oauth2::AsyncHttpClient;
 use oauth2::AuthUrl;
 use oauth2::AuthorizationCode;
 use oauth2::ClientId;
+use oauth2::ClientSecret;
 use oauth2::CsrfToken;
 use oauth2::EmptyExtraTokenFields;
 use oauth2::EndpointNotSet;
@@ -52,6 +53,7 @@ use crate::auth_status::discover_streamable_http_oauth_metadata;
 use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::build_default_headers;
+use crate::utils::oauth_token_headers;
 use crate::utils::protocol_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -86,16 +88,23 @@ struct OAuthState {
 impl OAuthState {
     fn new(
         metadata: StreamableHttpOAuthMetadata,
-        client_id: String,
+        client: OAuthClientConfig,
         redirect_uri: &str,
         scopes: &[&str],
         default_headers: HeaderMap,
         http_client: Arc<dyn HttpClient>,
     ) -> Result<Self> {
-        let client = BasicClient::new(ClientId::new(client_id.clone()))
+        let OAuthClientConfig {
+            client_id,
+            client_secret,
+        } = client;
+        let mut client = BasicClient::new(ClientId::new(client_id.clone()))
             .set_auth_uri(AuthUrl::new(metadata.authorization_endpoint)?)
             .set_token_uri(TokenUrl::new(metadata.token_endpoint)?)
             .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string())?);
+        if let Some(client_secret) = client_secret {
+            client = client.set_client_secret(ClientSecret::new(client_secret));
+        }
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let mut request = client
             .authorize_url(CsrfToken::new_random)
@@ -179,7 +188,7 @@ impl<'c> AsyncHttpClient<'c> for RoutedOAuthHttpClient {
                 .http_request(HttpRequestParams {
                     method: parts.method.to_string(),
                     url: parts.uri.to_string(),
-                    headers: protocol_headers(&headers),
+                    headers: oauth_token_headers(&headers),
                     body: Some(body.into()),
                     timeout_ms: None,
                     request_id: "oauth-request".to_string(),
@@ -868,8 +877,11 @@ async fn start_authorization(
     .await?
     .ok_or_else(|| anyhow!("MCP server `{server_name}` does not advertise OAuth metadata"))?;
     let default_headers = build_default_headers(http_headers.clone(), env_http_headers.clone())?;
-    let client_id = match oauth_client_id.filter(|client_id| !client_id.trim().is_empty()) {
-        Some(client_id) => client_id.to_string(),
+    let client = match oauth_client_id.filter(|client_id| !client_id.trim().is_empty()) {
+        Some(client_id) => OAuthClientConfig {
+            client_id: client_id.to_string(),
+            client_secret: None,
+        },
         None => {
             register_oauth_client(
                 &metadata,
@@ -883,7 +895,7 @@ async fn start_authorization(
     };
     OAuthState::new(
         metadata,
-        client_id,
+        client,
         redirect_uri,
         scopes,
         default_headers,
@@ -897,7 +909,7 @@ async fn register_oauth_client(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     http_client: Arc<dyn HttpClient>,
-) -> Result<String> {
+) -> Result<OAuthClientConfig> {
     let registration_url = metadata
         .registration_endpoint
         .as_ref()
@@ -932,10 +944,22 @@ async fn register_oauth_client(
     #[derive(serde::Deserialize)]
     struct ClientRegistrationResponse {
         client_id: String,
+        #[serde(default)]
+        client_secret: Option<String>,
     }
     let response =
         serde_json::from_slice::<ClientRegistrationResponse>(&response.body.into_inner())?;
-    Ok(response.client_id)
+    Ok(OAuthClientConfig {
+        client_id: response.client_id,
+        client_secret: response
+            .client_secret
+            .filter(|client_secret| !client_secret.trim().is_empty()),
+    })
+}
+
+struct OAuthClientConfig {
+    client_id: String,
+    client_secret: Option<String>,
 }
 
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
@@ -964,6 +988,7 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use codex_exec_server::ExecServerError;
+    use codex_exec_server::HTTP_REQUEST_NO_REDIRECTS_HEADER;
     use codex_exec_server::HttpClient;
     use codex_exec_server::HttpRequestParams;
     use codex_exec_server::HttpRequestResponse;
@@ -971,8 +996,10 @@ mod tests {
     use codex_exec_server::ReqwestHttpClient;
     use futures::FutureExt;
     use futures::future::BoxFuture;
+    use oauth2::AsyncHttpClient;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
+    use reqwest::header::HeaderMap;
     use serde_json::json;
     use tokio::net::TcpListener;
 
@@ -1002,16 +1029,21 @@ mod tests {
             &self,
             params: HttpRequestParams,
         ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
-            self.requests
-                .lock()
-                .expect("lock requests")
-                .push(params.clone());
+            let url = params.url.clone();
+            self.requests.lock().expect("lock requests").push(params);
             async move {
-                let metadata = json!({
-                    "authorization_endpoint": "https://auth.remote.example/oauth/authorize",
-                    "token_endpoint": "https://auth.remote.example/oauth/token",
-                    "scopes_supported": ["scope:remote"],
-                });
+                let metadata = if url == "https://auth.remote.example/oauth/token" {
+                    json!({
+                        "access_token": "access-token",
+                        "token_type": "bearer",
+                    })
+                } else {
+                    json!({
+                        "authorization_endpoint": "https://auth.remote.example/oauth/authorize",
+                        "token_endpoint": "https://auth.remote.example/oauth/token",
+                        "scopes_supported": ["scope:remote"],
+                    })
+                };
                 Ok(HttpRequestResponse {
                     status: 200,
                     headers: Vec::new(),
@@ -1137,6 +1169,70 @@ mod tests {
                 "http://remote-only.invalid/.well-known/oauth-authorization-server/mcp".to_string()
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn routed_token_request_disables_redirects() {
+        let http_client = Arc::new(RemoteOnlyHttpClient::default());
+        let client = super::RoutedOAuthHttpClient::new(http_client.clone(), HeaderMap::new());
+        let request = oauth2::http::Request::builder()
+            .method("POST")
+            .uri("https://auth.remote.example/oauth/token")
+            .body(Vec::new())
+            .expect("build token request");
+
+        client
+            .call(request)
+            .await
+            .expect("token request should succeed");
+
+        assert!(
+            http_client.requests()[0]
+                .headers
+                .iter()
+                .any(|header| header.name == HTTP_REQUEST_NO_REDIRECTS_HEADER)
+        );
+    }
+
+    #[tokio::test]
+    async fn token_exchange_preserves_dynamic_registration_client_secret() {
+        let http_client = Arc::new(RemoteOnlyHttpClient::default());
+        let oauth_state = super::OAuthState::new(
+            super::StreamableHttpOAuthMetadata {
+                authorization_endpoint: "https://auth.remote.example/oauth/authorize".to_string(),
+                token_endpoint: "https://auth.remote.example/oauth/token".to_string(),
+                registration_endpoint: None,
+                scopes_supported: None,
+            },
+            super::OAuthClientConfig {
+                client_id: "dynamic-client".to_string(),
+                client_secret: Some("dynamic-secret".to_string()),
+            },
+            "http://127.0.0.1/callback",
+            &[],
+            HeaderMap::new(),
+            http_client.clone(),
+        )
+        .expect("build oauth state");
+        let csrf_state = oauth_state.csrf_state.secret().to_string();
+
+        oauth_state
+            .handle_callback("code", &csrf_state)
+            .await
+            .expect("token exchange should succeed");
+
+        let authorization = http_client
+            .requests()
+            .into_iter()
+            .find(|request| request.url == "https://auth.remote.example/oauth/token")
+            .and_then(|request| {
+                request
+                    .headers
+                    .into_iter()
+                    .find(|header| header.name.eq_ignore_ascii_case("authorization"))
+            })
+            .expect("token exchange should send authorization header");
+        assert!(authorization.value.starts_with("Basic "));
     }
 
     #[test]

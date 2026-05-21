@@ -35,6 +35,9 @@ use crate::rpc::invalid_params;
 #[derive(Clone, Default)]
 pub struct ReqwestHttpClient;
 
+pub const HTTP_REQUEST_NO_PROXY_HEADER: &str = "x-codex-internal-http-no-proxy";
+pub const HTTP_REQUEST_NO_REDIRECTS_HEADER: &str = "x-codex-internal-http-no-redirects";
+
 /// Streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
 pub(crate) struct PendingReqwestHttpBodyStream {
@@ -49,13 +52,22 @@ pub(crate) struct ReqwestHttpRequestRunner {
 }
 
 impl ReqwestHttpClient {
-    fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
-        let builder = match timeout_ms {
+    fn build_client(
+        timeout_ms: Option<u64>,
+        request_policy: HttpRequestPolicy,
+    ) -> Result<reqwest::Client, ExecServerError> {
+        let mut builder = match timeout_ms {
             None => reqwest::Client::builder(),
             Some(timeout_ms) => {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
         };
+        if request_policy.no_proxy {
+            builder = builder.no_proxy();
+        }
+        if request_policy.no_redirects {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
         build_reqwest_client_with_custom_ca(builder)
             .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
     }
@@ -67,7 +79,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(&params)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, _) = runner
                 .run(HttpRequestParams {
@@ -86,7 +98,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(&params)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, pending_stream) = runner
                 .run(HttpRequestParams {
@@ -110,9 +122,12 @@ impl HttpClient for ReqwestHttpClient {
 }
 
 impl ReqwestHttpRequestRunner {
-    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
-        let client = ReqwestHttpClient::build_client(timeout_ms)
-            .map_err(|error| internal_error(error.to_string()))?;
+    pub(crate) fn new(params: &HttpRequestParams) -> Result<Self, JSONRPCErrorError> {
+        let client = ReqwestHttpClient::build_client(
+            params.timeout_ms,
+            HttpRequestPolicy::from_headers(&params.headers),
+        )
+        .map_err(|error| internal_error(error.to_string()))?;
         Ok(Self { client })
     }
 
@@ -239,6 +254,9 @@ impl ReqwestHttpRequestRunner {
     fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
         let mut header_map = HeaderMap::new();
         for header in headers {
+            if is_internal_http_request_header(&header.name) {
+                continue;
+            }
             let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|error| {
                 invalid_params(format!("http/request header name is invalid: {error}"))
             })?;
@@ -263,5 +281,74 @@ impl ReqwestHttpRequestRunner {
                 })
             })
             .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HttpRequestPolicy {
+    no_proxy: bool,
+    no_redirects: bool,
+}
+
+impl HttpRequestPolicy {
+    fn from_headers(headers: &[HttpHeader]) -> Self {
+        Self {
+            no_proxy: has_internal_http_request_header(headers, HTTP_REQUEST_NO_PROXY_HEADER),
+            no_redirects: has_internal_http_request_header(
+                headers,
+                HTTP_REQUEST_NO_REDIRECTS_HEADER,
+            ),
+        }
+    }
+}
+
+fn has_internal_http_request_header(headers: &[HttpHeader], expected_name: &str) -> bool {
+    headers
+        .iter()
+        .any(|header| header.name.eq_ignore_ascii_case(expected_name))
+}
+
+fn is_internal_http_request_header(header_name: &str) -> bool {
+    header_name.eq_ignore_ascii_case(HTTP_REQUEST_NO_PROXY_HEADER)
+        || header_name.eq_ignore_ascii_case(HTTP_REQUEST_NO_REDIRECTS_HEADER)
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn request_policy_reads_internal_headers_without_forwarding_them() {
+        let headers = vec![
+            HttpHeader {
+                name: HTTP_REQUEST_NO_PROXY_HEADER.to_string(),
+                value: "true".to_string(),
+            },
+            HttpHeader {
+                name: HTTP_REQUEST_NO_REDIRECTS_HEADER.to_string(),
+                value: "true".to_string(),
+            },
+            HttpHeader {
+                name: "accept".to_string(),
+                value: "application/json".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            HttpRequestPolicy::from_headers(&headers),
+            HttpRequestPolicy {
+                no_proxy: true,
+                no_redirects: true,
+            }
+        );
+        assert_eq!(
+            ReqwestHttpRequestRunner::build_headers(headers)
+                .expect("headers should build")
+                .get("accept")
+                .expect("accept header should be forwarded"),
+            "application/json"
+        );
     }
 }
