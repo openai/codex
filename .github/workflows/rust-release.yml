@@ -149,9 +149,6 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # 2026-03-04: temporarily change releases to use thin LTO because
-      # Ubuntu ARM is timing out at 60 minutes.
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
       # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
       # macOS release runners have intermittently failed to fetch nested
       # submodules through SecureTransport/libgit2, especially libwebrtc's
@@ -325,7 +322,6 @@ jobs:
           for binary in ${{ matrix.binaries }}; do
             build_args+=(--bin "$binary")
           done
-          echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
@@ -1330,8 +1326,6 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'build_unsigned' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
-    with:
-      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
