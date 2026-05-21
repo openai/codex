@@ -460,7 +460,7 @@ impl ExecServerClient {
     }
 
     fn is_disconnected(&self) -> bool {
-        self.inner.disconnected.get().is_some()
+        self.inner.disconnected.get().is_some() || self.inner.client.is_disconnected()
     }
 
     pub(crate) async fn connect(
