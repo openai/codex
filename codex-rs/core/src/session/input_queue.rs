@@ -21,8 +21,15 @@ struct PendingInput {
     start_turn: bool,
 }
 
-impl From<TurnInput> for PendingInput {
-    fn from(input: TurnInput) -> Self {
+impl PendingInput {
+    fn new(input: TurnInput) -> Self {
+        Self {
+            input,
+            start_turn: false,
+        }
+    }
+
+    fn starts_turn(input: TurnInput) -> Self {
         Self {
             input,
             start_turn: true,
@@ -138,12 +145,20 @@ impl InputQueue {
             .accept_mailbox_delivery_for_current_turn();
     }
 
+    pub(crate) async fn inject_starts_turn(&self, input: Vec<TurnInput>) {
+        self.state
+            .lock()
+            .await
+            .turn_pending_input
+            .extend(input.into_iter().map(PendingInput::starts_turn));
+    }
+
     pub(crate) async fn inject(&self, input: Vec<TurnInput>) {
         self.state
             .lock()
             .await
             .turn_pending_input
-            .extend(input.into_iter().map(PendingInput::from));
+            .extend(input.into_iter().map(PendingInput::new));
     }
 
     #[expect(

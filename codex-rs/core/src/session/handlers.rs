@@ -901,7 +901,7 @@ Approved action:
     }];
 
     sess.input_queue
-        .inject(
+        .inject_starts_turn(
             items
                 .into_iter()
                 .map(TurnInput::ResponseInputItem)

@@ -3181,7 +3181,7 @@ impl Session {
         }
 
         self.input_queue
-            .inject(vec![TurnInput::UserInput(input)])
+            .inject_starts_turn(vec![TurnInput::UserInput(input)])
             .await;
         active_turn
             .turn_state

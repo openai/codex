@@ -8101,7 +8101,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     };
 
     sess.input_queue
-        .inject(vec![TurnInput::ResponseInputItem(queued_item.clone())])
+        .inject_starts_turn(vec![TurnInput::ResponseInputItem(queued_item.clone())])
         .await;
 
     sess.spawn_task(
@@ -8132,7 +8132,7 @@ async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
     };
 
     sess.input_queue
-        .inject(vec![TurnInput::ResponseInputItem(queued_item)])
+        .inject_starts_turn(vec![TurnInput::ResponseInputItem(queued_item)])
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;

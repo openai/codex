@@ -389,7 +389,7 @@ impl CodexThread {
         self.codex
             .session
             .input_queue
-            .inject(vec![TurnInput::ResponseInputItem(pending_item)])
+            .inject_starts_turn(vec![TurnInput::ResponseInputItem(pending_item)])
             .await;
         self.codex.session.maybe_start_turn_for_pending_work().await;
 
