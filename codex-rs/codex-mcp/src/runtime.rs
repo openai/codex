@@ -37,19 +37,22 @@ pub struct SandboxState {
 #[derive(Clone)]
 pub struct McpRuntimeContext {
     environment_manager: Arc<EnvironmentManager>,
-    fallback_cwd: PathBuf,
+    local_stdio_fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeContext {
-    pub fn new(environment_manager: Arc<EnvironmentManager>, fallback_cwd: PathBuf) -> Self {
+    pub fn new(
+        environment_manager: Arc<EnvironmentManager>,
+        local_stdio_fallback_cwd: PathBuf,
+    ) -> Self {
         Self {
             environment_manager,
-            fallback_cwd,
+            local_stdio_fallback_cwd,
         }
     }
 
-    pub(crate) fn fallback_cwd(&self) -> PathBuf {
-        self.fallback_cwd.clone()
+    pub(crate) fn local_stdio_fallback_cwd(&self) -> PathBuf {
+        self.local_stdio_fallback_cwd.clone()
     }
 
     pub(crate) fn resolve_server_environment(

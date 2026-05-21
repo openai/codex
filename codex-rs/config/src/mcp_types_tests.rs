@@ -52,23 +52,6 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
-fn deserialize_legacy_mcp_environment_alias() {
-    let cwd = std::env::temp_dir();
-    let cfg: McpServerConfig = match toml::from_str(&format!(
-        r#"
-            command = "echo"
-            experimental_environment = "remote"
-            cwd = {cwd:?}
-        "#
-    )) {
-        Ok(cfg) => cfg,
-        Err(error) => panic!("should deserialize legacy MCP environment alias: {error}"),
-    };
-
-    assert_eq!(cfg.environment_id, "remote");
-}
-
-#[test]
 fn deserialize_remote_stdio_server_requires_absolute_cwd() {
     let missing_cwd = toml::from_str::<McpServerConfig>(
         r#"

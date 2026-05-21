@@ -592,7 +592,7 @@ async fn make_rmcp_client(
                 // `ExecutorStdioServerLauncher` once the executor-backed path
                 // preserves `LocalStdioServerLauncher` semantics.
                 Arc::new(LocalStdioServerLauncher::new(
-                    runtime_context.fallback_cwd(),
+                    runtime_context.local_stdio_fallback_cwd(),
                 )) as Arc<dyn StdioServerLauncher>
             } else {
                 let Some(environment) = resolved_environment.as_ref() else {
@@ -602,7 +602,6 @@ async fn make_rmcp_client(
                 };
                 Arc::new(ExecutorStdioServerLauncher::new(
                     environment.get_exec_backend(),
-                    runtime_context.fallback_cwd(),
                 )) as Arc<dyn StdioServerLauncher>
             };
 
