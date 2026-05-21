@@ -273,27 +273,6 @@ fn strip_schema_descriptions(value: &mut JsonValue) {
     }
 }
 
-fn visit_schema_objects(
-    value: &JsonValue,
-    definition_traversal: DefinitionTraversal,
-    visitor: &mut impl FnMut(&JsonValue),
-) {
-    match value {
-        JsonValue::Array(values) => {
-            for value in values {
-                visit_schema_objects(value, definition_traversal, visitor);
-            }
-        }
-        JsonValue::Object(map) => {
-            visitor(value);
-            for_each_schema_child(map, definition_traversal, &mut |value| {
-                visit_schema_objects(value, definition_traversal, visitor);
-            });
-        }
-        _ => {}
-    }
-}
-
 fn for_each_schema_child_mut(
     map: &mut serde_json::Map<String, JsonValue>,
     definition_traversal: DefinitionTraversal,
@@ -586,19 +565,37 @@ fn collect_reachable_definitions(value: &JsonValue) -> BTreeSet<DefinitionPointe
 }
 
 fn collect_refs_outside_definitions(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
-    visit_schema_objects(value, DefinitionTraversal::Skip, &mut |value| {
-        if let JsonValue::Object(map) = value {
-            collect_ref_from_map(map, refs);
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_refs_outside_definitions(value, refs);
+            }
         }
-    });
+        JsonValue::Object(map) => {
+            collect_ref_from_map(map, refs);
+            for_each_schema_child(map, DefinitionTraversal::Skip, &mut |value| {
+                collect_refs_outside_definitions(value, refs);
+            });
+        }
+        _ => {}
+    }
 }
 
 fn collect_refs(value: &JsonValue, refs: &mut Vec<DefinitionPointer>) {
-    visit_schema_objects(value, DefinitionTraversal::Include, &mut |value| {
-        if let JsonValue::Object(map) = value {
-            collect_ref_from_map(map, refs);
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_refs(value, refs);
+            }
         }
-    });
+        JsonValue::Object(map) => {
+            collect_ref_from_map(map, refs);
+            for value in map.values() {
+                collect_refs(value, refs);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_ref_from_map(
