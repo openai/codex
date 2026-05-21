@@ -3,6 +3,8 @@ use crate::ConfigLayerSource;
 use crate::TomlValue;
 use crate::loader::resolve_relative_paths_in_config_toml;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 use std::io;
 use thiserror::Error;
@@ -12,7 +14,7 @@ use thiserror::Error;
 /// The bundle orders fragments from highest precedence to lowest precedence.
 /// This module returns config layers in stack order, so callers can append the
 /// result between system and user config without re-sorting.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigFragment {
     pub id: String,
     pub name: String,

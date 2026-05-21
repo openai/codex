@@ -9,6 +9,8 @@ use crate::RequirementSource;
 use crate::RequirementsExecPolicyToml;
 use crate::Sourced;
 use crate::config_requirements::merge_app_requirements_descending;
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 use thiserror::Error;
 
@@ -27,7 +29,7 @@ mod permissions;
 // ConfigRequirementsToml so adding a new requirements field forces an explicit
 // merge policy decision.
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudRequirementsFragment {
     pub id: String,
     pub name: String,
