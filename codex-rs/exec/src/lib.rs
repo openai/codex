@@ -456,13 +456,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     }
 
     set_default_client_residency_requirement(config.enforce_residency.value());
-    refresh_managed_chatgpt_token_for_storage_if_near_expiry(
-        config.codex_home.to_path_buf(),
-        /*enable_codex_api_key_env*/ false,
-        config.cli_auth_credentials_store_mode,
-        config.chatgpt_base_url.clone(),
-    )
-    .await;
 
     if let Err(err) = enforce_login_restrictions(&AuthConfig {
         codex_home: config.codex_home.to_path_buf(),
@@ -476,6 +469,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         eprintln!("{err}");
         std::process::exit(1);
     }
+
+    refresh_managed_chatgpt_token_for_storage_if_near_expiry(
+        config.codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ true,
+        config.cli_auth_credentials_store_mode,
+        config.chatgpt_base_url.clone(),
+    )
+    .await;
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         codex_core::otel_init::build_provider(

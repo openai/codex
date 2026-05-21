@@ -1751,13 +1751,13 @@ impl AuthManager {
             return Ok(());
         }
 
+        let _refresh_lock = self.acquire_chatgpt_startup_refresh_lock().await?;
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        let _refresh_lock = self.acquire_chatgpt_startup_refresh_lock().await?;
 
         self.refresh_token_with_refresh_lock_held().await
     }

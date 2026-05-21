@@ -322,6 +322,81 @@ async fn refresh_managed_chatgpt_token_waits_while_startup_refresh_lock_is_held(
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
+async fn refresh_token_does_not_wait_while_startup_refresh_lock_is_held() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let expired_access_token = access_token_with_expiration(Utc::now() - Duration::minutes(1));
+    let initial_tokens = build_tokens(&expired_access_token, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+    })
+    .await?;
+
+    let lock_path = ctx
+        .codex_home
+        .path()
+        .join("chatgpt-access-token-startup-refresh.lock");
+    let lock_file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock_file.try_lock()?;
+
+    let auth_manager = Arc::clone(&ctx.auth_manager);
+    let startup_refresh_task = tokio::spawn(async move {
+        auth_manager
+            .refresh_managed_chatgpt_token_if_near_expiry()
+            .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !startup_refresh_task.is_finished(),
+        "startup refresh should wait while another process holds the file lock"
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        ctx.auth_manager.refresh_token_from_authority(),
+    )
+    .await
+    .context("normal refresh should not wait for the startup file lock")?
+    .context("normal refresh should succeed")?;
+
+    startup_refresh_task.abort();
+    let _ = startup_refresh_task.await;
+    drop(lock_file);
+
+    let stored = ctx.load_auth()?;
+    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
+    assert_eq!(tokens.access_token, "new-access-token");
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+    server.verify().await;
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
 async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
