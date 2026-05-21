@@ -17,6 +17,7 @@ struct GoalAccountingInner {
     current_turn_id: Option<String>,
     turns: HashMap<String, GoalTurnAccounting>,
     wall_clock: GoalWallClockAccounting,
+    budget_limit_reported_goal_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -102,6 +103,9 @@ impl GoalAccountingState {
     pub(crate) fn mark_turn_goal_active(&self, turn_id: &str, goal_id: impl Into<String>) {
         let mut inner = self.inner();
         let goal_id = goal_id.into();
+        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
+            inner.budget_limit_reported_goal_id = None;
+        }
         if let Some(turn) = inner.turns.get_mut(turn_id) {
             turn.active_goal_id = Some(goal_id.clone());
             if inner.current_turn_id.as_deref() == Some(turn_id) {
@@ -117,6 +121,9 @@ impl GoalAccountingState {
         let mut inner = self.inner();
         let turn_id = inner.current_turn_id.clone()?;
         let goal_id = goal_id.into();
+        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
+            inner.budget_limit_reported_goal_id = None;
+        }
         let turn = inner.turns.get_mut(turn_id.as_str())?;
         turn.active_goal_id = Some(goal_id.clone());
         turn.reset_baseline_to_current();
@@ -131,6 +138,7 @@ impl GoalAccountingState {
             turn.active_goal_id = None;
         }
         inner.wall_clock.clear_active_goal();
+        inner.budget_limit_reported_goal_id = None;
         Some(turn_id)
     }
 
@@ -178,6 +186,9 @@ impl GoalAccountingState {
         if clear_active_goal {
             inner.wall_clock.clear_active_goal();
         }
+        if status != ThreadGoalStatus::BudgetLimited {
+            inner.budget_limit_reported_goal_id = None;
+        }
     }
 
     pub(crate) fn finish_turn(&self, turn_id: &str) {
@@ -186,6 +197,15 @@ impl GoalAccountingState {
         if inner.current_turn_id.as_deref() == Some(turn_id) {
             inner.current_turn_id = None;
         }
+    }
+
+    pub(crate) fn mark_budget_limit_reported_if_new(&self, goal_id: &str) -> bool {
+        let mut inner = self.inner();
+        if inner.budget_limit_reported_goal_id.as_deref() == Some(goal_id) {
+            return false;
+        }
+        inner.budget_limit_reported_goal_id = Some(goal_id.to_string());
+        true
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, GoalAccountingInner> {
@@ -221,6 +241,7 @@ impl Default for GoalAccountingInner {
             current_turn_id: None,
             turns: HashMap::new(),
             wall_clock: GoalWallClockAccounting::new(),
+            budget_limit_reported_goal_id: None,
         }
     }
 }

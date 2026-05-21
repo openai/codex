@@ -1,5 +1,4 @@
 [package]
-build = "build.rs"
 edition.workspace = true
 license.workspace = true
 name = "codex-windows-sandbox"
@@ -93,6 +92,3 @@ version = "0.52"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-
-[build-dependencies]
-winres = "0.1"

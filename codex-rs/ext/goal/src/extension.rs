@@ -5,6 +5,7 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ResponseItemInjector;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
@@ -19,12 +20,14 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadGoal;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
+use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
 use crate::tool::protocol_goal_from_state;
 
@@ -43,7 +46,13 @@ impl GoalExtensionConfig {
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
+    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
+}
+
+struct AccountedGoalProgress {
+    goal: ThreadGoal,
+    goal_id: String,
 }
 
 impl<C> std::fmt::Debug for GoalExtension<C> {
@@ -53,14 +62,16 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 }
 
 impl<C> GoalExtension<C> {
-    pub(crate) fn new_with_event_sink(
+    pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
+        response_item_injector: Arc<dyn ResponseItemInjector>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
+            response_item_injector,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -151,14 +162,21 @@ where
         }
 
         let turn_id = input.turn_store.level_id();
-        self.account_active_goal_progress(
-            input.thread_store,
-            turn_id,
-            &format!("{turn_id}:turn-stop"),
-            codex_state::GoalAccountingMode::ActiveOnly,
-            BudgetLimitedGoalDisposition::ClearActive,
-        )
-        .await;
+        if let Err(err) = self
+            .account_active_goal_progress(
+                input.thread_store,
+                turn_id,
+                &format!("{turn_id}:turn-stop"),
+                codex_state::GoalAccountingMode::ActiveOnly,
+                BudgetLimitedGoalDisposition::ClearActive,
+            )
+            .await
+        {
+            tracing::warn!(
+                "failed to account active goal progress at turn stop for {turn_id}: {err}"
+            );
+            return;
+        }
         accounting_state(input.thread_store).finish_turn(turn_id);
     }
 
@@ -168,14 +186,21 @@ where
         }
 
         let turn_id = input.turn_store.level_id();
-        self.account_active_goal_progress(
-            input.thread_store,
-            turn_id,
-            &format!("{turn_id}:turn-abort"),
-            codex_state::GoalAccountingMode::ActiveOnly,
-            BudgetLimitedGoalDisposition::ClearActive,
-        )
-        .await;
+        if let Err(err) = self
+            .account_active_goal_progress(
+                input.thread_store,
+                turn_id,
+                &format!("{turn_id}:turn-abort"),
+                codex_state::GoalAccountingMode::ActiveOnly,
+                BudgetLimitedGoalDisposition::ClearActive,
+            )
+            .await
+        {
+            tracing::warn!(
+                "failed to account active goal progress after turn abort for {turn_id}: {err}"
+            );
+            return;
+        }
         accounting_state(input.thread_store).finish_turn(turn_id);
     }
 }
@@ -217,14 +242,44 @@ where
             if !should_count_for_goal_progress {
                 return;
             }
-            self.account_active_goal_progress(
-                input.thread_store,
-                input.turn_id,
-                input.call_id,
-                codex_state::GoalAccountingMode::ActiveOnly,
-                BudgetLimitedGoalDisposition::KeepActive,
-            )
-            .await;
+            let turn_id = input.turn_id;
+            let progress = match self
+                .account_active_goal_progress(
+                    input.thread_store,
+                    turn_id,
+                    input.call_id,
+                    codex_state::GoalAccountingMode::ActiveOnly,
+                    BudgetLimitedGoalDisposition::KeepActive,
+                )
+                .await
+            {
+                Ok(Some(progress)) => progress,
+                Ok(None) => return,
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to account active goal progress after tool finish for {turn_id}: {err}"
+                    );
+                    return;
+                }
+            };
+            let goal = progress.goal;
+            if goal.status != ThreadGoalStatus::BudgetLimited {
+                return;
+            }
+            if !accounting_state(input.thread_store)
+                .mark_budget_limit_reported_if_new(progress.goal_id.as_str())
+            {
+                return;
+            }
+            let item = budget_limit_steering_item(&goal);
+            if self
+                .response_item_injector
+                .inject_response_items(vec![item])
+                .await
+                .is_err()
+            {
+                tracing::debug!("skipping budget-limit goal steering because no turn is active");
+            }
         })
     }
 }
@@ -277,13 +332,15 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
+    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
 {
-    let extension = Arc::new(GoalExtension::new_with_event_sink(
+    let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         registry.event_sink(),
+        response_item_injector,
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
@@ -326,12 +383,14 @@ impl<C> GoalExtension<C> {
         event_id: &str,
         mode: codex_state::GoalAccountingMode,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
-    ) -> Option<ThreadGoal> {
+    ) -> Result<Option<AccountedGoalProgress>, String> {
         let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
-            return None;
+            return Ok(None);
         };
         let accounting = accounting_state(thread_store);
-        let snapshot = accounting.progress_snapshot(turn_id)?;
+        let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
+            return Ok(None);
+        };
         let outcome = self
             .state_dbs
             .thread_goals()
@@ -343,9 +402,10 @@ impl<C> GoalExtension<C> {
                 Some(snapshot.expected_goal_id.as_str()),
             )
             .await
-            .ok()?;
-        match outcome {
+            .map_err(|err| err.to_string())?;
+        Ok(match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
+                let goal_id = goal.goal_id.clone();
                 accounting.mark_progress_accounted_for_status(
                     turn_id,
                     &snapshot,
@@ -358,9 +418,9 @@ impl<C> GoalExtension<C> {
                     Some(turn_id.to_string()),
                     goal.clone(),
                 );
-                Some(goal)
+                Some(AccountedGoalProgress { goal, goal_id })
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
-        }
+        })
     }
 }

@@ -418,8 +418,46 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.pending_startup_thread_start = false;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
+    }
+
+    pub(super) async fn handle_startup_thread_started(
+        &mut self,
+        app_server: &mut AppServerSession,
+        result: Result<AppServerStartedThread, String>,
+    ) -> Result<()> {
+        if !self.pending_startup_thread_start {
+            if let Ok(started) = result {
+                let thread_id = started.session.thread_id;
+                if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        "failed to unsubscribe stale startup thread: {err}"
+                    );
+                }
+                self.discard_thread_local_state(thread_id).await;
+            }
+            return Ok(());
+        }
+
+        self.pending_startup_thread_start = false;
+        self.chat_widget
+            .set_queue_submissions_until_session_configured(/*queue*/ false);
+        match result {
+            Ok(started) => {
+                self.enqueue_primary_thread_session(started.session, started.turns)
+                    .await?;
+                self.chat_widget.maybe_send_next_queued_input();
+            }
+            Err(err) => {
+                return Err(color_eyre::eyre::eyre!(
+                    "Failed to start a fresh session through the app server: {err}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn start_fresh_session_with_summary_hint(
@@ -618,7 +656,6 @@ impl App {
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
         config.service_tier = self.chat_widget.configured_service_tier();
-        config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         config
     }
     pub(super) async fn resume_target_session(

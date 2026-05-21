@@ -1103,6 +1103,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 arguments: Some(json!({})),
             },
             mcp_app_resource_uri: None,
+            plugin_id: None,
         },
     );
 
@@ -1275,6 +1276,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 priority: 1,
                 additional_speed_tiers: Vec::new(),
                 service_tiers: Vec::new(),
+                default_service_tier: None,
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,

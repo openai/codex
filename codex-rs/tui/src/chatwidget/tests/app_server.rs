@@ -1,6 +1,65 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn thread_settings_for_test(
+    model: &str,
+    thread_id: ThreadId,
+) -> codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+    codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+        thread_id: thread_id.to_string(),
+        thread_settings: codex_app_server_protocol::ThreadSettings {
+            cwd: test_path_buf("/tmp/thread-settings").abs(),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+            sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: Some(
+                codex_app_server_protocol::ActivePermissionProfile::read_only(),
+            ),
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+            effort: Some(ReasoningEffortConfig::High),
+            summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: codex_protocol::config_types::Settings {
+                    model: model.to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::High),
+                    developer_instructions: None,
+                },
+            },
+            personality: Some(Personality::Pragmatic),
+        },
+    }
+}
+
+fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
+    crate::session_state::ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.3-codex".to_string(),
+        model_provider_id: "openai".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/thread-settings").abs(),
+        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    }
+}
+
 #[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
@@ -35,6 +94,98 @@ async fn invalid_url_elicitation_is_declined() {
                 meta: None,
             },
         }) if op_thread_id == request_thread_id && server_name == "payments"
+    );
+}
+
+#[tokio::test]
+async fn thread_settings_updated_updates_visible_state_without_transcript() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-5.4", thread_id)),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_model(), "gpt-5.4");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        chat.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::OnRequest.to_core()
+    );
+    assert_eq!(
+        chat.config_ref().approvals_reviewer,
+        ApprovalsReviewer::AutoReview
+    );
+    assert_eq!(
+        chat.config_ref()
+            .permissions
+            .active_permission_profile()
+            .expect("active profile")
+            .id,
+        codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY
+    );
+    assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "ThreadSettingsUpdated should not render transcript history"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test(
+            "gpt-5.2",
+            ThreadId::new(),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_model(), "gpt-5.4");
+}
+
+#[tokio::test]
+async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let thread_id = ThreadId::new();
+    let mut session = configured_thread_session(thread_id);
+    session.model = "gpt-default".to_string();
+    session.reasoning_effort = Some(ReasoningEffortConfig::Low);
+    chat.handle_thread_session(session);
+    let _ = drain_insert_history(&mut rx);
+    let default_mode = chat.current_collaboration_mode().clone();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-plan", thread_id)),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), "gpt-plan");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(chat.current_collaboration_mode(), &default_mode);
+
+    let default_mask = collaboration_modes::default_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), "gpt-default");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
     );
 }
 

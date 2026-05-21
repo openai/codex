@@ -105,6 +105,7 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PostToolUse
         | HookEventName::SessionStart
         | HookEventName::SubagentStart
+        | HookEventName::SubagentStop
         | HookEventName::PreCompact
         | HookEventName::PostCompact => matcher,
         HookEventName::UserPromptSubmit | HookEventName::Stop => None,
