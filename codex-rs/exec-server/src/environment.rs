@@ -94,6 +94,19 @@ impl EnvironmentManager {
         Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
     }
 
+    /// Builds a manager from `CODEX_HOME` while omitting the synthetic local
+    /// environment from the loaded snapshot.
+    ///
+    /// This preserves configured remote environments for callers that need
+    /// environment-aware HTTP routing but do not have local runtime paths
+    /// available to construct the local execution environment.
+    pub async fn from_codex_home_without_local(
+        codex_home: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ExecServerError> {
+        let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
+        Self::from_snapshot(without_local_environment(provider.snapshot().await?), None)
+    }
+
     /// Builds a manager from the legacy environment-variable provider without
     /// reading user config files from `CODEX_HOME`.
     pub async fn from_env(
@@ -276,6 +289,16 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
+}
+
+fn without_local_environment(
+    mut snapshot: EnvironmentProviderSnapshot,
+) -> EnvironmentProviderSnapshot {
+    snapshot.include_local = false;
+    if snapshot.default == EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string()) {
+        snapshot.default = EnvironmentDefault::Disabled;
+    }
+    snapshot
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -728,19 +751,44 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_snapshot_without_local_environment_disables_local_default() {
-        let mut snapshot = EnvironmentProviderSnapshot {
+        let snapshot = EnvironmentProviderSnapshot {
             environments: Vec::new(),
             default: EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string()),
             include_local: true,
         };
-        snapshot.include_local = false;
-        snapshot.default = EnvironmentDefault::Disabled;
-        let manager =
-            EnvironmentManager::from_snapshot(snapshot, /*local_runtime_paths*/ None)
-                .expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(without_local_environment(snapshot), None)
+            .expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);
+        assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
+        assert_local_environment_unavailable(&manager);
+    }
+
+    #[tokio::test]
+    async fn environment_manager_snapshot_without_local_environment_keeps_remote_default() {
+        let snapshot = EnvironmentProviderSnapshot {
+            environments: vec![(
+                REMOTE_ENVIRONMENT_ID.to_string(),
+                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                    .expect("remote environment"),
+            )],
+            default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
+            include_local: true,
+        };
+        let manager = EnvironmentManager::from_snapshot(without_local_environment(snapshot), None)
+            .expect("environment manager");
+
+        assert_eq!(
+            manager.default_environment_id(),
+            Some(REMOTE_ENVIRONMENT_ID)
+        );
+        assert!(
+            manager
+                .default_environment()
+                .expect("remote default environment")
+                .is_remote()
+        );
         assert!(manager.get_environment(LOCAL_ENVIRONMENT_ID).is_none());
         assert_local_environment_unavailable(&manager);
     }

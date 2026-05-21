@@ -247,10 +247,6 @@ async fn perform_oauth_login_retry_without_scopes(
 }
 
 async fn threadless_mcp_runtime_context(config: &Config) -> Result<McpRuntimeContext> {
-    // Threadless status/login only needs local exec runtime paths when it may
-    // actually resolve a local stdio MCP. Keep local optional here so HTTP MCP
-    // auth/status still works in tests and orchestrator-only configs that do
-    // not configure the Codex executable path.
     let local_runtime_paths = config
         .codex_self_exe
         .clone()
@@ -258,8 +254,22 @@ async fn threadless_mcp_runtime_context(config: &Config) -> Result<McpRuntimeCon
             ExecServerRuntimePaths::new(codex_self_exe, config.codex_linux_sandbox_exe.clone())
         })
         .transpose()?;
-    let environment_manager =
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?;
+    let environment_manager = match local_runtime_paths {
+        Some(local_runtime_paths) => {
+            EnvironmentManager::from_codex_home(
+                config.codex_home.clone(),
+                Some(local_runtime_paths),
+            )
+            .await?
+        }
+        None => {
+            // Threadless status/login can still route named remote HTTP MCPs
+            // without constructing the local execution environment. Local HTTP
+            // falls back to the ambient client, while local stdio still fails
+            // only if a path actually tries to launch it.
+            EnvironmentManager::from_codex_home_without_local(config.codex_home.clone()).await?
+        }
+    };
     Ok(McpRuntimeContext::new(
         Arc::new(environment_manager),
         config.cwd.to_path_buf(),
