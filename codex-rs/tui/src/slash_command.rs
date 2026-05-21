@@ -163,6 +163,12 @@ impl SlashCommand {
         )
     }
 
+    /// Whether slash-command completion should preserve draft text after the typed command prefix
+    /// and use it as inline arguments for this command.
+    pub fn preserves_draft_tail_on_completion(self) -> bool {
+        matches!(self, SlashCommand::Review | SlashCommand::Goal)
+    }
+
     /// Whether this command remains available inside an active side conversation.
     pub fn available_in_side_conversation(self) -> bool {
         matches!(

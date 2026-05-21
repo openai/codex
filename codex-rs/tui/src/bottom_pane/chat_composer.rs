@@ -3504,6 +3504,9 @@ impl ChatComposer {
             && self
                 .slash_input()
                 .is_editing_command_name(first_line, cursor);
+        let command_filter_text = caret_on_first_line
+            .then(|| slash_input::command_popup_filter_text(first_line, cursor))
+            .flatten();
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3517,15 +3520,19 @@ impl ChatComposer {
         match &mut self.popups.active {
             ActivePopup::Command(popup) => {
                 if is_editing_slash_command_name {
-                    popup.on_composer_text_change(first_line.to_string());
+                    if let Some(command_filter_text) = command_filter_text.as_deref() {
+                        popup.on_composer_text_change(command_filter_text.to_string());
+                    }
                 } else {
                     self.popups.active = ActivePopup::None;
                 }
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let command_popup = self.slash_input().command_popup(first_line);
-                    self.popups.active = ActivePopup::Command(command_popup);
+                    if let Some(command_filter_text) = command_filter_text.as_deref() {
+                        let command_popup = self.slash_input().command_popup(command_filter_text);
+                        self.popups.active = ActivePopup::Command(command_popup);
+                    }
                 }
             }
         }
@@ -7989,6 +7996,198 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
         assert_eq!(composer.draft.textarea.text(), "/compact ");
+        assert_eq!(
+            composer.draft.textarea.cursor(),
+            composer.draft.textarea.text().len()
+        );
+    }
+
+    #[test]
+    fn slash_completion_preserves_existing_draft_tail_for_goal() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let draft = "preserve this draft as the goal objective";
+        let draft_chars = draft.chars().collect::<Vec<_>>();
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_goal_command_enabled(/*enabled*/ true);
+
+        type_chars_humanlike(&mut composer, &draft_chars);
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        type_chars_humanlike(&mut composer, &['/', 'g', 'o']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/goal preserve this draft as the goal objective"
+        );
+        assert_eq!(
+            composer.draft.textarea.cursor(),
+            composer.draft.textarea.text().len()
+        );
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_goal_command_enabled(/*enabled*/ true);
+
+        type_chars_humanlike(&mut composer, &draft_chars);
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        type_chars_humanlike(&mut composer, &['/', 'g', 'o']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Goal, draft.to_string(), Vec::new())
+        );
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/goal preserve this draft as the goal objective"
+        );
+
+        let command = "/re use the text after the slash command as review instructions";
+        let review_args = "use the text after the slash command as review instructions";
+        let cursor_after_re = "/re".len();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.draft.textarea.set_text_clearing_elements(command);
+        composer.draft.textarea.set_cursor(cursor_after_re);
+        composer.sync_popups();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Review, review_args.to_string(), Vec::new())
+        );
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/review use the text after the slash command as review instructions"
+        );
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.draft.textarea.set_text_clearing_elements(command);
+        composer.draft.textarea.set_cursor(cursor_after_re);
+        composer.sync_popups();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(
+            composer.draft.textarea.text(),
+            "/review use the text after the slash command as review instructions"
+        );
+
+        let make_goal_composer = |cursor| {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_goal_command_enabled(/*enabled*/ true);
+            composer
+                .draft
+                .textarea
+                .set_text_clearing_elements("/goal ship it");
+            composer.draft.textarea.set_cursor(cursor);
+            composer.sync_popups();
+            composer
+        };
+
+        for cursor in [0, 1] {
+            let mut composer = make_goal_composer(cursor);
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+            assert_eq!(result, InputResult::None);
+            assert_eq!(composer.draft.textarea.text(), "/goal ship it");
+        }
+
+        for cursor in [0, 1] {
+            let mut composer = make_goal_composer(cursor);
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+            assert_eq!(
+                result,
+                InputResult::CommandWithArgs(SlashCommand::Goal, "ship it".to_string(), Vec::new())
+            );
+            assert_eq!(composer.draft.textarea.text(), "/goal ship it");
+        }
+    }
+
+    #[test]
+    fn slash_completion_does_not_preserve_existing_draft_tail_for_other_commands() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let draft = "preserve this draft only for opted-in slash commands";
+        let draft_chars = draft.chars().collect::<Vec<_>>();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &draft_chars);
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/model ");
         assert_eq!(
             composer.draft.textarea.cursor(),
             composer.draft.textarea.text().len()
