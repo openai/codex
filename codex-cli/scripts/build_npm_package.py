@@ -326,9 +326,7 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
     print("+", " ".join(cmd), flush=True)
-    env = os.environ.copy()
-    env.setdefault("CI", "true")
-    subprocess.run(cmd, cwd=cwd, env=env, check=True)
+    subprocess.run(cmd, cwd=cwd, check=True)
 
 
 def stage_codex_sdk_sources(staging_dir: Path) -> None:

@@ -18,6 +18,6 @@ When `--package codex` is provided, the staging helper builds the lightweight
 `@openai/codex` meta package plus all platform-native `@openai/codex` variants
 that are later published under platform-specific dist-tags.
 
-If you need to invoke `build_npm_package.py` directly, run
-`codex-cli/scripts/install_native_deps.py --component codex-package` first and pass
-`--vendor-src` pointing to the directory that contains the populated `vendor/` tree.
+Direct `build_npm_package.py` invocations are still useful for package-specific
+debugging, but native packages expect `--vendor-src` to point at a prehydrated
+`vendor/` tree. Release packaging should use `scripts/stage_npm_packages.py`.
