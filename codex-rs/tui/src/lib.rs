@@ -997,7 +997,7 @@ pub async fn run_main(
         let resolved = resolve_oss_provider(
             cli.oss_provider.as_deref(),
             &config_toml,
-            cli.config_profile.clone(),
+            /*config_profile*/ None,
         );
 
         if let Some(provider) = resolved {
@@ -1041,7 +1041,6 @@ pub async fn run_main(
             cwd
         },
         model_provider: model_provider_override.clone(),
-        config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),

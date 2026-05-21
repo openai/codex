@@ -47,6 +47,7 @@ impl App {
 fn send_world_writable_scan_failed(tx: &AppEventSender) {
     tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
         preset: None,
+        profile_selection: None,
         sample_paths: Vec::new(),
         extra_count: 0usize,
         failed_scan: true,
