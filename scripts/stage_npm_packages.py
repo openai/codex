@@ -59,11 +59,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_native_components(packages: list[str]) -> set[str]:
-    components: set[str] = set()
+def native_components_for_package(package: str) -> tuple[str, ...]:
+    return tuple(sorted(PACKAGE_NATIVE_COMPONENTS.get(package, [])))
+
+
+def collect_native_component_sets(packages: list[str]) -> list[tuple[str, ...]]:
+    component_sets: list[tuple[str, ...]] = []
+    seen: set[tuple[str, ...]] = set()
     for package in packages:
-        components.update(PACKAGE_NATIVE_COMPONENTS.get(package, []))
-    return components
+        components = native_components_for_package(package)
+        if not components or components in seen:
+            continue
+        seen.add(components)
+        component_sets.append(components)
+    return component_sets
 
 
 def expand_packages(packages: list[str]) -> list[str]:
@@ -144,26 +153,28 @@ def main() -> int:
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
     packages = expand_packages(list(args.packages))
-    native_components = collect_native_components(packages)
+    native_component_sets = collect_native_component_sets(packages)
 
-    vendor_temp_root: Path | None = None
-    vendor_src: Path | None = None
+    vendor_temp_roots: list[Path] = []
+    vendor_src_by_components: dict[tuple[str, ...], Path] = {}
     resolved_head_sha: str | None = None
 
     final_messages = []
 
     try:
-        if native_components:
+        if native_component_sets:
             workflow_url, resolved_head_sha = resolve_workflow_url(
                 args.release_version, args.workflow_url
             )
-            vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(
-                workflow_url,
-                native_components,
-                vendor_temp_root,
-            )
-            vendor_src = vendor_temp_root / "vendor"
+            for components in native_component_sets:
+                vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
+                vendor_temp_roots.append(vendor_temp_root)
+                install_native_components(
+                    workflow_url,
+                    set(components),
+                    vendor_temp_root,
+                )
+                vendor_src_by_components[components] = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
             print(f"should `git checkout {resolved_head_sha}`")
@@ -184,6 +195,7 @@ def main() -> int:
                 str(pack_output),
             ]
 
+            vendor_src = vendor_src_by_components.get(native_components_for_package(package))
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
 
@@ -195,8 +207,9 @@ def main() -> int:
 
             final_messages.append(f"Staged {package} at {pack_output}")
     finally:
-        if vendor_temp_root is not None and not args.keep_staging_dirs:
-            shutil.rmtree(vendor_temp_root, ignore_errors=True)
+        if not args.keep_staging_dirs:
+            for vendor_temp_root in vendor_temp_roots:
+                shutil.rmtree(vendor_temp_root, ignore_errors=True)
 
     for msg in final_messages:
         print(msg)

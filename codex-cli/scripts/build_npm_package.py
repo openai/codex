@@ -87,16 +87,6 @@ PACKAGE_TARGET_FILTERS: dict[str, str] = {
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
-COMPONENT_DEST_DIR: dict[str, str] = {
-    "bwrap": "codex-resources",
-    "codex": "codex",
-    "codex-responses-api-proxy": "codex-responses-api-proxy",
-    "codex-windows-sandbox-setup": "codex",
-    "codex-command-runner": "codex",
-    "rg": "path",
-}
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
@@ -369,11 +359,7 @@ def copy_native_binaries(
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
 
-    components_set = {
-        component
-        for component in components
-        if component == CODEX_PACKAGE_COMPONENT or component in COMPONENT_DEST_DIR
-    }
+    components_set = set(components)
     if not components_set:
         return
 
@@ -402,18 +388,14 @@ def copy_native_binaries(
         else:
             dest_target_dir.mkdir(parents=True, exist_ok=True)
 
-        for component in components_set - {CODEX_PACKAGE_COMPONENT}:
-            dest_dir_name = COMPONENT_DEST_DIR.get(component)
-            if dest_dir_name is None:
-                continue
-
-            src_component_dir = target_dir / dest_dir_name
+        for component in sorted(components_set - {CODEX_PACKAGE_COMPONENT}):
+            src_component_dir = target_dir / component
             if not src_component_dir.exists():
                 raise RuntimeError(
                     f"Missing native component '{component}' in vendor source: {src_component_dir}"
                 )
 
-            dest_component_dir = dest_target_dir / dest_dir_name
+            dest_component_dir = dest_target_dir / component
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)

@@ -11,8 +11,8 @@ example, to stage the CLI, responses proxy, and SDK packages for version `0.6.0`
   --package codex-sdk
 ```
 
-This downloads the native package archive artifacts once, hydrates `vendor/` for each
-package, and writes tarballs to `dist/npm/`.
+This downloads the required native package archive artifacts, hydrates `vendor/` for
+each package, and writes tarballs to `dist/npm/`.
 
 When `--package codex` is provided, the staging helper builds the lightweight
 `@openai/codex` meta package plus all platform-native `@openai/codex` variants
