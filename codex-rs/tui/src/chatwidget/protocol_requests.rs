@@ -35,7 +35,8 @@ impl ChatWidget {
             ServerRequest::ToolRequestUserInput { params, .. } => {
                 self.on_request_user_input(params);
             }
-            ServerRequest::DynamicToolCall { .. }
+            ServerRequest::ToolOptionPicker { .. }
+            | ServerRequest::DynamicToolCall { .. }
             | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::ApplyPatchApproval { .. }

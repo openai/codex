@@ -26,6 +26,7 @@ use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::option_picker::OptionPickerResponse;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -435,6 +436,14 @@ pub async fn request_user_input_response(
     sess.notify_user_input_response(&id, response).await;
 }
 
+pub async fn option_picker_response(
+    sess: &Arc<Session>,
+    id: String,
+    response: OptionPickerResponse,
+) {
+    sess.notify_option_picker_response(&id, response).await;
+}
+
 pub async fn request_permissions_response(
     sess: &Arc<Session>,
     id: String,
@@ -790,6 +799,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::UserInputAnswer { id, response } => {
                     request_user_input_response(&sess, id, response).await;
+                    false
+                }
+                Op::OptionPickerResponse { id, response } => {
+                    option_picker_response(&sess, id, response).await;
                     false
                 }
                 Op::RequestPermissionsResponse { id, response } => {

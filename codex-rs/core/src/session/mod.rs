@@ -325,6 +325,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::option_picker::OptionPickerArgs;
+use codex_protocol::option_picker::OptionPickerResponse;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -343,6 +345,7 @@ use codex_protocol::protocol::ModelVerificationEvent;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::OptionPickerEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -2317,6 +2320,78 @@ impl Session {
             .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn request_option_picker(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: OptionPickerArgs,
+    ) -> Option<OptionPickerResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_option_picker(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending option picker for sub_id: {event_id}");
+        }
+
+        let event = EventMsg::OptionPicker(OptionPickerEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            question: args.question,
+            options: args.options,
+            allow_multiple: args.allow_multiple,
+            submit_label: args.submit_label,
+            skip_label: args.skip_label,
+        });
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn notify_option_picker_response(
+        &self,
+        sub_id: &str,
+        response: OptionPickerResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_option_picker(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending option picker found for sub_id: {sub_id}");
+            }
+        }
     }
 
     #[expect(

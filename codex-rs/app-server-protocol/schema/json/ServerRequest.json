@@ -1664,6 +1664,71 @@
     "ThreadId": {
       "type": "string"
     },
+    "ToolOptionPickerOption": {
+      "description": "EXPERIMENTAL. Defines a single selectable option for request_option_picker.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "ToolOptionPickerParams": {
+      "description": "EXPERIMENTAL. Params sent with a request_option_picker event.",
+      "properties": {
+        "allowMultiple": {
+          "type": "boolean"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/definitions/ToolOptionPickerOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "skipLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submitLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowMultiple",
+        "itemId",
+        "options",
+        "question",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "ToolRequestUserInputOption": {
       "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
       "properties": {
@@ -1820,6 +1885,31 @@
         "params"
       ],
       "title": "Item/tool/requestUserInputRequest",
+      "type": "object"
+    },
+    {
+      "description": "EXPERIMENTAL - Request compact option selection from the user for a tool call.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "item/tool/requestOptionPicker"
+          ],
+          "title": "Item/tool/requestOptionPickerRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ToolOptionPickerParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Item/tool/requestOptionPickerRequest",
       "type": "object"
     },
     {

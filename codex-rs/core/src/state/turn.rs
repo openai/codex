@@ -23,6 +23,7 @@ use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::option_picker::OptionPickerResponse;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
 
@@ -113,6 +114,7 @@ pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
+    pending_option_picker: HashMap<String, oneshot::Sender<OptionPickerResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
@@ -150,6 +152,7 @@ impl TurnState {
         self.pending_approvals.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
+        self.pending_option_picker.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
     }
@@ -183,6 +186,21 @@ impl TurnState {
         key: &str,
     ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
         self.pending_user_input.remove(key)
+    }
+
+    pub(crate) fn insert_pending_option_picker(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<OptionPickerResponse>,
+    ) -> Option<oneshot::Sender<OptionPickerResponse>> {
+        self.pending_option_picker.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_option_picker(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<OptionPickerResponse>> {
+        self.pending_option_picker.remove(key)
     }
 
     pub(crate) fn insert_pending_elicitation(

@@ -5297,6 +5297,31 @@
           "type": "object"
         },
         {
+          "description": "EXPERIMENTAL - Request compact option selection from the user for a tool call.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/tool/requestOptionPicker"
+              ],
+              "title": "Item/tool/requestOptionPickerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ToolOptionPickerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/tool/requestOptionPickerRequest",
+          "type": "object"
+        },
+        {
           "description": "Request input for an MCP server elicitation.",
           "properties": {
             "id": {
@@ -5472,6 +5497,109 @@
         }
       ],
       "title": "ServerRequest"
+    },
+    "ToolOptionPickerAction": {
+      "description": "EXPERIMENTAL. Action selected for request_option_picker.",
+      "enum": [
+        "submit",
+        "skip",
+        "dismiss"
+      ],
+      "type": "string"
+    },
+    "ToolOptionPickerOption": {
+      "description": "EXPERIMENTAL. Defines a single selectable option for request_option_picker.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "ToolOptionPickerParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL. Params sent with a request_option_picker event.",
+      "properties": {
+        "allowMultiple": {
+          "type": "boolean"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/definitions/ToolOptionPickerOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "skipLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submitLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowMultiple",
+        "itemId",
+        "options",
+        "question",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ToolOptionPickerParams",
+      "type": "object"
+    },
+    "ToolOptionPickerResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL. Captures a user's response to request_option_picker.",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ToolOptionPickerAction"
+        },
+        "freeformAnswer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selectedOptions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "selectedOptions"
+      ],
+      "title": "ToolOptionPickerResponse",
+      "type": "object"
     },
     "ToolRequestUserInputAnswer": {
       "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",

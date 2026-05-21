@@ -1447,3 +1447,47 @@ pub struct ToolRequestUserInputAnswer {
 pub struct ToolRequestUserInputResponse {
     pub answers: HashMap<String, ToolRequestUserInputAnswer>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Defines a single selectable option for request_option_picker.
+pub struct ToolOptionPickerOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Params sent with a request_option_picker event.
+pub struct ToolOptionPickerParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub question: String,
+    pub options: Vec<ToolOptionPickerOption>,
+    pub allow_multiple: bool,
+    pub submit_label: Option<String>,
+    pub skip_label: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Action selected for request_option_picker.
+pub enum ToolOptionPickerAction {
+    Submit,
+    Skip,
+    Dismiss,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Captures a user's response to request_option_picker.
+pub struct ToolOptionPickerResponse {
+    pub action: ToolOptionPickerAction,
+    pub selected_options: Vec<String>,
+    pub freeform_answer: Option<String>,
+}

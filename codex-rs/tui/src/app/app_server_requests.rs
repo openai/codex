@@ -127,6 +127,12 @@ impl PendingAppServerRequests {
                 );
                 None
             }
+            ServerRequest::ToolOptionPicker { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Option picker requests are not available in TUI yet.".to_string(),
+                })
+            }
             ServerRequest::DynamicToolCall { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),
@@ -336,7 +342,8 @@ impl PendingAppServerRequests {
                 .mcp_requests
                 .values()
                 .any(|pending_request_id| pending_request_id == request_id),
-            ServerRequest::DynamicToolCall { .. }
+            ServerRequest::ToolOptionPicker { .. }
+            | ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::ApplyPatchApproval { .. }

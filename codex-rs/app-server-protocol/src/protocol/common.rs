@@ -1334,6 +1334,12 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    /// EXPERIMENTAL - Request compact option selection from the user for a tool call.
+    ToolOptionPicker => "item/tool/requestOptionPicker" {
+        params: v2::ToolOptionPickerParams,
+        response: v2::ToolOptionPickerResponse,
+    },
+
     /// Request input for an MCP server elicitation.
     McpServerElicitationRequest => "mcpServer/elicitation/request" {
         params: v2::McpServerElicitationRequestParams,

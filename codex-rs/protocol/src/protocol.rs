@@ -43,6 +43,7 @@ use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use crate::option_picker::OptionPickerResponse;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
@@ -75,6 +76,7 @@ pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
+pub use crate::option_picker::OptionPickerEvent;
 pub use crate::permissions::FileSystemAccessMode;
 pub use crate::permissions::FileSystemPath;
 pub use crate::permissions::FileSystemSandboxEntry;
@@ -579,6 +581,14 @@ pub enum Op {
         response: RequestUserInputResponse,
     },
 
+    /// Resolve a request_option_picker tool call.
+    OptionPickerResponse {
+        /// Turn id for the in-flight request.
+        id: String,
+        /// User-provided selection.
+        response: OptionPickerResponse,
+    },
+
     /// Resolve a request_permissions tool call.
     RequestPermissionsResponse {
         /// Call id for the in-flight request.
@@ -728,6 +738,7 @@ impl Op {
             Self::PatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",
             Self::UserInputAnswer { .. } => "user_input_answer",
+            Self::OptionPickerResponse { .. } => "option_picker_response",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
@@ -1245,6 +1256,8 @@ pub enum EventMsg {
     RequestPermissions(RequestPermissionsEvent),
 
     RequestUserInput(RequestUserInputEvent),
+
+    OptionPicker(OptionPickerEvent),
 
     DynamicToolCallRequest(DynamicToolCallRequest),
 

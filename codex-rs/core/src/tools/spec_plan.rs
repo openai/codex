@@ -13,6 +13,7 @@ use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::OptionPickerHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
@@ -571,6 +572,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     planned_tools.add(RequestUserInputHandler {
         available_modes: request_user_input_available_modes(features),
     });
+    if features.enabled(Feature::OnboardingInteractiveTools) {
+        planned_tools.add(OptionPickerHandler);
+    }
 
     if features.enabled(Feature::RequestPermissionsTool) {
         planned_tools.add(RequestPermissionsHandler);

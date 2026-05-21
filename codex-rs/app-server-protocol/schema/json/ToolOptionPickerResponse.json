@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ToolOptionPickerAction": {
+      "description": "EXPERIMENTAL. Action selected for request_option_picker.",
+      "enum": [
+        "submit",
+        "skip",
+        "dismiss"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "EXPERIMENTAL. Captures a user's response to request_option_picker.",
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/ToolOptionPickerAction"
+    },
+    "freeformAnswer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selectedOptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "action",
+    "selectedOptions"
+  ],
+  "title": "ToolOptionPickerResponse",
+  "type": "object"
+}

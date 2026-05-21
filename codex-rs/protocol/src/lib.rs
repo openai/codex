@@ -21,6 +21,7 @@ pub mod models;
 pub mod network_policy;
 pub mod num_format;
 pub mod openai_models;
+pub mod option_picker;
 pub mod parse_command;
 pub mod permissions;
 pub mod plan_tool;

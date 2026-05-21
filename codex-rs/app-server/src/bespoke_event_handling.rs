@@ -65,6 +65,10 @@ use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ToolOptionPickerAction;
+use codex_app_server_protocol::ToolOptionPickerOption;
+use codex_app_server_protocol::ToolOptionPickerParams;
+use codex_app_server_protocol::ToolOptionPickerResponse;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -90,6 +94,8 @@ use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
+use codex_protocol::option_picker::OptionPickerAction as CoreOptionPickerAction;
+use codex_protocol::option_picker::OptionPickerResponse as CoreOptionPickerResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
@@ -680,6 +686,43 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             tokio::spawn(async move {
                 on_request_user_input_response(
+                    event_turn_id,
+                    pending_request_id,
+                    rx,
+                    conversation,
+                    thread_state,
+                    user_input_guard,
+                )
+                .await;
+            });
+        }
+        EventMsg::OptionPicker(request) => {
+            let user_input_guard = thread_watch_manager
+                .note_user_input_requested(&conversation_id.to_string())
+                .await;
+            let options = request
+                .options
+                .into_iter()
+                .map(|option| ToolOptionPickerOption {
+                    label: option.label,
+                    description: option.description,
+                })
+                .collect();
+            let params = ToolOptionPickerParams {
+                thread_id: conversation_id.to_string(),
+                turn_id: request.turn_id,
+                item_id: request.call_id,
+                question: request.question,
+                options,
+                allow_multiple: request.allow_multiple,
+                submit_label: request.submit_label,
+                skip_label: request.skip_label,
+            };
+            let (pending_request_id, rx) = outgoing
+                .send_request(ServerRequestPayload::ToolOptionPicker(params))
+                .await;
+            tokio::spawn(async move {
+                on_option_picker_response(
                     event_turn_id,
                     pending_request_id,
                     rx,
@@ -1596,6 +1639,82 @@ async fn handle_token_count_event(
                 },
             ))
             .await;
+    }
+}
+
+async fn on_option_picker_response(
+    event_turn_id: String,
+    pending_request_id: RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    user_input_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    drop(user_input_guard);
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+        Ok(Err(err)) => {
+            error!("option picker request failed with client error: {err:?}");
+            submit_empty_option_picker_response(event_turn_id, conversation).await;
+            return;
+        }
+        Err(err) => {
+            error!("option picker request failed: {err:?}");
+            submit_empty_option_picker_response(event_turn_id, conversation).await;
+            return;
+        }
+    };
+
+    let response =
+        serde_json::from_value::<ToolOptionPickerResponse>(value).unwrap_or_else(|err| {
+            error!("failed to deserialize ToolOptionPickerResponse: {err}");
+            ToolOptionPickerResponse {
+                action: ToolOptionPickerAction::Dismiss,
+                selected_options: Vec::new(),
+                freeform_answer: None,
+            }
+        });
+    let response = CoreOptionPickerResponse {
+        action: match response.action {
+            ToolOptionPickerAction::Submit => CoreOptionPickerAction::Submit,
+            ToolOptionPickerAction::Skip => CoreOptionPickerAction::Skip,
+            ToolOptionPickerAction::Dismiss => CoreOptionPickerAction::Dismiss,
+        },
+        selected_options: response.selected_options,
+        freeform_answer: response.freeform_answer,
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::OptionPickerResponse {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit OptionPickerResponse: {err}");
+    }
+}
+
+async fn submit_empty_option_picker_response(
+    event_turn_id: String,
+    conversation: Arc<CodexThread>,
+) {
+    let response = CoreOptionPickerResponse {
+        action: CoreOptionPickerAction::Dismiss,
+        selected_options: Vec::new(),
+        freeform_answer: None,
+    };
+    if let Err(err) = conversation
+        .submit(Op::OptionPickerResponse {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit OptionPickerResponse: {err}");
     }
 }
 

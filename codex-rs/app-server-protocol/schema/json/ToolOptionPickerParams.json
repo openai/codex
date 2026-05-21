@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ToolOptionPickerOption": {
+      "description": "EXPERIMENTAL. Defines a single selectable option for request_option_picker.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "EXPERIMENTAL. Params sent with a request_option_picker event.",
+  "properties": {
+    "allowMultiple": {
+      "type": "boolean"
+    },
+    "itemId": {
+      "type": "string"
+    },
+    "options": {
+      "items": {
+        "$ref": "#/definitions/ToolOptionPickerOption"
+      },
+      "type": "array"
+    },
+    "question": {
+      "type": "string"
+    },
+    "skipLabel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "submitLabel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "allowMultiple",
+    "itemId",
+    "options",
+    "question",
+    "threadId",
+    "turnId"
+  ],
+  "title": "ToolOptionPickerParams",
+  "type": "object"
+}
