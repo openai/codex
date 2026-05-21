@@ -69,180 +69,23 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
 }
 
 #[tokio::test]
-async fn profile_add_list_and_remove_only_mutate_profile_config() -> Result<()> {
+async fn profile_mcp_reports_legacy_profile_migration() -> Result<()> {
     let codex_home = TempDir::new()?;
-
-    let mut add_base_cmd = codex_command(codex_home.path())?;
-    add_base_cmd
-        .args(["mcp", "add", "base", "--url", "https://base.example/mcp"])
-        .assert()
-        .success();
-
-    let mut add_profile_cmd = codex_command(codex_home.path())?;
-    add_profile_cmd
-        .args([
-            "--profile",
-            "work",
-            "mcp",
-            "add",
-            "docs",
-            "--",
-            "docs-server",
-        ])
-        .assert()
-        .success();
-
-    let profile_path = codex_home.path().join("work.config.toml");
-    let profile_contents = std::fs::read_to_string(&profile_path)?;
-    assert!(profile_contents.contains("[mcp_servers.docs]"));
-    assert!(!profile_contents.contains("[mcp_servers.base]"));
-
-    let base_servers = load_global_mcp_servers(codex_home.path()).await?;
-    assert!(base_servers.contains_key("base"));
-    assert!(!base_servers.contains_key("docs"));
-
-    let mut list_profile_cmd = codex_command(codex_home.path())?;
-    let list_profile_output = list_profile_cmd
-        .args(["--profile", "work", "mcp", "list", "--json"])
-        .output()?;
-    assert!(list_profile_output.status.success());
-    let stdout = String::from_utf8(list_profile_output.stdout)?;
-    assert!(stdout.contains("\"name\": \"base\""));
-    assert!(stdout.contains("\"name\": \"docs\""));
-
-    let mut remove_profile_cmd = codex_command(codex_home.path())?;
-    remove_profile_cmd
-        .args(["--profile", "work", "mcp", "remove", "docs"])
-        .assert()
-        .success()
-        .stdout(contains("Removed global MCP server 'docs'."));
-
-    let profile_contents = std::fs::read_to_string(profile_path)?;
-    assert!(!profile_contents.contains("[mcp_servers.docs]"));
-
-    let base_servers = load_global_mcp_servers(codex_home.path()).await?;
-    assert!(base_servers.contains_key("base"));
-    assert!(!base_servers.contains_key("docs"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn profile_add_and_remove_preserve_partial_inherited_server_override() -> Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let mut add_base_cmd = codex_command(codex_home.path())?;
-    add_base_cmd
-        .args(["mcp", "add", "base", "--", "base-server"])
-        .assert()
-        .success();
-
-    let profile_path = codex_home.path().join("work.config.toml");
     std::fs::write(
-        &profile_path,
-        r#"[mcp_servers.base]
-enabled = false
+        codex_home.path().join("config.toml"),
+        r#"[profiles.work]
+model = "gpt-5"
 "#,
     )?;
 
-    let mut add_profile_cmd = codex_command(codex_home.path())?;
-    add_profile_cmd
-        .args([
-            "--profile",
-            "work",
-            "mcp",
-            "add",
-            "docs",
-            "--",
-            "docs-server",
-        ])
-        .assert()
-        .success();
-
-    let profile_contents = std::fs::read_to_string(&profile_path)?;
-    assert!(profile_contents.contains("[mcp_servers.base]"));
-    assert!(profile_contents.contains("enabled = false"));
-    assert!(profile_contents.contains("[mcp_servers.docs]"));
-
-    let mut remove_profile_cmd = codex_command(codex_home.path())?;
-    remove_profile_cmd
-        .args(["--profile", "work", "mcp", "remove", "docs"])
-        .assert()
-        .success();
-
-    let profile_contents = std::fs::read_to_string(profile_path)?;
-    assert!(profile_contents.contains("[mcp_servers.base]"));
-    assert!(profile_contents.contains("enabled = false"));
-    assert!(!profile_contents.contains("[mcp_servers.docs]"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn profile_remove_disables_inherited_server() -> Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let mut add_base_cmd = codex_command(codex_home.path())?;
-    add_base_cmd
-        .args(["mcp", "add", "base", "--", "base-server"])
-        .assert()
-        .success();
-
-    let mut remove_profile_cmd = codex_command(codex_home.path())?;
-    remove_profile_cmd
-        .args(["--profile", "work", "mcp", "remove", "base"])
-        .assert()
-        .success()
-        .stdout(contains("Disabled inherited MCP server 'base'."));
-
-    let profile_contents = std::fs::read_to_string(codex_home.path().join("work.config.toml"))?;
-    assert!(profile_contents.contains("[mcp_servers.base]"));
-    assert!(profile_contents.contains("enabled = false"));
-
-    let mut get_profile_cmd = codex_command(codex_home.path())?;
-    let get_profile_output = get_profile_cmd
-        .args(["--profile", "work", "mcp", "get", "base", "--json"])
-        .output()?;
-    assert!(get_profile_output.status.success());
-    let stdout = String::from_utf8(get_profile_output.stdout)?;
-    assert!(stdout.contains("\"enabled\": false"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn profile_add_rejects_inherited_server_name() -> Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let mut add_base_cmd = codex_command(codex_home.path())?;
-    add_base_cmd
-        .args(["mcp", "add", "docs", "--", "base-docs-server"])
-        .assert()
-        .success();
-
-    let mut add_profile_cmd = codex_command(codex_home.path())?;
-    add_profile_cmd
-        .args([
-            "--profile",
-            "work",
-            "mcp",
-            "add",
-            "docs",
-            "--url",
-            "https://profile.example/mcp",
-        ])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "MCP server 'docs' is inherited from the base user config",
-        ));
-
-    let mut list_profile_cmd = codex_command(codex_home.path())?;
-    list_profile_cmd
+    let mut list_cmd = codex_command(codex_home.path())?;
+    list_cmd
         .args(["--profile", "work", "mcp", "list"])
         .assert()
-        .success()
-        .stdout(contains("base-docs-server"));
+        .failure()
+        .stderr(contains("--profile `work` cannot be used"))
+        .stderr(contains("[profiles.work]"))
+        .stderr(contains("work.config.toml"));
 
     Ok(())
 }

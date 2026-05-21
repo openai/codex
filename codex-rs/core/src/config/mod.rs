@@ -1754,6 +1754,7 @@ pub async fn load_global_mcp_servers(
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
+
     ensure_no_inline_bearer_tokens(servers_value)?;
 
     servers_value

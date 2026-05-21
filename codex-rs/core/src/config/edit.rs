@@ -56,15 +56,6 @@ pub enum ConfigEdit {
     RecordModelMigrationSeen { from: String, to: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Set one entry under `[mcp_servers]` without changing sibling entries.
-    SetMcpServer {
-        name: String,
-        config: Box<McpServerConfig>,
-    },
-    /// Remove one entry under `[mcp_servers]`.
-    RemoveMcpServer { name: String },
-    /// Replace one `[mcp_servers]` entry with a disabled profile override.
-    SetMcpServerDisabledOverride { name: String },
     /// Add a disabled tool suggestion under `[tool_suggest].disabled_tools`.
     AddToolSuggestDisabledTool(ToolSuggestDisabledTool),
     /// Set or clear a skill config entry under `[[skills.config]]` by path.
@@ -648,13 +639,6 @@ impl ConfigDocument {
                 value(to.clone()),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
-            ConfigEdit::SetMcpServer { name, config } => Ok(self.set_mcp_server(name, config)),
-            ConfigEdit::RemoveMcpServer { name } => {
-                Ok(self.clear(Scope::Global, &["mcp_servers", name.as_str()]))
-            }
-            ConfigEdit::SetMcpServerDisabledOverride { name } => {
-                Ok(self.set_mcp_server_disabled_override(name))
-            }
             ConfigEdit::AddToolSuggestDisabledTool(disabled_tool) => {
                 Ok(self.add_tool_suggest_disabled_tool(disabled_tool))
             }
@@ -740,7 +724,23 @@ impl ConfigDocument {
             return self.clear(Scope::Global, &["mcp_servers"]);
         }
 
-        let Some(table) = self.mcp_servers_table_for_write() else {
+        let root = self.doc.as_table_mut();
+        if !root.contains_key("mcp_servers") {
+            root.insert(
+                "mcp_servers",
+                TomlItem::Table(document_helpers::new_implicit_table()),
+            );
+        }
+
+        let Some(item) = root.get_mut("mcp_servers") else {
+            return false;
+        };
+
+        if document_helpers::ensure_table_for_write(item).is_none() {
+            *item = TomlItem::Table(document_helpers::new_implicit_table());
+        }
+
+        let Some(table) = item.as_table_mut() else {
             return false;
         };
 
@@ -755,61 +755,21 @@ impl ConfigDocument {
         }
 
         for (name, config) in servers {
-            Self::write_mcp_server(table, name, config);
-        }
-
-        true
-    }
-
-    fn set_mcp_server(&mut self, name: &str, config: &McpServerConfig) -> bool {
-        let Some(table) = self.mcp_servers_table_for_write() else {
-            return false;
-        };
-        Self::write_mcp_server(table, name, config);
-        true
-    }
-
-    fn set_mcp_server_disabled_override(&mut self, name: &str) -> bool {
-        let mut override_table = TomlTable::new();
-        override_table.set_implicit(false);
-        override_table["enabled"] = value(false);
-        self.insert(
-            &["mcp_servers".to_string(), name.to_string()],
-            TomlItem::Table(override_table),
-        )
-    }
-
-    fn mcp_servers_table_for_write(&mut self) -> Option<&mut TomlTable> {
-        let root = self.doc.as_table_mut();
-        if !root.contains_key("mcp_servers") {
-            root.insert(
-                "mcp_servers",
-                TomlItem::Table(document_helpers::new_implicit_table()),
-            );
-        }
-
-        let item = root.get_mut("mcp_servers")?;
-
-        if document_helpers::ensure_table_for_write(item).is_none() {
-            *item = TomlItem::Table(document_helpers::new_implicit_table());
-        }
-
-        item.as_table_mut()
-    }
-
-    fn write_mcp_server(table: &mut TomlTable, name: &str, config: &McpServerConfig) {
-        if let Some(existing) = table.get_mut(name) {
-            if let TomlItem::Value(value) = existing
-                && let Some(inline) = value.as_inline_table_mut()
-            {
-                let replacement = document_helpers::serialize_mcp_server_inline(config);
-                document_helpers::merge_inline_table(inline, replacement);
+            if let Some(existing) = table.get_mut(name.as_str()) {
+                if let TomlItem::Value(value) = existing
+                    && let Some(inline) = value.as_inline_table_mut()
+                {
+                    let replacement = document_helpers::serialize_mcp_server_inline(config);
+                    document_helpers::merge_inline_table(inline, replacement);
+                } else {
+                    *existing = document_helpers::serialize_mcp_server(config);
+                }
             } else {
-                *existing = document_helpers::serialize_mcp_server(config);
+                table.insert(name, document_helpers::serialize_mcp_server(config));
             }
-        } else {
-            table.insert(name, document_helpers::serialize_mcp_server(config));
         }
+
+        true
     }
 
     fn set_skill_config(&mut self, selector: SkillConfigSelector, enabled: bool) -> bool {
@@ -1271,28 +1231,6 @@ impl ConfigEditsBuilder {
     pub fn replace_mcp_servers(mut self, servers: &BTreeMap<String, McpServerConfig>) -> Self {
         self.edits
             .push(ConfigEdit::ReplaceMcpServers(servers.clone()));
-        self
-    }
-
-    pub fn set_mcp_server(mut self, name: &str, config: &McpServerConfig) -> Self {
-        self.edits.push(ConfigEdit::SetMcpServer {
-            name: name.to_string(),
-            config: Box::new(config.clone()),
-        });
-        self
-    }
-
-    pub fn remove_mcp_server(mut self, name: &str) -> Self {
-        self.edits.push(ConfigEdit::RemoveMcpServer {
-            name: name.to_string(),
-        });
-        self
-    }
-
-    pub fn set_mcp_server_disabled_override(mut self, name: &str) -> Self {
-        self.edits.push(ConfigEdit::SetMcpServerDisabledOverride {
-            name: name.to_string(),
-        });
         self
     }
 
