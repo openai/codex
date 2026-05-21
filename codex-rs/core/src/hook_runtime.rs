@@ -14,8 +14,8 @@ use codex_hooks::PreToolUseOutcome;
 use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::StartHookTarget;
+use codex_hooks::StopHookTarget;
 use codex_hooks::StopOutcome;
-use codex_hooks::StopRequest;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
@@ -33,6 +33,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
 
 use crate::context::ContextualUserFragment;
@@ -288,6 +289,78 @@ pub(crate) async fn run_post_tool_use_hooks(
     outcome
 }
 
+pub(crate) async fn run_turn_stop_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    stop_hook_active: bool,
+    last_assistant_message: Option<String>,
+) -> StopOutcome {
+    // Resolve the stop hook kind from the session source before building the
+    // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
+    let (target, transcript_path) = match &turn_context.session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_role,
+            parent_thread_id,
+            ..
+        }) => {
+            let agent_type = agent_role
+                .clone()
+                .unwrap_or_else(|| crate::agent::role::DEFAULT_ROLE_NAME.to_string());
+            let agent_transcript_path = sess.hook_transcript_path().await;
+            let parent_transcript_path = match sess
+                .services
+                .thread_store
+                .read_thread(ReadThreadParams {
+                    thread_id: *parent_thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(thread) => thread.rollout_path,
+                Err(error) => {
+                    tracing::warn!(
+                        parent_thread_id = %parent_thread_id,
+                        error = %error,
+                        "failed to resolve parent transcript path for subagent hook"
+                    );
+                    None
+                }
+            };
+            (
+                StopHookTarget::SubagentStop {
+                    agent_id: sess.thread_id().to_string(),
+                    agent_type,
+                    agent_transcript_path,
+                },
+                parent_transcript_path,
+            )
+        }
+        // Internal/synthetic subagents do not expose user-configured lifecycle
+        // hooks, so there is no Stop or SubagentStop request to dispatch.
+        SessionSource::SubAgent(_) => return StopOutcome::default(),
+        _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
+    };
+    let request = codex_hooks::StopRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        stop_hook_active,
+        last_assistant_message,
+        target,
+    };
+    let hooks = sess.hooks();
+    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+
+    let mut outcome = hooks.run_stop(request).await;
+    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    outcome
+}
+
 pub(crate) async fn run_pre_compact_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -350,30 +423,6 @@ pub(crate) async fn run_post_compact_hooks(
     } else {
         PostCompactHookOutcome::Continue
     }
-}
-
-pub(crate) async fn run_stop_hooks(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    stop_hook_active: bool,
-    last_assistant_message: Option<String>,
-) -> StopOutcome {
-    let request = StopRequest {
-        session_id: sess.session_id().into(),
-        turn_id: turn_context.sub_id.clone(),
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.clone(),
-        transcript_path: sess.hook_transcript_path().await,
-        model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
-        stop_hook_active,
-        last_assistant_message,
-    };
-    let hooks = sess.hooks();
-    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
-    let mut outcome = hooks.run_stop(request).await;
-    emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
-    outcome
 }
 
 pub(crate) async fn run_legacy_after_agent_hook(
@@ -638,6 +687,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
     };
     let hook_source = match run.source {

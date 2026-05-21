@@ -6,6 +6,7 @@
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
+use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
@@ -107,6 +108,7 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -164,6 +166,8 @@ pub(crate) struct AppServerSession {
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
     thread_settings_update_supported: bool,
+    default_model: Option<String>,
+    available_models: Vec<ModelPreset>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +209,8 @@ impl AppServerSession {
             remote_cwd_override: None,
             thread_params_mode,
             thread_settings_update_supported: true,
+            default_model: None,
+            available_models: Vec::new(),
         }
     }
 
@@ -254,6 +260,8 @@ impl AppServerSession {
             })
             .or_else(|| available_models.first().map(|model| model.model.clone()))
             .wrap_err("model/list returned no models for TUI bootstrap")?;
+        self.default_model = Some(default_model.clone());
+        self.available_models = available_models.clone();
 
         let (
             account_email,
@@ -365,12 +373,13 @@ impl AppServerSession {
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(config);
         let response: ThreadStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
                 params: thread_start_params_from_config(
-                    config,
+                    &session_config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
@@ -389,12 +398,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
                 params: thread_resume_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -420,12 +430,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
                 params: thread_fork_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -446,6 +457,32 @@ impl AppServerSession {
 
     pub(crate) fn thread_params_mode(&self) -> ThreadParamsMode {
         self.thread_params_mode
+    }
+
+    fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
+        let Some(model) = config.model.as_deref().or(self.default_model.as_deref()) else {
+            return config.clone();
+        };
+        let mut session_config = config.clone();
+        match service_tier_resolution::service_tier_update_for_core(
+            config,
+            model,
+            &self.available_models,
+        ) {
+            Some(Some(service_tier)) => {
+                session_config.service_tier = Some(service_tier);
+                session_config.notices.fast_default_opt_out = None;
+            }
+            Some(None) => {
+                session_config.service_tier = Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string());
+                session_config.notices.fast_default_opt_out = None;
+            }
+            None => {
+                session_config.service_tier = None;
+                session_config.notices.fast_default_opt_out = None;
+            }
+        }
+        session_config
     }
 
     async fn fork_parent_title_from_app_server(
@@ -1159,6 +1196,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
                 description: service_tier.description,
             })
             .collect(),
+        default_service_tier: model.default_service_tier,
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1219,11 +1257,10 @@ fn config_request_overrides_from_config(
 }
 
 fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
-    config
-        .service_tier
-        .clone()
-        .map(Some)
-        .or_else(|| (config.notices.fast_default_opt_out == Some(true)).then_some(None))
+    config.service_tier.clone().map(Some).or_else(|| {
+        (config.notices.fast_default_opt_out == Some(true))
+            .then(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
+    })
 }
 
 fn sandbox_mode_from_permission_profile(

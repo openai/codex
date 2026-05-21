@@ -81,6 +81,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -519,6 +520,7 @@ pub struct Config {
     pub model: Option<String>,
 
     /// Effective service tier request id preference for new turns.
+    /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
 
     /// Model used specifically for review sessions.
@@ -3136,15 +3138,10 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let mut notices = cfg.notice.unwrap_or_default();
+        let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
-            Some(None) => {
-                // Preserve explicit standard/clear intent after the nested override
-                // collapses into `Config.service_tier = None`.
-                notices.fast_default_opt_out = Some(true);
-                None
-            }
+            Some(None) => Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             None => config_profile.service_tier.or(cfg.service_tier),
         };
         let service_tier = service_tier.and_then(|service_tier| {
@@ -3304,6 +3301,17 @@ impl Config {
             &mut constrained_permission_profile,
             &mut startup_warnings,
         )?;
+        if permission_profile_was_constrained
+            && sandbox_mode_requirement_for_permission_profile(&original_permission_profile)
+                == SandboxModeRequirement::DangerFullAccess
+            && constrained_permission_profile.get() == &PermissionProfile::read_only()
+            && constrained_approval_policy.value() == AskForApproval::Never
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`approval_policy = \"never\"` cannot be used because requirements do not allow `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions with approvals disabled. Choose an `approval_policy` based on what you need, such as `on-request`, or choose an allowed sandbox mode.",
+            ));
+        }
         if permission_profile_was_constrained {
             // The selected profile no longer describes the effective
             // permissions after requirements forced a fallback.

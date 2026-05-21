@@ -2491,6 +2491,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: json!({"arg": "value"}),
         mcp_app_resource_uri: Some("app://connector".to_string()),
+        plugin_id: Some("sample@test".to_string()),
         status: CoreMcpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -2506,6 +2507,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
             mcp_app_resource_uri: Some("app://connector".to_string()),
+            plugin_id: Some("sample@test".to_string()),
             result: None,
             error: None,
             duration_ms: None,
@@ -2518,6 +2520,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: JsonValue::Null,
         mcp_app_resource_uri: None,
+        plugin_id: None,
         status: CoreMcpToolCallStatus::Completed,
         result: Some(CallToolResult {
             content: vec![json!({"type": "text", "text": "ok"})],
@@ -2538,6 +2541,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::Completed,
             arguments: JsonValue::Null,
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: Some(Box::new(McpToolCallResult {
                 content: vec![json!({"type": "text", "text": "ok"})],
                 structured_content: Some(json!({"ok": true})),

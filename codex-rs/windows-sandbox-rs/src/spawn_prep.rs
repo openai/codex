@@ -44,13 +44,13 @@ pub(crate) struct SpawnContext {
     pub(crate) policy: SandboxPolicy,
     pub(crate) permissions: ResolvedWindowsSandboxPermissions,
     pub(crate) current_dir: PathBuf,
-    pub(crate) sandbox_base: PathBuf,
     pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) uses_write_capabilities: bool,
 }
 
 pub(crate) struct ElevatedSpawnContext {
-    pub(crate) common: SpawnContext,
+    pub(crate) sandbox_base: PathBuf,
+    pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) sandbox_creds: SandboxCreds,
     pub(crate) cap_sids: Vec<String>,
 }
@@ -109,7 +109,7 @@ fn prepare_spawn_context_common(
     ensure_codex_home_exists(codex_home)?;
     let sandbox_base = codex_home.join(".sandbox");
     std::fs::create_dir_all(&sandbox_base)?;
-    let logs_base_dir = Some(sandbox_base.clone());
+    let logs_base_dir = Some(sandbox_base);
     log_start(command, logs_base_dir.as_deref());
 
     let permissions =
@@ -120,7 +120,6 @@ fn prepare_spawn_context_common(
         policy,
         permissions,
         current_dir: cwd.to_path_buf(),
-        sandbox_base,
         logs_base_dir,
         uses_write_capabilities,
     })
@@ -362,9 +361,8 @@ pub(crate) fn apply_legacy_session_acl_rules(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_elevated_spawn_context(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+pub(crate) fn prepare_elevated_spawn_context_for_permissions(
+    permissions: ResolvedWindowsSandboxPermissions,
     codex_home: &Path,
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
@@ -375,33 +373,33 @@ pub(crate) fn prepare_elevated_spawn_context(
     deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
 ) -> Result<ElevatedSpawnContext> {
-    let common = prepare_spawn_context_common(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
-        codex_home,
-        cwd,
-        env_map,
-        command,
-        SpawnPrepOptions {
-            inherit_path: true,
-            add_git_safe_directory: true,
-        },
-    )?;
+    normalize_null_device_env(env_map);
+    ensure_non_interactive_pager(env_map);
+    inherit_path_env(env_map);
+    inject_git_safe_directory(env_map, cwd);
+
+    // Use a temp-based log dir that the sandbox user can write.
+    let sandbox_base = codex_home.join(".sandbox");
+    ensure_codex_home_exists(&sandbox_base)?;
+    let logs_base_dir = Some(sandbox_base.clone());
+    log_start(command, logs_base_dir.as_deref());
+
+    let uses_write_capabilities = permissions.uses_write_capabilities_for_cwd(cwd, env_map);
 
     let AllowDenyPaths { allow, deny } =
-        compute_allow_paths_for_permissions(&common.permissions, &common.current_dir, env_map);
+        compute_allow_paths_for_permissions(&permissions, cwd, env_map);
     let write_roots: Vec<PathBuf> = allow.into_iter().collect();
     let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
-    let computed_write_roots_override = if common.uses_write_capabilities {
+    let computed_write_roots_override = if uses_write_capabilities {
         Some(write_roots.as_slice())
     } else {
         None
     };
     let write_roots_for_setup = write_roots_override.or(computed_write_roots_override);
-    let effective_write_roots = if common.uses_write_capabilities {
+    let effective_write_roots = if uses_write_capabilities {
         effective_write_roots_for_permissions(
-            &common.permissions,
-            &common.current_dir,
+            &permissions,
+            cwd,
             env_map,
             codex_home,
             write_roots_for_setup,
@@ -409,13 +407,13 @@ pub(crate) fn prepare_elevated_spawn_context(
     } else {
         Vec::new()
     };
-    let setup_write_roots_override = if common.uses_write_capabilities {
+    let setup_write_roots_override = if uses_write_capabilities {
         Some(effective_write_roots.as_slice())
     } else {
         write_roots_override
     };
     let sandbox_creds = require_logon_sandbox_creds(
-        &common.permissions,
+        &permissions,
         cwd,
         env_map,
         codex_home,
@@ -431,7 +429,7 @@ pub(crate) fn prepare_elevated_spawn_context(
         /*proxy_enforced*/ false,
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (psid_to_use, cap_sids) = if common.uses_write_capabilities {
+    let (psid_to_use, cap_sids) = if uses_write_capabilities {
         let cap_sids = root_capability_sids(codex_home, cwd, effective_write_roots)?
             .into_iter()
             .map(|root_sid| root_sid.sid_str)
@@ -452,7 +450,8 @@ pub(crate) fn prepare_elevated_spawn_context(
     }
 
     Ok(ElevatedSpawnContext {
-        common,
+        sandbox_base,
+        logs_base_dir,
         sandbox_creds,
         cap_sids,
     })

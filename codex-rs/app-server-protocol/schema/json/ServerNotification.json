@@ -1836,6 +1836,7 @@
         "sessionStart",
         "userPromptSubmit",
         "subagentStart",
+        "subagentStop",
         "stop"
       ],
       "type": "string"
@@ -3855,6 +3856,12 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pluginId": {
               "type": [
                 "string",
                 "null"

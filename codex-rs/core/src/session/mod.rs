@@ -72,7 +72,6 @@ use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -80,6 +79,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -320,7 +320,6 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -589,14 +588,10 @@ impl Codex {
                 developer_instructions: None,
             },
         };
-        let account_plan_type = auth_manager
-            .auth_cached()
-            .and_then(|auth| auth.account_plan_type());
         let service_tier = get_service_tier(
             config.service_tier.clone(),
-            config.notices.fast_default_opt_out.unwrap_or(false),
-            account_plan_type,
             config.features.enabled(Feature::FastMode),
+            &model_info,
         );
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -798,29 +793,22 @@ impl Codex {
 
 fn get_service_tier(
     configured_service_tier: Option<String>,
-    fast_default_opt_out: bool,
-    account_plan_type: Option<AccountPlanType>,
     fast_mode_enabled: bool,
+    model_info: &ModelInfo,
 ) -> Option<String> {
-    if configured_service_tier.is_some() || fast_default_opt_out || !fast_mode_enabled {
-        return configured_service_tier;
+    if !fast_mode_enabled {
+        return None;
     }
-
-    account_plan_type
-        .is_some_and(is_enterprise_default_service_tier_plan)
-        .then_some(ServiceTier::Fast.request_value().to_string())
+    configured_service_tier.filter(|service_tier| {
+        service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
+            || model_info.supports_service_tier(service_tier)
+    })
 }
 
 fn session_permission_profile_state_from_config(
     config: &Config,
 ) -> CodexResult<PermissionProfileState> {
     Ok(config.permissions.permission_profile_state().clone())
-}
-
-fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {
-    plan_type == AccountPlanType::Enterprise
-        || plan_type.is_business_like()
-        || plan_type.is_team_like()
 }
 
 #[cfg(test)]
