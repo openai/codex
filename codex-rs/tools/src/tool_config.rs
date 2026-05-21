@@ -110,6 +110,7 @@ pub struct ToolsConfig {
     pub max_concurrent_threads_per_session: Option<usize>,
     pub wait_agent_min_timeout_ms: Option<i64>,
     pub default_mode_request_user_input: bool,
+    pub onboarding_interactive_tools_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
@@ -148,6 +149,8 @@ impl ToolsConfig {
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
+        let include_onboarding_interactive_tools =
+            features.enabled(Feature::OnboardingInteractiveTools);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
         let include_tool_suggest = features.enabled(Feature::ToolSuggest)
@@ -231,6 +234,7 @@ impl ToolsConfig {
             max_concurrent_threads_per_session: None,
             wait_agent_min_timeout_ms: None,
             default_mode_request_user_input: include_default_mode_request_user_input,
+            onboarding_interactive_tools_enabled: include_onboarding_interactive_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,

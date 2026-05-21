@@ -49,6 +49,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::option_picker::OptionPickerAction as CoreOptionPickerAction;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
@@ -78,7 +79,6 @@ use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-use codex_protocol::request_user_input::RequestUserInputType;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
@@ -102,6 +102,8 @@ use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_protocol::request_user_input::RequestUserInputType;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerAction as CoreSetupCodexContextPickerAction;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -7542,6 +7544,10 @@ pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    pub input_type: Option<RequestUserInputType>,
+    pub allow_multiple: Option<bool>,
+    pub optional: Option<bool>,
+    pub placeholder: Option<String>,
     #[serde(default)]
     pub is_other: bool,
     #[serde(default)]
@@ -7557,9 +7563,7 @@ pub struct ToolRequestUserInputParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_type: Option<RequestUserInputType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option_picker_allow_multiple: Option<bool>,
     pub questions: Vec<ToolRequestUserInputQuestion>,
 }
@@ -7578,6 +7582,97 @@ pub struct ToolRequestUserInputAnswer {
 /// EXPERIMENTAL. Response payload mapping question ids to answers.
 pub struct ToolRequestUserInputResponse {
     pub answers: HashMap<String, ToolRequestUserInputAnswer>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Defines a single selectable option for request_option_picker.
+pub struct ToolOptionPickerOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Params sent with a request_option_picker event.
+pub struct ToolOptionPickerParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub question: String,
+    pub options: Vec<ToolOptionPickerOption>,
+    pub allow_multiple: bool,
+    pub submit_label: Option<String>,
+    pub skip_label: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolOptionPickerAction {
+    Submit,
+    Skip,
+    Dismiss,
+}
+
+impl From<ToolOptionPickerAction> for CoreOptionPickerAction {
+    fn from(value: ToolOptionPickerAction) -> Self {
+        match value {
+            ToolOptionPickerAction::Submit => Self::Submit,
+            ToolOptionPickerAction::Skip => Self::Skip,
+            ToolOptionPickerAction::Dismiss => Self::Dismiss,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Response payload from request_option_picker.
+pub struct ToolOptionPickerResponse {
+    pub action: ToolOptionPickerAction,
+    pub selected_options: Vec<String>,
+    pub freeform_answer: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Params sent with a setup_codex_context_picker event.
+pub struct ToolSetupCodexContextPickerParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ToolSetupCodexContextPickerAction {
+    Continue,
+    Skip,
+    Dismiss,
+}
+
+impl From<ToolSetupCodexContextPickerAction> for CoreSetupCodexContextPickerAction {
+    fn from(value: ToolSetupCodexContextPickerAction) -> Self {
+        match value {
+            ToolSetupCodexContextPickerAction::Continue => Self::Continue,
+            ToolSetupCodexContextPickerAction::Skip => Self::Skip,
+            ToolSetupCodexContextPickerAction::Dismiss => Self::Dismiss,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Response payload from the setup Codex context picker.
+pub struct ToolSetupCodexContextPickerResponse {
+    pub action: ToolSetupCodexContextPickerAction,
+    pub selected_sources: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

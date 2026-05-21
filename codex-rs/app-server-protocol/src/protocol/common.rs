@@ -1100,6 +1100,18 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    /// EXPERIMENTAL - Request an onboarding option picker.
+    ToolOptionPicker => "item/tool/requestOptionPicker" {
+        params: v2::ToolOptionPickerParams,
+        response: v2::ToolOptionPickerResponse,
+    },
+
+    /// EXPERIMENTAL - Request the onboarding context source picker.
+    ToolSetupCodexContextPicker => "item/tool/requestSetupCodexContextPicker" {
+        params: v2::ToolSetupCodexContextPickerParams,
+        response: v2::ToolSetupCodexContextPickerResponse,
+    },
+
     /// Request input for an MCP server elicitation.
     McpServerElicitationRequest => "mcpServer/elicitation/request" {
         params: v2::McpServerElicitationRequestParams,

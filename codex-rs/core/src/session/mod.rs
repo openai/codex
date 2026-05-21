@@ -97,6 +97,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::option_picker::OptionPickerArgs;
+use codex_protocol::option_picker::OptionPickerEvent;
+use codex_protocol::option_picker::OptionPickerResponse;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
@@ -121,6 +124,8 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerEvent;
+use codex_protocol::setup_codex_context_picker::SetupCodexContextPickerResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
@@ -2176,6 +2181,138 @@ impl Session {
             }
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn request_option_picker(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: OptionPickerArgs,
+    ) -> Option<OptionPickerResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_option_picker(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending option picker for sub_id: {event_id}");
+        }
+
+        let event = EventMsg::OptionPicker(OptionPickerEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            question: args.question,
+            options: args.options,
+            allow_multiple: args.allow_multiple,
+            submit_label: args.submit_label,
+            skip_label: args.skip_label,
+        });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn notify_option_picker_response(
+        &self,
+        sub_id: &str,
+        response: OptionPickerResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_option_picker(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending option picker found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn request_setup_codex_context_picker(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+    ) -> Option<SetupCodexContextPickerResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_setup_codex_context_picker(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending setup codex context picker for sub_id: {event_id}");
+        }
+
+        let event = EventMsg::SetupCodexContextPicker(SetupCodexContextPickerEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+        });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub async fn notify_setup_codex_context_picker_response(
+        &self,
+        sub_id: &str,
+        response: SetupCodexContextPickerResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_setup_codex_context_picker(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending setup codex context picker found for sub_id: {sub_id}");
             }
         }
     }

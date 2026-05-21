@@ -585,12 +585,18 @@ async fn request_user_input_notification_overrides_pending_agent_turn_complete_n
     chat.handle_request_user_input_now(RequestUserInputEvent {
         call_id: "call-1".to_string(),
         turn_id: "turn-1".to_string(),
-        input_type: None,
-        option_picker_allow_multiple: None,
+        title: None,
+        submit_label: None,
+        skip_label: None,
+        placement: None,
         questions: vec![RequestUserInputQuestion {
             id: "reasoning_scope".to_string(),
             header: "Reasoning scope".to_string(),
             question: "Which reasoning scope should I use?".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![RequestUserInputQuestionOption {
@@ -615,12 +621,18 @@ async fn handle_request_user_input_sets_pending_notification() {
     chat.handle_request_user_input_now(RequestUserInputEvent {
         call_id: "call-1".to_string(),
         turn_id: "turn-1".to_string(),
-        input_type: None,
-        option_picker_allow_multiple: None,
+        title: None,
+        submit_label: None,
+        skip_label: None,
+        placement: None,
         questions: vec![RequestUserInputQuestion {
             id: "reasoning_scope".to_string(),
             header: "Reasoning scope".to_string(),
             question: "Which reasoning scope should I use?".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![RequestUserInputQuestionOption {

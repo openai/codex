@@ -24,6 +24,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
 
     let result = RequestUserInputHandler {
         default_mode_request_user_input: true,
+        option_picker_enabled: false,
     }
     .handle(ToolInvocation {
         session: Arc::new(session),

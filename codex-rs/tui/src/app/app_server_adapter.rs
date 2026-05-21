@@ -310,6 +310,12 @@ fn server_request_thread_id(request: &ServerRequest) -> Option<ThreadId> {
         ServerRequest::ToolRequestUserInput { params, .. } => {
             ThreadId::from_string(&params.thread_id).ok()
         }
+        ServerRequest::ToolOptionPicker { params, .. } => {
+            ThreadId::from_string(&params.thread_id).ok()
+        }
+        ServerRequest::ToolSetupCodexContextPicker { params, .. } => {
+            ThreadId::from_string(&params.thread_id).ok()
+        }
         ServerRequest::McpServerElicitationRequest { params, .. } => {
             ThreadId::from_string(&params.thread_id).ok()
         }

@@ -4,7 +4,6 @@ use crate::ToolSpec;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
-use serde_json::json;
 use std::collections::BTreeMap;
 
 pub const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
@@ -53,7 +52,6 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
         ),
         ("options".to_string(), options_schema),
     ]);
-
     let questions_schema = JsonSchema::array(
         JsonSchema::object(
             question_props,
@@ -61,33 +59,13 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
                 "id".to_string(),
                 "header".to_string(),
                 "question".to_string(),
-                "options".to_string(),
             ]),
             Some(false.into()),
         ),
         Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
     );
 
-    let properties = BTreeMap::from([
-        (
-            "inputType".to_string(),
-            JsonSchema::string_enum(
-                vec![json!("structured"), json!("option_picker")],
-                Some(
-                    "Optional UI presentation hint. Use `option_picker` when the prompt should render as a selectable option picker; otherwise omit this or use `structured`."
-                        .to_string(),
-                ),
-            ),
-        ),
-        (
-            "optionPickerAllowMultiple".to_string(),
-            JsonSchema::boolean(Some(
-                "Optional. For `inputType: option_picker`, set true when multiple choices may be selected."
-                    .to_string(),
-            )),
-        ),
-        ("questions".to_string(), questions_schema),
-    ]);
+    let properties = BTreeMap::from([("questions".to_string(), questions_schema)]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: REQUEST_USER_INPUT_TOOL_NAME.to_string(),
@@ -120,14 +98,6 @@ pub fn request_user_input_unavailable_message(
 pub fn normalize_request_user_input_args(
     mut args: RequestUserInputArgs,
 ) -> Result<RequestUserInputArgs, String> {
-    let missing_options = args
-        .questions
-        .iter()
-        .any(|question| question.options.as_ref().is_none_or(Vec::is_empty));
-    if missing_options {
-        return Err("request_user_input requires non-empty options for every question".to_string());
-    }
-
     for question in &mut args.questions {
         question.is_other = true;
     }

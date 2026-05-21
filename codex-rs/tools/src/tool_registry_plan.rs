@@ -1,7 +1,9 @@
 use crate::CommandToolOptions;
+use crate::REQUEST_OPTION_PICKER_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
+use crate::SETUP_CODEX_CONTEXT_PICKER_TOOL_NAME;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
@@ -38,11 +40,13 @@ use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
+use crate::create_request_option_picker_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
 use crate::create_resume_agent_tool;
 use crate::create_send_input_tool_v1;
 use crate::create_send_message_tool;
+use crate::create_setup_codex_context_picker_tool;
 use crate::create_shell_command_tool;
 use crate::create_shell_tool;
 use crate::create_spawn_agent_tool_v1;
@@ -250,6 +254,28 @@ pub fn build_tool_registry_plan(
         REQUEST_USER_INPUT_TOOL_NAME,
         ToolHandlerKind::RequestUserInput,
     );
+
+    if config.onboarding_interactive_tools_enabled {
+        plan.push_spec(
+            create_request_option_picker_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(
+            REQUEST_OPTION_PICKER_TOOL_NAME,
+            ToolHandlerKind::OptionPicker,
+        );
+
+        plan.push_spec(
+            create_setup_codex_context_picker_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(
+            SETUP_CODEX_CONTEXT_PICKER_TOOL_NAME,
+            ToolHandlerKind::SetupCodexContextPicker,
+        );
+    }
 
     if config.request_permissions_tool_enabled {
         plan.push_spec(

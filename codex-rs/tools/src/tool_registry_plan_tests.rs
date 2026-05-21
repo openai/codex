@@ -88,7 +88,10 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         }),
         create_write_stdin_tool(),
         create_update_plan_tool(),
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
+        request_user_input_tool_spec(
+            /*default_mode_request_user_input*/ false,
+            /*onboarding_interactive_tools_enabled*/ false,
+        ),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
@@ -586,7 +589,10 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
         request_user_input_tool.spec,
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false)
+        request_user_input_tool_spec(
+            /*default_mode_request_user_input*/ false,
+            /*onboarding_interactive_tools_enabled*/ false,
+        )
     );
 
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -609,7 +615,43 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
     assert_eq!(
         request_user_input_tool.spec,
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ true)
+        request_user_input_tool_spec(
+            /*default_mode_request_user_input*/ true,
+            /*onboarding_interactive_tools_enabled*/ false,
+        )
+    );
+
+    features.enable(Feature::OnboardingInteractiveTools);
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let request_user_input_tool = find_tool(&tools, REQUEST_USER_INPUT_TOOL_NAME);
+    assert_eq!(
+        request_user_input_tool.spec,
+        request_user_input_tool_spec(
+            /*default_mode_request_user_input*/ true,
+            /*onboarding_interactive_tools_enabled*/ true,
+        )
+    );
+    assert_contains_tool_names(
+        &tools,
+        &[
+            REQUEST_OPTION_PICKER_TOOL_NAME,
+            REQUEST_LAUNCH_BRIEF_QUESTIONNAIRE_TOOL_NAME,
+        ],
     );
 }
 
@@ -2343,7 +2385,10 @@ fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
     );
 }
 
-fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+fn request_user_input_tool_spec(
+    default_mode_request_user_input: bool,
+    _onboarding_interactive_tools_enabled: bool,
+) -> ToolSpec {
     create_request_user_input_tool(request_user_input_tool_description(
         default_mode_request_user_input,
     ))

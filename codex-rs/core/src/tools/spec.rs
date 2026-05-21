@@ -84,9 +84,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::OptionPickerHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
+    use crate::tools::handlers::SetupCodexContextPickerHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
@@ -168,6 +170,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let option_picker_handler = Arc::new(OptionPickerHandler);
+    let setup_codex_context_picker_handler = Arc::new(SetupCodexContextPickerHandler);
     let deferred_dynamic_tools = dynamic_tools
         .iter()
         .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
@@ -240,6 +244,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());
+            }
+            ToolHandlerKind::OptionPicker => {
+                builder.register_handler(handler.name, option_picker_handler.clone());
+            }
+            ToolHandlerKind::SetupCodexContextPicker => {
+                builder.register_handler(handler.name, setup_codex_context_picker_handler.clone());
             }
             ToolHandlerKind::RequestUserInput => {
                 builder.register_handler(handler.name, request_user_input_handler.clone());

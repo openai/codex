@@ -1345,6 +1345,10 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![
@@ -1369,6 +1373,10 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: true,
             is_secret: false,
             options: Some(vec![
@@ -1393,6 +1401,10 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose the next step for this task.".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![
@@ -1423,6 +1435,10 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose one option.".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![
@@ -1445,6 +1461,10 @@ mod tests {
             question:
                 "Choose one option; each hint is intentionally very long to test wrapped scrolling."
                     .to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: Some(vec![
@@ -1474,6 +1494,10 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Share details.".to_string(),
+            input_type: None,
+            allow_multiple: None,
+            optional: None,
+            placeholder: None,
             is_other: false,
             is_secret: false,
             options: None,
@@ -1487,8 +1511,10 @@ mod tests {
         RequestUserInputEvent {
             call_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions,
         }
     }
@@ -1550,15 +1576,19 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions: vec![question_with_options("q2", "Second")],
         });
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions: vec![question_with_options("q3", "Third")],
         });
 
@@ -1575,8 +1605,10 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
-                input_type: None,
-                option_picker_allow_multiple: None,
+                title: None,
+                submit_label: None,
+                skip_label: None,
+                placement: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1604,8 +1636,10 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
-                input_type: None,
-                option_picker_allow_multiple: None,
+                title: None,
+                submit_label: None,
+                skip_label: None,
+                placement: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1616,8 +1650,10 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions: vec![question_with_options("q2", "Second")],
         });
 
@@ -1644,8 +1680,10 @@ mod tests {
             RequestUserInputEvent {
                 call_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
-                input_type: None,
-                option_picker_allow_multiple: None,
+                title: None,
+                submit_label: None,
+                skip_label: None,
+                placement: None,
                 questions: vec![question_with_options("q1", "First")],
             },
             tx,
@@ -1656,15 +1694,19 @@ mod tests {
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions: vec![question_with_options("q2", "Second")],
         });
         overlay.try_consume_user_input_request(RequestUserInputEvent {
             call_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
-            input_type: None,
-            option_picker_allow_multiple: None,
+            title: None,
+            submit_label: None,
+            skip_label: None,
+            placement: None,
             questions: vec![question_with_options("q3", "Third")],
         });
 
@@ -2873,6 +2915,10 @@ mod tests {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
+                    input_type: None,
+                    allow_multiple: None,
+                    optional: None,
+                    placeholder: None,
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![
@@ -2925,6 +2971,10 @@ mod tests {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
+                    input_type: None,
+                    allow_multiple: None,
+                    optional: None,
+                    placeholder: None,
                     is_other: false,
                     is_secret: false,
                     options: Some(vec![

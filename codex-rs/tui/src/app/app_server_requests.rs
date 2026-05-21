@@ -99,6 +99,18 @@ impl PendingAppServerRequests {
                     });
                 None
             }
+            ServerRequest::ToolOptionPicker { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Option picker is not available in TUI yet.".to_string(),
+                })
+            }
+            ServerRequest::ToolSetupCodexContextPicker { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Setup Codex context picker is not available in TUI yet.".to_string(),
+                })
+            }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.mcp_requests.insert(
                     McpLegacyRequestKey {
@@ -333,6 +345,8 @@ impl PendingAppServerRequests {
                 .values()
                 .any(|pending_request_id| pending_request_id == request_id),
             ServerRequest::DynamicToolCall { .. }
+            | ServerRequest::ToolOptionPicker { .. }
+            | ServerRequest::ToolSetupCodexContextPicker { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => true,
@@ -524,8 +538,10 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-2".to_string(),
                     item_id: "tool-1".to_string(),
-                    input_type: None,
-                    option_picker_allow_multiple: None,
+                    title: None,
+                    submit_label: None,
+                    skip_label: None,
+                    placement: None,
                     questions: Vec::new(),
                 },
             }),
@@ -819,8 +835,10 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "tool-1".to_string(),
-                input_type: None,
-                option_picker_allow_multiple: None,
+                title: None,
+                submit_label: None,
+                skip_label: None,
+                placement: None,
                 questions: Vec::new(),
             },
         });
@@ -843,8 +861,10 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: item_id.to_string(),
-                    input_type: None,
-                    option_picker_allow_multiple: None,
+                    title: None,
+                    submit_label: None,
+                    skip_label: None,
+                    placement: None,
                     questions: Vec::new(),
                 },
             });

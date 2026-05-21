@@ -233,6 +233,10 @@ async fn should_install_mcp_dependencies(
         question: format!(
             "The following MCP servers are required by the selected skills but are not installed yet: {server_list}. Install them now?"
         ),
+        input_type: None,
+        allow_multiple: None,
+        optional: None,
+        placeholder: None,
         is_other: false,
         is_secret: false,
         options: Some(vec![

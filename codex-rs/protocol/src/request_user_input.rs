@@ -12,6 +12,13 @@ pub enum RequestUserInputType {
     OptionPicker,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RequestUserInputPlacement {
+    Composer,
+    Inline,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputQuestionOption {
     pub label: String,
@@ -23,6 +30,22 @@ pub struct RequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(rename = "inputType", default, skip_serializing_if = "Option::is_none")]
+    #[schemars(rename = "inputType")]
+    #[ts(rename = "inputType")]
+    pub input_type: Option<RequestUserInputType>,
+    #[serde(
+        rename = "allowMultiple",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(rename = "allowMultiple")]
+    #[ts(rename = "allowMultiple")]
+    pub allow_multiple: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
     #[serde(rename = "isOther", default)]
     #[schemars(rename = "isOther")]
     #[ts(rename = "isOther")]
@@ -37,11 +60,7 @@ pub struct RequestUserInputQuestion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputArgs {
-    #[serde(
-        rename = "inputType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "inputType", default, skip_serializing_if = "Option::is_none")]
     #[schemars(rename = "inputType")]
     #[ts(rename = "inputType")]
     pub input_type: Option<RequestUserInputType>,
@@ -74,11 +93,7 @@ pub struct RequestUserInputEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
-    #[serde(
-        rename = "inputType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "inputType", default, skip_serializing_if = "Option::is_none")]
     #[schemars(rename = "inputType")]
     #[ts(rename = "inputType")]
     pub input_type: Option<RequestUserInputType>,

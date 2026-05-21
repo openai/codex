@@ -36,6 +36,7 @@ use codex_mcp::collect_mcp_snapshot_from_manager;
 use codex_mcp::compute_auth_statuses;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::option_picker::OptionPickerResponse;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -455,6 +456,23 @@ pub async fn request_user_input_response(
     response: RequestUserInputResponse,
 ) {
     sess.notify_user_input_response(&id, response).await;
+}
+
+pub async fn option_picker_response(
+    sess: &Arc<Session>,
+    id: String,
+    response: OptionPickerResponse,
+) {
+    sess.notify_option_picker_response(&id, response).await;
+}
+
+pub async fn setup_codex_context_picker_response(
+    sess: &Arc<Session>,
+    id: String,
+    response: codex_protocol::setup_codex_context_picker::SetupCodexContextPickerResponse,
+) {
+    sess.notify_setup_codex_context_picker_response(&id, response)
+        .await;
 }
 
 pub async fn request_permissions_response(
@@ -1084,6 +1102,14 @@ pub(super) async fn submission_loop(
                 }
                 Op::UserInputAnswer { id, response } => {
                     request_user_input_response(&sess, id, response).await;
+                    false
+                }
+                Op::OptionPickerResponse { id, response } => {
+                    option_picker_response(&sess, id, response).await;
+                    false
+                }
+                Op::SetupCodexContextPickerResponse { id, response } => {
+                    setup_codex_context_picker_response(&sess, id, response).await;
                     false
                 }
                 Op::RequestPermissionsResponse { id, response } => {
