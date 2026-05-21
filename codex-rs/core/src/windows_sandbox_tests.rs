@@ -102,6 +102,47 @@ fn resolve_windows_sandbox_mode_prefers_profile_windows() {
 }
 
 #[test]
+fn resolve_windows_sandbox_mode_explicit_profile_windows_beats_profile_legacy() {
+    let mut entries = BTreeMap::new();
+    entries.insert("elevated_windows_sandbox".to_string(), /*value*/ true);
+    let profile = ConfigProfile {
+        windows: Some(WindowsToml {
+            sandbox: Some(WindowsSandboxModeToml::Unelevated),
+            ..Default::default()
+        }),
+        features: Some(FeaturesToml::from(entries)),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_windows_sandbox_mode(&ConfigToml::default(), &profile),
+        Some(WindowsSandboxModeToml::Unelevated)
+    );
+}
+
+#[test]
+fn resolve_windows_sandbox_mode_explicit_cfg_windows_beats_profile_legacy() {
+    let cfg = ConfigToml {
+        windows: Some(WindowsToml {
+            sandbox: Some(WindowsSandboxModeToml::Unelevated),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut entries = BTreeMap::new();
+    entries.insert("elevated_windows_sandbox".to_string(), /*value*/ true);
+    let profile = ConfigProfile {
+        features: Some(FeaturesToml::from(entries)),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_windows_sandbox_mode(&cfg, &profile),
+        Some(WindowsSandboxModeToml::Unelevated)
+    );
+}
+
+#[test]
 fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
     let mut entries = BTreeMap::new();
     entries.insert(

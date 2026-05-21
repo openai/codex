@@ -60,19 +60,21 @@ pub fn resolve_windows_sandbox_mode(
     cfg: &ConfigToml,
     profile: &ConfigProfile,
 ) -> Option<WindowsSandboxModeToml> {
+    if let Some(mode) = profile
+        .windows
+        .as_ref()
+        .and_then(|windows| windows.sandbox)
+        .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
+    {
+        return Some(mode);
+    }
     if let Some(mode) = legacy_windows_sandbox_mode(profile.features.as_ref()) {
         return Some(mode);
     }
     if legacy_windows_sandbox_keys_present(profile.features.as_ref()) {
         return None;
     }
-
-    profile
-        .windows
-        .as_ref()
-        .and_then(|windows| windows.sandbox)
-        .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
-        .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
+    legacy_windows_sandbox_mode(cfg.features.as_ref())
 }
 
 pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &ConfigProfile) -> bool {
