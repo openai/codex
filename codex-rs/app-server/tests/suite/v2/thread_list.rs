@@ -686,7 +686,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
         codex_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
-        "needle suffix",
+        "mixed NEEDLE suffix",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
@@ -718,7 +718,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
         .map(|result| result.thread.id.as_str())
         .collect();
     assert_eq!(ids, vec![newer_match, older_match]);
-    assert_eq!(data[0].snippet, "needle suffix");
+    assert_eq!(data[0].snippet, "mixed NEEDLE suffix");
 
     Ok(())
 }

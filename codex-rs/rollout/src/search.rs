@@ -9,6 +9,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use regex::Regex;
+use regex::RegexBuilder;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
@@ -45,6 +47,7 @@ async fn ripgrep_rollout_paths(
     let output = match Command::new(rg_command)
         .arg("-l")
         .arg("--fixed-strings")
+        .arg("--ignore-case")
         .arg("--no-ignore")
         .arg("--glob")
         .arg("*.jsonl")
@@ -88,6 +91,7 @@ async fn ripgrep_rollout_paths(
 async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSet<PathBuf>> {
     let mut matches = HashSet::new();
     let mut dirs = vec![root.to_path_buf()];
+    let search_term = case_insensitive_literal_regex(search_term)?;
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -107,7 +111,7 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
             {
                 continue;
             }
-            if rollout_contains(path.as_path(), search_term).await? {
+            if rollout_contains(path.as_path(), &search_term).await? {
                 matches.insert(path);
             }
         }
@@ -116,11 +120,11 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
     Ok(matches)
 }
 
-async fn rollout_contains(path: &Path, search_term: &str) -> io::Result<bool> {
+async fn rollout_contains(path: &Path, search_term: &Regex) -> io::Result<bool> {
     let file = tokio::fs::File::open(path).await?;
     let mut lines = tokio::io::BufReader::new(file).lines();
     while let Some(line) = lines.next_line().await? {
-        if line.contains(search_term) {
+        if search_term.is_match(line.as_str()) {
             return Ok(true);
         }
     }
@@ -133,10 +137,11 @@ pub async fn first_rollout_content_match_snippet(
 ) -> io::Result<Option<String>> {
     let file = tokio::fs::File::open(path).await?;
     let mut lines = tokio::io::BufReader::new(file).lines();
-    let json_search_term = json_escaped_search_term(search_term)?;
+    let json_search_term = case_insensitive_literal_regex(json_escaped_search_term(search_term)?)?;
+    let search_term = case_insensitive_literal_regex(search_term)?;
     while let Some(line) = lines.next_line().await? {
-        if line.contains(json_search_term.as_str())
-            && let Some(snippet) = content_match_snippet(line.as_str(), search_term)
+        if json_search_term.is_match(line.as_str())
+            && let Some(snippet) = content_match_snippet(line.as_str(), &search_term)
         {
             return Ok(Some(snippet));
         }
@@ -149,7 +154,14 @@ fn json_escaped_search_term(search_term: &str) -> io::Result<String> {
     Ok(serialized[1..serialized.len() - 1].to_string())
 }
 
-fn content_match_snippet(jsonl_line: &str, search_term: &str) -> Option<String> {
+fn case_insensitive_literal_regex(search_term: impl AsRef<str>) -> io::Result<Regex> {
+    RegexBuilder::new(regex::escape(search_term.as_ref()).as_str())
+        .case_insensitive(true)
+        .build()
+        .map_err(io::Error::other)
+}
+
+fn content_match_snippet(jsonl_line: &str, search_term: &Regex) -> Option<String> {
     let rollout_line = serde_json::from_str::<RolloutLine>(jsonl_line.trim()).ok()?;
     let text = conversation_text_from_item(&rollout_line.item)?;
     excerpt_around_match(text.as_str(), search_term)
@@ -206,10 +218,11 @@ fn strip_user_message_prefix(text: &str) -> &str {
     }
 }
 
-fn excerpt_around_match(text: &str, search_term: &str) -> Option<String> {
+fn excerpt_around_match(text: &str, search_term: &Regex) -> Option<String> {
     let normalized = normalize_preview_text(text);
-    let match_start = normalized.find(search_term)?;
-    let match_end = match_start.saturating_add(search_term.len());
+    let matched = search_term.find(normalized.as_str())?;
+    let match_start = matched.start();
+    let match_end = matched.end();
     let excerpt_start =
         char_start_before(normalized.as_str(), match_start, MATCH_CONTEXT_BEFORE_CHARS);
     let excerpt_end = char_end_after(normalized.as_str(), match_end, MATCH_CONTEXT_AFTER_CHARS);
