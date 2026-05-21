@@ -3317,7 +3317,7 @@ impl ChatComposer {
             self.popups.active = ActivePopup::None;
             return;
         }
-        let at_token = Self::current_at_token(&self.draft.textarea);
+        let at_token = self.current_editable_at_token();
         let browsing_history = self
             .history
             .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
@@ -6480,6 +6480,51 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(composer.draft.textarea.cursor(), "go".len());
         assert!(matches!(composer.popups.active, ActivePopup::MentionV2(_)));
+    }
+
+    #[test]
+    fn restored_bound_at_mentions_do_not_open_mention_popup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        }]));
+
+        composer.set_text_content_with_mention_bindings(
+            "@sample".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(consumed);
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "@sample"),
+            _ => panic!("expected restored bound mention to submit"),
+        }
     }
 
     #[test]
