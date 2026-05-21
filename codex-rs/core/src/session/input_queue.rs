@@ -15,6 +15,21 @@ pub(crate) enum TurnInput {
     ResponseInputItem(ResponseInputItem),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct PendingInput {
+    input: TurnInput,
+    start_turn: bool,
+}
+
+impl From<TurnInput> for PendingInput {
+    fn from(input: TurnInput) -> Self {
+        Self {
+            input,
+            start_turn: true,
+        }
+    }
+}
+
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     mailbox_tx: watch::Sender<()>,
@@ -24,7 +39,7 @@ pub(crate) struct InputQueue {
 #[derive(Default)]
 struct InputQueueState {
     mailbox_pending_mails: VecDeque<InterAgentCommunication>,
-    turn_pending_input: Vec<TurnInput>,
+    turn_pending_input: Vec<PendingInput>,
 }
 
 impl InputQueue {
@@ -70,7 +85,12 @@ impl InputQueue {
     }
 
     pub(crate) async fn has_queued_input_for_next_turn(&self) -> bool {
-        !self.state.lock().await.turn_pending_input.is_empty()
+        self.state
+            .lock()
+            .await
+            .turn_pending_input
+            .iter()
+            .any(|pending_input| pending_input.start_turn)
     }
 
     pub(crate) async fn turn_state_for_sub_id(
@@ -119,7 +139,11 @@ impl InputQueue {
     }
 
     pub(crate) async fn inject(&self, input: Vec<TurnInput>) {
-        self.state.lock().await.turn_pending_input.extend(input);
+        self.state
+            .lock()
+            .await
+            .turn_pending_input
+            .extend(input.into_iter().map(PendingInput::from));
     }
 
     #[expect(
@@ -141,7 +165,10 @@ impl InputQueue {
             }
         };
         let mut state = self.state.lock().await;
-        let pending_input = std::mem::take(&mut state.turn_pending_input);
+        let pending_input = std::mem::take(&mut state.turn_pending_input)
+            .into_iter()
+            .map(|pending_input| pending_input.input)
+            .collect::<Vec<_>>();
         if !accepts_mailbox_delivery {
             return pending_input;
         }
