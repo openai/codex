@@ -173,10 +173,9 @@ fn build_model_visible_specs_and_registry(
             continue;
         }
         let exposure = runtime.exposure();
-        if exposure.is_direct()
-            && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
-            && let Some(spec) = runtime.spec()
+        if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
         {
+            let spec = runtime.spec();
             specs.push(spec_for_model_request(turn_context, exposure, spec));
         }
     }
@@ -375,9 +374,10 @@ fn build_code_mode_executors(
             continue;
         }
 
-        let Some(spec) = executor.spec() else {
+        if exposure == ToolExposure::Hidden {
             continue;
-        };
+        }
+        let spec = executor.spec();
 
         if exposure != ToolExposure::Deferred {
             exec_prompt_tool_specs.push(spec.clone());
@@ -666,16 +666,25 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
 fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     if let Some(mcp_tools) = context.mcp_tools {
         for tool in mcp_tools {
-            planned_tools.add_runtime(McpHandler::new(tool.clone()));
+            match McpHandler::new(tool.clone()) {
+                Ok(handler) => planned_tools.add_runtime(handler),
+                Err(err) => warn!(
+                    "Skipping MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
+            }
         }
     }
 
     if let Some(deferred_mcp_tools) = context.deferred_mcp_tools {
         for tool in deferred_mcp_tools {
-            planned_tools.add_runtime(McpHandler::with_exposure(
-                tool.clone(),
-                ToolExposure::Deferred,
-            ));
+            match McpHandler::with_exposure(tool.clone(), ToolExposure::Deferred) {
+                Ok(handler) => planned_tools.add_runtime(handler),
+                Err(err) => warn!(
+                    "Skipping deferred MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
+            }
         }
     }
 }
@@ -815,14 +824,14 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
         ToolName::namespaced(self.namespace.clone(), self.handler.tool_name().name)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        match self.handler.spec()? {
-            ToolSpec::Function(tool) => Some(ToolSpec::Namespace(ResponsesApiNamespace {
+    fn spec(&self) -> ToolSpec {
+        match self.handler.spec() {
+            ToolSpec::Function(tool) => ToolSpec::Namespace(ResponsesApiNamespace {
                 name: self.namespace.clone(),
                 description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
                 tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-            })),
-            spec => Some(spec),
+            }),
+            spec => spec,
         }
     }
 

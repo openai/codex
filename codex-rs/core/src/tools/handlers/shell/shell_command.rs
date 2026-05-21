@@ -22,6 +22,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolExposure;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use codex_tools::ToolSpec;
 
@@ -39,7 +40,8 @@ enum ShellCommandBackend {
 
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
-    options: Option<ShellCommandHandlerOptions>,
+    options: ShellCommandHandlerOptions,
+    exposure: ToolExposure,
 }
 
 #[derive(Clone, Copy)]
@@ -51,9 +53,22 @@ pub(crate) struct ShellCommandHandlerOptions {
 
 impl ShellCommandHandler {
     pub(crate) fn new(options: ShellCommandHandlerOptions) -> Self {
+        Self::with_exposure(options, ToolExposure::Direct)
+    }
+
+    pub(crate) fn hidden(options: ShellCommandHandlerOptions) -> Self {
+        Self::with_exposure(options, ToolExposure::Hidden)
+    }
+
+    fn with_exposure(options: ShellCommandHandlerOptions, exposure: ToolExposure) -> Self {
+        let backend = match options.backend_config {
+            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
+            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
+        };
         Self {
-            options: Some(options),
-            ..Self::from(options.backend_config)
+            backend,
+            options,
+            exposure,
         }
     }
 
@@ -114,15 +129,12 @@ impl ShellCommandHandler {
 }
 
 impl From<ShellCommandBackendConfig> for ShellCommandHandler {
-    fn from(config: ShellCommandBackendConfig) -> Self {
-        let backend = match config {
-            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
-            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
-        };
-        Self {
-            backend,
-            options: None,
-        }
+    fn from(backend_config: ShellCommandBackendConfig) -> Self {
+        Self::hidden(ShellCommandHandlerOptions {
+            backend_config,
+            allow_login_shell: false,
+            exec_permission_approvals_enabled: false,
+        })
     }
 }
 
@@ -132,17 +144,19 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         ToolName::plain("shell_command")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        self.options.map(|options| {
-            create_shell_command_tool(CommandToolOptions {
-                allow_login_shell: options.allow_login_shell,
-                exec_permission_approvals_enabled: options.exec_permission_approvals_enabled,
-            })
+    fn spec(&self) -> ToolSpec {
+        create_shell_command_tool(CommandToolOptions {
+            allow_login_shell: self.options.allow_login_shell,
+            exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
+    }
+
     fn supports_parallel_tool_calls(&self) -> bool {
-        self.options.is_some()
+        self.exposure != ToolExposure::Hidden
     }
 
     async fn handle(

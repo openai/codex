@@ -43,7 +43,11 @@ pub(crate) fn build_shell_tools(options: ShellToolsOptions) -> Vec<Arc<dyn CoreT
             // unified exec is model-visible.
             add_runtime(
                 &mut runtimes,
-                ShellCommandHandler::from(options.shell_command_backend),
+                ShellCommandHandler::hidden(ShellCommandHandlerOptions {
+                    backend_config: options.shell_command_backend,
+                    allow_login_shell: options.allow_login_shell,
+                    exec_permission_approvals_enabled: options.exec_permission_approvals_enabled,
+                }),
             );
         }
         ConfigShellToolType::Disabled => {}

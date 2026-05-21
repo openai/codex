@@ -37,7 +37,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         self.0.tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.0.spec()
     }
 
@@ -130,25 +130,23 @@ mod tests {
             codex_tools::ToolName::plain("extension_echo")
         }
 
-        fn spec(&self) -> Option<codex_tools::ToolSpec> {
-            Some(codex_tools::ToolSpec::Function(
-                codex_tools::ResponsesApiTool {
-                    name: "extension_echo".to_string(),
-                    description: "Echoes arguments.".to_string(),
-                    strict: true,
-                    parameters: codex_tools::parse_tool_input_schema(&json!({
-                        "type": "object",
-                        "properties": {
-                            "message": { "type": "string" },
-                        },
-                        "required": ["message"],
-                        "additionalProperties": false,
-                    }))
-                    .expect("extension schema should parse"),
-                    output_schema: None,
-                    defer_loading: None,
-                },
-            ))
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "extension_echo".to_string(),
+                description: "Echoes arguments.".to_string(),
+                strict: true,
+                parameters: codex_tools::parse_tool_input_schema(&json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }))
+                .expect("extension schema should parse"),
+                output_schema: None,
+                defer_loading: None,
+            })
         }
 
         async fn handle(
@@ -169,6 +167,17 @@ mod tests {
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for CapturingExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "extension_echo".to_string(),
+                description: "Captures arguments.".to_string(),
+                strict: false,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+                defer_loading: None,
+            })
         }
 
         async fn handle(

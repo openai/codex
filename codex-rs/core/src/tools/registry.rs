@@ -184,7 +184,7 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
         self.handler.tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.handler.spec()
     }
 

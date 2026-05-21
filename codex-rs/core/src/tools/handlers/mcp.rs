@@ -29,19 +29,25 @@ use serde_json::Value;
 
 pub struct McpHandler {
     tool_info: ToolInfo,
+    spec: ToolSpec,
     exposure: ToolExposure,
 }
 
 impl McpHandler {
-    pub fn new(tool_info: ToolInfo) -> Self {
+    pub fn new(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
         Self::with_exposure(tool_info, ToolExposure::Direct)
     }
 
-    pub fn with_exposure(tool_info: ToolInfo, exposure: ToolExposure) -> Self {
-        Self {
+    pub fn with_exposure(
+        tool_info: ToolInfo,
+        exposure: ToolExposure,
+    ) -> Result<Self, serde_json::Error> {
+        let spec = create_tool_spec(&tool_info)?;
+        Ok(Self {
             tool_info,
+            spec,
             exposure,
-        }
+        })
     }
 }
 
@@ -51,32 +57,8 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
         self.tool_info.canonical_tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        let tool_name = self.tool_name();
-        let namespace_name = tool_name.namespace.as_ref()?;
-        let tool = mcp_tool_to_responses_api_tool(&tool_name, &self.tool_info.tool).ok()?;
-        let description = self
-            .tool_info
-            .namespace_description
-            .as_deref()
-            .map(str::trim)
-            .filter(|description| !description.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                self.tool_info
-                    .connector_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|connector_name| !connector_name.is_empty())
-                    .map(|connector_name| format!("Tools for working with {connector_name}."))
-            })
-            .unwrap_or_default();
-
-        Some(ToolSpec::Namespace(ResponsesApiNamespace {
-            name: namespace_name.clone(),
-            description,
-            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-        }))
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     fn exposure(&self) -> ToolExposure {
@@ -152,7 +134,7 @@ impl CoreToolRuntime for McpHandler {
 
         ToolSearchInfo::from_spec(
             build_mcp_search_text(&self.tool_info),
-            self.spec()?,
+            self.spec(),
             source_info,
         )
     }
@@ -221,6 +203,32 @@ impl CoreToolRuntime for McpHandler {
             tool_response,
         })
     }
+}
+
+fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error> {
+    let tool_name = tool_info.canonical_tool_name();
+    let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
+    let description = tool_info
+        .namespace_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            tool_info
+                .connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
+        .unwrap_or_default();
+
+    Ok(ToolSpec::Namespace(ResponsesApiNamespace {
+        name: tool_info.callable_namespace.clone(),
+        description,
+        tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+    }))
 }
 
 fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
@@ -306,7 +314,8 @@ mod tests {
             .to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("memory", "mcp__memory__", "create_entities"));
+        let handler = McpHandler::new(tool_info("memory", "mcp__memory__", "create_entities"))
+            .expect("MCP tool spec should build");
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
@@ -336,7 +345,8 @@ mod tests {
             arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"));
+        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"))
+            .expect("MCP tool spec should build");
 
         assert_eq!(
             handler.pre_tool_use_payload(&ToolInvocation {
@@ -362,7 +372,8 @@ mod tests {
             arguments: json!({ "message": "hello" }).to_string(),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"));
+        let handler = McpHandler::new(tool_info("foo", "mcp__foo__", "exec_command"))
+            .expect("MCP tool spec should build");
 
         let invocation = handler
             .with_updated_hook_input(
@@ -411,7 +422,8 @@ mod tests {
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
         };
         let (session, turn) = make_session_and_context().await;
-        let handler = McpHandler::new(tool_info("filesystem", "mcp__filesystem__", "read_file"));
+        let handler = McpHandler::new(tool_info("filesystem", "mcp__filesystem__", "read_file"))
+            .expect("MCP tool spec should build");
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
