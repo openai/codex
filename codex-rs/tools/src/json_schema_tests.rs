@@ -780,6 +780,96 @@ fn parse_tool_input_schema_preserves_explicit_enum_type_union() {
 }
 
 #[test]
+fn parse_large_tool_input_schema_drops_definitions() {
+    let many_properties = (0..300)
+        .map(|index| {
+            (
+                format!("field_{index:03}"),
+                serde_json::json!({ "type": "string" }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "description": "x".repeat(4_500),
+        "properties": {
+            "metadata": {
+                "$ref": "#/$defs/metadata"
+            }
+        },
+        "$defs": {
+            "metadata": {
+                "type": "object",
+                "description": "metadata object",
+                "properties": many_properties
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "metadata".to_string(),
+                JsonSchema {
+                    schema_ref: Some("#/$defs/metadata".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        )
+    );
+}
+
+#[test]
+fn parse_large_tool_input_schema_collapses_deep_nested_shapes() {
+    let many_properties = (0..300)
+        .map(|index| {
+            (
+                format!("field_{index:03}"),
+                serde_json::json!({ "type": "string" }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "description": "x".repeat(4_500),
+        "properties": {
+            "event": {
+                "type": "object",
+                "properties": {
+                    "recurrence": {
+                        "type": "object",
+                        "properties": many_properties
+                    }
+                }
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "event".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([("recurrence".to_string(), JsonSchema::default())]),
+                    /*required*/ None,
+                    /*additional_properties*/ None,
+                )
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        )
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_preserves_string_enum_constraints() {
     // Example schema shape:
     // {
