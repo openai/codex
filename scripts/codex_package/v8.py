@@ -6,7 +6,6 @@ import hashlib
 import os
 import shutil
 import tempfile
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,7 @@ def resolve_codex_v8_cargo_env(
         return {}
 
     environ = os.environ if environ is None else environ
-    if environ.get("V8_FROM_SOURCE"):
+    if environ.get("V8_FROM_SOURCE") in {"true", "1", "yes"}:
         return {}
 
     archive_override = environ.get("RUSTY_V8_ARCHIVE")
@@ -88,6 +87,8 @@ def fetch_codex_v8_artifacts(
 
 
 def resolved_v8_crate_version() -> str:
+    import tomllib
+
     cargo_lock = tomllib.loads((REPO_ROOT / "codex-rs" / "Cargo.lock").read_text())
     versions = sorted(
         {
