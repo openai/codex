@@ -31,6 +31,21 @@ pub struct RuntimeInstallParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(export_to = "v2/")]
+pub enum RuntimeInstallCancelStatus {
+    Canceled,
+    NotFound,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RuntimeInstallCancelResponse {
+    pub status: RuntimeInstallCancelStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export_to = "v2/")]
 pub enum RuntimeInstallStatus {
     AlreadyCurrent,
     Installed,
@@ -55,4 +70,27 @@ pub struct RuntimeInstallResponse {
     pub bundle_version: Option<String>,
     pub paths: RuntimeInstallPaths,
     pub status: RuntimeInstallStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export_to = "v2/")]
+pub enum RuntimeInstallProgressPhase {
+    Checking,
+    Downloading,
+    Verifying,
+    Extracting,
+    Validating,
+    Installed,
+    Configuring,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RuntimeInstallProgressNotification {
+    pub bundle_version: Option<String>,
+    pub downloaded_bytes: Option<u64>,
+    pub phase: RuntimeInstallProgressPhase,
+    pub total_bytes: Option<u64>,
 }

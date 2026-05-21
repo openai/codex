@@ -5416,6 +5416,29 @@
         },
         "method": {
           "enum": [
+            "runtime/install/cancel"
+          ],
+          "title": "Runtime/install/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Runtime/install/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "plugin/uninstall"
           ],
           "title": "Plugin/uninstallRequestMethod",
