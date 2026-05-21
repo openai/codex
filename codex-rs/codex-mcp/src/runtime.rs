@@ -199,7 +199,7 @@ mod tests {
             Ok(resolved_runtime) => resolved_runtime,
             Err(error) => panic!("local HTTP MCP should resolve: {error}"),
         };
-        assert_eq!(resolved_runtime, None);
+        assert!(resolved_runtime.is_none());
     }
 
     #[test]
