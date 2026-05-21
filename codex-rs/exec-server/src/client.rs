@@ -12,6 +12,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -192,7 +193,7 @@ pub struct ExecServerClient {
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: ExecServerTransportParams,
     client: Arc<StdMutex<Option<ExecServerClient>>>,
-    connect_lock: Arc<Mutex<()>>,
+    connect_lock: Arc<Semaphore>,
 }
 
 impl LazyRemoteExecServerClient {
@@ -200,7 +201,7 @@ impl LazyRemoteExecServerClient {
         Self {
             transport_params,
             client: Arc::new(StdMutex::new(None)),
-            connect_lock: Arc::new(Mutex::new(())),
+            connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -209,7 +210,9 @@ impl LazyRemoteExecServerClient {
             return Ok(client);
         }
 
-        let _connect_guard = self.connect_lock.lock().await;
+        let _connect_permit = self.connect_lock.acquire().await.map_err(|_| {
+            ExecServerError::Protocol("exec-server connect lock closed".to_string())
+        })?;
         if let Some(client) = self.connected_client() {
             return Ok(client);
         }
@@ -921,6 +924,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::io::duplex;
+    use tokio::net::TcpListener;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
