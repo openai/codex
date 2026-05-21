@@ -1149,8 +1149,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                         "windows.allowed_sandbox_implementations",
                     ));
                 }
-                // Treat this as an allowlist, not an ordered preference list. If requirements
-                // force a fallback, prefer the default elevated sandbox whenever it is allowed.
+                // Prefer elevated when both Windows sandbox implementations are allowed.
                 let initial_value = if implementations.contains(&WindowsSandboxModeToml::Elevated) {
                     WindowsSandboxModeToml::Elevated
                 } else {
