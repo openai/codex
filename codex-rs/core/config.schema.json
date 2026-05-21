@@ -500,6 +500,9 @@
             "network_proxy": {
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
+            "onboarding_interactive_tools": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -4430,6 +4433,9 @@
         },
         "network_proxy": {
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+        },
+        "onboarding_interactive_tools": {
+          "type": "boolean"
         },
         "personality": {
           "type": "boolean"

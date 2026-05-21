@@ -174,6 +174,8 @@ pub enum Feature {
     MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
+    /// Allow onboarding-only interactive tools.
+    OnboardingInteractiveTools,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -1065,6 +1067,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::OnboardingInteractiveTools,
+        key: "onboarding_interactive_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

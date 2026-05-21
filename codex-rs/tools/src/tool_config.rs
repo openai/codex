@@ -27,8 +27,9 @@ pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> 
         .into_iter()
         .filter(|mode| {
             mode.allows_request_user_input()
-                || (features.enabled(Feature::DefaultModeRequestUserInput)
-                    && *mode == ModeKind::Default)
+                || (*mode == ModeKind::Default
+                    && (features.enabled(Feature::DefaultModeRequestUserInput)
+                        || features.enabled(Feature::OnboardingInteractiveTools)))
         })
         .collect()
 }
