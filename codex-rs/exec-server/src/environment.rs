@@ -459,6 +459,7 @@ mod tests {
     use super::EnvironmentManager;
     use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
+    use super::without_local_environment;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::environment_provider::EnvironmentDefault;
@@ -759,8 +760,11 @@ mod tests {
             default: EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string()),
             include_local: true,
         };
-        let manager = EnvironmentManager::from_snapshot(without_local_environment(snapshot), None)
-            .expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(
+            without_local_environment(snapshot),
+            /*local_runtime_paths*/ None,
+        )
+        .expect("environment manager");
 
         assert!(manager.default_environment().is_none());
         assert_eq!(manager.default_environment_id(), None);
@@ -779,8 +783,11 @@ mod tests {
             default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
             include_local: true,
         };
-        let manager = EnvironmentManager::from_snapshot(without_local_environment(snapshot), None)
-            .expect("environment manager");
+        let manager = EnvironmentManager::from_snapshot(
+            without_local_environment(snapshot),
+            /*local_runtime_paths*/ None,
+        )
+        .expect("environment manager");
 
         assert_eq!(
             manager.default_environment_id(),
