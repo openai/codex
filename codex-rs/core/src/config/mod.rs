@@ -1751,10 +1751,29 @@ pub async fn load_global_mcp_servers(
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
-    let Some(servers_value) = merged_toml.get("mcp_servers") else {
+    mcp_servers_from_toml(&merged_toml)
+}
+
+/// Returns MCP servers from the active user config file only.
+///
+/// Under profile config this is the selected profile overlay rather than the
+/// inherited base user config, so mutations can target the selected file
+/// without copying inherited entries into it.
+pub fn selected_user_mcp_servers(
+    config: &Config,
+) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
+    let Some(user_layer) = config.config_layer_stack.get_active_user_layer() else {
         return Ok(BTreeMap::new());
     };
+    mcp_servers_from_toml(&user_layer.config)
+}
 
+fn mcp_servers_from_toml(
+    config_toml: &TomlValue,
+) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
+    let Some(servers_value) = config_toml.get("mcp_servers") else {
+        return Ok(BTreeMap::new());
+    };
     ensure_no_inline_bearer_tokens(servers_value)?;
 
     servers_value

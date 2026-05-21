@@ -69,6 +69,65 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
 }
 
 #[tokio::test]
+async fn profile_add_list_and_remove_only_mutate_profile_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_base_cmd = codex_command(codex_home.path())?;
+    add_base_cmd
+        .args(["mcp", "add", "base", "--url", "https://base.example/mcp"])
+        .assert()
+        .success();
+
+    let mut add_profile_cmd = codex_command(codex_home.path())?;
+    add_profile_cmd
+        .args([
+            "--profile",
+            "work",
+            "mcp",
+            "add",
+            "docs",
+            "--",
+            "docs-server",
+        ])
+        .assert()
+        .success();
+
+    let profile_path = codex_home.path().join("work.config.toml");
+    let profile_contents = std::fs::read_to_string(&profile_path)?;
+    assert!(profile_contents.contains("[mcp_servers.docs]"));
+    assert!(!profile_contents.contains("[mcp_servers.base]"));
+
+    let base_servers = load_global_mcp_servers(codex_home.path()).await?;
+    assert!(base_servers.contains_key("base"));
+    assert!(!base_servers.contains_key("docs"));
+
+    let mut list_profile_cmd = codex_command(codex_home.path())?;
+    let list_profile_output = list_profile_cmd
+        .args(["--profile", "work", "mcp", "list", "--json"])
+        .output()?;
+    assert!(list_profile_output.status.success());
+    let stdout = String::from_utf8(list_profile_output.stdout)?;
+    assert!(stdout.contains("\"name\": \"base\""));
+    assert!(stdout.contains("\"name\": \"docs\""));
+
+    let mut remove_profile_cmd = codex_command(codex_home.path())?;
+    remove_profile_cmd
+        .args(["--profile", "work", "mcp", "remove", "docs"])
+        .assert()
+        .success()
+        .stdout(contains("Removed global MCP server 'docs'."));
+
+    let profile_contents = std::fs::read_to_string(profile_path)?;
+    assert!(!profile_contents.contains("[mcp_servers.docs]"));
+
+    let base_servers = load_global_mcp_servers(codex_home.path()).await?;
+    assert!(base_servers.contains_key("base"));
+    assert!(!base_servers.contains_key("docs"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     let codex_home = TempDir::new()?;
 
