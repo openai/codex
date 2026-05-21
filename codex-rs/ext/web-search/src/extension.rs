@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+use codex_api::ApproximateLocation;
+use codex_api::LocationType;
+use codex_api::SearchContextSize;
+use codex_api::SearchFilters;
+use codex_api::SearchSettings;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -12,6 +17,8 @@ use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::WebSearchContextSize;
+use codex_protocol::config_types::WebSearchMode;
 use codex_thread_store::ThreadStore;
 
 use crate::tool::WebSearchTool;
@@ -26,15 +33,52 @@ struct WebSearchExtension {
 struct WebSearchExtensionConfig {
     enabled: bool,
     provider: ModelProviderInfo,
+    settings: SearchSettings,
 }
 
 impl WebSearchExtensionConfig {
     fn from_config(config: &Config) -> Self {
+        let web_search_mode = config.web_search_mode.value();
         Self {
             enabled: config.features.enabled(Feature::StandaloneWebSearch)
-                && config.model_provider.is_openai(),
+                && config.model_provider.is_openai()
+                && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
+            settings: search_settings(config, web_search_mode),
         }
+    }
+}
+
+fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSettings {
+    let web_search_config = config.web_search_config.as_ref();
+    SearchSettings {
+        user_location: web_search_config
+            .and_then(|config| config.user_location.as_ref())
+            .map(|location| ApproximateLocation {
+                r#type: LocationType::Approximate,
+                country: location.country.clone(),
+                region: location.region.clone(),
+                city: location.city.clone(),
+                timezone: location.timezone.clone(),
+            }),
+        search_context_size: web_search_config
+            .and_then(|config| config.search_context_size)
+            .map(|size| match size {
+                WebSearchContextSize::Low => SearchContextSize::Low,
+                WebSearchContextSize::Medium => SearchContextSize::Medium,
+                WebSearchContextSize::High => SearchContextSize::High,
+            }),
+        filters: web_search_config
+            .and_then(|config| config.filters.as_ref())
+            .map(|filters| SearchFilters {
+                allowed_domains: filters.allowed_domains.clone(),
+                blocked_domains: None,
+            }),
+        external_web_access: Some(match web_search_mode {
+            WebSearchMode::Live => true,
+            WebSearchMode::Cached | WebSearchMode::Disabled => false,
+        }),
+        ..Default::default()
     }
 }
 
@@ -83,6 +127,7 @@ impl ToolContributor for WebSearchExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
+            settings: config.settings.clone(),
         })]
     }
 }
@@ -132,6 +177,7 @@ mod tests {
         thread_store.insert(WebSearchExtensionConfig {
             enabled: true,
             provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            settings: Default::default(),
         });
 
         let tool_names = registry

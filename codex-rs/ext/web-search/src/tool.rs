@@ -4,6 +4,7 @@ use codex_api::ReqwestTransport;
 use codex_api::SearchClient;
 use codex_api::SearchCommands;
 use codex_api::SearchRequest;
+use codex_api::SearchSettings;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall;
@@ -35,6 +36,7 @@ pub(crate) struct WebSearchTool {
     pub(crate) thread_id: ThreadId,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) provider: SharedModelProvider,
+    pub(crate) settings: SearchSettings,
 }
 
 #[async_trait::async_trait]
@@ -94,7 +96,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
             reasoning: None,
             input: recent_input(&history.items),
             commands: Some(commands),
-            settings: None,
+            settings: Some(self.settings.clone()),
             max_output_tokens: Some(
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
