@@ -986,6 +986,51 @@ fn parse_large_tool_input_schema_strips_descriptions_without_removing_descriptio
 }
 
 #[test]
+fn parse_large_tool_input_schema_preserves_object_enum_literal_descriptions() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "description": "x".repeat(4_500),
+        "properties": {
+            "choice": {
+                "enum": [
+                    {
+                        "description": "first literal",
+                        "id": 1
+                    },
+                    {
+                        "description": "second literal",
+                        "id": 2
+                    }
+                ]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "type": "string",
+                    "enum": [
+                        {
+                            "description": "first literal",
+                            "id": 1
+                        },
+                        {
+                            "description": "second literal",
+                            "id": 2
+                        }
+                    ]
+                }
+            }
+        })
+    );
+}
+
+#[test]
 fn collapse_deep_schema_objects_traverses_schema_children() {
     let mut schema = serde_json::json!({
         "type": "object",
