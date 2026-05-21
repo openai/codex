@@ -191,9 +191,12 @@ async fn remote_model_override_uses_parent_model_for_strict_auto_review() -> Res
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 4);
-    assert_eq!(requests[2].body_json()["model"].as_str(), Some(model));
+    let guardian_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("auto-review-model-override.txt"))
+        .expect("expected Guardian request for strict apply_patch");
+    assert_eq!(guardian_request.body_json()["model"].as_str(), Some(model));
 
     Ok(())
 }
