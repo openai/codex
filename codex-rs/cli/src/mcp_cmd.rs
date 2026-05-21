@@ -415,7 +415,7 @@ async fn run_login(config: &Config, login_args: LoginArgs) -> Result<()> {
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LoginArgs { name, scopes } = login_args;
 
@@ -463,7 +463,7 @@ async fn run_logout(config: &Config, logout_args: LogoutArgs) -> Result<()> {
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let LogoutArgs { name } = logout_args;
 
@@ -489,8 +489,8 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
-    let effective_mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
+    let effective_mcp_servers = mcp_manager.effective_servers(config, /*auth*/ None).await;
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -739,7 +739,7 @@ async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
-    let mcp_servers = mcp_manager.configured_servers(&config).await;
+    let mcp_servers = mcp_manager.configured_servers(config).await;
 
     let Some(server) = mcp_servers.get(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);
