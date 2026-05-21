@@ -5,6 +5,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
+
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
 /// This mirrors the OpenAI Structured Outputs subset for JSON Schema `type`:
@@ -209,8 +211,9 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(value) = map.get_mut("anyOf") {
                 sanitize_json_schema(value);
             }
-            sanitize_schema_table(map, "$defs");
-            sanitize_schema_table(map, "definitions");
+            for table in DEFINITION_TABLE_KEYS {
+                sanitize_schema_table(map, table);
+            }
 
             if let Some(const_value) = map.remove("const") {
                 map.insert("enum".to_string(), JsonValue::Array(vec![const_value]));
@@ -292,23 +295,8 @@ fn ensure_default_children_for_schema_types(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum DefinitionTable {
-    Defs,
-    Definitions,
-}
-
-impl DefinitionTable {
-    fn key(&self) -> &'static str {
-        match self {
-            Self::Defs => "$defs",
-            Self::Definitions => "definitions",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct DefinitionPointer {
-    table: DefinitionTable,
+    table: &'static str,
     name: String,
 }
 
@@ -320,28 +308,29 @@ fn prune_unreachable_definitions(value: &mut JsonValue) {
         return;
     };
 
-    prune_schema_table(map, DefinitionTable::Defs, &reachable);
-    prune_schema_table(map, DefinitionTable::Definitions, &reachable);
+    for table in DEFINITION_TABLE_KEYS {
+        prune_schema_table(map, table, &reachable);
+    }
 }
 
 fn prune_schema_table(
     map: &mut serde_json::Map<String, JsonValue>,
-    table: DefinitionTable,
+    table: &'static str,
     reachable: &BTreeSet<DefinitionPointer>,
 ) {
-    let Some(JsonValue::Object(definitions)) = map.get_mut(table.key()) else {
+    let Some(JsonValue::Object(definitions)) = map.get_mut(table) else {
         return;
     };
 
     definitions.retain(|name, _| {
         reachable.contains(&DefinitionPointer {
-            table: table.clone(),
+            table,
             name: name.clone(),
         })
     });
 
     if definitions.is_empty() {
-        map.remove(table.key());
+        map.remove(table);
     }
 }
 
@@ -393,7 +382,7 @@ fn collect_refs_outside_definitions_in_context(
             RefCollectionContext::SchemaObject => {
                 collect_ref_from_map(map, refs);
                 for (key, value) in map {
-                    if key == "$defs" || key == "definitions" {
+                    if DEFINITION_TABLE_KEYS.contains(&key.as_str()) {
                         continue;
                     }
 
@@ -455,7 +444,7 @@ fn definition_for_pointer<'a>(
         return None;
     };
 
-    map.get(pointer.table.key())
+    map.get(pointer.table)
         .and_then(JsonValue::as_object)
         .and_then(|definitions| definitions.get(&pointer.name))
 }
@@ -466,11 +455,10 @@ fn parse_local_definition_ref(schema_ref: &str) -> Option<DefinitionPointer> {
     let pointer = jsonptr::Pointer::parse(pointer.as_ref()).ok()?;
 
     let (table_token, pointer) = pointer.split_front()?;
-    let table = match table_token.decoded().as_ref() {
-        "$defs" => DefinitionTable::Defs,
-        "definitions" => DefinitionTable::Definitions,
-        _ => return None,
-    };
+    let table = table_token.decoded();
+    let table = DEFINITION_TABLE_KEYS
+        .into_iter()
+        .find(|candidate| table.as_ref() == *candidate)?;
 
     // Responses API non-strict mode accepts nested local refs such as
     // `#/$defs/User/properties/name`, so keep the parent definition reachable.
