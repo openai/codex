@@ -1402,6 +1402,7 @@ impl Config {
             cfg,
             ConfigOverrides {
                 cwd: Some(self.cwd.to_path_buf()),
+                default_zsh_path: refreshed_config.zsh_path.clone(),
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
@@ -2140,6 +2141,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
     pub zsh_path: Option<PathBuf>,
+    pub default_zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -2537,6 +2539,7 @@ impl Config {
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
             zsh_path: zsh_path_override,
+            default_zsh_path,
             base_instructions,
             developer_instructions,
             personality,
@@ -3303,7 +3306,8 @@ impl Config {
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let zsh_path = zsh_path_override
             .or(config_profile.zsh_path.map(Into::into))
-            .or(cfg.zsh_path.map(Into::into));
+            .or(cfg.zsh_path.map(Into::into))
+            .or(default_zsh_path);
 
         let review_model = override_review_model.or(cfg.review_model);
 
