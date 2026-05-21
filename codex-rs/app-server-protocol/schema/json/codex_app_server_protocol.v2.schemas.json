@@ -15264,6 +15264,21 @@
       "title": "ThreadRollbackResponse",
       "type": "object"
     },
+    "ThreadSearchResult": {
+      "properties": {
+        "snippet": {
+          "type": "string"
+        },
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "snippet",
+        "thread"
+      ],
+      "type": "object"
+    },
     "ThreadSetNameParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
