@@ -114,7 +114,7 @@ impl fmt::Display for ProfileV2NameParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid --profile-v2 value `{}`; pass a plain name such as `work`",
+            "invalid --profile value `{}`; pass a plain name such as `work`",
             self.value
         )
     }
@@ -431,6 +431,12 @@ pub enum ServiceTier {
     Fast,
     Flex,
 }
+
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
 
 impl ServiceTier {
     pub const fn request_value(self) -> &'static str {

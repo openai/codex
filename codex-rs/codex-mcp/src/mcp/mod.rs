@@ -38,7 +38,7 @@ use serde_json::Value;
 
 use crate::codex_apps::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
@@ -261,7 +261,7 @@ pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
 pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
-    runtime_environment: McpRuntimeEnvironment,
+    runtime_context: McpRuntimeContext,
     server: &str,
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
@@ -284,7 +284,7 @@ pub async fn read_mcp_resource(
         String::new(),
         tx_event,
         PermissionProfile::default(),
-        runtime_environment,
+        runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
@@ -314,13 +314,14 @@ pub struct McpServerStatusSnapshot {
     pub resources: HashMap<String, Vec<Resource>>,
     pub resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     pub auth_statuses: HashMap<String, McpAuthStatus>,
+    pub server_names: Vec<String>,
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
-    runtime_environment: McpRuntimeEnvironment,
+    runtime_context: McpRuntimeContext,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -332,6 +333,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
             auth_statuses: HashMap::new(),
+            server_names: Vec::new(),
         };
     }
 
@@ -341,6 +343,8 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         auth,
     )
     .await;
+
+    let server_names = mcp_servers.keys().cloned().collect();
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
@@ -353,7 +357,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         submit_id,
         tx_event,
         PermissionProfile::default(),
-        runtime_environment,
+        runtime_context,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
@@ -367,6 +371,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,
         auth_status_entries,
+        server_names,
         detail,
     )
     .await;
@@ -451,7 +456,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
             http_headers,
             env_http_headers: None,
         },
-        experimental_environment: None,
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
@@ -575,6 +580,7 @@ fn convert_mcp_resource_templates(
 async fn collect_mcp_server_status_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
     auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let (tools, resources, resource_templates) = tokio::join!(
@@ -613,6 +619,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         resources: convert_mcp_resources(resources),
         resource_templates: convert_mcp_resource_templates(resource_templates),
         auth_statuses: auth_statuses_from_entries(&auth_status_entries),
+        server_names,
     }
 }
 

@@ -66,10 +66,10 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+pub use goals::GoalAccountingMode;
+pub use goals::GoalAccountingOutcome;
 pub use goals::GoalStore;
-pub use goals::ThreadGoalAccountingMode;
-pub use goals::ThreadGoalAccountingOutcome;
-pub use goals::ThreadGoalUpdate;
+pub use goals::GoalUpdate;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 

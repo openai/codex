@@ -1728,6 +1728,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             }]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            allowed_permissions: None,
             allowed_web_search_modes: None,
             allow_managed_hooks_only: None,
             computer_use: None,
@@ -2491,6 +2492,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: json!({"arg": "value"}),
         mcp_app_resource_uri: Some("app://connector".to_string()),
+        plugin_id: Some("sample@test".to_string()),
         status: CoreMcpToolCallStatus::InProgress,
         result: None,
         error: None,
@@ -2506,6 +2508,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
             mcp_app_resource_uri: Some("app://connector".to_string()),
+            plugin_id: Some("sample@test".to_string()),
             result: None,
             error: None,
             duration_ms: None,
@@ -2518,6 +2521,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         tool: "tool".to_string(),
         arguments: JsonValue::Null,
         mcp_app_resource_uri: None,
+        plugin_id: None,
         status: CoreMcpToolCallStatus::Completed,
         result: Some(CallToolResult {
             content: vec![json!({"type": "text", "text": "ok"})],
@@ -2538,6 +2542,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             status: McpToolCallStatus::Completed,
             arguments: JsonValue::Null,
             mcp_app_resource_uri: None,
+            plugin_id: None,
             result: Some(Box::new(McpToolCallResult {
                 content: vec![json!({"type": "text", "text": "ok"})],
                 structured_content: Some(json!({"ok": true})),
@@ -2708,14 +2713,14 @@ fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
 fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
     assert_eq!(
         serde_json::to_value(PluginMarketplaceEntry {
-            name: "openai-curated".to_string(),
+            name: "openai-curated-remote".to_string(),
             path: None,
             interface: None,
             plugins: Vec::new(),
         })
         .unwrap(),
         json!({
-            "name": "openai-curated",
+            "name": "openai-curated-remote",
             "path": null,
             "interface": null,
             "plugins": [],
@@ -2799,6 +2804,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             cwds: None,
             marketplace_kinds: Some(vec![
                 PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
                 PluginListMarketplaceKind::WorkspaceDirectory,
                 PluginListMarketplaceKind::SharedWithMe,
             ]),
@@ -2808,6 +2814,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
             "cwds": null,
             "marketplaceKinds": [
                 "local",
+                "vertical",
                 "workspace-directory",
                 "shared-with-me",
             ],
@@ -2875,13 +2882,13 @@ fn plugin_read_params_serialization_uses_install_source_fields() {
 
     assert_eq!(
         serde_json::from_value::<PluginReadParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
         }))
         .unwrap(),
         PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2926,14 +2933,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 
     assert_eq!(
         serde_json::from_value::<PluginInstallParams>(json!({
-            "remoteMarketplaceName": "openai-curated",
+            "remoteMarketplaceName": "openai-curated-remote",
             "pluginName": "gmail",
             "forceRemoteSync": true,
         }))
         .unwrap(),
         PluginInstallParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "gmail".to_string(),
         },
     );
@@ -2943,13 +2950,13 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
 fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
     assert_eq!(
         serde_json::to_value(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
         .unwrap(),
         json!({
-            "remoteMarketplaceName": "chatgpt-global",
+            "remoteMarketplaceName": "openai-curated-remote",
             "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
             "skillName": "plan-work",
         }),
@@ -3144,7 +3151,7 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    id: "gmail@chatgpt-global".to_string(),
+                    id: "gmail@openai-curated-remote".to_string(),
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
                     ),
@@ -3167,7 +3174,7 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "id": "gmail@chatgpt-global",
+                    "id": "gmail@openai-curated-remote",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "localVersion": null,
                     "name": "gmail",
@@ -3576,6 +3583,77 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_explicit_null_service_tier() {
+    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "serviceTier": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let without_override = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        service_tier: None,
+        ..Default::default()
+    };
+    let serialized_without_override =
+        serde_json::to_value(&without_override).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_field_level_experimental_gates() {
+    let permissions = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        permissions: Some(":workspace".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&permissions),
+        Some("thread/settings/update.permissions")
+    );
+
+    let granular_approval = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        approval_policy: Some(AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&granular_approval),
+        Some("askForApproval.granular")
+    );
+
+    let collaboration_mode = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+            mode: codex_protocol::config_types::ModeKind::Plan,
+            settings: codex_protocol::config_types::Settings {
+                model: "mock-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&collaboration_mode),
+        Some("thread/settings/update.collaborationMode")
+    );
 }
 
 #[test]

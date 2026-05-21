@@ -2493,6 +2493,8 @@ async fn session_configured_clears_goal_status_footer() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),

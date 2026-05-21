@@ -355,6 +355,7 @@ pub(crate) struct ChatComposer {
     attachments: AttachmentState,
     placeholder_text: String,
     is_task_running: bool,
+    queue_submissions: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -524,6 +525,7 @@ impl ChatComposer {
             attachments: AttachmentState::default(),
             placeholder_text,
             is_task_running: false,
+            queue_submissions: false,
             pending_slash_command_history: None,
             #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
@@ -2817,6 +2819,9 @@ impl ChatComposer {
         now: Instant,
     ) -> (InputResult, bool) {
         if should_queue {
+            if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+            }
             let raw_text = self.draft.textarea.text();
             let defer_slash_validation =
                 self.should_parse_as_slash_on_dequeue_from_raw_text(raw_text);
@@ -3227,13 +3232,13 @@ impl ChatComposer {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
         }
         if self.queue_keys.is_pressed(key_event)
-            && (self.is_task_running || !self.is_bang_shell_command())
+            && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
         {
-            return self.handle_submission(self.is_task_running);
+            return self.handle_submission(self.is_task_running || self.queue_submissions);
         }
 
         if self.submit_keys.is_pressed(key_event) {
-            return self.handle_submission(/*should_queue*/ false);
+            return self.handle_submission(self.queue_submissions);
         }
 
         if let KeyEvent {
@@ -4141,6 +4146,10 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+    }
+
+    pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
+        self.queue_submissions = queue_submissions;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -7064,6 +7073,49 @@ mod tests {
         assert_eq!(composer.draft.textarea.text(), "hi\nthere");
     }
 
+    /// Behavior: startup-pending submissions are queued immediately, so Enter should flush any
+    /// buffered burst text into that queued message instead of turning into a draft newline.
+    #[test]
+    fn queued_submission_flushes_ascii_burst_instead_of_inserting_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
+        for ch in ['h', 'i'] {
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                now,
+            );
+            now += step;
+        }
+        assert!(composer.is_in_paste_burst());
+
+        let (result, _) = composer.handle_submission_with_time(/*should_queue*/ true, now);
+
+        assert_eq!(
+            result,
+            InputResult::Queued {
+                text: "hi".to_string(),
+                text_elements: Vec::new(),
+                action: QueuedInputAction::Plain,
+            }
+        );
+        assert!(composer.draft.textarea.text().is_empty());
+        assert!(!composer.is_in_paste_burst());
+    }
+
     /// Behavior: even if Enter suppression would normally be active for a burst, Enter should
     /// still dispatch a built-in slash command when the first line begins with `/`.
     #[test]
@@ -7700,6 +7752,114 @@ mod tests {
     }
 
     #[test]
+    fn slash_popup_btw_for_bt_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'b', 't']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_bt", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_btw_for_bt_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'b', 't']);
+
+        match &composer.popups.active {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "btw")
+                }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected btw command, got service tier {command:?}")
+                }
+                None => panic!("no selected command for '/bt'"),
+            },
+            _ => panic!("slash popup not active after typing '/bt'"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_side_for_si_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 's', 'i']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_si", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_side_for_si_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 's', 'i']);
+
+        match &composer.popups.active {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "side")
+                }
+                Some(CommandItem::ServiceTier(command)) => {
+                    panic!("expected side command, got service tier {command:?}")
+                }
+                None => panic!("no selected command for '/si'"),
+            },
+            _ => panic!("slash popup not active after typing '/si'"),
+        }
+    }
+
+    #[test]
     fn service_tier_slash_command_dispatches_from_catalog_name() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -7919,6 +8079,40 @@ mod tests {
             }
         }
         assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn enter_queues_when_queue_submissions_is_enabled() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_queue_submissions(/*queue_submissions*/ true);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("queued before session");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::Queued {
+                text: "queued before session".to_string(),
+                text_elements: Vec::new(),
+                action: QueuedInputAction::Plain,
+            }
+        );
     }
 
     #[test]

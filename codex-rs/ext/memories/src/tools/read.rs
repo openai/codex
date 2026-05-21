@@ -42,11 +42,11 @@ where
         memory_tool_name(READ_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<ReadArgs, ReadMemoryResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<ReadArgs, ReadMemoryResponse>(
             READ_TOOL_NAME,
             "Read a Codex memory file by relative path, optionally starting at a 1-indexed line offset and limiting the number of lines returned.",
-        ))
+        )
     }
 
     async fn handle(

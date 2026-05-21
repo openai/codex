@@ -196,9 +196,9 @@ async fn exec_cli_applies_model_instructions_file() {
     );
 }
 
-/// Verify that `codex exec --profile ...` preserves the active profile when it
-/// starts the in-process app-server thread, so profile-scoped
-/// `model_instructions_file` is applied to the outbound request.
+/// Verify that `codex exec --profile ...` preserves the active user config
+/// profile when it starts the in-process app-server thread, so the selected
+/// profile's `model_instructions_file` reaches the outbound request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_profile_applies_model_instructions_file() {
     skip_if_no_network!();
@@ -223,8 +223,8 @@ async fn exec_cli_profile_applies_model_instructions_file() {
 
     let home = TempDir::new().unwrap();
     std::fs::write(
-        home.path().join("config.toml"),
-        format!("[profiles.default]\nmodel_instructions_file = \"{custom_path_str}\"\n",),
+        home.path().join("default.config.toml"),
+        format!("model_instructions_file = \"{custom_path_str}\"\n"),
     )
     .unwrap();
 

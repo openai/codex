@@ -101,7 +101,7 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
             marketplace_path: Some(AbsolutePathBuf::try_from(
                 codex_home.path().join("marketplace.json"),
             )?),
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
@@ -196,7 +196,7 @@ plugins = true
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
@@ -208,8 +208,8 @@ plugins = true
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
-    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
+    assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
+    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
@@ -484,7 +484,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
@@ -496,10 +496,10 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
-    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
+    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
@@ -568,7 +568,7 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
 
     let request_id = mcp
         .send_plugin_skill_read_request(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
@@ -621,7 +621,7 @@ async fn plugin_read_maps_missing_remote_plugin_to_invalid_request() -> Result<(
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_missing".to_string(),
         })
         .await?;
@@ -673,7 +673,7 @@ remote_plugin = true
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "linear".to_string(),
         })
         .await?;
@@ -703,7 +703,7 @@ async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "linear/../../oops".to_string(),
         })
         .await?;
@@ -1273,7 +1273,6 @@ description: Visible only for ChatGPT
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"

@@ -47,8 +47,8 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
         ToolName::plain(WAIT_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_wait_tool())
+    fn spec(&self) -> ToolSpec {
+        create_wait_tool()
     }
 
     async fn handle(

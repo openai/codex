@@ -13,6 +13,7 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -75,26 +76,22 @@ pub(crate) fn build_service_tier_selection_edits(
     let service_tier_edit = service_tier.map_or_else(
         || clear_config_value(profile_scoped_key_path(profile, "service_tier")),
         |service_tier| {
-            let config_value =
+            let config_value = if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE {
+                SERVICE_TIER_DEFAULT_REQUEST_VALUE
+            } else {
                 match codex_protocol::config_types::ServiceTier::from_request_value(service_tier) {
                     Some(codex_protocol::config_types::ServiceTier::Fast) => "fast",
                     Some(codex_protocol::config_types::ServiceTier::Flex) => "flex",
                     None => service_tier,
-                };
+                }
+            };
             replace_config_value(
                 profile_scoped_key_path(profile, "service_tier"),
                 serde_json::json!(config_value),
             )
         },
     );
-    let mut edits = vec![service_tier_edit];
-    if service_tier.is_none() {
-        edits.push(replace_config_value(
-            "notice.fast_default_opt_out",
-            serde_json::json!(true),
-        ));
-    }
-    edits
+    vec![service_tier_edit]
 }
 
 pub(crate) async fn write_config_batch(

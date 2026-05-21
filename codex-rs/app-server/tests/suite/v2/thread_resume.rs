@@ -679,6 +679,7 @@ fn append_resume_redaction_history(
                 arguments: Some(json!({"secret":"argument"})),
             },
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
                 content: vec![json!({
@@ -1108,7 +1109,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
             thread_id,
             /*time_delta_seconds*/ 12,
             /*token_delta*/ 50,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             Some(persisted_goal.goal_id.as_str()),
         )
         .await?;

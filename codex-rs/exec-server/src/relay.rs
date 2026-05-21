@@ -298,7 +298,7 @@ where
     }
 }
 
-pub(crate) async fn run_multiplexed_executor<S>(
+pub(crate) async fn run_multiplexed_environment<S>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
 ) where
@@ -337,7 +337,7 @@ pub(crate) async fn run_multiplexed_executor<S>(
                     continue;
                 }
                 Some(Err(err)) => {
-                    debug!("multiplexed executor websocket read failed: {err}");
+                    debug!("multiplexed environment websocket read failed: {err}");
                     break;
                 }
             }

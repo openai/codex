@@ -7,10 +7,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
-use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
-use codex_utils_output_truncation::TruncationPolicy;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,13 +68,6 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 
 fn default_tty() -> bool {
     false
-}
-
-fn effective_max_output_tokens(
-    max_output_tokens: Option<usize>,
-    truncation_policy: TruncationPolicy,
-) -> usize {
-    resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
 }
 
 #[derive(Debug)]

@@ -77,33 +77,43 @@ if (!platformPackage) {
 
 const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
 const localVendorRoot = path.join(__dirname, "..", "vendor");
-const localBinaryPath = path.join(
-  localVendorRoot,
-  targetTriple,
-  "codex",
-  codexBinaryName,
-);
+const packageBinaryPath = (vendorRoot) =>
+  path.join(vendorRoot, targetTriple, "bin", codexBinaryName);
+const legacyBinaryPath = (vendorRoot) =>
+  path.join(vendorRoot, targetTriple, "codex", codexBinaryName);
 
-let vendorRoot;
-try {
-  const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
-  vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
-} catch {
-  if (existsSync(localBinaryPath)) {
-    vendorRoot = localVendorRoot;
-  } else {
-    const packageManager = detectPackageManager();
-    const updateCommand =
-      packageManager === "bun"
-        ? "bun install -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
-    throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
-    );
+function resolveNativePackage(vendorRoot) {
+  const packageRoot = path.join(vendorRoot, targetTriple);
+  const binaryPath = packageBinaryPath(vendorRoot);
+  if (existsSync(binaryPath)) {
+    return {
+      binaryPath,
+      pathDir: path.join(packageRoot, "codex-path"),
+    };
   }
+
+  const legacyPath = legacyBinaryPath(vendorRoot);
+  if (existsSync(legacyPath)) {
+    return {
+      binaryPath: legacyPath,
+      pathDir: path.join(packageRoot, "path"),
+    };
+  }
+
+  return null;
 }
 
-if (!vendorRoot) {
+let nativePackage;
+try {
+  const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
+  nativePackage = resolveNativePackage(
+    path.join(path.dirname(packageJsonPath), "vendor"),
+  );
+} catch {
+  nativePackage = resolveNativePackage(localVendorRoot);
+}
+
+if (!nativePackage) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
@@ -114,8 +124,7 @@ if (!vendorRoot) {
   );
 }
 
-const archRoot = path.join(vendorRoot, targetTriple);
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+const { binaryPath, pathDir } = nativePackage;
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -159,7 +168,6 @@ function detectPackageManager() {
 }
 
 const additionalDirs = [];
-const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
   additionalDirs.push(pathDir);
 }

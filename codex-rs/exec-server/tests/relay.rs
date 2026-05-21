@@ -20,7 +20,7 @@ use codex_app_server_protocol::RequestId;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
-use codex_exec_server::RemoteExecutorConfig;
+use codex_exec_server::RemoteEnvironmentConfig;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -45,7 +45,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const EXECUTOR_ID: &str = "exec-mux-test";
+const ENVIRONMENT_ID: &str = "env-mux-test";
 const REGISTRY_TOKEN: &str = "registry-token";
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -67,15 +67,17 @@ fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Result<()> {
+async fn multiplexed_remote_environment_routes_independent_virtual_streams() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let rendezvous_url = format!("ws://{}", listener.local_addr()?);
     let registry = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path(format!("/cloud/executor/{EXECUTOR_ID}/register")))
+        .and(path(format!(
+            "/cloud/environment/{ENVIRONMENT_ID}/register"
+        )))
         .and(header("authorization", format!("Bearer {REGISTRY_TOKEN}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "executor_id": EXECUTOR_ID,
+            "environment_id": ENVIRONMENT_ID,
             "url": rendezvous_url,
         })))
         .mount(&registry)
@@ -83,22 +85,22 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
-    let config = RemoteExecutorConfig::new(
+    let config = RemoteEnvironmentConfig::new(
         registry.uri(),
-        EXECUTOR_ID.to_string(),
+        ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
     )?;
-    let remote_executor = tokio::spawn(codex_exec_server::run_remote_executor(
+    let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
         runtime_paths,
     ));
 
     let (socket, _peer_addr) = timeout(TEST_TIMEOUT, listener.accept())
         .await
-        .context("remote executor should connect to fake rendezvous")??;
+        .context("remote environment should connect to fake rendezvous")??;
     let mut websocket = timeout(TEST_TIMEOUT, accept_async(socket))
         .await
-        .context("fake rendezvous should accept executor websocket")??;
+        .context("fake rendezvous should accept environment websocket")??;
 
     let stream_a = "stream-a";
     let stream_b = "stream-b";
@@ -192,8 +194,8 @@ async fn multiplexed_remote_executor_routes_independent_virtual_streams() -> Res
     )?;
 
     websocket.close(None).await?;
-    remote_executor.abort();
-    let _ = remote_executor.await;
+    remote_environment.abort();
+    let _ = remote_environment.await;
     Ok(())
 }
 
@@ -285,7 +287,7 @@ where
         let frame = timeout(TEST_TIMEOUT, websocket.next())
             .await
             .context("timed out waiting for relay frame")?
-            .ok_or_else(|| anyhow!("executor websocket closed"))??;
+            .ok_or_else(|| anyhow!("environment websocket closed"))??;
         match frame {
             Message::Binary(bytes) => {
                 let frame = RelayMessageFrame::decode(bytes.as_ref())?;
@@ -297,8 +299,8 @@ where
                 return Ok((stream_id, message));
             }
             Message::Ping(_) | Message::Pong(_) => {}
-            Message::Close(_) => bail!("executor websocket closed"),
-            Message::Text(_) => bail!("executor sent text frame on relay websocket"),
+            Message::Close(_) => bail!("environment websocket closed"),
+            Message::Text(_) => bail!("environment sent text frame on relay websocket"),
             Message::Frame(_) => {}
         }
     }

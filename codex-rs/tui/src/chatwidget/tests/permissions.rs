@@ -166,7 +166,9 @@ async fn full_access_confirmation_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset, /*return_to_permissions*/ false);
+    chat.open_full_access_confirmation(
+        preset, /*return_to_permissions*/ false, /*profile_selection*/ None,
+    );
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("full_access_confirmation_popup", popup);
@@ -181,7 +183,7 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
         .into_iter()
         .find(|preset| preset.id == "auto")
         .expect("auto preset");
-    chat.open_windows_sandbox_enable_prompt(preset);
+    chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
@@ -584,6 +586,8 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -632,6 +636,8 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -739,6 +745,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permission_profile: Some(PermissionProfile::workspace_write()),
             active_permission_profile: Some(ActivePermissionProfile::new(
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
@@ -794,8 +801,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                profile_selection,
             } => {
-                open_confirmation_event = Some((preset, return_to_permissions));
+                open_confirmation_event = Some((preset, return_to_permissions, profile_selection));
             }
             _ => {}
         }
@@ -806,9 +814,9 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             "did not expect history cell before confirming full access"
         );
     }
-    let (preset, return_to_permissions) =
+    let (preset, return_to_permissions, profile_selection) =
         open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset, return_to_permissions);
+    chat.open_full_access_confirmation(preset, return_to_permissions, profile_selection);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
