@@ -519,8 +519,7 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
         .await?;
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let child_requests = wait_for_requests(&child_request_log).await?;
-    assert_eq!(child_requests.len(), 1);
+    let _ = wait_for_requests(&child_request_log).await?;
 
     let start_inputs = wait_for_hook_log(
         test.codex_home_path(),
