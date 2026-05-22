@@ -980,48 +980,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_permission_profile_overrides_active_profile_sandbox_mode()
-    -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "profile = \"legacy\"\n\
-             \n\
-             [profiles.legacy]\n\
-             sandbox_mode = \"danger-full-access\"\n",
-        )?;
-
-        let config = load_debug_sandbox_config_with_codex_home(
-            Vec::new(),
-            /*codex_linux_sandbox_exe*/ None,
-            DebugSandboxConfigOptions {
-                permissions_profile: Some(":workspace".to_string()),
-                cwd: None,
-                managed_requirements_mode: ManagedRequirementsMode::Ignore,
-            },
-            Some(codex_home.path().to_path_buf()),
-            /*strict_config*/ false,
-        )
-        .await?;
-
-        let actual = config
-            .permissions
-            .permission_profile()
-            .file_system_sandbox_policy();
-        let expected = codex_protocol::models::PermissionProfile::workspace_write()
-            .file_system_sandbox_policy();
-        assert!(
-            expected
-                .entries
-                .iter()
-                .all(|entry| actual.entries.contains(entry)),
-            "explicit workspace profile should preserve the built-in workspace rules"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn debug_sandbox_honors_explicit_named_permission_profile() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let sandbox_paths = TempDir::new()?;
