@@ -994,11 +994,7 @@ pub async fn run_main(
     .await;
 
     let model_provider_override = if cli.oss {
-        let resolved = resolve_oss_provider(
-            cli.oss_provider.as_deref(),
-            &config_toml,
-            /*config_profile*/ None,
-        );
+        let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml);
 
         if let Some(provider) = resolved {
             Some(provider)

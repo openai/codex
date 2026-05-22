@@ -29,10 +29,6 @@ pub struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
-    /// Configuration profile from config.toml to specify default options.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
-
     /// Working directory for the session. If relative, it is resolved against
     /// the server process's current working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,7 +156,6 @@ impl CodexToolCallParam {
         let Self {
             prompt,
             model,
-            profile,
             cwd,
             approval_policy,
             sandbox,
@@ -173,7 +168,6 @@ impl CodexToolCallParam {
         // Build the `ConfigOverrides` recognized by codex-core.
         let overrides = ConfigOverrides {
             model,
-            config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_mode: sandbox.map(Into::into),
@@ -343,10 +337,6 @@ mod tests {
               },
               "model": {
                 "description": "Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').",
-                "type": "string"
-              },
-              "profile": {
-                "description": "Configuration profile from config.toml to specify default options.",
                 "type": "string"
               },
               "prompt": {

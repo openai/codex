@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::config::edit::ConfigEditsBuilder;
 use codex_config::config_toml::ConfigToml;
-use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
@@ -56,45 +55,18 @@ pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandbo
     WindowsSandboxLevel::from_features(features)
 }
 
-pub fn resolve_windows_sandbox_mode(
-    cfg: &ConfigToml,
-    profile: &ConfigProfile,
-) -> Option<WindowsSandboxModeToml> {
-    if let Some(mode) = legacy_windows_sandbox_mode(profile.features.as_ref()) {
-        return Some(mode);
-    }
-    if legacy_windows_sandbox_keys_present(profile.features.as_ref()) {
-        return None;
-    }
-
-    profile
-        .windows
+pub fn resolve_windows_sandbox_mode(cfg: &ConfigToml) -> Option<WindowsSandboxModeToml> {
+    cfg.windows
         .as_ref()
         .and_then(|windows| windows.sandbox)
-        .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
         .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
 }
 
-pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &ConfigProfile) -> bool {
-    profile
-        .windows
+pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml) -> bool {
+    cfg.windows
         .as_ref()
         .and_then(|windows| windows.sandbox_private_desktop)
-        .or_else(|| {
-            cfg.windows
-                .as_ref()
-                .and_then(|windows| windows.sandbox_private_desktop)
-        })
         .unwrap_or(true)
-}
-
-fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
-    let Some(entries) = features.map(FeaturesToml::entries) else {
-        return false;
-    };
-    entries.contains_key(Feature::WindowsSandboxElevated.key())
-        || entries.contains_key(Feature::WindowsSandbox.key())
-        || entries.contains_key("enable_experimental_windows_sandbox")
 }
 
 pub fn legacy_windows_sandbox_mode(
