@@ -910,7 +910,8 @@ impl App {
             return;
         }
 
-        self.runtime_permission_profile_override = Some(permission_profile);
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
         self.sync_active_thread_permission_settings_to_cached_session()
             .await;
 
