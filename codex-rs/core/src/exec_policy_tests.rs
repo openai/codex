@@ -1052,8 +1052,8 @@ prefix_rule(pattern=["git"], decision="prompt")
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 disallowed_git_path,
                 "status".to_string(),
