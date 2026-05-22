@@ -241,14 +241,16 @@ fn restore_common(
     raw_mode_restore: RawModeRestore,
     keyboard_restore: KeyboardRestore,
 ) -> Result<()> {
-    ensure_virtual_terminal_processing()?;
+    let mut first_error = ensure_virtual_terminal_processing().err();
 
     match keyboard_restore {
         KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
     }
 
-    let mut first_error = execute!(stdout(), DisableBracketedPaste).err();
+    if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
     let _ = execute!(stdout(), DisableFocusChange);
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
