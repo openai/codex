@@ -17,44 +17,14 @@ import type { ThreadSource } from "./ThreadSource";
  *
  * Prefer using thread_id whenever possible.
  */
-export type ThreadForkParams = { threadId: string,
-/**
- * [UNSTABLE] Specify the rollout path to fork from.
- * If specified, the thread_id param will be ignored.
- */
-path?: string | null,
-/**
+export type ThreadForkParams = {threadId: string, /**
  * Configuration overrides for the forked thread, if any.
  */
-model?: string | null, modelProvider?: string | null, serviceTier?: string | null | null, cwd?: string | null,
-/**
- * Replace the thread's runtime workspace roots. Relative paths are
- * resolved against the effective cwd for the thread.
- */
-runtimeWorkspaceRoots?: Array<string> | null, approvalPolicy?: AskForApproval | null,
-/**
+model?: string | null, modelProvider?: string | null, serviceTier?: string | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null,
-/**
- * Named profile id for the forked thread. Cannot be combined with
- * `sandbox`.
- */
-permissions?: string | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean,
-/**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
  * Optional client-supplied analytics source classification for this forked thread.
  */
-threadSource?: ThreadSource | null,
-/**
- * When true, return only thread metadata and live fork state without
- * populating `thread.turns`. This is useful when the client plans to call
- * `thread/turns/list` immediately after forking.
- */
-excludeTurns?: boolean,
-/**
- * Deprecated and ignored by app-server. Kept only so older clients can
- * continue sending the field while rollout persistence always uses the
- * limited history policy.
- */
-persistExtendedHistory?: boolean, };
+threadSource?: ThreadSource | null};

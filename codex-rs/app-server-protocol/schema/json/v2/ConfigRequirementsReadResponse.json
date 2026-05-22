@@ -94,15 +94,6 @@
             "null"
           ]
         },
-        "allowedApprovalsReviewers": {
-          "items": {
-            "$ref": "#/definitions/ApprovalsReviewer"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "allowedPermissions": {
           "items": {
             "type": "string"
@@ -157,26 +148,6 @@
           "type": [
             "object",
             "null"
-          ]
-        },
-        "hooks": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ManagedHooksRequirements"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NetworkRequirements"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       },
