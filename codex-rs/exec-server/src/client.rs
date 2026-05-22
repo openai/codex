@@ -1077,6 +1077,10 @@ mod tests {
                 id: request.id,
                 result: serde_json::to_value(InitializeResponse {
                     session_id: session_id.to_string(),
+                    codex_home: AbsolutePathBuf::try_from(
+                        std::env::current_dir().expect("current dir"),
+                    )
+                    .expect("absolute current dir"),
                 })
                 .expect("initialize response should serialize"),
             }),
