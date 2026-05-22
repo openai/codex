@@ -758,24 +758,34 @@ async fn steered_user_input_resets_auto_compact_limit() {
     ];
 
     let (server, _completions) = start_streaming_sse_server(vec![
-        gated_commentary_sampling_chunks(1, "first answer", gate_first_completed_rx, 500),
-        compact_summary_chunks(1, 500),
         gated_commentary_sampling_chunks(
-            2,
+            /*idx*/ 1,
+            "first answer",
+            gate_first_completed_rx,
+            /*total_tokens*/ 500,
+        ),
+        compact_summary_chunks(/*idx*/ 1, /*total_tokens*/ 500),
+        gated_commentary_sampling_chunks(
+            /*idx*/ 2,
             "processed second prompt",
             gate_second_completed_rx,
-            500,
+            /*total_tokens*/ 500,
         ),
-        compact_summary_chunks(2, 500),
-        gated_commentary_sampling_chunks(3, "processed third prompt", gate_third_completed_rx, 500),
-        compact_summary_chunks(3, 500),
+        compact_summary_chunks(/*idx*/ 2, /*total_tokens*/ 500),
         gated_commentary_sampling_chunks(
-            4,
+            /*idx*/ 3,
+            "processed third prompt",
+            gate_third_completed_rx,
+            /*total_tokens*/ 500,
+        ),
+        compact_summary_chunks(/*idx*/ 3, /*total_tokens*/ 500),
+        gated_commentary_sampling_chunks(
+            /*idx*/ 4,
             "processed fourth prompt",
             gate_fourth_completed_rx,
-            500,
+            /*total_tokens*/ 500,
         ),
-        compact_summary_chunks(4, 500),
+        compact_summary_chunks(/*idx*/ 4, /*total_tokens*/ 500),
         final_chunks,
     ])
     .await;
@@ -849,7 +859,7 @@ async fn steered_user_input_is_rejected_when_auto_compact_guard_fires() {
     }
     responses.extend([
         fourth_sampling_chunks,
-        compact_summary_chunks(4, token_count_used_after_compaction),
+        compact_summary_chunks(/*idx*/ 4, token_count_used_after_compaction),
     ]);
     let (server, _completions) = start_streaming_sse_server(responses).await;
 

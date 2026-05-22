@@ -13,7 +13,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::user_input::UserInput;
 use tracing::Instrument;
 use tracing::trace_span;
 
@@ -46,7 +45,7 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
@@ -56,6 +55,7 @@ impl SessionTask for RegularTask {
         // not wait on startup prewarm resolution.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: ctx.sub_id.clone(),
+            trace_id: ctx.trace_id.clone(),
             started_at: ctx.turn_timing_state.started_at_unix_secs().await,
             model_context_window: ctx.model_context_window(),
             collaboration_mode_kind: ctx.collaboration_mode.mode,

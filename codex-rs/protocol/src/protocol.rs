@@ -1850,6 +1850,10 @@ pub struct TurnCompleteEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    // Persist for rollout consumers that correlate turns with telemetry traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trace_id: Option<String>,
     /// Unix timestamp (in seconds) when the turn started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
