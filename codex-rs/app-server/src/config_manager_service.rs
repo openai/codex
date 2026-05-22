@@ -135,7 +135,8 @@ impl ConfigManager {
 
         reject_legacy_profile_read(&layers)?;
 
-        let effective = layers.effective_config();
+        let mut effective = layers.effective_config();
+        strip_legacy_profile_keys(&mut effective);
         let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
@@ -147,7 +148,7 @@ impl ConfigManager {
 
         Ok(ConfigReadResponse {
             config,
-            origins: layers.origins(),
+            origins: origins_without_legacy_profiles(&layers),
             layers: params.include_layers.then(|| {
                 layers
                     .get_layers(
@@ -155,7 +156,11 @@ impl ConfigManager {
                         /*include_disabled*/ true,
                     )
                     .iter()
-                    .map(|layer| layer.as_layer())
+                    .map(|layer| {
+                        let mut layer = layer.as_layer();
+                        strip_json_legacy_profile_keys(&mut layer.config);
+                        layer
+                    })
                     .collect()
             }),
         })
@@ -396,13 +401,28 @@ async fn create_empty_user_layer(
 }
 
 fn reject_legacy_profile_read(layers: &ConfigLayerStack) -> Result<(), ConfigManagerError> {
+    let profile_v2_active = layers
+        .get_user_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .iter()
+        .any(|layer| {
+            matches!(
+                &layer.name,
+                ConfigLayerSource::User {
+                    profile: Some(_),
+                    ..
+                }
+            )
+        });
     let contains_legacy_profiles = layers
         .get_layers(
             ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .iter()
-        .any(|layer| legacy_profile_keys_present(&layer.config));
+        .any(|layer| legacy_profile_keys_rejected(layer, profile_v2_active));
     if !contains_legacy_profiles {
         return Ok(());
     }
@@ -412,10 +432,44 @@ fn reject_legacy_profile_read(layers: &ConfigLayerStack) -> Result<(), ConfigMan
     ))
 }
 
-fn legacy_profile_keys_present(config: &TomlValue) -> bool {
-    config
-        .as_table()
-        .is_some_and(|table| table.contains_key("profile") || table.contains_key("profiles"))
+fn legacy_profile_keys_rejected(layer: &ConfigLayerEntry, profile_v2_active: bool) -> bool {
+    let Some(config) = layer.config.as_table() else {
+        return false;
+    };
+    if config.contains_key("profile") {
+        return true;
+    }
+    if !config.contains_key("profiles") {
+        return false;
+    }
+
+    !profile_v2_active || !matches!(&layer.name, ConfigLayerSource::User { profile: None, .. })
+}
+
+fn strip_legacy_profile_keys(config: &mut TomlValue) {
+    if let Some(config) = config.as_table_mut() {
+        config.remove("profile");
+        config.remove("profiles");
+    }
+}
+
+fn strip_json_legacy_profile_keys(config: &mut JsonValue) {
+    if let Some(config) = config.as_object_mut() {
+        config.remove("profile");
+        config.remove("profiles");
+    }
+}
+
+fn origins_without_legacy_profiles(
+    layers: &ConfigLayerStack,
+) -> std::collections::HashMap<String, ConfigLayerMetadata> {
+    let mut origins = layers.origins();
+    origins.retain(|path, _| !legacy_profile_origin_path(path));
+    origins
+}
+
+fn legacy_profile_origin_path(path: &str) -> bool {
+    path == "profile" || path == "profiles" || path.starts_with("profiles.")
 }
 
 fn reject_legacy_profile_write(segments: &[String]) -> Result<(), ConfigManagerError> {
