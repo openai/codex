@@ -767,6 +767,7 @@ fn build_payload_roots(
     let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let write_roots = filter_windows_acl_incompatible_roots(write_roots);
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
         // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
@@ -787,6 +788,7 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
+    read_roots = filter_windows_acl_incompatible_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -814,6 +816,7 @@ fn build_payload_deny_write_paths(
         })
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    deny_write_paths = filter_windows_acl_incompatible_roots(deny_write_paths);
     deny_write_paths
 }
 
@@ -940,6 +943,19 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
     roots
 }
 
+fn filter_windows_acl_incompatible_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots.retain(|root| !is_windows_acl_incompatible_root(root));
+    roots
+}
+
+fn is_windows_acl_incompatible_root(root: &Path) -> bool {
+    let key = canonical_path_key(root);
+    key.starts_with("//wsl.localhost/")
+        || key.starts_with("//wsl$/")
+        || key.starts_with("//?/unc/wsl.localhost/")
+        || key.starts_with("//?/unc/wsl$/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
@@ -957,6 +973,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1435,6 +1452,33 @@ mod tests {
             .into_iter()
             .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn wsl_unc_paths_are_treated_as_acl_incompatible() {
+        assert!(super::is_windows_acl_incompatible_root(Path::new(
+            r"\\wsl.localhost\Ubuntu\home\dev\repo"
+        )));
+        assert!(super::is_windows_acl_incompatible_root(Path::new(
+            r"\\wsl$\Ubuntu\home\dev\repo"
+        )));
+        assert!(!super::is_windows_acl_incompatible_root(Path::new(
+            r"C:\Users\dev\repo"
+        )));
+    }
+
+    #[test]
+    fn acl_incompatible_roots_are_filtered_out() {
+        let roots = vec![
+            PathBuf::from(r"\\wsl.localhost\Ubuntu\home\dev\repo"),
+            PathBuf::from(r"\\wsl$\Ubuntu\home\dev\repo"),
+            PathBuf::from(r"C:\Users\dev\repo"),
+        ];
+
+        assert_eq!(
+            vec![PathBuf::from(r"C:\Users\dev\repo")],
+            super::filter_windows_acl_incompatible_roots(roots)
         );
     }
 
