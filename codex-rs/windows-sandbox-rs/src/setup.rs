@@ -207,6 +207,18 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let cleared_report = match clear_setup_error_report(request.codex_home) {
+        Ok(()) => true,
+        Err(err) => {
+            log_note(
+                &format!(
+                    "setup orchestrator: failed to clear setup_error.json before refresh: {err}"
+                ),
+                Some(&sandbox_dir(request.codex_home)),
+            );
+            false
+        }
+    };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -235,7 +247,17 @@ fn run_setup_refresh_inner(
             &format!("setup refresh: exited with status {status:?}"),
             Some(&sandbox_dir(request.codex_home)),
         );
-        return Err(anyhow!("setup refresh failed with status {status}"));
+        return Err(report_helper_failure(
+            request.codex_home,
+            cleared_report,
+            status.code(),
+        ));
+    }
+    if let Err(err) = clear_setup_error_report(request.codex_home) {
+        log_note(
+            &format!("setup orchestrator: failed to clear setup_error.json after refresh: {err}"),
+            Some(&sandbox_dir(request.codex_home)),
+        );
     }
     Ok(())
 }
@@ -1022,6 +1044,10 @@ mod tests {
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+    use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::SetupErrorReport;
+    use crate::setup_error::SetupFailure;
+    use crate::setup_error::write_setup_error_report;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -1660,6 +1686,28 @@ mod tests {
         assert_eq!(
             super::build_payload_deny_read_paths(Some(vec![existing.clone(), missing.clone()])),
             vec![existing, missing]
+        );
+    }
+
+    #[test]
+    fn report_helper_failure_prefers_structured_refresh_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let report = SetupErrorReport {
+            code: SetupErrorCode::HelperUnknownError,
+            message: "setup refresh had errors: write ACE grant failed on \\\\?\\UNC\\wsl.localhost\\Ubuntu\\repo".to_string(),
+        };
+        write_setup_error_report(&codex_home, &report).expect("write setup error report");
+
+        let err = super::report_helper_failure(&codex_home, true, Some(1));
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("structured setup failure");
+        assert_eq!(failure.code, SetupErrorCode::HelperUnknownError);
+        assert!(
+            failure
+                .message
+                .contains("\\\\?\\UNC\\wsl.localhost\\Ubuntu\\repo")
         );
     }
 }
