@@ -55,12 +55,15 @@ struct TurnTimingStateInner {
     first_token_at: Option<Instant>,
     first_message_at: Option<Instant>,
     first_request_started_at: Option<Instant>,
+    sampling_started_at: Option<Instant>,
     sampling_duration: Duration,
+    blocking_tool_critical_path_started_at: Option<Instant>,
     blocking_tool_critical_path_duration: Duration,
 }
 
 impl TurnTimingState {
-    pub(crate) async fn mark_turn_started(&self, started_at: Instant) -> i64 {
+    pub(crate) async fn mark_turn_started(&self) -> i64 {
+        let started_at = Instant::now();
         let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
         state.started_at = Some(started_at);
@@ -68,7 +71,9 @@ impl TurnTimingState {
         state.first_token_at = None;
         state.first_message_at = None;
         state.first_request_started_at = None;
+        state.sampling_started_at = None;
         state.sampling_duration = Duration::default();
+        state.blocking_tool_critical_path_started_at = None;
         state.blocking_tool_critical_path_duration = Duration::default();
         started_at_unix_ms
     }
@@ -119,16 +124,34 @@ impl TurnTimingState {
         }
     }
 
-    pub(crate) async fn record_sampling_duration(&self, duration: Duration) {
+    pub(crate) async fn mark_sampling_started(&self) {
         let mut state = self.state.lock().await;
-        state.sampling_duration = state.sampling_duration.saturating_add(duration);
+        if state.sampling_started_at.is_none() {
+            state.sampling_started_at = Some(Instant::now());
+        }
     }
 
-    pub(crate) async fn record_blocking_tool_critical_path_duration(&self, duration: Duration) {
+    pub(crate) async fn mark_sampling_completed(&self) {
         let mut state = self.state.lock().await;
-        state.blocking_tool_critical_path_duration = state
-            .blocking_tool_critical_path_duration
-            .saturating_add(duration);
+        if let Some(started_at) = state.sampling_started_at.take() {
+            state.sampling_duration = state.sampling_duration.saturating_add(started_at.elapsed());
+        }
+    }
+
+    pub(crate) async fn mark_blocking_tool_critical_path_started(&self) {
+        let mut state = self.state.lock().await;
+        if state.blocking_tool_critical_path_started_at.is_none() {
+            state.blocking_tool_critical_path_started_at = Some(Instant::now());
+        }
+    }
+
+    pub(crate) async fn mark_blocking_tool_critical_path_completed(&self) {
+        let mut state = self.state.lock().await;
+        if let Some(started_at) = state.blocking_tool_critical_path_started_at.take() {
+            state.blocking_tool_critical_path_duration = state
+                .blocking_tool_critical_path_duration
+                .saturating_add(started_at.elapsed());
+        }
     }
 
     pub(crate) async fn timing_breakdown(&self) -> TurnTimingBreakdown {

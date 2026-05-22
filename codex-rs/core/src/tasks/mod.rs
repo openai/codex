@@ -6,7 +6,6 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use codex_extension_api::ExtensionData;
 use futures::future::BoxFuture;
@@ -319,11 +318,7 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
-        let started_at = Instant::now();
-        let turn_started_at_unix_ms = turn_context
-            .turn_timing_state
-            .mark_turn_started(started_at)
-            .await;
+        let turn_started_at_unix_ms = turn_context.turn_timing_state.mark_turn_started().await;
         turn_context
             .turn_metadata_state
             .set_turn_started_at_unix_ms(turn_started_at_unix_ms);

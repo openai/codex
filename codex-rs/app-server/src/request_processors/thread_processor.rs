@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_analytics::StartedTimer;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -989,7 +990,7 @@ impl ThreadRequestProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
-        let thread_start_started_at = std::time::Instant::now();
+        let thread_start_timer = StartedTimer::start();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1208,14 +1209,7 @@ impl ThreadRequestProcessor {
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
-        analytics_events_client.track_thread_start_timing(
-            thread.id.clone(),
-            thread_start_started_at
-                .elapsed()
-                .as_millis()
-                .try_into()
-                .unwrap_or(u64::MAX),
-        );
+        analytics_events_client.track_thread_start_timing(thread.id.clone(), thread_start_timer);
         let notif = thread_started_notification(thread);
         listener_task_context
             .outgoing
@@ -1236,7 +1230,7 @@ impl ThreadRequestProcessor {
             .await;
         session_telemetry.record_startup_phase(
             "thread_start_total",
-            thread_start_started_at.elapsed(),
+            thread_start_timer.elapsed(),
             Some("ready"),
         );
         Ok(())

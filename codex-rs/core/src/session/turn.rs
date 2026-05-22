@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -1738,7 +1737,7 @@ async fn try_run_sampling_request(
         .turn_timing_state
         .mark_model_request_started()
         .await;
-    let sampling_started_at = Instant::now();
+    turn_context.turn_timing_state.mark_sampling_started().await;
     let stream_result = client_session
         .stream(
             prompt,
@@ -1758,14 +1757,14 @@ async fn try_run_sampling_request(
         Ok(Err(err)) => {
             turn_context
                 .turn_timing_state
-                .record_sampling_duration(sampling_started_at.elapsed())
+                .mark_sampling_completed()
                 .await;
             return Err(err);
         }
         Err(codex_async_utils::CancelErr::Cancelled) => {
             turn_context
                 .turn_timing_state
-                .record_sampling_duration(sampling_started_at.elapsed())
+                .mark_sampling_completed()
                 .await;
             return Err(CodexErr::TurnAborted);
         }
@@ -2176,7 +2175,7 @@ async fn try_run_sampling_request(
     .await;
     turn_context
         .turn_timing_state
-        .record_sampling_duration(sampling_started_at.elapsed())
+        .mark_sampling_completed()
         .await;
 
     if sess
@@ -2188,12 +2187,17 @@ async fn try_run_sampling_request(
         client_session.send_response_processed(response_id).await;
     }
 
-    let blocking_tool_started_at = Instant::now();
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
     turn_context
         .turn_timing_state
-        .record_blocking_tool_critical_path_duration(blocking_tool_started_at.elapsed())
+        .mark_blocking_tool_critical_path_started()
         .await;
+    let drain_in_flight_result =
+        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await;
+    turn_context
+        .turn_timing_state
+        .mark_blocking_tool_critical_path_completed()
+        .await;
+    drain_in_flight_result?;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

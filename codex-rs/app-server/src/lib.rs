@@ -17,7 +17,6 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
@@ -42,7 +41,7 @@ use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
-use codex_analytics::now_unix_seconds;
+use codex_analytics::StartedTimer;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -430,7 +429,7 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
-    let app_server_start_started_at = Instant::now();
+    let app_server_start_timer = StartedTimer::start();
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -1070,15 +1069,7 @@ pub async fn run_main_with_transport_options(
             info!("processor task exited (channel closed)");
         }
     });
-    analytics_events_client.track_app_server_started(
-        analytics_transport,
-        app_server_start_started_at
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX),
-        now_unix_seconds(),
-    );
+    analytics_events_client.track_app_server_started(analytics_transport, app_server_start_timer);
 
     drop(transport_event_tx);
 
