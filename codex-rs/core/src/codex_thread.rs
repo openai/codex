@@ -5,6 +5,7 @@ use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use crate::turn_metadata::McpTurnMetadataContext;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -500,6 +501,18 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    pub async fn current_mcp_request_turn_metadata(&self) -> Option<serde_json::Value> {
+        let active = self.codex.session.active_turn.lock().await;
+        let (_, active_task) = active.as_ref()?.tasks.first()?;
+        let turn_context = active_task.turn_context.as_ref();
+        turn_context
+            .turn_metadata_state
+            .current_meta_value_for_mcp_request(McpTurnMetadataContext {
+                model: turn_context.model_info.slug.as_str(),
+                reasoning_effort: turn_context.effective_reasoning_effort(),
+            })
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

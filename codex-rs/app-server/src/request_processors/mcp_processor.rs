@@ -402,6 +402,10 @@ impl McpRequestProcessor {
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
+        let meta = with_mcp_tool_call_turn_metadata_meta(
+            meta,
+            thread.current_mcp_request_turn_metadata().await,
+        );
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
@@ -413,6 +417,34 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
+    }
+}
+
+fn with_mcp_tool_call_turn_metadata_meta(
+    meta: Option<serde_json::Value>,
+    turn_metadata: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let Some(turn_metadata) = turn_metadata else {
+        return meta;
+    };
+
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                codex_core::X_CODEX_TURN_METADATA_HEADER.to_string(),
+                turn_metadata,
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                codex_core::X_CODEX_TURN_METADATA_HEADER.to_string(),
+                turn_metadata,
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
     }
 }
 
