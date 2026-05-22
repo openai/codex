@@ -1,6 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigBundleResponse;
-use crate::types::ConfigFileResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
@@ -390,23 +389,6 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
-    }
-
-    /// Fetch the managed requirements file from codex-backend.
-    ///
-    /// `GET /api/codex/config/requirements` (Codex API style) or
-    /// `GET /wham/config/requirements` (ChatGPT backend-api style).
-    pub async fn get_config_requirements_file(
-        &self,
-    ) -> std::result::Result<ConfigFileResponse, RequestError> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
-        };
-        let req = self.http.get(&url).headers(self.headers());
-        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
-        self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
-            .map_err(RequestError::from)
     }
 
     /// Fetch the selected cloud-managed config bundle from codex-backend.

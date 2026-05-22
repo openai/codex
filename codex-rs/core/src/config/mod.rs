@@ -7,7 +7,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -1066,7 +1066,7 @@ pub struct ConfigBuilder {
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     strict_config: bool,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
 }
@@ -1097,8 +1097,8 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
-        self.cloud_requirements = cloud_requirements;
+    pub fn cloud_config_bundle(mut self, cloud_config_bundle: CloudConfigBundleLoader) -> Self {
+        self.cloud_config_bundle = cloud_config_bundle;
         self
     }
 
@@ -1127,7 +1127,7 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             strict_config,
-            cloud_requirements,
+            cloud_config_bundle,
             thread_config_loader,
             fallback_cwd,
         } = self;
@@ -1153,7 +1153,7 @@ impl ConfigBuilder {
                 loader_overrides,
                 strict_config,
             },
-            cloud_requirements,
+            cloud_config_bundle,
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
@@ -1543,7 +1543,7 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
         cwd.cloned(),
         &cli_overrides,
         options,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;
@@ -1754,7 +1754,7 @@ pub async fn load_global_mcp_servers(
         cwd,
         &cli_overrides,
         LoaderOverrides::default(),
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;

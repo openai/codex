@@ -107,7 +107,7 @@ model = "gpt-work"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await
@@ -166,7 +166,7 @@ model = "gpt-main"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await
@@ -223,7 +223,7 @@ model = "gpt-dev"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await

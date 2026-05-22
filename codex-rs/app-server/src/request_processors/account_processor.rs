@@ -586,7 +586,7 @@ impl AccountRequestProcessor {
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
-        self.config_manager.replace_cloud_requirements_loader(
+        self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
         );
@@ -645,7 +645,7 @@ impl AccountRequestProcessor {
             let auth_manager = thread_manager.auth_manager();
             auth_manager.reload().await;
             config_manager
-                .replace_cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url);
+                .replace_cloud_config_bundle_loader(auth_manager.clone(), chatgpt_base_url);
             config_manager
                 .sync_default_client_residency_requirement()
                 .await;

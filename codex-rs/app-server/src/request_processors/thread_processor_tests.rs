@@ -54,7 +54,7 @@ mod thread_processor_behavior_tests {
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
-    use codex_config::CloudRequirementsLoader;
+    use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
@@ -505,9 +505,9 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::Auth,
+    fn config_load_error_marks_cloud_config_bundle_failures_for_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::Auth,
             Some(401),
             "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
         ));
@@ -517,7 +517,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "Auth",
                 "action": "relogin",
                 "statusCode": 401,
@@ -532,7 +532,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_leaves_non_cloud_requirements_failures_unmarked() {
+    fn config_load_error_leaves_non_cloud_config_bundle_failures_unmarked() {
         let err = std::io::Error::other("required MCP servers failed to initialize");
 
         let error = config_load_error(&err);
@@ -546,11 +546,11 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::RequestFailed,
+    fn config_load_error_marks_non_auth_cloud_config_bundle_failures_without_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "Failed to load cloud requirements (workspace-managed policies).",
+            "Failed to load cloud config bundle (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -558,9 +558,9 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "RequestFailed",
-                "detail": "Failed to load cloud requirements (workspace-managed policies).",
+                "detail": "Failed to load cloud config bundle (workspace-managed policies).",
             }))
         );
     }
@@ -592,7 +592,7 @@ mod thread_processor_behavior_tests {
             Vec::new(),
             LoaderOverrides::default(),
             /*strict_config*/ false,
-            CloudRequirementsLoader::default(),
+            CloudConfigBundleLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {

@@ -12,6 +12,7 @@ use crate::config_requirements::merge_app_requirements_descending;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
+use std::io;
 use thiserror::Error;
 
 mod hooks;
@@ -82,6 +83,12 @@ pub enum CloudRequirementsCompositionError {
         incoming_fragment: CloudRequirementsFragmentSource,
         message: String,
     },
+}
+
+impl From<CloudRequirementsCompositionError> for io::Error {
+    fn from(error: CloudRequirementsCompositionError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    }
 }
 
 pub fn compose_cloud_requirements(
