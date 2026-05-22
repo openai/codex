@@ -112,6 +112,7 @@ fn cache_miss_variants(image: Vec<u8>) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Encodes a synthetic UI screenshot fixture for prompt image benchmarks.
 fn screenshot_png(size: ImageSize) -> Vec<u8> {
     let image = RgbaImage::from_fn(size.width, size.height, |x, y| {
         let toolbar = y < 52;
@@ -146,6 +147,7 @@ fn screenshot_png(size: ImageSize) -> Vec<u8> {
     encode_fixture(DynamicImage::ImageRgba8(image), ImageFormat::Png)
 }
 
+/// Encodes a synthetic textured photo fixture for prompt image benchmarks.
 fn photo_jpeg(size: ImageSize) -> Vec<u8> {
     let image = RgbImage::from_fn(size.width, size.height, |x, y| {
         let x_gradient = x * 255 / size.width;
