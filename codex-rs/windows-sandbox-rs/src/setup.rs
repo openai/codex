@@ -220,9 +220,12 @@ fn run_setup_refresh_inner(
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let cwd = request.codex_home.to_path_buf();
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -367,6 +370,24 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn normalize_windows_path_for_checks(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_ascii_lowercase()
+}
+
+fn is_wsl_unc_path(path: &Path) -> bool {
+    let normalized = normalize_windows_path_for_checks(path);
+    normalized.starts_with(r"\\wsl.localhost\")
+        || normalized.starts_with(r"\\?\unc\wsl.localhost\")
+        || normalized.starts_with(r"\\wsl$\")
+        || normalized.starts_with(r"\\?\unc\wsl$\")
+}
+
+fn filter_unsupported_windows_acl_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots.into_iter()
+        .filter(|root| !is_wsl_unc_path(root))
+        .collect()
+}
+
 fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(user_profile) {
         Ok(entries) => entries,
@@ -496,7 +517,8 @@ pub(crate) fn effective_write_roots_for_permissions(
     let write_roots = filter_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
-    filter_sensitive_write_roots(write_roots, codex_home)
+    let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
+    filter_unsupported_windows_acl_roots(write_roots)
 }
 
 #[derive(Serialize)]
@@ -718,6 +740,7 @@ fn run_setup_exe(
     if !needs_elevation {
         let status = Command::new(&exe)
             .arg(&payload_b64)
+            .current_dir(codex_home)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -751,12 +774,14 @@ fn run_setup_exe(
     let params = quote_arg(&payload_b64);
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
+    let directory_w = crate::winutil::to_wide(codex_home);
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.lpVerb = verb_w.as_ptr();
     sei.lpFile = exe_w.as_ptr();
     sei.lpParameters = params_w.as_ptr();
+    sei.lpDirectory = directory_w.as_ptr();
     // Hide the window for the elevated helper.
     sei.nShow = 0; // SW_HIDE
     let ok = unsafe { ShellExecuteExW(&mut sei) };
@@ -876,6 +901,7 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
+    read_roots = filter_unsupported_windows_acl_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -896,7 +922,7 @@ fn build_payload_deny_write_paths(
         .map(|path| canonicalize_path(&path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
-    deny_write_paths
+    filter_unsupported_windows_acl_roots(deny_write_paths)
 }
 
 fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
@@ -1032,9 +1058,11 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::filter_unsupported_windows_acl_roots;
     use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
+    use super::is_wsl_unc_path;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -1083,6 +1111,26 @@ mod tests {
         assert_eq!(
             loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
             Some(1080)
+        );
+    }
+
+    #[test]
+    fn detects_wsl_unc_paths() {
+        assert!(is_wsl_unc_path(PathBuf::from(r"\\wsl.localhost\Ubuntu\home\dev\repo").as_path()));
+        assert!(is_wsl_unc_path(PathBuf::from(r"\\?\UNC\wsl$\Ubuntu\home\dev\repo").as_path()));
+        assert!(!is_wsl_unc_path(PathBuf::from(r"C:\Users\dev\repo").as_path()));
+    }
+
+    #[test]
+    fn filters_out_wsl_unc_acl_roots() {
+        let roots = vec![
+            PathBuf::from(r"\\wsl.localhost\Ubuntu\home\dev\repo"),
+            PathBuf::from(r"C:\Users\dev\repo"),
+        ];
+
+        assert_eq!(
+            filter_unsupported_windows_acl_roots(roots),
+            vec![PathBuf::from(r"C:\Users\dev\repo")]
         );
     }
 
