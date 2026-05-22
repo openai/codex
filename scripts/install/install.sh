@@ -3,6 +3,7 @@
 set -eu
 
 RELEASE="latest"
+NON_INTERACTIVE=false
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
@@ -57,12 +58,12 @@ parse_args() {
         RELEASE="$2"
         shift
         ;;
+      --non-interactive)
+        NON_INTERACTIVE=true
+        ;;
       --help | -h)
         cat <<EOF
-Usage: install.sh [--release VERSION]
-
-Environment:
-  CODEX_INSTALL_SCRIPT_NONINTERACTIVE=true  Skip prompts and use default answers.
+Usage: install.sh [--release VERSION] [--non-interactive]
 EOF
         exit 0
         ;;
@@ -547,7 +548,7 @@ classify_existing_codex() {
 prompt_yes_no() {
   prompt="$1"
 
-  if [ "${CODEX_INSTALL_SCRIPT_NONINTERACTIVE:-}" = "true" ]; then
+  if [ "$NON_INTERACTIVE" = true ]; then
     return 1
   fi
 
