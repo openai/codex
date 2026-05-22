@@ -238,6 +238,13 @@ impl ConfigManager {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if matches!(segments.as_slice(), [segment] if segment == "profile") && !value.is_null()
+            {
+                return Err(ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                ));
+            }
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)

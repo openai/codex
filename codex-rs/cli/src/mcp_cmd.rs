@@ -11,6 +11,8 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::McpManager;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::LoaderOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
@@ -157,11 +159,15 @@ pub struct LogoutArgs {
 }
 
 impl McpCli {
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, loader_overrides: LoaderOverrides) -> Result<()> {
         let McpCli {
             config_overrides,
             subcommand,
         } = self;
+
+        if loader_overrides.user_config_profile.is_some() {
+            validate_profile_v2_migration(&config_overrides, loader_overrides).await?;
+        }
 
         match subcommand {
             McpSubcommand::List(args) => {
@@ -237,6 +243,22 @@ async fn perform_oauth_login_retry_without_scopes(
         }
         Err(err) => Err(err),
     }
+}
+
+async fn validate_profile_v2_migration(
+    config_overrides: &CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    ConfigBuilder::default()
+        .cli_overrides(overrides)
+        .loader_overrides(loader_overrides)
+        .build()
+        .await
+        .context("failed to load configuration")?;
+    Ok(())
 }
 
 async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {

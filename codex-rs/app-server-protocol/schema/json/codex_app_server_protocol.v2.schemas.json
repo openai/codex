@@ -4060,7 +4060,6 @@
           ]
         },
         "includeLayers": {
-          "default": false,
           "type": "boolean"
         }
       },
@@ -4962,8 +4961,7 @@
         }
       },
       "required": [
-        "classification",
-        "includeLogs"
+        "classification"
       ],
       "title": "FeedbackUploadParams",
       "type": "object"
@@ -5850,7 +5848,6 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "refreshToken": {
-          "default": false,
           "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
           "type": "boolean"
         }
@@ -14789,7 +14786,6 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "includeTurns": {
-          "default": false,
           "description": "When true, include turns and their items from rollout history.",
           "type": "boolean"
         },

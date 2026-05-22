@@ -50,7 +50,6 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -91,6 +90,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
@@ -113,6 +113,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::SandboxMode as AppServerSandboxMode;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -127,12 +128,17 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+#[cfg(target_os = "windows")]
+use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
+use codex_features::FeaturesToml;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -480,7 +486,6 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
@@ -687,7 +692,6 @@ impl App {
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         loader_overrides: LoaderOverrides,
-        active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
@@ -965,7 +969,6 @@ See the Codex keymap documentation for supported actions and examples."
             workspace_command_runner: Some(workspace_command_runner),
             config,
             state_db,
-            active_profile,
             cli_kv_overrides,
             harness_overrides,
             loader_overrides,

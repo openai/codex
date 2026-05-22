@@ -357,7 +357,7 @@ pub enum ConfigWriteErrorCode {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadParams {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_layers: bool,
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any

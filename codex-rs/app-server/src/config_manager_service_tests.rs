@@ -131,6 +131,80 @@ async fn clear_missing_nested_config_is_noop() -> Result<()> {
 }
 
 #[tokio::test]
+async fn write_value_rejects_legacy_profile_selector() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "model = \"gpt-main\"\n")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "profile".to_string(),
+            value: serde_json::json!("work"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("legacy profile selector write should fail");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("`profile` is a legacy config selector"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "model = \"gpt-main\"\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_write_rejects_legacy_profile_selector() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "model = \"gpt-main\"\n")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .batch_write(ConfigBatchWriteParams {
+            edits: vec![
+                codex_app_server_protocol::ConfigEdit {
+                    key_path: "model".to_string(),
+                    value: serde_json::json!("gpt-work"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                codex_app_server_protocol::ConfigEdit {
+                    key_path: "profile".to_string(),
+                    value: serde_json::json!("work"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            file_path: Some(path.display().to_string()),
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await
+        .expect_err("legacy profile selector batch write should fail");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("`profile` is a legacy config selector"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "model = \"gpt-main\"\n");
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_supports_nested_app_paths() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
