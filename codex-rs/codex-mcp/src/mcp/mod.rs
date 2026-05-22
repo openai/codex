@@ -22,6 +22,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppsMcpConnectorAccess;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -45,6 +46,9 @@ pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
+const CONSUMER_LOCKDOWN_CONNECTOR_ACCESS_HEADER: &str =
+    "X-OpenAI-Consumer-Lockdown-Connector-Access";
+const CONSUMER_LOCKDOWN_CONNECTOR_ACCESS_SYNC_ONLY: &str = "sync_only";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
@@ -111,6 +115,8 @@ pub struct McpConfig {
     pub apps_mcp_path_override: Option<String>,
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
+    /// Optional connector access scope for the host-owned apps MCP server.
+    pub apps_mcp_connector_access: Option<AppsMcpConnectorAccess>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Preferred credential store for MCP OAuth tokens.
@@ -286,7 +292,7 @@ pub async fn read_mcp_resource(
         PermissionProfile::default(),
         runtime_environment,
         config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_apps_tools_cache_key(auth, config.apps_mcp_connector_access),
         host_owned_codex_apps_enabled,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance(config),
@@ -355,7 +361,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         PermissionProfile::default(),
         runtime_environment,
         config.codex_home.clone(),
-        codex_apps_tools_cache_key(auth),
+        codex_apps_tools_cache_key(auth, config.apps_mcp_connector_access),
         host_owned_codex_apps_enabled,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance,
@@ -440,9 +446,20 @@ fn codex_apps_mcp_url_for_base_url(base_url: &str, apps_mcp_path_override: Optio
 
 fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
     let url = codex_apps_mcp_url(config);
-    let http_headers = config.apps_mcp_product_sku.as_ref().map(|product_sku| {
-        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.clone())])
-    });
+    let mut http_headers = HashMap::new();
+    if matches!(
+        config.apps_mcp_connector_access,
+        Some(AppsMcpConnectorAccess::SyncOnly)
+    ) {
+        http_headers.insert(
+            CONSUMER_LOCKDOWN_CONNECTOR_ACCESS_HEADER.to_string(),
+            CONSUMER_LOCKDOWN_CONNECTOR_ACCESS_SYNC_ONLY.to_string(),
+        );
+    }
+    if let Some(product_sku) = config.apps_mcp_product_sku.as_ref() {
+        http_headers.insert("X-OpenAI-Product-Sku".to_string(), product_sku.clone());
+    }
+    let http_headers = (!http_headers.is_empty()).then_some(http_headers);
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {

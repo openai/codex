@@ -278,7 +278,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
             config.cwd.to_path_buf(),
         ),
         config.codex_home.to_path_buf(),
-        codex_apps_tools_cache_key(auth.as_ref()),
+        codex_apps_tools_cache_key(auth.as_ref(), mcp_config.apps_mcp_connector_access),
         host_owned_codex_apps_enabled,
         mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),

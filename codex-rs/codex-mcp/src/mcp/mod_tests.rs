@@ -2,6 +2,7 @@ use super::*;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppsMcpConnectorAccess;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -19,6 +20,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         apps_mcp_path_override: None,
         apps_mcp_product_sku: None,
+        apps_mcp_connector_access: None,
         codex_home,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         mcp_oauth_callback_port: None,
@@ -297,6 +299,40 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
             assert!(env_http_headers.is_none());
         }
         other => panic!("expected streamable http transport, got {other:?}"),
+    }
+}
+
+#[test]
+fn codex_apps_server_config_forwards_sync_only_connector_access() {
+    let mut config = test_mcp_config(PathBuf::from("/tmp"));
+    config.apps_mcp_connector_access = Some(AppsMcpConnectorAccess::SyncOnly);
+    config.apps_enabled = true;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let servers = with_codex_apps_mcp(HashMap::new(), Some(&auth), &config);
+    let server = servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("codex apps should be present when apps is enabled");
+    let config = server
+        .configured_config()
+        .expect("codex apps should use configured transport");
+
+    match &config.transport {
+        McpServerTransportConfig::StreamableHttp {
+            http_headers,
+            env_http_headers,
+            ..
+        } => {
+            assert_eq!(
+                http_headers,
+                &Some(HashMap::from([(
+                    "X-OpenAI-Consumer-Lockdown-Connector-Access".to_string(),
+                    "sync_only".to_string(),
+                )]))
+            );
+            assert!(env_http_headers.is_none());
+        }
+        _ => panic!("expected streamable http transport for codex apps"),
     }
 }
 

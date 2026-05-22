@@ -18,6 +18,7 @@ use crate::tools::normalize_tools_for_model;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
+use codex_config::types::AppsMcpConnectorAccess;
 use codex_protocol::ToolName;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -84,6 +85,7 @@ fn create_codex_apps_tools_cache_context(
             account_id: account_id.map(ToOwned::to_owned),
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
+            apps_mcp_connector_access: None,
         },
     }
 }
@@ -585,6 +587,31 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
 }
 
 #[test]
+fn codex_apps_tools_cache_is_scoped_per_connector_access() {
+    let codex_home = tempdir().expect("tempdir");
+    let full_access_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let sync_only_context = CodexAppsToolsCacheContext {
+        codex_home: codex_home.path().to_path_buf(),
+        user_key: CodexAppsToolsCacheKey {
+            account_id: Some("account-one".to_string()),
+            chatgpt_user_id: Some("user-one".to_string()),
+            is_workspace_account: false,
+            apps_mcp_connector_access: Some(AppsMcpConnectorAccess::SyncOnly),
+        },
+    };
+
+    assert_ne!(
+        full_access_context.cache_path(),
+        sync_only_context.cache_path(),
+        "connector access scope should isolate Codex Apps cache files"
+    );
+}
+
+#[test]
 fn codex_apps_tools_cache_filters_disallowed_connectors() {
     let codex_home = tempdir().expect("tempdir");
     let cache_context = create_codex_apps_tools_cache_context(
@@ -925,6 +952,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             account_id: None,
             chatgpt_user_id: None,
             is_workspace_account: false,
+            apps_mcp_connector_access: None,
         },
         /*host_owned_codex_apps_enabled*/ false,
         ElicitationCapability::default(),

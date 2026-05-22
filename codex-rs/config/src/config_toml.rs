@@ -10,6 +10,7 @@ use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
+use crate::types::AppsMcpConnectorAccess;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
@@ -367,6 +368,9 @@ pub struct ConfigToml {
 
     /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
     pub apps_mcp_product_sku: Option<String>,
+
+    /// Optional connector access scope for host-owned Codex Apps MCP requests.
+    pub apps_mcp_connector_access: Option<AppsMcpConnectorAccess>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,

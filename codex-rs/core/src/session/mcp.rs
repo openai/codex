@@ -355,7 +355,7 @@ impl Session {
             turn_context.permission_profile(),
             mcp_runtime_environment,
             config.codex_home.to_path_buf(),
-            codex_apps_tools_cache_key(auth.as_ref()),
+            codex_apps_tools_cache_key(auth.as_ref(), mcp_config.apps_mcp_connector_access),
             host_owned_codex_apps_enabled,
             mcp_config.client_elicitation_capability,
             tool_plugin_provenance,

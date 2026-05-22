@@ -218,6 +218,12 @@
       },
       "type": "object"
     },
+    "AppsMcpConnectorAccess": {
+      "enum": [
+        "sync_only"
+      ],
+      "type": "string"
+    },
     "AppsMcpPathOverrideConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -4070,6 +4076,14 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "apps_mcp_connector_access": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppsMcpConnectorAccess"
+        }
+      ],
+      "description": "Optional connector access scope for host-owned Codex Apps MCP requests."
     },
     "apps_mcp_product_sku": {
       "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",

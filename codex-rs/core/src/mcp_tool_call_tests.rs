@@ -1243,7 +1243,10 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
             },
         ),
         turn_context.config.codex_home.to_path_buf(),
-        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
+        codex_mcp::codex_apps_tools_cache_key(
+            auth.as_ref(),
+            turn_context.config.apps_mcp_connector_access,
+        ),
         /*host_owned_codex_apps_enabled*/ true,
         rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),

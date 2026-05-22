@@ -36,6 +36,7 @@ use codex_config::loader::project_trust_key;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AppsMcpConnectorAccess;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
@@ -894,6 +895,9 @@ pub struct Config {
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
+    /// Optional connector access scope for the host-owned apps MCP server.
+    pub apps_mcp_connector_access: Option<AppsMcpConnectorAccess>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
@@ -1326,6 +1330,7 @@ impl Config {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_path_override: self.apps_mcp_path_override.clone(),
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
+            apps_mcp_connector_access: self.apps_mcp_connector_access,
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
@@ -3528,6 +3533,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             apps_mcp_path_override,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
+            apps_mcp_connector_access: cfg.apps_mcp_connector_access,
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

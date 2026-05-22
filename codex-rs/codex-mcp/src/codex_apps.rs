@@ -12,6 +12,7 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
+use codex_config::types::AppsMcpConnectorAccess;
 use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
@@ -27,13 +28,19 @@ pub struct CodexAppsToolsCacheKey {
     pub(crate) account_id: Option<String>,
     pub(crate) chatgpt_user_id: Option<String>,
     pub(crate) is_workspace_account: bool,
+    #[serde(default)]
+    pub(crate) apps_mcp_connector_access: Option<AppsMcpConnectorAccess>,
 }
 
-pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
+pub fn codex_apps_tools_cache_key(
+    auth: Option<&CodexAuth>,
+    apps_mcp_connector_access: Option<AppsMcpConnectorAccess>,
+) -> CodexAppsToolsCacheKey {
     CodexAppsToolsCacheKey {
         account_id: auth.and_then(CodexAuth::get_account_id),
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
+        apps_mcp_connector_access,
     }
 }
 
