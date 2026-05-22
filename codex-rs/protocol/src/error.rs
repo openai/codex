@@ -498,7 +498,9 @@ impl std::fmt::Display for UsageLimitReachedError {
                         "You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue."
                     );
                 }
-                RateLimitReachedType::RateLimitReached => {}
+                RateLimitReachedType::RateLimitReached => {
+                    // Generic limits intentionally use the existing promo or plan copy below.
+                }
             }
         }
 

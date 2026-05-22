@@ -65,6 +65,44 @@ fn usage_limit_reached_error_formats_plus_plan() {
 }
 
 #[test]
+fn usage_limit_reached_error_formats_rate_limit_reached_types() {
+    let cases = [
+        (
+            RateLimitReachedType::RateLimitReached,
+            "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            "Your workspace is out of credits. Add credits to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceMemberCreditsDepleted,
+            "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            "You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+        ),
+        (
+            RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+            "You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to continue.",
+        ),
+    ];
+
+    for (rate_limit_reached_type, expected) in cases {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
+            resets_at: None,
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
+            promo_message: None,
+            rate_limit_reached_type: Some(rate_limit_reached_type),
+        };
+
+        assert_eq!(err.to_string(), expected);
+    }
+}
+
+#[test]
 fn server_overloaded_maps_to_protocol() {
     let err = CodexErr::ServerOverloaded;
     assert_eq!(

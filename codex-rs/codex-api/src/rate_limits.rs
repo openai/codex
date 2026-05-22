@@ -180,22 +180,10 @@ pub fn parse_promo_message(headers: &HeaderMap) -> Option<String> {
 }
 
 pub(crate) fn parse_rate_limit_reached_type(headers: &HeaderMap) -> Option<RateLimitReachedType> {
-    match parse_header_str(headers, "x-codex-rate-limit-reached-type")?.trim() {
-        "rate_limit_reached" => Some(RateLimitReachedType::RateLimitReached),
-        "workspace_owner_credits_depleted" => {
-            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted)
-        }
-        "workspace_member_credits_depleted" => {
-            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
-        }
-        "workspace_owner_usage_limit_reached" => {
-            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached)
-        }
-        "workspace_member_usage_limit_reached" => {
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
-        }
-        _ => None,
-    }
+    parse_header_str(headers, "x-codex-rate-limit-reached-type")?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn parse_rate_limit_window(
