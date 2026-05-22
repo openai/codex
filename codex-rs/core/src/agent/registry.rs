@@ -35,7 +35,6 @@ struct ActiveAgents {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AgentMetadata {
     pub(crate) agent_id: Option<ThreadId>,
-    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) agent_path: Option<AgentPath>,
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
@@ -165,42 +164,6 @@ impl AgentRegistry {
             })
             .cloned()
             .collect()
-    }
-
-    pub(crate) fn live_thread_spawn_children(
-        &self,
-    ) -> HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>> {
-        let active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, AgentMetadata)>>::new();
-
-        for metadata in active_agents.agent_tree.values() {
-            let Some(parent_thread_id) = metadata.parent_thread_id else {
-                continue;
-            };
-            let Some(child_thread_id) = metadata.agent_id else {
-                continue;
-            };
-            children_by_parent
-                .entry(parent_thread_id)
-                .or_default()
-                .push((child_thread_id, metadata.clone()));
-        }
-
-        for children in children_by_parent.values_mut() {
-            children.sort_by(|left, right| {
-                left.1
-                    .agent_path
-                    .as_deref()
-                    .unwrap_or_default()
-                    .cmp(right.1.agent_path.as_deref().unwrap_or_default())
-                    .then_with(|| left.0.to_string().cmp(&right.0.to_string()))
-            });
-        }
-
-        children_by_parent
     }
 
     pub(crate) fn update_last_task_message(&self, thread_id: ThreadId, last_task_message: String) {

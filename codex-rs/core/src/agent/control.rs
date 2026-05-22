@@ -1095,7 +1095,6 @@ impl AgentControl {
         });
         let agent_metadata = AgentMetadata {
             agent_id: None,
-            parent_thread_id: Some(parent_thread_id),
             agent_path,
             agent_nickname,
             agent_role,
@@ -1163,7 +1162,36 @@ impl AgentControl {
     async fn live_thread_spawn_children(
         &self,
     ) -> CodexResult<HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>> {
-        Ok(self.state.live_thread_spawn_children())
+        let state = self.upgrade()?;
+        let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, AgentMetadata)>>::new();
+
+        for (parent_thread_id, child_thread_id) in state.list_live_thread_spawn_edges().await {
+            children_by_parent
+                .entry(parent_thread_id)
+                .or_default()
+                .push((
+                    child_thread_id,
+                    self.state
+                        .agent_metadata_for_thread(child_thread_id)
+                        .unwrap_or(AgentMetadata {
+                            agent_id: Some(child_thread_id),
+                            ..Default::default()
+                        }),
+                ));
+        }
+
+        for children in children_by_parent.values_mut() {
+            children.sort_by(|left, right| {
+                left.1
+                    .agent_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .cmp(right.1.agent_path.as_deref().unwrap_or_default())
+                    .then_with(|| left.0.to_string().cmp(&right.0.to_string()))
+            });
+        }
+
+        Ok(children_by_parent)
     }
 
     async fn persist_thread_spawn_edge_for_source(
