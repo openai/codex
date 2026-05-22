@@ -3770,6 +3770,7 @@ dependencies = [
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-string",

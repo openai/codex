@@ -56,6 +56,10 @@
         }
       ],
       "expected_pruned": [],
+      "expected_dropped_fields": [
+        "/properties/file/oneOf",
+        "/properties/metadata/allOf"
+      ],
       "expected_markers": {
         "input": {
           "schema_refs": 0,

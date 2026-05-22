@@ -84,6 +84,7 @@
       "expected_pruned": [
         "/$defs/GiantUnusedPayload"
       ],
+      "expected_dropped_fields": [],
       "expected_markers": {
         "input": {
           "schema_refs": 3,

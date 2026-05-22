@@ -77,6 +77,9 @@
       "expected_pruned": [
         "/definitions/UnusedCalendarResource"
       ],
+      "expected_dropped_fields": [
+        "/definitions/DateTime/properties/dateTime/format"
+      ],
       "expected_markers": {
         "input": {
           "schema_refs": 2,
@@ -85,7 +88,7 @@
           "any_of": 1,
           "one_of": 0,
           "all_of": 0,
-          "descriptions": 6,
+          "descriptions": 7,
           "enums": 1
         },
         "output": {
@@ -95,7 +98,7 @@
           "any_of": 1,
           "one_of": 0,
           "all_of": 0,
-          "descriptions": 5,
+          "descriptions": 6,
           "enums": 1
         }
       }

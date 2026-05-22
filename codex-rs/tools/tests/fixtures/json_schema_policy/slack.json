@@ -67,6 +67,9 @@
       "expected_pruned": [
         "/$defs/UnusedPayload"
       ],
+      "expected_dropped_fields": [
+        "/$defs/SlackTs/pattern"
+      ],
       "expected_markers": {
         "input": {
           "schema_refs": 1,

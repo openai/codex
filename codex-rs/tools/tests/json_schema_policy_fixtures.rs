@@ -3,6 +3,7 @@ use codex_tools::mcp_tool_to_responses_api_tool;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -16,6 +17,8 @@ const FIXTURE_PATHS: [&str; 5] = [
     "tests/fixtures/json_schema_policy/notion.json",
     "tests/fixtures/json_schema_policy/microsoft_outlook_email.json",
 ];
+const OVERSIZED_NOTION_CREATE_PAGE_SCHEMA_PATH: &str =
+    "tests/fixtures/json_schema_policy/oversized_notion_create_page_input_schema.json";
 
 #[derive(Debug, Deserialize)]
 struct FixtureFile {
@@ -32,6 +35,8 @@ struct FixtureTool {
     expected_preserved: Vec<ExpectedValue>,
     #[serde(default)]
     expected_pruned: Vec<String>,
+    #[serde(default)]
+    expected_dropped_fields: Vec<String>,
     expected_markers: ExpectedMarkers,
 }
 
@@ -150,6 +155,30 @@ fn json_schema_policy_fixtures_prune_unreachable_definitions() {
 }
 
 #[test]
+fn json_schema_policy_fixtures_drop_expected_fields_after_json_schema_conversion() {
+    for fixture in load_fixtures() {
+        for fixture_tool in &fixture.tools {
+            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
+            let parameters = serde_json::to_value(&responses_tool.parameters)
+                .expect("responses parameters should serialize");
+
+            for pointer in &fixture_tool.expected_dropped_fields {
+                assert!(
+                    fixture_tool.input_schema.pointer(pointer).is_some(),
+                    "{} fixture should contain expected dropped field {pointer}",
+                    fixture_tool.name
+                );
+                assert!(
+                    parameters.pointer(pointer).is_none(),
+                    "{} should drop field {pointer} after JsonSchema conversion",
+                    fixture_tool.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn json_schema_policy_fixtures_match_marker_baselines() {
     for fixture in load_fixtures() {
         for fixture_tool in &fixture.tools {
@@ -173,33 +202,125 @@ fn json_schema_policy_fixtures_match_marker_baselines() {
     }
 }
 
+#[test]
+fn json_schema_policy_oversized_golden_schema_triggers_compaction() {
+    let input_schema = load_json_fixture(OVERSIZED_NOTION_CREATE_PAGE_SCHEMA_PATH);
+    let input_bytes = compact_json_len(&input_schema);
+    assert!(
+        input_bytes > 4_000,
+        "oversized fixture should exceed local compaction budget, got {input_bytes} bytes"
+    );
+    assert!(
+        input_schema.pointer("/$defs/property_value").is_some(),
+        "oversized fixture should include real Notion page property definitions"
+    );
+    assert!(
+        input_schema.pointer("/properties/parent/$ref").is_some(),
+        "oversized fixture should include local refs from top-level properties"
+    );
+
+    let responses_tool = convert_tool_schema(
+        "golden/notion/tools",
+        "create_page",
+        "Create a Notion page.",
+        &input_schema,
+    );
+    let parameters =
+        serde_json::to_value(&responses_tool.parameters).expect("responses parameters serialize");
+    let output_bytes = compact_json_len(&parameters);
+
+    assert!(
+        output_bytes <= 4_000,
+        "compacted fixture should fit local compaction budget, got {output_bytes} bytes"
+    );
+    assert!(
+        output_bytes < input_bytes,
+        "compaction should reduce schema size from {input_bytes} bytes"
+    );
+    assert!(
+        parameters.pointer("/description").is_none(),
+        "oversized schema should drop root description"
+    );
+    assert!(
+        parameters
+            .pointer("/properties/parent/description")
+            .is_none(),
+        "oversized schema should drop nested descriptions"
+    );
+    assert!(
+        parameters.pointer("/$defs").is_none(),
+        "oversized schema should drop root definitions after stripping descriptions is insufficient"
+    );
+    assert_eq!(
+        parameters.pointer("/properties/parent"),
+        Some(&json!({})),
+        "oversized schema should rewrite local refs before dropping root definitions"
+    );
+    assert_eq!(
+        parameters.pointer("/properties/children/items"),
+        Some(&json!({})),
+        "oversized schema should rewrite nested local refs before dropping root definitions"
+    );
+    assert_eq!(
+        parameters.pointer("/properties/markdown/type"),
+        Some(&json!("string")),
+        "oversized schema should retain top-level argument shape"
+    );
+    assert_eq!(
+        parameters.pointer("/properties/properties/type"),
+        Some(&json!("object")),
+        "oversized schema should retain object argument shape"
+    );
+}
+
+fn load_json_fixture(path: &str) -> Value {
+    let path = fixture_path(path);
+    let fixture = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
+    serde_json::from_str(&fixture)
+        .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
+}
+
+fn load_fixture_file(path: &str) -> FixtureFile {
+    let path = fixture_path(path);
+    let fixture = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
+    serde_json::from_str(&fixture)
+        .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
+}
+
 fn load_fixtures() -> Vec<FixtureFile> {
-    FIXTURE_PATHS
-        .into_iter()
-        .map(|path| {
-            let path = fixture_path(path);
-            let fixture = fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
-            serde_json::from_str(&fixture)
-                .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
-        })
-        .collect()
+    FIXTURE_PATHS.into_iter().map(load_fixture_file).collect()
 }
 
 fn fixture_path(path: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    codex_utils_cargo_bin::find_resource!(path)
+        .unwrap_or_else(|err| panic!("resolve fixture {path}: {err}"))
 }
 
 fn convert_fixture_tool(source: &str, fixture_tool: &FixtureTool) -> codex_tools::ResponsesApiTool {
-    let input_schema = fixture_tool
-        .input_schema
+    convert_tool_schema(
+        source,
+        &fixture_tool.name,
+        &fixture_tool.description,
+        &fixture_tool.input_schema,
+    )
+}
+
+fn convert_tool_schema(
+    source: &str,
+    name: &str,
+    description: &str,
+    input_schema: &Value,
+) -> codex_tools::ResponsesApiTool {
+    let input_schema = input_schema
         .as_object()
-        .unwrap_or_else(|| panic!("{} input_schema should be an object", fixture_tool.name))
+        .unwrap_or_else(|| panic!("{name} input_schema should be an object"))
         .clone();
     let tool = rmcp::model::Tool {
-        name: fixture_tool.name.clone().into(),
+        name: name.to_string().into(),
         title: None,
-        description: Some(fixture_tool.description.clone().into()),
+        description: Some(description.to_string().into()),
         input_schema: Arc::new(input_schema),
         output_schema: None,
         annotations: None,
@@ -208,8 +329,8 @@ fn convert_fixture_tool(source: &str, fixture_tool: &FixtureTool) -> codex_tools
         meta: None,
     };
 
-    mcp_tool_to_responses_api_tool(&ToolName::namespaced(source, &fixture_tool.name), &tool)
-        .unwrap_or_else(|err| panic!("convert {} from {source}: {err}", fixture_tool.name))
+    mcp_tool_to_responses_api_tool(&ToolName::namespaced(source, name), &tool)
+        .unwrap_or_else(|err| panic!("convert {name} from {source}: {err}"))
 }
 
 fn marker_counts(value: &Value) -> MarkerCounts {
@@ -238,6 +359,12 @@ fn count_key(value: &Value, target: &str) -> usize {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
     }
+}
+
+fn compact_json_len(value: &Value) -> usize {
+    serde_json::to_vec(value)
+        .unwrap_or_else(|err| panic!("serialize compact JSON: {err}"))
+        .len()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

@@ -66,6 +66,7 @@
       "expected_pruned": [
         "/$defs/UnusedDatabase"
       ],
+      "expected_dropped_fields": [],
       "expected_markers": {
         "input": {
           "schema_refs": 2,
