@@ -5,6 +5,7 @@ use std::sync::RwLock;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RuntimeInstallParams;
 use codex_app_server_protocol::RuntimeInstallResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
@@ -15,6 +16,7 @@ use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
+use crate::codex_home::default_codex_home_path;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
@@ -101,7 +103,13 @@ impl EnvironmentManager {
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
         let provider = environment_provider_from_codex_home(codex_home.as_ref())?;
-        Self::from_snapshot(provider.snapshot().await?, local_runtime_paths)
+        let local_codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home.as_ref())
+            .map_err(|err| ExecServerError::Protocol(err.to_string()))?;
+        Self::from_snapshot_with_codex_home(
+            provider.snapshot().await?,
+            local_runtime_paths,
+            Some(local_codex_home),
+        )
     }
 
     /// Builds a manager from the legacy environment-variable provider without
@@ -142,6 +150,18 @@ impl EnvironmentManager {
         snapshot: EnvironmentProviderSnapshot,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
+        Self::from_snapshot_with_codex_home(
+            snapshot,
+            local_runtime_paths,
+            default_local_codex_home(),
+        )
+    }
+
+    fn from_snapshot_with_codex_home(
+        snapshot: EnvironmentProviderSnapshot,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+        local_codex_home: Option<AbsolutePathBuf>,
+    ) -> Result<Self, ExecServerError> {
         let EnvironmentProviderSnapshot {
             environments,
             default,
@@ -155,7 +175,10 @@ impl EnvironmentManager {
                     "local environment requires configured runtime paths".to_string(),
                 )
             })?;
-            let local_environment = Arc::new(Environment::local(local_runtime_paths));
+            let local_environment = Arc::new(Environment::local_with_codex_home(
+                local_runtime_paths,
+                local_codex_home,
+            ));
             environment_map.insert(
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::clone(&local_environment),
@@ -302,6 +325,7 @@ pub struct Environment {
     http_client: Arc<dyn HttpClient>,
     runtime_installer: RuntimeInstaller,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
+    codex_home: Option<AbsolutePathBuf>,
 }
 
 /// Provides environment metadata from either a local environment or a remote exec-server.
@@ -380,6 +404,7 @@ impl Environment {
             http_client: Arc::new(ReqwestHttpClient),
             runtime_installer: RuntimeInstaller::Local,
             local_runtime_paths: None,
+            codex_home: default_local_codex_home(),
         }
     }
 }
@@ -429,6 +454,13 @@ impl Environment {
     }
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::local_with_codex_home(local_runtime_paths, default_local_codex_home())
+    }
+
+    fn local_with_codex_home(
+        local_runtime_paths: ExecServerRuntimePaths,
+        codex_home: Option<AbsolutePathBuf>,
+    ) -> Self {
         Self {
             exec_server_url: None,
             remote_transport: None,
@@ -440,6 +472,7 @@ impl Environment {
             http_client: Arc::new(ReqwestHttpClient),
             runtime_installer: RuntimeInstaller::Local,
             local_runtime_paths: Some(local_runtime_paths),
+            codex_home,
         }
     }
 
@@ -479,6 +512,7 @@ impl Environment {
             http_client: Arc::new(http_client),
             runtime_installer: RuntimeInstaller::Remote(client),
             local_runtime_paths,
+            codex_home: None,
         }
     }
 
@@ -518,6 +552,29 @@ impl Environment {
     ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
         self.runtime_installer.install_runtime(params).await
     }
+
+    pub async fn codex_home(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+        if let Some(codex_home) = self.codex_home.clone() {
+            return Ok(codex_home);
+        }
+        match &self.runtime_installer {
+            RuntimeInstaller::Local => default_local_codex_home().ok_or_else(|| {
+                internal_error("failed to locate local codex home for runtime install")
+            }),
+            RuntimeInstaller::Remote(client) => {
+                let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
+                client
+                    .codex_home()
+                    .ok_or_else(|| internal_error("remote exec-server did not report a codex home"))
+            }
+        }
+    }
+}
+
+fn default_local_codex_home() -> Option<AbsolutePathBuf> {
+    default_codex_home_path()
+        .ok()
+        .and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
 }
 
 impl EnvironmentInfo {

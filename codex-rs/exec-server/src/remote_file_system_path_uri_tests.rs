@@ -9,6 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -149,6 +150,10 @@ async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream
             id: request.id,
             result: serde_json::to_value(InitializeResponse {
                 session_id: "session-1".to_string(),
+                codex_home: AbsolutePathBuf::from_absolute_path(
+                    std::env::current_dir().expect("current directory"),
+                )
+                .expect("absolute current directory"),
             })
             .expect("initialize response should serialize"),
         }),

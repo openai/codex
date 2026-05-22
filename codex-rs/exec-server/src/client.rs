@@ -10,6 +10,7 @@ use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RuntimeInstallParams;
 use codex_app_server_protocol::RuntimeInstallResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -187,6 +188,7 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
+    codex_home: std::sync::RwLock<Option<AbsolutePathBuf>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -359,6 +361,14 @@ impl ExecServerClient {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *session_id = Some(response.session_id.clone());
             }
+            {
+                let mut codex_home = self
+                    .inner
+                    .codex_home
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *codex_home = Some(response.codex_home.clone());
+            }
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -516,6 +526,14 @@ impl ExecServerClient {
         self.inner.disconnected.get().is_some() || self.inner.client.is_disconnected()
     }
 
+    pub fn codex_home(&self) -> Option<AbsolutePathBuf> {
+        self.inner
+            .codex_home
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -563,6 +581,7 @@ impl ExecServerClient {
                 http_body_streams_write_lock: Mutex::new(()),
                 http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
+                codex_home: std::sync::RwLock::new(None),
                 reader_task,
             }
         });
@@ -969,6 +988,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
@@ -1104,6 +1124,10 @@ mod tests {
                 id: request.id,
                 result: serde_json::to_value(InitializeResponse {
                     session_id: session_id.to_string(),
+                    codex_home: AbsolutePathBuf::try_from(
+                        std::env::current_dir().expect("current dir"),
+                    )
+                    .expect("absolute current dir"),
                 })
                 .expect("initialize response should serialize"),
             }),
@@ -1139,7 +1163,7 @@ mod tests {
                 program: "sh".to_string(),
                 args: vec![
                     "-c".to_string(),
-                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
+                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}'; read _line; sleep 60".to_string(),
                 ],
                 env: HashMap::new(),
                 cwd: None,
@@ -1163,7 +1187,7 @@ mod tests {
                     program: "sh".to_string(),
                     args: vec![
                         "-c".to_string(),
-                        "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'; read _line; sleep 60".to_string(),
+                        "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}'; read _line; sleep 60".to_string(),
                     ],
                     env: HashMap::new(),
                     cwd: None,
@@ -1186,7 +1210,7 @@ mod tests {
                 args: vec![
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
-                    "$null = [Console]::In.ReadLine(); [Console]::Out.WriteLine('{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\"}}'); $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 60".to_string(),
+                    "$null = [Console]::In.ReadLine(); [Console]::Out.WriteLine('{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"C:\\\\Users\\\\codex\\\\.codex\"}}'); $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 60".to_string(),
                 ],
                 env: HashMap::new(),
                 cwd: None,
@@ -1211,7 +1235,7 @@ mod tests {
             "read _line; \
              echo \"$$\" > {}; \
              sleep 60 >/dev/null 2>&1 & echo \"$!\" > {}; \
-             printf '%s\\n' '{{\"id\":1,\"result\":{{\"sessionId\":\"stdio-test\"}}}}'; \
+             printf '%s\\n' '{{\"id\":1,\"result\":{{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}}}'; \
              read _line; \
              wait",
             shell_quote(pid_file.as_path()),
@@ -1337,6 +1361,10 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        codex_home: AbsolutePathBuf::try_from(
+                            std::env::current_dir().expect("current dir"),
+                        )
+                        .expect("absolute current dir"),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1480,6 +1508,10 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        codex_home: AbsolutePathBuf::try_from(
+                            std::env::current_dir().expect("current dir"),
+                        )
+                        .expect("absolute current dir"),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1617,6 +1649,10 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        codex_home: AbsolutePathBuf::try_from(
+                            std::env::current_dir().expect("current dir"),
+                        )
+                        .expect("absolute current dir"),
                     })
                     .expect("initialize response should serialize"),
                 }),
