@@ -559,9 +559,9 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     let expected = r#"profile = "fast"
-model_reasoning_effort = "high"
 
 profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
+model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
 }
