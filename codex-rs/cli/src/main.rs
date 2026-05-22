@@ -353,6 +353,10 @@ type HostSandboxArgs = UnsupportedSandboxArgs;
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[derive(Debug, Parser)]
 struct UnsupportedSandboxArgs {
+    /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<ProfileV2Name>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
@@ -1242,6 +1246,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "sandbox",
             )?;
+            let config_profile = sandbox_cli
+                .config_profile
+                .as_ref()
+                .or(interactive.config_profile_v2.as_ref());
+            let loader_overrides = loader_overrides_for_profile(config_profile)?;
             prepend_config_flags(
                 &mut sandbox_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1250,22 +1259,28 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             codex_cli::run_command_under_seatbelt(
                 sandbox_cli,
                 arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
             )
             .await?;
             #[cfg(target_os = "linux")]
             codex_cli::run_command_under_landlock(
                 sandbox_cli,
                 arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
             )
             .await?;
             #[cfg(target_os = "windows")]
             codex_cli::run_command_under_windows_sandbox(
                 sandbox_cli,
                 arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
             )
             .await?;
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            anyhow::bail!("`codex sandbox` is not supported on this operating system");
+            {
+                let _ = loader_overrides;
+                anyhow::bail!("`codex sandbox` is not supported on this operating system");
+            }
         }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
             DebugSubcommand::Models(cmd) => {
@@ -1441,11 +1456,12 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Resume(_)
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
+        | Subcommand::Sandbox(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, `codex mcp`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -2252,6 +2268,12 @@ mod tests {
                 .as_deref(),
             Some("work")
         );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile", "work", "sandbox"])
+                .expect("sandbox supports config profile")
+                .as_deref(),
+            Some("work")
+        );
     }
 
     #[test]
@@ -2497,6 +2519,21 @@ mod tests {
         };
 
         assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn sandbox_parses_config_profile() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "sandbox", "--profile", "work", "--", "echo"])
+                .expect("parse");
+
+        let Some(Subcommand::Sandbox(command)) = cli.subcommand else {
+            panic!("expected sandbox command");
+        };
+
+        assert_eq!(command.config_profile.as_deref(), Some("work"));
         assert_eq!(command.command, vec!["echo"]);
     }
 
