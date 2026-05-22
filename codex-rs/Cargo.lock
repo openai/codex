@@ -2760,6 +2760,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-client",
  "codex-file-system",
+ "codex-managed-process",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -3111,6 +3112,7 @@ name = "codex-managed-process"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "tokio",
  "tracing",
 ]
 

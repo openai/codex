@@ -8,10 +8,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+tokio = { workspace = true, features = ["process"] }
 tracing = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lib]
 doctest = false

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_managed_process::ManagedTokioChild;
+use codex_managed_process::TokioCommandExt;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -17,6 +19,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tracing::warn;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
@@ -249,12 +252,26 @@ async fn run_command(
     request_json: Vec<u8>,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let mut child = spawn_command(command)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| internal_error("failed to open fs sandbox helper stdin".to_string()))?;
-    stdin.write_all(&request_json).await.map_err(io_error)?;
-    stdin.shutdown().await.map_err(io_error)?;
+    let Some(mut stdin) = child.stdin.take() else {
+        if let Err(err) = child.kill_and_wait().await {
+            warn!("failed to kill fs sandbox helper after missing stdin: {err}");
+        }
+        return Err(internal_error(
+            "failed to open fs sandbox helper stdin".to_string(),
+        ));
+    };
+    if let Err(err) = stdin.write_all(&request_json).await {
+        if let Err(kill_err) = child.kill_and_wait().await {
+            warn!("failed to kill fs sandbox helper after stdin write failed: {kill_err}");
+        }
+        return Err(io_error(err));
+    }
+    if let Err(err) = stdin.shutdown().await {
+        if let Err(kill_err) = child.kill_and_wait().await {
+            warn!("failed to kill fs sandbox helper after stdin shutdown failed: {kill_err}");
+        }
+        return Err(io_error(err));
+    }
     drop(stdin);
 
     let output = child.wait_with_output().await.map_err(io_error)?;
@@ -280,7 +297,7 @@ fn spawn_command(
         arg0,
         ..
     }: SandboxExecRequest,
-) -> Result<tokio::process::Child, JSONRPCErrorError> {
+) -> Result<ManagedTokioChild, JSONRPCErrorError> {
     let Some((program, args)) = argv.split_first() else {
         return Err(invalid_request("fs sandbox command was empty".to_string()));
     };
@@ -298,8 +315,7 @@ fn spawn_command(
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
-    command.spawn().map_err(io_error)
+    command.spawn_managed().map_err(io_error)
 }
 
 fn io_error(err: std::io::Error) -> JSONRPCErrorError {
