@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_tools::ConversationHistory;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -37,7 +38,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         self.0.tool_name()
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         self.0.spec()
     }
 
@@ -53,7 +54,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        self.0.handle(to_extension_call(&invocation)).await
+        self.0.handle(to_extension_call(&invocation).await).await
     }
 }
 
@@ -86,12 +87,15 @@ impl CoreToolRuntime for ExtensionToolAdapter {
     }
 }
 
-fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+    let conversation_history =
+        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
         truncation_policy: invocation.turn.truncation_policy,
+        conversation_history,
         payload: invocation.payload.clone(),
     }
 }
@@ -108,6 +112,8 @@ fn extension_tool_hook_input(arguments: &str) -> Value {
 mod tests {
     use std::sync::Arc;
 
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -130,25 +136,23 @@ mod tests {
             codex_tools::ToolName::plain("extension_echo")
         }
 
-        fn spec(&self) -> Option<codex_tools::ToolSpec> {
-            Some(codex_tools::ToolSpec::Function(
-                codex_tools::ResponsesApiTool {
-                    name: "extension_echo".to_string(),
-                    description: "Echoes arguments.".to_string(),
-                    strict: true,
-                    parameters: codex_tools::parse_tool_input_schema(&json!({
-                        "type": "object",
-                        "properties": {
-                            "message": { "type": "string" },
-                        },
-                        "required": ["message"],
-                        "additionalProperties": false,
-                    }))
-                    .expect("extension schema should parse"),
-                    output_schema: None,
-                    defer_loading: None,
-                },
-            ))
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "extension_echo".to_string(),
+                description: "Echoes arguments.".to_string(),
+                strict: true,
+                parameters: codex_tools::parse_tool_input_schema(&json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false,
+                }))
+                .expect("extension schema should parse"),
+                output_schema: None,
+                defer_loading: None,
+            })
         }
 
         async fn handle(
@@ -169,6 +173,17 @@ mod tests {
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for CapturingExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
             codex_tools::ToolName::plain("extension_echo")
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "extension_echo".to_string(),
+                description: "Captures arguments.".to_string(),
+                strict: false,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+                defer_loading: None,
+            })
         }
 
         async fn handle(
@@ -227,6 +242,17 @@ mod tests {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let turn_id = turn.sub_id.clone();
         let truncation_policy = turn.truncation_policy;
+        let history_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "extension history".to_string(),
+            }],
+            phase: None,
+        };
+        session
+            .record_into_history(std::slice::from_ref(&history_item), &turn)
+            .await;
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
@@ -252,6 +278,10 @@ mod tests {
             codex_tools::ToolName::plain("extension_echo")
         );
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        assert_eq!(
+            captured_call.conversation_history.items(),
+            std::slice::from_ref(&history_item)
+        );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {
                 assert_eq!(arguments, json!({ "message": "hello" }).to_string());

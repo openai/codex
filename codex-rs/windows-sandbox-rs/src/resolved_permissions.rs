@@ -17,7 +17,7 @@ use std::path::PathBuf;
 /// Windows-specific path conventions, not the user/config-facing
 /// `PermissionProfile` enum itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedWindowsSandboxPermissions {
+pub struct ResolvedWindowsSandboxPermissions {
     file_system: FileSystemSandboxPolicy,
     network: NetworkSandboxPolicy,
 }
@@ -41,8 +41,10 @@ pub fn token_mode_for_permission_profile(
     cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Result<WindowsSandboxTokenMode> {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::try_from_permission_profile(permission_profile)?;
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+        permission_profile,
+        cwd,
+    )?;
     if permissions.file_system.has_full_disk_write_access() {
         anyhow::bail!(
             "permission profile requests full-disk filesystem writes, which cannot be enforced by the Windows sandbox"
@@ -56,23 +58,15 @@ pub fn token_mode_for_permission_profile(
 }
 
 impl ResolvedWindowsSandboxPermissions {
-    pub(crate) fn from_legacy_policy(policy: &SandboxPolicy) -> Self {
+    pub fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
         Self {
-            file_system: FileSystemSandboxPolicy::from(policy),
+            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd)
+                .materialize_project_roots_with_cwd(cwd),
             network: NetworkSandboxPolicy::from(policy),
         }
     }
 
-    pub(crate) fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
-        Self {
-            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd),
-            network: NetworkSandboxPolicy::from(policy),
-        }
-    }
-
-    pub(crate) fn try_from_permission_profile(
-        permission_profile: &PermissionProfile,
-    ) -> Result<Self> {
+    pub fn try_from_permission_profile(permission_profile: &PermissionProfile) -> Result<Self> {
         if !matches!(permission_profile, PermissionProfile::Managed { .. }) {
             anyhow::bail!(
                 "only managed permission profiles can be enforced by the Windows sandbox"
@@ -90,8 +84,53 @@ impl ResolvedWindowsSandboxPermissions {
         })
     }
 
+    /// Resolves a managed permission profile and binds symbolic `:workspace_roots`
+    /// entries to the permission root supplied by the caller.
+    pub fn try_from_permission_profile_for_cwd(
+        permission_profile: &PermissionProfile,
+        cwd: &Path,
+    ) -> Result<Self> {
+        let mut permissions = Self::try_from_permission_profile(permission_profile)?;
+        permissions.file_system = permissions
+            .file_system
+            .materialize_project_roots_with_cwd(cwd);
+        Ok(permissions)
+    }
+
     pub(crate) fn should_apply_network_block(&self) -> bool {
         !self.network.is_enabled()
+    }
+
+    pub(crate) fn network_policy(&self) -> NetworkSandboxPolicy {
+        self.network
+    }
+
+    pub(crate) fn is_enforceable_by_windows_sandbox(&self) -> bool {
+        matches!(self.file_system.kind, FileSystemSandboxKind::Restricted)
+    }
+
+    pub(crate) fn has_full_disk_read_access(&self) -> bool {
+        self.file_system.has_full_disk_read_access()
+    }
+
+    pub(crate) fn include_platform_defaults(&self) -> bool {
+        self.file_system.include_platform_defaults()
+    }
+
+    pub(crate) fn readable_roots_for_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
+        self.file_system
+            .get_readable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(AbsolutePathBuf::into_path_buf)
+            .collect()
+    }
+
+    pub(crate) fn uses_write_capabilities_for_cwd(
+        &self,
+        cwd: &Path,
+        env_map: &HashMap<String, String>,
+    ) -> bool {
+        !self.writable_roots_for_cwd(cwd, env_map).is_empty()
     }
 
     pub(crate) fn writable_roots_for_cwd(
@@ -205,6 +244,71 @@ mod tests {
         .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(expected_roots, roots);
+    }
+
+    #[test]
+    fn legacy_workspace_root_stays_bound_to_policy_cwd() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_cwd = tmp.path().join("workspace");
+        let command_cwd = policy_cwd.join("subdir");
+        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let permissions =
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(&policy, &policy_cwd);
+
+        let roots = permissions
+            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            roots,
+            vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
+        );
+    }
+
+    #[test]
+    fn permission_profile_workspace_root_stays_bound_to_profile_cwd() {
+        let tmp = TempDir::new().expect("tempdir");
+        let profile_cwd = tmp.path().join("workspace");
+        let command_cwd = profile_cwd.join("subdir");
+        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
+
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                }],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+            &permission_profile,
+            &profile_cwd,
+        )
+        .expect("managed permission profile");
+
+        let roots = permissions
+            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
+            .into_iter()
+            .map(|root| root.root)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            roots,
+            vec![dunce::canonicalize(&profile_cwd).expect("canonical profile cwd")]
+        );
     }
 
     #[test]

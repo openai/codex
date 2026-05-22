@@ -331,11 +331,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = match self.config.service_tier.clone() {
-            Some(service_tier) => Some(Some(service_tier)),
-            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
-            None => None,
-        };
+        let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
             items,

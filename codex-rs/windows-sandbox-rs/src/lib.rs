@@ -108,6 +108,8 @@ pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
+pub use audit::apply_world_writable_scan_and_denies_for_permissions;
+#[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
@@ -137,7 +139,11 @@ pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::ElevatedSandboxCaptureRequest;
 #[cfg(target_os = "windows")]
+pub use elevated_impl::ElevatedSandboxProfileCaptureRequest;
+#[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
+#[cfg(target_os = "windows")]
+pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run_windows_sandbox_capture_for_permission_profile_elevated;
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
@@ -177,9 +183,13 @@ pub use ipc_framed::read_frame;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::write_frame;
 #[cfg(target_os = "windows")]
-pub use logging::LOG_FILE_NAME;
+pub use logging::current_log_file_path;
+#[cfg(target_os = "windows")]
+pub use logging::log_file_path_for_utc_date;
 #[cfg(target_os = "windows")]
 pub use logging::log_note;
+#[cfg(target_os = "windows")]
+pub use logging::log_writer;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
@@ -198,6 +208,8 @@ pub use process::create_process_as_user;
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
@@ -254,6 +266,8 @@ pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_elevated;
 #[cfg(target_os = "windows")]
+pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
+#[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
@@ -291,8 +305,10 @@ mod windows_impl {
     use super::logging::log_success;
     use super::policy::SandboxPolicy;
     use super::process::create_process_as_user;
+    use super::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
+    use super::spawn_prep::SpawnPrepOptions;
     use super::spawn_prep::allow_null_device_for_workspace_write;
     use super::spawn_prep::apply_legacy_session_acl_rules;
     use super::spawn_prep::legacy_session_capability_roots;
@@ -400,17 +416,21 @@ mod windows_impl {
             .collect::<Vec<_>>();
         let common = prepare_legacy_spawn_context(
             policy_json_or_preset,
+            sandbox_policy_cwd,
             codex_home,
             cwd,
             &mut env_map,
             &command,
-            /*inherit_path*/ false,
-            /*add_git_safe_directory*/ false,
+            SpawnPrepOptions {
+                inherit_path: false,
+                add_git_safe_directory: false,
+            },
         )?;
         let policy = common.policy;
+        let permissions = common.permissions;
         let current_dir = common.current_dir;
         let logs_base_dir = common.logs_base_dir.as_deref();
-        let is_workspace_write = common.is_workspace_write;
+        let uses_write_capabilities = common.uses_write_capabilities;
         if !policy.has_full_disk_read_access() {
             anyhow::bail!(
                 "Restricted read-only access requires the elevated Windows sandbox backend"
@@ -429,10 +449,9 @@ mod windows_impl {
             codex_home,
         );
         let security = prepare_legacy_session_security(&policy, codex_home, cwd, capability_roots)?;
-        allow_null_device_for_workspace_write(is_workspace_write);
+        allow_null_device_for_workspace_write(uses_write_capabilities);
         apply_legacy_session_acl_rules(
-            &policy,
-            sandbox_policy_cwd,
+            &permissions,
             codex_home,
             &current_dir,
             &env_map,
@@ -598,8 +617,10 @@ mod windows_impl {
         );
         let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
         apply_legacy_session_acl_rules(
-            sandbox_policy,
-            sandbox_policy_cwd,
+            &ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(
+                sandbox_policy,
+                sandbox_policy_cwd,
+            ),
             codex_home,
             &current_dir,
             env_map,
@@ -618,7 +639,8 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use crate::policy::SandboxPolicy;
-        use crate::spawn_prep::should_apply_network_block;
+        use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+        use std::path::Path;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
@@ -627,6 +649,11 @@ mod windows_impl {
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
+        }
+
+        fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(policy, Path::new("."))
+                .should_apply_network_block()
         }
 
         #[test]

@@ -272,7 +272,6 @@ struct PickerPage {
 #[derive(Clone)]
 struct SessionPickerViewPersistence {
     codex_home: PathBuf,
-    active_profile: Option<String>,
 }
 
 struct SessionPickerRunOptions {
@@ -369,7 +368,6 @@ async fn run_resume_picker_with_launch_context(
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
             codex_home: config.codex_home.to_path_buf(),
-            active_profile: config.active_profile.clone(),
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
@@ -415,7 +413,6 @@ pub async fn run_fork_picker_with_app_server(
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
             codex_home: config.codex_home.to_path_buf(),
-            active_profile: config.active_profile.clone(),
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
@@ -1679,7 +1676,6 @@ impl PickerState {
         };
 
         ConfigEditsBuilder::new(&persistence.codex_home)
-            .with_profile(persistence.active_profile.as_deref())
             .set_session_picker_view(SessionPickerViewMode::from(self.density))
             .apply()
             .await
@@ -4444,7 +4440,6 @@ mod tests {
         );
         state.view_persistence = Some(SessionPickerViewPersistence {
             codex_home: tmp.path().to_path_buf(),
-            active_profile: None,
         });
 
         state
@@ -4458,39 +4453,6 @@ mod tests {
         assert_eq!(
             contents,
             r#"[tui]
-session_picker_view = "dense"
-"#
-        );
-    }
-
-    #[tokio::test]
-    async fn ctrl_o_persists_density_preference_for_active_profile() {
-        let tmp = tempdir().expect("tmpdir");
-        let loader = page_only_loader(|_| {});
-        let mut state = PickerState::new(
-            FrameRequester::test_dummy(),
-            loader,
-            ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
-            /*filter_cwd*/ None,
-            SessionPickerAction::Resume,
-        );
-        state.view_persistence = Some(SessionPickerViewPersistence {
-            codex_home: tmp.path().to_path_buf(),
-            active_profile: Some(String::from("work")),
-        });
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
-            .await
-            .unwrap();
-
-        assert_eq!(state.density, SessionListDensity::Dense);
-        let contents =
-            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(
-            contents,
-            r#"[profiles.work.tui]
 session_picker_view = "dense"
 "#
         );
@@ -4512,7 +4474,6 @@ session_picker_view = "dense"
         );
         state.view_persistence = Some(SessionPickerViewPersistence {
             codex_home: codex_home_file,
-            active_profile: None,
         });
 
         state

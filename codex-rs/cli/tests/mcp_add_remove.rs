@@ -69,6 +69,28 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
 }
 
 #[tokio::test]
+async fn profile_mcp_reports_legacy_profile_migration() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[profiles.work]
+model = "gpt-5"
+"#,
+    )?;
+
+    let mut list_cmd = codex_command(codex_home.path())?;
+    list_cmd
+        .args(["--profile", "work", "mcp", "list"])
+        .assert()
+        .failure()
+        .stderr(contains("--profile `work` cannot be used"))
+        .stderr(contains("[profiles.work]"))
+        .stderr(contains("work.config.toml"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     let codex_home = TempDir::new()?;
 

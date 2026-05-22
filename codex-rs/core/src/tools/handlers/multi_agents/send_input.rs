@@ -12,8 +12,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_send_input_tool_v1())
+    fn spec(&self) -> ToolSpec {
+        create_send_input_tool_v1()
     }
 
     async fn handle(
@@ -94,7 +94,7 @@ impl CoreToolRuntime for Handler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         multi_agent_tool_search_info(
             "send_input send message existing agent subagent follow up interrupt redirect queue target",
-            self.spec()?,
+            self.spec(),
         )
     }
 

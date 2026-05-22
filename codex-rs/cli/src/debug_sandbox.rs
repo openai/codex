@@ -110,7 +110,7 @@ pub async fn run_command_under_landlock(
     .await
 }
 
-pub async fn run_command_under_windows(
+pub async fn run_command_under_windows_sandbox(
     command: WindowsCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
@@ -672,8 +672,7 @@ async fn load_debug_sandbox_config_with_codex_home(
     // For legacy configs, `codex sandbox` historically defaulted to read-only
     // instead of inheriting ambient `sandbox_mode` settings from user/system
     // config. Keep that behavior unless this invocation explicitly passes a
-    // legacy `sandbox_mode` CLI override, which is now the documented writable
-    // replacement for the removed `--full-auto` flag.
+    // legacy `sandbox_mode` CLI override for compatibility with older callers.
     let uses_legacy_sandbox_mode_override = cli_overrides_use_legacy_sandbox_mode(&cli_overrides);
     let config = build_debug_sandbox_config(
         cli_overrides.clone(),
@@ -948,48 +947,6 @@ mod tests {
     #[tokio::test]
     async fn debug_sandbox_honors_explicit_builtin_permission_profile() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-
-        let config = load_debug_sandbox_config_with_codex_home(
-            Vec::new(),
-            /*codex_linux_sandbox_exe*/ None,
-            DebugSandboxConfigOptions {
-                permissions_profile: Some(":workspace".to_string()),
-                cwd: None,
-                managed_requirements_mode: ManagedRequirementsMode::Ignore,
-            },
-            Some(codex_home.path().to_path_buf()),
-            /*strict_config*/ false,
-        )
-        .await?;
-
-        let actual = config
-            .permissions
-            .permission_profile()
-            .file_system_sandbox_policy();
-        let expected = codex_protocol::models::PermissionProfile::workspace_write()
-            .file_system_sandbox_policy();
-        assert!(
-            expected
-                .entries
-                .iter()
-                .all(|entry| actual.entries.contains(entry)),
-            "explicit workspace profile should preserve the built-in workspace rules"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn explicit_permission_profile_overrides_active_profile_sandbox_mode()
-    -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "profile = \"legacy\"\n\
-             \n\
-             [profiles.legacy]\n\
-             sandbox_mode = \"danger-full-access\"\n",
-        )?;
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),

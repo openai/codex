@@ -679,6 +679,7 @@ fn append_resume_redaction_history(
                 arguments: Some(json!({"secret":"argument"})),
             },
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
                 content: vec![json!({

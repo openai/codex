@@ -4,14 +4,16 @@ use super::ChatWidget;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::service_tier_resolution;
 use codex_features::Feature;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::SPEED_TIER_FAST;
 
 impl ChatWidget {
     pub(crate) fn set_service_tier(&mut self, service_tier: Option<String>) {
-        self.config.service_tier = service_tier.clone();
-        self.effective_service_tier = service_tier;
+        self.config.service_tier = service_tier;
+        self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -23,8 +25,12 @@ impl ChatWidget {
         self.config.service_tier.clone()
     }
 
-    pub(crate) fn fast_default_opt_out(&self) -> Option<bool> {
-        self.config.notices.fast_default_opt_out
+    pub(crate) fn service_tier_update_for_core(&self) -> Option<Option<String>> {
+        service_tier_resolution::service_tier_update_for_core(
+            &self.config,
+            self.current_model(),
+            &self.model_catalog.try_list_models().unwrap_or_default(),
+        )
     }
 
     pub(crate) fn should_show_fast_status(&self, model: &str, service_tier: Option<&str>) -> bool {
@@ -50,7 +56,7 @@ impl ChatWidget {
             return;
         };
         let next_tier = if self.current_service_tier() == Some(fast_tier.id.as_str()) {
-            None
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
         } else {
             Some(fast_tier.id)
         };
@@ -59,7 +65,7 @@ impl ChatWidget {
 
     pub(crate) fn toggle_service_tier_from_ui(&mut self, command: ServiceTierCommand) {
         let next_tier = if self.current_service_tier() == Some(command.id.as_str()) {
-            None
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
         } else {
             Some(command.id)
         };
@@ -98,15 +104,13 @@ impl ChatWidget {
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<String>) {
-        if service_tier.is_none() {
-            self.config.notices.fast_default_opt_out = Some(true);
-        }
         self.set_service_tier(service_tier.clone());
         self.app_event_tx
             .send(AppEvent::CodexOp(AppCommand::override_turn_context(
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
                 /*active_permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,
@@ -142,5 +146,13 @@ impl ChatWidget {
         self.current_model_service_tier_commands()
             .into_iter()
             .find(|tier| tier.name.eq_ignore_ascii_case(SPEED_TIER_FAST))
+    }
+
+    pub(super) fn refresh_effective_service_tier(&mut self) {
+        self.effective_service_tier = service_tier_resolution::effective_service_tier(
+            &self.config,
+            self.current_model(),
+            &self.model_catalog.try_list_models().unwrap_or_default(),
+        );
     }
 }

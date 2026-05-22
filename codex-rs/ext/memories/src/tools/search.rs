@@ -51,11 +51,11 @@ where
         memory_tool_name(SEARCH_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<SearchArgs, SearchMemoriesResponse>(
             SEARCH_TOOL_NAME,
             "Search Codex memory files for substring matches, optionally normalizing separators or requiring all query substrings on the same line or within a line window.",
-        ))
+        )
     }
 
     async fn handle(

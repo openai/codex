@@ -1072,6 +1072,9 @@ impl MessageProcessor {
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
             }
+            ClientRequest::ThreadSearch { params, .. } => {
+                self.thread_processor.thread_search(params).await
+            }
             ClientRequest::ThreadLoadedList { params, .. } => {
                 self.thread_processor.thread_loaded_list(params).await
             }

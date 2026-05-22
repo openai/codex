@@ -1004,10 +1004,14 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
     assert!(
         err.error
             .message
-            .contains("invalid thread settings override")
+            .contains("`approval_policy = \"never\"` cannot be used"),
+        "unexpected error message: {}",
+        err.error.message
     );
     assert!(
-        err.error.message.contains("allowed set [ReadOnly]"),
+        err.error
+            .message
+            .contains("requirements do not allow `sandbox_mode = \"danger-full-access\"`"),
         "unexpected error message: {}",
         err.error.message
     );

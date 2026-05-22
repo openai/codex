@@ -32,8 +32,8 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         ToolName::plain("list_mcp_resources")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_mcp_resources_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_mcp_resources_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
