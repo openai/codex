@@ -1,5 +1,6 @@
 param(
-    [string]$Release = "latest"
+    [string]$Release = "latest",
+    [switch]$NonInteractive
 )
 
 Set-StrictMode -Version Latest
@@ -27,7 +28,7 @@ function Prompt-YesNo {
         [string]$Prompt
     )
 
-    if ($env:CODEX_INSTALL_SCRIPT_NONINTERACTIVE -eq "true") {
+    if ($NonInteractive) {
         return $false
     }
 
