@@ -303,13 +303,6 @@ impl ChatWidget {
 
         match result {
             Ok(mut snapshot) => {
-                if !is_final {
-                    snapshot.connectors = chatgpt_connectors::merge_connectors_with_accessible(
-                        Vec::new(),
-                        snapshot.connectors,
-                        /*all_connectors_loaded*/ false,
-                    );
-                }
                 if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors.cache {
                     let enabled_by_id: HashMap<&str, bool> = existing_snapshot
                         .connectors
@@ -339,7 +332,7 @@ impl ChatWidget {
                         .set_connectors_snapshot(Some(snapshot.clone()));
                 } else if let Some(snapshot) = partial_snapshot {
                     warn!(
-                        "failed to load full apps list; falling back to installed apps snapshot: {err}"
+                        "failed to load final apps list; falling back to latest apps update: {err}"
                     );
                     self.refresh_connectors_popup_if_open(&snapshot.connectors);
                     self.connectors.cache = ConnectorsCacheState::Ready(snapshot.clone());
