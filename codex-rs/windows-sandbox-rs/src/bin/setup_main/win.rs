@@ -6,7 +6,6 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_otel::StatsigMetricsSettings;
-use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
@@ -21,6 +20,7 @@ use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
+use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
@@ -36,7 +36,6 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
-use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -109,7 +108,7 @@ enum SetupMode {
     ReadAclsOnly,
 }
 
-fn log_line(log: &mut File, msg: &str) -> Result<()> {
+fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}").map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -156,7 +155,7 @@ fn workspace_write_cap_sids_for_path(
     Ok(sid_strs)
 }
 
-fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
+fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
     read_payload.refresh_only = true;
@@ -182,7 +181,7 @@ struct ReadAclSubjects<'a> {
 fn apply_read_acls(
     read_roots: &[PathBuf],
     subjects: &ReadAclSubjects<'_>,
-    log: &mut File,
+    log: &mut dyn Write,
     refresh_errors: &mut Vec<String>,
     access_mask: u32,
     access_label: &str,
@@ -259,7 +258,7 @@ fn read_mask_allows_or_log(
     read_mask: u32,
     access_label: &str,
     refresh_errors: &mut Vec<String>,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<bool> {
     match path_mask_allows(root, psids, read_mask, /*require_all_bits*/ true) {
         Ok(has) => Ok(has),
@@ -294,7 +293,7 @@ fn lock_sandbox_dir(
     sandbox_group_access_mode: i32,
     sandbox_group_mask: u32,
     real_user_mask: u32,
-    _log: &mut File,
+    _log: &mut dyn Write,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let system_sid = resolve_sid("SYSTEM")?;
@@ -391,8 +390,7 @@ pub fn main() -> Result<()> {
         if let Ok(codex_home) = std::env::var("CODEX_HOME") {
             let sbx_dir = sandbox_dir(Path::new(&codex_home));
             let _ = std::fs::create_dir_all(&sbx_dir);
-            let log_path = sbx_dir.join(LOG_FILE_NAME);
-            if let Ok(mut f) = File::options().create(true).append(true).open(&log_path) {
+            if let Some(mut f) = log_writer(&sbx_dir) {
                 let _ = writeln!(
                     f,
                     "[{}] top-level error: {}",
@@ -442,17 +440,12 @@ fn real_main() -> Result<()> {
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         ))
     })?;
-    let log_path = sbx_dir.join(LOG_FILE_NAME);
-    let mut log = File::options()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperLogFailed,
-                format!("open log {} failed: {err}", log_path.display()),
-            ))
-        })?;
+    let mut log = log_writer(&sbx_dir).ok_or_else(|| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLogFailed,
+            format!("open log in {} failed", sbx_dir.display()),
+        ))
+    })?;
     let result = run_setup(&payload, &mut log, &sbx_dir);
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
@@ -480,14 +473,14 @@ fn real_main() -> Result<()> {
     result
 }
 
-fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
         SetupMode::Full => run_setup_full(payload, log, sbx_dir),
     }
 }
 
-fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
+fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
     let _read_acl_guard = match acquire_read_acl_mutex()? {
         Some(guard) => guard,
         None => {
@@ -550,7 +543,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     Ok(())
 }
 
-fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let refresh_only = payload.refresh_only;
     if !refresh_only {
         let provision_result = provision_sandbox_users(

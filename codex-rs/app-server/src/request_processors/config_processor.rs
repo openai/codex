@@ -431,6 +431,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
+        allow_appshots: requirements.allow_appshots,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -655,6 +656,17 @@ mod tests {
             ])
         );
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_allow_appshots() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_appshots: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_appshots, Some(false));
         assert_eq!(mapped.hooks, None);
     }
 
