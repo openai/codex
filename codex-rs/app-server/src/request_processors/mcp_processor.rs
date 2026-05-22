@@ -402,10 +402,14 @@ impl McpRequestProcessor {
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
-        let meta = with_mcp_tool_call_turn_metadata_meta(
-            meta,
-            thread.current_mcp_request_turn_metadata().await,
-        );
+        let meta = if should_forward_turn_metadata_to_mcp_server(&params.server) {
+            with_mcp_tool_call_turn_metadata_meta(
+                meta,
+                thread.current_mcp_request_turn_metadata().await,
+            )
+        } else {
+            meta
+        };
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
@@ -418,6 +422,10 @@ impl McpRequestProcessor {
         });
         Ok(())
     }
+}
+
+fn should_forward_turn_metadata_to_mcp_server(server: &str) -> bool {
+    server == CODEX_APPS_MCP_SERVER_NAME
 }
 
 fn with_mcp_tool_call_turn_metadata_meta(
@@ -445,6 +453,21 @@ fn with_mcp_tool_call_turn_metadata_meta(
             Some(serde_json::Value::Object(map))
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_metadata_is_forwarded_only_to_codex_apps_mcp_server() {
+        assert!(should_forward_turn_metadata_to_mcp_server(
+            CODEX_APPS_MCP_SERVER_NAME
+        ));
+        assert!(!should_forward_turn_metadata_to_mcp_server(
+            "custom_mcp_server"
+        ));
     }
 }
 
