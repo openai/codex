@@ -351,10 +351,10 @@ async fn init_state_db_for_app_server_target(
     }
 }
 
-fn remove_tui_log_file(log_dir: &Path) {
+fn remove_legacy_tui_log_file(codex_home: &Path) {
     // Shared append-only TUI logs could grow without bound. Existing processes
     // may still hold the file open, so startup cleanup is best effort.
-    let _ = std::fs::remove_file(log_dir.join(TUI_LOG_FILE_NAME));
+    let _ = std::fs::remove_file(codex_home.join("log").join(TUI_LOG_FILE_NAME));
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -1064,7 +1064,7 @@ pub async fn run_main(
     )
     .await;
 
-    remove_tui_log_file(config.log_dir.as_path());
+    remove_legacy_tui_log_file(config.codex_home.as_path());
 
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1922,10 +1922,12 @@ mod tests {
     #[test]
     fn startup_removes_legacy_tui_log_file() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let legacy_log = temp_dir.path().join(TUI_LOG_FILE_NAME);
+        let legacy_log_dir = temp_dir.path().join("log");
+        std::fs::create_dir_all(&legacy_log_dir)?;
+        let legacy_log = legacy_log_dir.join(TUI_LOG_FILE_NAME);
         std::fs::write(&legacy_log, "legacy log")?;
 
-        remove_tui_log_file(temp_dir.path());
+        remove_legacy_tui_log_file(temp_dir.path());
 
         assert!(!legacy_log.exists());
         Ok(())
