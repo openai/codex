@@ -272,7 +272,14 @@ fn create_tool_input_schema(
     // in case any `$ref` leaks into the generated schema (even though we try
     // to inline subschemas).
     let mut input_schema = JsonObject::new();
-    for key in ["properties", "required", "type", "$defs", "definitions"] {
+    for key in [
+        "additionalProperties",
+        "properties",
+        "required",
+        "type",
+        "$defs",
+        "definitions",
+    ] {
         if let Some(value) = schema_object.remove(key) {
             input_schema.insert(key.to_string(), value);
         }
