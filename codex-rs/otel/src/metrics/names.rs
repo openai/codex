@@ -36,7 +36,6 @@ pub const GOAL_USAGE_LIMITED_METRIC: &str = "codex.goal.usage_limited";
 pub const GOAL_BLOCKED_METRIC: &str = "codex.goal.blocked";
 pub const GOAL_TOKEN_COUNT_METRIC: &str = "codex.goal.token_count";
 pub const GOAL_DURATION_SECONDS_METRIC: &str = "codex.goal.duration_s";
-pub const PROFILE_USAGE_METRIC: &str = "codex.profile.usage";
 pub const PLUGIN_INSTALL_ELICITATION_SENT_METRIC: &str = "codex.plugins.install_elicitation.sent";
 pub const PLUGIN_INSTALL_SUGGESTION_METRIC: &str = "codex.plugins.install_suggestion";
 pub const CURATED_PLUGINS_STARTUP_SYNC_METRIC: &str = "codex.plugins.startup_sync";

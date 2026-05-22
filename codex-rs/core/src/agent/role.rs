@@ -2,9 +2,9 @@
 //!
 //! Roles are selected at spawn time and are loaded with the same config machinery as
 //! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
-//! high-precedence layer, and preserves the caller's current profile/provider unless the role
-//! explicitly takes ownership of model selection. It does not decide when to spawn a sub-agent or
-//! which role to use; the multi-agent tool handler owns that orchestration.
+//! high-precedence layer, and preserves the caller's current provider and service tier unless the
+//! role layer sets them. It does not decide when to spawn a sub-agent or which role to use; the
+//! multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
@@ -29,14 +29,12 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
-/// Applies a named role layer to `config` while preserving caller-owned model selection.
+/// Applies a named role layer to `config` while preserving caller-owned provider settings.
 ///
 /// The role layer is inserted at session-flag precedence so it can override persisted config, but
-/// the caller's current `profile` and `model_provider` remain sticky runtime choices unless the
-/// role explicitly sets `profile`, explicitly sets `model_provider`, or rewrites the active
-/// profile's `model_provider` in place. Rebuilding the config without those overrides would make a
-/// spawned agent silently fall back to the default provider, which is the bug this preservation
-/// logic avoids.
+/// the caller's current `model_provider` and `service_tier` remain sticky runtime choices unless
+/// the role explicitly sets the corresponding top-level config key. Rebuilding the config without
+/// those overrides would make a spawned agent silently fall back to default settings.
 pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,

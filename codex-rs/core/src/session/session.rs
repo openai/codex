@@ -816,7 +816,6 @@ impl Session {
                     .permissions
                     .legacy_sandbox_policy(session_configuration.cwd.as_path()),
                 mcp_servers.keys().map(String::as_str).collect(),
-                /*active_profile*/ None,
             );
 
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
