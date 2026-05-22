@@ -12,8 +12,8 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
-use crate::tools::context::CallerVisibleRewriteOutput;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ModelVisibleRewriteOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -519,7 +519,7 @@ impl ToolRegistry {
             } else if let Some(updated_tool_output) = &outcome.updated_tool_output {
                 let mut guard = response_cell.lock().await;
                 if let Some(mut result) = guard.take() {
-                    result.result = Box::new(CallerVisibleRewriteOutput::new(
+                    result.result = Box::new(ModelVisibleRewriteOutput::new(
                         result.result,
                         updated_tool_output.clone(),
                     ));

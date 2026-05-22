@@ -18,6 +18,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::assert_regex_match;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -352,7 +353,7 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_post_tool_use_updated_tool_output_rewrites_exec_command_output() -> Result<()> {
+async fn code_mode_post_tool_use_updated_tool_output_preserves_exec_command_result() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -364,8 +365,8 @@ async fn code_mode_post_tool_use_updated_tool_output_rewrites_exec_command_outpu
                 .expect("write post tool use hook");
         })
         .with_config(|config| {
+            trust_discovered_hooks(config);
             let _ = config.features.enable(Feature::CodeMode);
-            let _ = config.features.enable(Feature::CodexHooks);
         });
     let test = builder.build(&server).await?;
 
@@ -406,7 +407,7 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf original-output" }))
     let parsed: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
     assert_eq!(
         parsed.get("output").and_then(Value::as_str),
-        Some(rewritten_output),
+        Some("original-output"),
     );
     assert_eq!(parsed.get("exit_code").and_then(Value::as_i64), Some(0));
     assert!(parsed.get("wall_time_seconds").is_some());

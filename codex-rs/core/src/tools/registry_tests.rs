@@ -1,6 +1,6 @@
 use super::*;
-use crate::tools::context::CallerVisibleRewriteOutput;
 use crate::tools::context::McpToolOutput;
+use crate::tools::context::ModelVisibleRewriteOutput;
 use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
@@ -68,8 +68,8 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
 }
 
 #[test]
-fn caller_visible_rewrite_reaches_direct_and_code_mode_callers() {
-    let result = mcp_result_with_caller_visible_rewrite();
+fn model_visible_rewrite_preserves_code_mode_result() {
+    let result = mcp_result_with_model_visible_rewrite();
 
     match result.into_response() {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
@@ -83,20 +83,24 @@ fn caller_visible_rewrite_reaches_direct_and_code_mode_callers() {
     }
 
     assert_eq!(
-        mcp_result_with_caller_visible_rewrite().code_mode_result(),
+        mcp_result_with_model_visible_rewrite().code_mode_result(),
         json!({
-            "echo": "rewritten",
+            "content": [],
+            "structuredContent": {
+                "echo": "original",
+            },
+            "isError": false,
         })
     );
 }
 
-fn mcp_result_with_caller_visible_rewrite() -> AnyToolResult {
+fn mcp_result_with_model_visible_rewrite() -> AnyToolResult {
     AnyToolResult {
         call_id: "mcp-call-1".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-        result: Box::new(CallerVisibleRewriteOutput::new(
+        result: Box::new(ModelVisibleRewriteOutput::new(
             Box::new(McpToolOutput {
                 result: CallToolResult {
                     content: Vec::new(),

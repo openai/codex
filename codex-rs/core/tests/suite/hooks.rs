@@ -3415,12 +3415,7 @@ async fn post_tool_use_updated_tool_output_replaces_shell_command_output() -> Re
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with output rewrite")
@@ -3485,12 +3480,7 @@ async fn post_tool_use_ignores_updated_tool_output_with_wrong_builtin_kind() -> 
                 panic!("failed to write post tool use hook test fixture: {error}");
             }
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::CodexHooks)
-                .expect("test config should allow feature update");
-        });
+        .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
     test.submit_turn("run the shell command with invalid output rewrite")
