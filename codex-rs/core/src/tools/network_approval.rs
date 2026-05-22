@@ -556,7 +556,6 @@ impl NetworkApprovalService {
                         Ok(()) => {
                             session
                                 .record_network_policy_amendment_message(
-                                    &turn_context.sub_id,
                                     &network_policy_amendment,
                                 )
                                 .await;
@@ -586,7 +585,6 @@ impl NetworkApprovalService {
                         Ok(()) => {
                             session
                                 .record_network_policy_amendment_message(
-                                    &turn_context.sub_id,
                                     &network_policy_amendment,
                                 )
                                 .await;

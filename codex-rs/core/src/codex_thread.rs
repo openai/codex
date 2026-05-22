@@ -5,7 +5,6 @@ use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
-#[cfg(test)]
 use crate::session::TurnInput;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
@@ -347,7 +346,7 @@ impl CodexThread {
         self.codex.session.token_usage_info().await
     }
 
-    /// Records a user-role session-prefix message without creating a new user turn boundary.
+    /// Injects a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let message = ResponseItem::Message {
             id: None,
@@ -362,19 +361,11 @@ impl CodexThread {
                 return;
             }
         };
-        if self
-            .codex
+        self.codex
             .session
-            .inject_into_active_turn(vec![pending_item])
-            .await
-            .is_err()
-        {
-            let turn_context = self.codex.session.new_default_turn().await;
-            self.codex
-                .session
-                .record_conversation_items(turn_context.as_ref(), &[message])
-                .await;
-        }
+            .input_queue
+            .inject(vec![TurnInput::ResponseInputItem(pending_item)])
+            .await;
     }
 
     /// Append a prebuilt message to the thread history without treating it as a user turn.

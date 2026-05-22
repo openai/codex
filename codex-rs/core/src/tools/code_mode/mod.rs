@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ToolRouter;
@@ -139,21 +140,22 @@ impl CodeModeTurnHost for CoreTurnHost {
         .map_err(|error| error.to_string())
     }
 
-    async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String> {
+    async fn notify(&self, call_id: String, _cell_id: String, text: String) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
         self.exec
             .session
-            .inject_into_active_turn(vec![ResponseInputItem::CustomToolCallOutput {
-                call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-            }])
-            .await
-            .map_err(|_| {
-                format!("failed to inject exec notify message for cell {cell_id}: no active turn")
-            })
+            .input_queue
+            .inject(vec![TurnInput::ResponseInputItem(
+                ResponseInputItem::CustomToolCallOutput {
+                    call_id,
+                    name: Some(PUBLIC_TOOL_NAME.to_string()),
+                    output: FunctionCallOutputPayload::from_text(text),
+                },
+            )])
+            .await;
+        Ok(())
     }
 }
 

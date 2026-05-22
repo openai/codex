@@ -17,6 +17,7 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
+use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
@@ -374,16 +375,8 @@ async fn persist_user_shell_output(
         _ => unreachable!("user shell command output record should always be a message"),
     };
 
-    if let Err(items) = session
-        .inject_into_active_turn(vec![response_input_item])
-        .await
-    {
-        let response_items = items
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<_>>();
-        session
-            .record_conversation_items(turn_context, &response_items)
-            .await;
-    }
+    session
+        .input_queue
+        .inject(vec![TurnInput::ResponseInputItem(response_input_item)])
+        .await;
 }

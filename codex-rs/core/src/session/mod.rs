@@ -1857,25 +1857,15 @@ impl Session {
         };
         let fragment = ApprovedCommandPrefixSaved::new(prefixes);
         let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_into_active_turn(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
-        }
+        self.input_queue
+            .inject(vec![TurnInput::ResponseInputItem(
+                ResponseInputItem::Message {
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                },
+            )])
+            .await;
     }
 
     pub(crate) async fn persist_network_policy_amendment(
@@ -1949,30 +1939,19 @@ impl Session {
 
     pub(crate) async fn record_network_policy_amendment_message(
         &self,
-        sub_id: &str,
         amendment: &NetworkPolicyAmendment,
     ) {
         let fragment = NetworkRuleSaved::new(amendment);
         let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_into_active_turn(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record network policy amendment message for {sub_id}");
-        }
+        self.input_queue
+            .inject(vec![TurnInput::ResponseInputItem(
+                ResponseInputItem::Message {
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                },
+            )])
+            .await;
     }
 
     /// Emit an exec approval request event and await the user's decision.
