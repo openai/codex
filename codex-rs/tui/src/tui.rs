@@ -166,6 +166,8 @@ mod tests {
 }
 
 pub fn set_modes() -> Result<()> {
+    ensure_virtual_terminal_processing()?;
+
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
@@ -239,6 +241,8 @@ fn restore_common(
     raw_mode_restore: RawModeRestore,
     keyboard_restore: KeyboardRestore,
 ) -> Result<()> {
+    ensure_virtual_terminal_processing()?;
+
     match keyboard_restore {
         KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
@@ -797,6 +801,8 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
+        ensure_virtual_terminal_processing()?;
+
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
@@ -854,6 +860,10 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         let terminal = &mut self.terminal;
         let state = &mut self.ambient_pet_image_state;
         stdout().sync_update(|_| {
@@ -869,6 +879,10 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         let terminal = &mut self.terminal;
         let state = &mut self.pet_picker_preview_image_state;
         stdout().sync_update(|_| {
@@ -887,6 +901,10 @@ impl Tui {
     pub fn clear_ambient_pet_image(
         &mut self,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         crate::pets::render_ambient_pet_image(
             self.terminal.backend_mut(),
             &mut self.ambient_pet_image_state,
@@ -910,6 +928,8 @@ impl Tui {
         let mut prepared_resume = self
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+
+        ensure_virtual_terminal_processing()?;
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -967,4 +987,52 @@ impl Tui {
         }
         Ok(None)
     }
+}
+
+#[cfg(windows)]
+fn ensure_virtual_terminal_processing() -> Result<()> {
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::ENABLE_PROCESSED_OUTPUT;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+
+    fn enable_for_handle(handle: HANDLE) -> Result<()> {
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            return Ok(());
+        }
+
+        let mut mode = 0;
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+            return Ok(());
+        }
+
+        let requested = ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if mode & requested == requested {
+            return Ok(());
+        }
+
+        if unsafe { SetConsoleMode(handle, mode | requested) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        Ok(())
+    }
+
+    let stdout_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    enable_for_handle(stdout_handle)?;
+
+    let stderr_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    enable_for_handle(stderr_handle)?;
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_virtual_terminal_processing() -> Result<()> {
+    Ok(())
 }
