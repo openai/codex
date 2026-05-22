@@ -383,6 +383,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a AbsolutePathBuf,
+    pub(crate) workspace_roots: &'a [AbsolutePathBuf],
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -422,6 +423,7 @@ impl<'a> SandboxAttempt<'a> {
                     request,
                     options,
                     windows_sandbox_policy_cwd,
+                    self.workspace_roots.to_vec(),
                 )
             })
     }
