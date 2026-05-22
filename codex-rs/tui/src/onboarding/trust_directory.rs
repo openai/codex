@@ -163,6 +163,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
+        self.error = None;
         self.selection = Some(TrustDirectorySelection::Trust);
     }
 

@@ -47,6 +47,7 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -89,7 +90,7 @@ pub(crate) struct OnboardingScreenArgs {
 }
 
 pub(crate) struct OnboardingResult {
-    pub directory_trust_decision: Option<TrustDirectorySelection>,
+    pub trusted_directory: Option<PathBuf>,
     pub should_exit: bool,
 }
 
@@ -221,17 +222,30 @@ impl OnboardingScreen {
                 .any(|step| matches!(step.get_step_state(), StepState::InProgress))
     }
 
-    pub fn directory_trust_decision(&self) -> Option<TrustDirectorySelection> {
-        self.steps
-            .iter()
-            .find_map(|step| {
-                if let Step::TrustDirectory(TrustDirectoryWidget { selection, .. }) = step {
-                    Some(*selection)
-                } else {
-                    None
-                }
-            })
-            .flatten()
+    fn trusted_directory_target(&self) -> Option<PathBuf> {
+        self.steps.iter().find_map(|step| {
+            if let Step::TrustDirectory(TrustDirectoryWidget {
+                selection: Some(TrustDirectorySelection::Trust),
+                trust_target,
+                ..
+            }) = step
+            {
+                Some(trust_target.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn set_trust_directory_error(&mut self, message: String) {
+        if let Some(Step::TrustDirectory(widget)) = self
+            .steps
+            .iter_mut()
+            .find(|step| matches!(step, Step::TrustDirectory(_)))
+        {
+            widget.selection = None;
+            widget.error = Some(message);
+        }
     }
 
     pub fn should_exit(&self) -> bool {
@@ -491,7 +505,9 @@ pub(crate) async fn run_onboarding_app(
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
 
+    let trust_request_handle = args.app_server_request_handle.clone();
     let mut onboarding_screen = OnboardingScreen::new(tui, args).await;
+    let mut trusted_directory = None;
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 
@@ -571,9 +587,46 @@ pub(crate) async fn run_onboarding_app(
                 }
             }
         }
+        if trusted_directory.is_none()
+            && let Some(trust_target) = onboarding_screen.trusted_directory_target()
+        {
+            match trust_request_handle.clone() {
+                Some(request_handle) => {
+                    if let Err(err) = crate::config_update::write_trusted_project(
+                        request_handle,
+                        trust_target.as_path(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %err,
+                            project = %trust_target.display(),
+                            "failed to persist trusted project state through app server"
+                        );
+                        onboarding_screen.set_trust_directory_error(format!(
+                            "Failed to set trust for {}: {err}",
+                            trust_target.display()
+                        ));
+                        let _ = tui.draw(u16::MAX, |frame| {
+                            frame.render_widget_ref(&onboarding_screen, frame.area());
+                        });
+                    } else {
+                        trusted_directory = Some(trust_target);
+                    }
+                }
+                None => {
+                    onboarding_screen.set_trust_directory_error(
+                        "Failed to set trust: app server is unavailable".to_string(),
+                    );
+                    let _ = tui.draw(u16::MAX, |frame| {
+                        frame.render_widget_ref(&onboarding_screen, frame.area());
+                    });
+                }
+            }
+        }
     }
     Ok(OnboardingResult {
-        directory_trust_decision: onboarding_screen.directory_trust_decision(),
+        trusted_directory,
         should_exit: onboarding_screen.should_exit(),
     })
 }

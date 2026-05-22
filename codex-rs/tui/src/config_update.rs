@@ -16,15 +16,13 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_config::loader::project_trust_key;
-use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
-use std::path::PathBuf;
+use std::path::Path;
 use uuid::Uuid;
 
 pub(crate) fn replace_config_value(key_path: impl Into<String>, value: JsonValue) -> ConfigEdit {
@@ -170,15 +168,11 @@ pub(crate) async fn write_oss_provider(
 
 pub(crate) async fn write_trusted_project(
     request_handle: AppServerRequestHandle,
-    cwd: &AbsolutePathBuf,
-) -> Result<PathBuf> {
-    let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
-        .await
-        .map(Into::into)
-        .unwrap_or_else(|| cwd.to_path_buf());
+    trust_target: &Path,
+) -> Result<()> {
     let mut project_update = serde_json::Map::new();
     project_update.insert(
-        project_trust_key(trust_target.as_path()),
+        project_trust_key(trust_target),
         serde_json::json!({ "trust_level": "trusted" }),
     );
     write_upsert_config_value(
@@ -193,7 +187,7 @@ pub(crate) async fn write_trusted_project(
             trust_target.display()
         )
     })?;
-    Ok(trust_target)
+    Ok(())
 }
 
 pub(crate) async fn write_config_value(

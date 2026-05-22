@@ -1421,26 +1421,7 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        if matches!(
-            onboarding_result.directory_trust_decision,
-            Some(crate::onboarding::TrustDirectorySelection::Trust)
-        ) {
-            let Some(app_server) = app_server.as_ref() else {
-                unreachable!("app server should exist while onboarding is active");
-            };
-            if let Err(err) = crate::config_update::write_trusted_project(
-                app_server.request_handle(),
-                &initial_config.cwd,
-            )
-            .await
-            {
-                tracing::warn!(
-                    error = %err,
-                    "failed to persist trusted project state through app server"
-                );
-            }
-        }
-        trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
+        trust_decision_was_made = onboarding_result.trusted_directory.is_some();
         // If this onboarding run included the login step, always refresh cloud requirements and
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
@@ -1456,7 +1437,7 @@ async fn run_ratatui_app(
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
-        if onboarding_result.directory_trust_decision.is_some()
+        if onboarding_result.trusted_directory.is_some()
             || (show_login_screen && !uses_remote_workspace)
         {
             load_config_or_exit(
