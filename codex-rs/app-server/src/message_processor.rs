@@ -315,7 +315,6 @@ impl MessageProcessor {
                     guardian_agent_spawner(thread_manager.clone()),
                     app_server_extension_event_sink(outgoing.clone()),
                     auth_manager.clone(),
-                    Arc::clone(&thread_store),
                 ),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),

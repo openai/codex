@@ -191,7 +191,6 @@ mod tests {
                     guardian_agent_spawner(thread_manager.clone()),
                     Arc::new(NoopExtensionEventSink),
                     auth_manager.clone(),
-                    Arc::clone(&thread_store),
                 ),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),

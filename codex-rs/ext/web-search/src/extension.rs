@@ -16,17 +16,14 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchMode;
-use codex_thread_store::ThreadStore;
 
 use crate::tool::WebSearchTool;
 
 #[derive(Clone)]
 struct WebSearchExtension {
     auth_manager: Arc<AuthManager>,
-    thread_store: Arc<dyn ThreadStore>,
 }
 
 #[derive(Clone)]
@@ -115,14 +112,9 @@ impl ToolContributor for WebSearchExtension {
         if !config.enabled {
             return Vec::new();
         }
-        let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
-            return Vec::new();
-        };
 
         vec![Arc::new(WebSearchTool {
             session_id: session_store.level_id().to_string(),
-            thread_id,
-            thread_store: Arc::clone(&self.thread_store),
             provider: create_model_provider(
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
@@ -132,15 +124,8 @@ impl ToolContributor for WebSearchExtension {
     }
 }
 
-pub fn install(
-    registry: &mut ExtensionRegistryBuilder<Config>,
-    auth_manager: Arc<AuthManager>,
-    thread_store: Arc<dyn ThreadStore>,
-) {
-    let extension = Arc::new(WebSearchExtension {
-        auth_manager,
-        thread_store,
-    });
+pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Arc<AuthManager>) {
+    let extension = Arc::new(WebSearchExtension { auth_manager });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.tool_contributor(extension);
@@ -148,14 +133,11 @@ pub fn install(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::ToolName;
     use codex_login::CodexAuth;
     use codex_model_provider_info::ModelProviderInfo;
-    use codex_thread_store::InMemoryThreadStore;
     use pretty_assertions::assert_eq;
 
     use super::AuthManager;
@@ -169,7 +151,6 @@ mod tests {
         install(
             &mut builder,
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            Arc::new(InMemoryThreadStore::default()),
         );
         let registry = builder.build();
         let session_store = ExtensionData::new("session");

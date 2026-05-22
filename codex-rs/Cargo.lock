@@ -4131,7 +4131,6 @@ dependencies = [
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-protocol",
- "codex-thread-store",
  "codex-tools",
  "codex-utils-output-truncation",
  "http 1.4.0",

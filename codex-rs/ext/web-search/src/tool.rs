@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use codex_api::ReqwestTransport;
 use codex_api::SearchClient;
 use codex_api::SearchCommands;
@@ -15,9 +13,6 @@ use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
-use codex_protocol::ThreadId;
-use codex_thread_store::LoadThreadHistoryParams;
-use codex_thread_store::ThreadStore;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::default_namespace_description;
@@ -33,8 +28,6 @@ const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
-    pub(crate) thread_id: ThreadId,
-    pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) provider: SharedModelProvider,
     pub(crate) settings: SearchSettings,
 }
@@ -45,13 +38,13 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
         ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
+    fn spec(&self) -> ToolSpec {
         let parameters = match parse_tool_input_schema(&commands_schema()) {
             Ok(parameters) => parameters,
             Err(err) => panic!("search command schema should parse: {err}"),
         };
 
-        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+        ToolSpec::Namespace(ResponsesApiNamespace {
             name: WEB_NAMESPACE.to_string(),
             description: default_namespace_description(WEB_NAMESPACE),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -62,19 +55,11 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 output_schema: None,
                 defer_loading: None,
             })],
-        }))
+        })
     }
 
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(&call)?;
-        let history = self
-            .thread_store
-            .load_history(LoadThreadHistoryParams {
-                thread_id: self.thread_id,
-                include_archived: false,
-            })
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
         let provider = self
             .provider
             .api_provider()
@@ -94,7 +79,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
             id: self.session_id.clone(),
             model: None,
             reasoning: None,
-            input: recent_input(&history.items),
+            input: recent_input(call.conversation_history.items()),
             commands: Some(commands),
             settings: Some(self.settings.clone()),
             max_output_tokens: Some(
