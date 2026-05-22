@@ -18,13 +18,6 @@ impl ExtensionToolAdapter {
     pub(crate) fn new(executor: Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>) -> Self {
         Self(executor)
     }
-
-    fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
-        let ToolPayload::Function { arguments } = payload else {
-            return None;
-        };
-        Some(arguments)
-    }
 }
 
 #[async_trait::async_trait]
@@ -55,7 +48,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 
 impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        self.arguments_from_payload(payload).is_some()
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 
