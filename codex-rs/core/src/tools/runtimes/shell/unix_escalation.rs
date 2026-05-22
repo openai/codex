@@ -15,7 +15,6 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
-use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -102,6 +101,7 @@ pub(super) async fn try_run_zsh_fork(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     command: &[String],
+    env: &HashMap<String, String>,
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
     let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
         tracing::warn!("ZshFork backend specified, but shell_zsh_path is not configured.");
@@ -116,9 +116,8 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
     let command =
-        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
+        build_sandbox_command(command, &req.cwd, env, req.additional_permissions.clone())?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
