@@ -4319,7 +4319,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
 }
 
 #[tokio::test]
-async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
+async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     config
@@ -4420,7 +4420,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Err(err) => err,
     };
     let msg = format!("{err:#}");
-    assert!(msg.contains("zsh fork feature enabled, but `zsh_path` is not configured"));
+    assert!(msg.contains("zsh fork feature enabled, but no packaged zsh fork is available"));
 }
 
 // todo: use online model info
