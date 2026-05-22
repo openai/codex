@@ -32,6 +32,7 @@ codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-install-context = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
