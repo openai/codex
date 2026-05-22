@@ -6,7 +6,9 @@ await-holding-invalid-types = [
     "tokio::sync::RwLockWriteGuard",
 ]
 disallowed-methods = [
-    { path = "std::process::Command::spawn", reason = "Don't leak processes on Drop.", replacement = "codex_managed_process::CommandExt::spawn_managed" },
+    { path = "std::process::Command::spawn",
+      reason = "Don't leak processes on Drop.",
+      replacement = "codex_managed_process::CommandExt::spawn_managed" },
     { path = "tokio::process::Command::spawn", reason = "Don't leak processes on Drop." },
     { path = "portable_pty::SlavePty::spawn_command", reason = "Don't leak processes on Drop." },
     { path = "ratatui::style::Color::Rgb", reason = "Use ANSI colors, which work better in various terminal themes." },

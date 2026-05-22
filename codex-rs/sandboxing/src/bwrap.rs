@@ -13,6 +13,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_managed_process::CommandExt;
+
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const MISSING_BWRAP_WARNING: &str = concat!(
     "Codex could not find bubblewrap on PATH. ",
