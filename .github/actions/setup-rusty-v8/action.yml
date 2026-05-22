@@ -1,28 +1,19 @@
-name: setup-rusty-v8-musl
-description: Download and verify musl rusty_v8 artifacts for Cargo builds.
+name: setup-rusty-v8
+description: Download and verify Codex-built rusty_v8 artifacts for Cargo builds.
 inputs:
   target:
-    description: Rust musl target triple.
+    description: Rust target triple with Codex-built V8 release artifacts.
     required: true
 
 runs:
   using: composite
   steps:
-    - name: Configure musl rusty_v8 artifact overrides and verify checksums
+    - name: Configure rusty_v8 artifact overrides and verify checksums
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
-
-        case "${TARGET}" in
-          x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
-            ;;
-          *)
-            echo "Unsupported musl rusty_v8 target: ${TARGET}" >&2
-            exit 1
-            ;;
-        esac
 
         version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
         release_tag="rusty-v8-v${version}"
@@ -42,6 +33,10 @@ runs:
           exit 1
         fi
 
-        (cd "${binding_dir}" && sha256sum -c "${checksums_path}")
+        if command -v sha256sum >/dev/null 2>&1; then
+          (cd "${binding_dir}" && sha256sum -c "${checksums_path}")
+        else
+          (cd "${binding_dir}" && shasum -a 256 -c "${checksums_path}")
+        fi
         echo "RUSTY_V8_ARCHIVE=${archive_path}" >> "${GITHUB_ENV}"
         echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "${GITHUB_ENV}"

@@ -271,6 +271,7 @@ async fn get_status_returns_not_found_without_manager() {
 async fn on_event_updates_status_from_task_started() {
     let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "turn-1".to_string(),
+        trace_id: None,
         started_at: None,
         model_context_window: None,
         collaboration_mode_kind: ModeKind::Default,
@@ -2121,6 +2122,64 @@ async fn list_agent_subtree_thread_ids_includes_anonymous_and_closed_descendants
         no_path_child_subtree_thread_ids,
         expected_no_path_child_subtree_thread_ids
     );
+}
+
+#[tokio::test]
+async fn list_agent_subtree_thread_ids_includes_live_descendants_without_state_db() {
+    let (_home, config) = test_config().await;
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*state_db*/ None,
+    );
+    let control = manager.agent_control();
+    let parent_thread_id = manager
+        .start_thread(config.clone())
+        .await
+        .expect("parent should start")
+        .thread_id;
+
+    let child_thread_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+    let grandchild_thread_id = control
+        .spawn_agent(
+            config,
+            text_input("hello grandchild"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: child_thread_id,
+                depth: 2,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("grandchild spawn should succeed");
+
+    let mut subtree_thread_ids = manager
+        .list_agent_subtree_thread_ids(parent_thread_id)
+        .await
+        .expect("live subtree should load");
+    subtree_thread_ids.sort_by_key(ToString::to_string);
+    let mut expected_subtree_thread_ids =
+        vec![parent_thread_id, child_thread_id, grandchild_thread_id];
+    expected_subtree_thread_ids.sort_by_key(ToString::to_string);
+
+    assert_eq!(subtree_thread_ids, expected_subtree_thread_ids);
 }
 
 #[tokio::test]

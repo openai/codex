@@ -42,9 +42,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-
       - name: Stage npm package
         id: stage_npm_package
         env:
@@ -55,17 +52,13 @@ jobs:
           # cross-platform native payload required by the npm package layout.
           # Passing the workflow URL directly avoids relying on old rust-v*
           # branches remaining discoverable via `gh run list --branch ...`.
-          CODEX_VERSION=0.125.0
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26131514935"
+          CODEX_VERSION=0.133.0-alpha.4
+          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
           OUTPUT_DIR="${RUNNER_TEMP}"
-          # This reused workflow predates codex-package archive artifacts, so
-          # CI synthesizes the package layout from the older per-binary
-          # artifacts. Release staging must use real package archives.
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
             --package codex \
-            --allow-legacy-codex-package \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
