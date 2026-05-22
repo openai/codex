@@ -579,10 +579,6 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<TurnInput>::new();
-        let mut token_usage_at_turn_start = None;
-        let mut turn_had_memory_citation = false;
-        let mut turn_tool_calls = 0_u64;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             active.as_mut().and_then(|active_turn| {
@@ -591,17 +587,21 @@ impl Session {
                 Some(Arc::clone(&active_turn.turn_state))
             })
         };
-        let should_clear_active_turn = turn_state.is_some();
-        if let Some(turn_state) = turn_state.as_ref() {
-            pending_input = self
-                .input_queue
-                .take_pending_input_for_turn_state(turn_state.as_ref())
-                .await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        let pending_input = self
+            .input_queue
+            .take_pending_input_for_turn_state(turn_state.as_ref())
+            .await;
+        let (turn_had_memory_citation, turn_tool_calls, token_usage_at_turn_start) = {
             let ts = turn_state.lock().await;
-            turn_had_memory_citation = ts.has_memory_citation;
-            turn_tool_calls = ts.tool_calls;
-            token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
-        }
+            (
+                ts.has_memory_citation,
+                ts.tool_calls,
+                ts.token_usage_at_turn_start.clone(),
+            )
+        };
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
                 let hook_outcome =
@@ -625,7 +625,7 @@ impl Session {
             }
         }
         // Emit token usage metrics.
-        if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
+        {
             // TODO(jif): drop this
             let tmp_mem = (
                 "tmp_mem_enabled",
@@ -750,14 +750,12 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
-        if should_clear_active_turn {
-            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
-                .await;
-        }
+        self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+            .await;
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
-                turn_completed: should_clear_active_turn,
+                turn_completed: true,
             })
             .await
         {
@@ -777,30 +775,26 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        if should_clear_active_turn {
-            let cleared_active_turn = {
-                let mut active = self.active_turn.lock().await;
-                if let Some(active_turn) = active.as_ref()
-                    && active_turn.task.is_none()
-                    && turn_state
-                        .as_ref()
-                        .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
-                {
-                    *active = None;
-                    true
-                } else {
-                    false
-                }
-            };
-            if !cleared_active_turn {
-                return;
-            }
-            if let Err(err) = self
-                .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-                .await
+        let cleared_active_turn = {
+            let mut active = self.active_turn.lock().await;
+            if let Some(active_turn) = active.as_ref()
+                && active_turn.task.is_none()
+                && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
             {
-                warn!("failed to apply goal runtime maybe-continue event: {err}");
+                *active = None;
+                true
+            } else {
+                false
             }
+        };
+        if !cleared_active_turn {
+            return;
+        }
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+            .await
+        {
+            warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
     }
 
