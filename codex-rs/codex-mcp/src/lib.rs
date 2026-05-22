@@ -52,6 +52,7 @@ pub use mcp::qualified_mcp_tool_name_prefix;
 pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod auth_elicitation;
+pub(crate) mod client_pool;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
@@ -59,4 +60,5 @@ pub(crate) mod mcp;
 pub(crate) mod rmcp_client;
 pub(crate) mod runtime;
 pub(crate) mod server;
+pub(crate) mod session_view;
 pub(crate) mod tools;
