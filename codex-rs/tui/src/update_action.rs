@@ -47,7 +47,12 @@ impl UpdateAction {
             ),
             UpdateAction::StandaloneWindows => (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"],
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "irm https://chatgpt.com/codex/install.ps1 | iex",
+                ],
             ),
         }
     }
@@ -142,7 +147,12 @@ mod tests {
             UpdateAction::StandaloneWindows.command_args(),
             (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"][..],
+                &[
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-c",
+                    "irm https://chatgpt.com/codex/install.ps1 | iex"
+                ][..],
             )
         );
     }
