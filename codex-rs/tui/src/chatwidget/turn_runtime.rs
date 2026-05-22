@@ -389,7 +389,7 @@ impl ChatWidget {
             }
             Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => {
                 self.on_error(
-                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
+                    "You have hit your spend cap in your workspace. Increase your spend cap to continue."
                         .to_string(),
                 );
             }
@@ -399,7 +399,8 @@ impl ChatWidget {
             }
             Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
                 self.on_error(
-                    "Request a limit increase from your owner to continue using codex.".to_string(),
+                    "You have hit your spend cap in your workspace. Ask an owner to increase your spend cap to continue."
+                        .to_string(),
                 );
                 self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
             }
