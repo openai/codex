@@ -32,6 +32,7 @@ use crate::events::ReviewTrigger;
 use crate::events::Reviewer;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ThreadStartTimingEventParams;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
@@ -1329,10 +1330,12 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
-            thread_start_duration_ms: Some(321),
-            thread_start_prepare_duration_ms: Some(111),
-            thread_start_spawn_duration_ms: Some(123),
-            thread_start_finalize_duration_ms: Some(87),
+            thread_start_timing: ThreadStartTimingEventParams {
+                thread_start_duration_ms: Some(321),
+                thread_start_prepare_duration_ms: Some(111),
+                thread_start_spawn_duration_ms: Some(123),
+                thread_start_finalize_duration_ms: Some(87),
+            },
             created_at: 1,
         },
     });

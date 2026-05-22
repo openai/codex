@@ -159,6 +159,14 @@ pub(crate) struct CodexAppServerStartedEventRequest {
     pub(crate) event_params: CodexAppServerStartedEventParams,
 }
 
+#[derive(Default, Serialize)]
+pub(crate) struct ThreadStartTimingEventParams {
+    pub(crate) thread_start_duration_ms: Option<u64>,
+    pub(crate) thread_start_prepare_duration_ms: Option<u64>,
+    pub(crate) thread_start_spawn_duration_ms: Option<u64>,
+    pub(crate) thread_start_finalize_duration_ms: Option<u64>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ThreadInitializedEventParams {
     pub(crate) thread_id: String,
@@ -170,10 +178,8 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
-    pub(crate) thread_start_duration_ms: Option<u64>,
-    pub(crate) thread_start_prepare_duration_ms: Option<u64>,
-    pub(crate) thread_start_spawn_duration_ms: Option<u64>,
-    pub(crate) thread_start_finalize_duration_ms: Option<u64>,
+    #[serde(flatten)]
+    pub(crate) thread_start_timing: ThreadStartTimingEventParams,
     pub(crate) created_at: u64,
 }
 
@@ -1061,10 +1067,7 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
-        thread_start_duration_ms: None,
-        thread_start_prepare_duration_ms: None,
-        thread_start_spawn_duration_ms: None,
-        thread_start_finalize_duration_ms: None,
+        thread_start_timing: ThreadStartTimingEventParams::default(),
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

@@ -47,6 +47,7 @@ use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ThreadStartTimingEventParams;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
@@ -1309,13 +1310,15 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    thread_start_duration_ms: thread_start_timing.map(|timing| timing.duration_ms),
-                    thread_start_prepare_duration_ms: thread_start_timing
-                        .map(|timing| timing.prepare_duration_ms),
-                    thread_start_spawn_duration_ms: thread_start_timing
-                        .map(|timing| timing.spawn_duration_ms),
-                    thread_start_finalize_duration_ms: thread_start_timing
-                        .map(|timing| timing.finalize_duration_ms),
+                    thread_start_timing: match thread_start_timing {
+                        Some(timing) => ThreadStartTimingEventParams {
+                            thread_start_duration_ms: Some(timing.duration_ms),
+                            thread_start_prepare_duration_ms: Some(timing.prepare_duration_ms),
+                            thread_start_spawn_duration_ms: Some(timing.spawn_duration_ms),
+                            thread_start_finalize_duration_ms: Some(timing.finalize_duration_ms),
+                        },
+                        None => ThreadStartTimingEventParams::default(),
+                    },
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },
