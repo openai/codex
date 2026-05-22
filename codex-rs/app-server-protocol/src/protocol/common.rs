@@ -585,6 +585,13 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadReadResponse,
     },
+    ThreadSuggestNextPrompt => "thread/suggestNextPrompt" {
+        params: v2::ThreadSuggestNextPromptParams,
+        // Suggestions do not mutate thread state, and cancellation requests must not queue
+        // behind the in-flight sampling request they are trying to stop.
+        serialization: None,
+        response: v2::ThreadSuggestNextPromptResponse,
+    },
     #[experimental("thread/turns/list")]
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,

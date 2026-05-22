@@ -3898,6 +3898,33 @@
       ],
       "type": "string"
     },
+    "ThreadSuggestNextPromptParams": {
+      "description": "Requests a best-effort predicted next prompt for one loaded thread.\n\nThis is an internal interactive-client helper. The request does not advance the thread or persist a new item; it asks the server to sample from the thread's current prompt-visible history.",
+      "properties": {
+        "cancel": {
+          "description": "When true, cancel the request identified by `cancellation_token` without sampling.\n\nThis requires `cancellation_token`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cancellationToken": {
+          "description": "Optional client token used to cancel an older in-flight suggestion request.\n\nReusing a token cancels the older request before this request samples.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Thread whose current completed history should be used for prediction.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadUnarchiveParams": {
       "properties": {
         "threadId": {
@@ -4746,6 +4773,30 @@
         "params"
       ],
       "title": "Thread/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/suggestNextPrompt"
+          ],
+          "title": "Thread/suggestNextPromptRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSuggestNextPromptParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/suggestNextPromptRequest",
       "type": "object"
     },
     {

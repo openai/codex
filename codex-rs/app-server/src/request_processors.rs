@@ -234,6 +234,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadSuggestNextPromptParams;
+use codex_app_server_protocol::ThreadSuggestNextPromptResponse;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;

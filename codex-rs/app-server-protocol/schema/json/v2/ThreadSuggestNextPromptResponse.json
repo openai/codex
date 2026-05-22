@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Returns the predicted prompt text, or silence when no suggestion is suitable.",
+  "properties": {
+    "suggestion": {
+      "description": "Composer-ready prompt text after server-side suppression and filtering.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "ThreadSuggestNextPromptResponse",
+  "type": "object"
+}

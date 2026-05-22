@@ -1171,6 +1171,38 @@ pub struct ThreadReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// Requests a best-effort predicted next prompt for one loaded thread.
+///
+/// This is an internal interactive-client helper. The request does not advance
+/// the thread or persist a new item; it asks the server to sample from the
+/// thread's current prompt-visible history.
+pub struct ThreadSuggestNextPromptParams {
+    /// Thread whose current completed history should be used for prediction.
+    pub thread_id: String,
+    /// Optional client token used to cancel an older in-flight suggestion request.
+    ///
+    /// Reusing a token cancels the older request before this request samples.
+    #[ts(optional = nullable)]
+    pub cancellation_token: Option<String>,
+    /// When true, cancel the request identified by `cancellation_token` without sampling.
+    ///
+    /// This requires `cancellation_token`.
+    #[ts(optional = nullable)]
+    pub cancel: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Returns the predicted prompt text, or silence when no suggestion is suitable.
+pub struct ThreadSuggestNextPromptResponse {
+    /// Composer-ready prompt text after server-side suppression and filtering.
+    pub suggestion: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadInjectItemsParams {
     pub thread_id: String,
     /// Raw Responses API items to append to the thread's model-visible history.
