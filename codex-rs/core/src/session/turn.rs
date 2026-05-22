@@ -159,7 +159,8 @@ pub(crate) async fn run_turn(
     .await
     {
         Ok(pre_sampling_compact) => pre_sampling_compact,
-        Err(err) => {
+        Err(AutoCompactRunError::NoProgressLimitReached) => return RunTurnResult::Terminal,
+        Err(AutoCompactRunError::Compact(err)) => {
             if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
                 && let Err(err) = sess
                     .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
@@ -170,11 +171,7 @@ pub(crate) async fn run_turn(
                 warn!("failed to usage-limit active goal after usage-limit error: {err}");
             }
             error!("Failed to run pre-sampling compact");
-            return if err.to_codex_protocol_error() == CodexErrorInfo::ContextWindowExceeded {
-                RunTurnResult::Terminal
-            } else {
-                RunTurnResult::Continue(None)
-            };
+            return RunTurnResult::Continue(None);
         }
     };
     if pre_sampling_compact.reset_client_session {
@@ -362,7 +359,10 @@ pub(crate) async fn run_turn(
                     .await
                     {
                         Ok(reset_client_session) => reset_client_session,
-                        Err(err) => {
+                        Err(AutoCompactRunError::NoProgressLimitReached) => {
+                            return RunTurnResult::Terminal;
+                        }
+                        Err(AutoCompactRunError::Compact(err)) => {
                             if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
                                 && let Err(err) = sess
                                     .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
@@ -374,13 +374,7 @@ pub(crate) async fn run_turn(
                                     "failed to usage-limit active goal after usage-limit error: {err}"
                                 );
                             }
-                            return if err.to_codex_protocol_error()
-                                == CodexErrorInfo::ContextWindowExceeded
-                            {
-                                RunTurnResult::Terminal
-                            } else {
-                                RunTurnResult::Continue(None)
-                            };
+                            return RunTurnResult::Continue(None);
                         }
                     };
                     if reset_client_session {
@@ -689,6 +683,17 @@ pub(crate) struct AutoCompactTurnLimiter {
     consecutive_no_progress: usize,
 }
 
+enum AutoCompactRunError {
+    NoProgressLimitReached,
+    Compact(CodexErr),
+}
+
+impl From<CodexErr> for AutoCompactRunError {
+    fn from(err: CodexErr) -> Self {
+        Self::Compact(err)
+    }
+}
+
 impl AutoCompactTurnLimiter {
     fn reset_after_user_input(&mut self) {
         self.consecutive_no_progress = 0;
@@ -700,7 +705,7 @@ impl AutoCompactTurnLimiter {
         turn_context: &TurnContext,
         reason: CompactionReason,
         phase: CompactionPhase,
-    ) -> CodexResult<()> {
+    ) -> Result<(), AutoCompactRunError> {
         if self.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS_AUTO_COMPACTIONS {
             let token_status = auto_compact_token_status(sess, turn_context).await;
             if !token_status.token_limit_reached {
@@ -730,7 +735,7 @@ impl AutoCompactTurnLimiter {
                 }),
             )
             .await;
-            return Err(CodexErr::ContextWindowExceeded);
+            return Err(AutoCompactRunError::NoProgressLimitReached);
         }
 
         Ok(())
@@ -802,7 +807,7 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     auto_compact_limiter: &mut AutoCompactTurnLimiter,
-) -> CodexResult<PreSamplingCompactResult> {
+) -> Result<PreSamplingCompactResult, AutoCompactRunError> {
     let mut pre_sampling_compacted = maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
@@ -842,7 +847,7 @@ async fn maybe_run_previous_model_inline_compact(
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     auto_compact_limiter: &mut AutoCompactTurnLimiter,
-) -> CodexResult<bool> {
+) -> Result<bool, AutoCompactRunError> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(false);
     };
@@ -900,7 +905,7 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
-) -> CodexResult<bool> {
+) -> Result<bool, AutoCompactRunError> {
     auto_compact_limiter
         .ensure_can_dispatch(sess.as_ref(), turn_context.as_ref(), reason, phase)
         .await?;
