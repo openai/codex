@@ -109,14 +109,14 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
             &additional_context_snapshot_options(),
         )
     );
-    let developer_external_texts = request
+    let developer_context_texts = request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("<external_"))
+        .filter(|text| text.starts_with("<automation_info>"))
         .collect::<Vec<_>>();
     assert_eq!(
-        developer_external_texts,
-        vec!["<external_automation_info>run one</external_automation_info>"]
+        developer_context_texts,
+        vec!["<automation_info>run one</automation_info>"]
     );
     assert_eq!(
         request.message_input_texts("user"),
@@ -156,14 +156,14 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
     wait_for_turn_complete(&test.codex).await;
 
     let request = request.single_request();
-    let developer_external_texts = request
+    let developer_context_texts = request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("<external_"))
+        .filter(|text| text.starts_with("<automation_info>"))
         .collect::<Vec<_>>();
     assert_eq!(
-        developer_external_texts,
-        vec!["<external_automation_info>run one</external_automation_info>"]
+        developer_context_texts,
+        vec!["<automation_info>run one</automation_info>"]
     );
     assert_eq!(
         request.message_input_texts("user"),

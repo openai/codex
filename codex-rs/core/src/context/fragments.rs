@@ -70,14 +70,11 @@ impl ContextualUserFragment for AdditionalContextDeveloperFragment {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        (
-            ADDITIONAL_CONTEXT_START_MARKER_PREFIX,
-            ADDITIONAL_CONTEXT_END_MARKER_SUFFIX,
-        )
+        ("", "")
     }
 
     fn body(&self) -> String {
-        additional_context_body(&self.key, &self.value)
+        additional_context_developer_body(&self.key, &self.value)
     }
 }
 
@@ -94,4 +91,9 @@ fn additional_context_input_item<T: ContextualUserFragment>(fragment: T) -> Resp
 fn additional_context_body(key: &str, value: &str) -> String {
     let value = truncate_middle_with_token_budget(value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
     format!("{key}>{value}</external_{key}")
+}
+
+fn additional_context_developer_body(key: &str, value: &str) -> String {
+    let value = truncate_middle_with_token_budget(value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
+    format!("<{key}>{value}</{key}>")
 }
