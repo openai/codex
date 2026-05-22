@@ -510,7 +510,6 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
             Vec::new(),
-            /*active_profile*/ None,
         );
         manager.record_api_request(
             /*attempt*/ 1,

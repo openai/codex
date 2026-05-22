@@ -134,7 +134,6 @@ pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
@@ -375,11 +374,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let run_cloud_requirements = cloud_requirements.clone();
 
     let model_provider = if oss {
-        let resolved = resolve_oss_provider(
-            oss_provider.as_deref(),
-            &config_toml,
-            /*config_profile*/ None,
-        );
+        let resolved = resolve_oss_provider(oss_provider.as_deref(), &config_toml);
 
         if let Some(provider) = resolved {
             Some(provider)
@@ -418,7 +413,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         workspace_roots: None,
         model_provider: model_provider.clone(),
         service_tier: None,
-        config_profile: None,
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
@@ -972,7 +966,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: config_request_overrides_from_config(config),
+        config: None,
         ephemeral: Some(config.ephemeral),
         thread_source: Some(ThreadSource::User),
         ..ThreadStartParams::default()
@@ -1003,7 +997,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
         permissions,
-        config: config_request_overrides_from_config(config),
+        config: None,
         ..ThreadResumeParams::default()
     }
 }
@@ -1042,13 +1036,6 @@ fn sandbox_mode_from_permission_profile(
             }
         }
     }
-}
-
-fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
 }
 
 fn approvals_reviewer_override_from_config(

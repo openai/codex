@@ -996,11 +996,7 @@ pub async fn run_main(
     .await;
 
     let model_provider_override = if cli.oss {
-        let resolved = resolve_oss_provider(
-            cli.oss_provider.as_deref(),
-            &config_toml,
-            /*config_profile*/ None,
-        );
+        let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml);
 
         if let Some(provider) = resolved {
             Some(provider)
@@ -1668,7 +1664,6 @@ async fn run_ratatui_app(
     }
 
     set_default_client_residency_requirement(config.enforce_residency.value());
-    let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
     #[cfg(target_os = "windows")]
     let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
@@ -1743,7 +1738,6 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),
-        active_profile,
         prompt,
         images,
         session_selection,
