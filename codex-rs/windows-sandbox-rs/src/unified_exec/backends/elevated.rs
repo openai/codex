@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     permission_profile: &PermissionProfile,
-    permission_profile_cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -49,10 +49,11 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
-    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-        permission_profile,
-        permission_profile_cwd,
-    )?;
+    let permissions =
+        ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            permission_profile,
+            workspace_roots,
+        )?;
     let elevated = prepare_elevated_spawn_context_for_permissions(
         permissions,
         codex_home,
@@ -71,7 +72,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
         permission_profile: permission_profile.clone(),
-        permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+        workspace_roots: workspace_roots.to_vec(),
         codex_home: elevated.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),

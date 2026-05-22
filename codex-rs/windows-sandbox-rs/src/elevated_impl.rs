@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
-    pub permission_profile_cwd: &'a Path,
+    pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
     pub command: Vec<String>,
     pub cwd: &'a Path,
@@ -57,7 +57,7 @@ mod windows_impl {
     ) -> Result<CaptureResult> {
         let ElevatedSandboxProfileCaptureRequest {
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
             codex_home,
             command,
             cwd,
@@ -71,10 +71,11 @@ mod windows_impl {
             deny_read_paths_override,
             deny_write_paths_override,
         } = request;
-        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-            permission_profile,
-            permission_profile_cwd,
-        )?;
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                permission_profile,
+                workspace_roots,
+            )?;
         let deny_read_paths_override = deny_read_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -139,7 +140,7 @@ mod windows_impl {
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
-                permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+                workspace_roots: workspace_roots.to_vec(),
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,

@@ -85,6 +85,7 @@ impl ToolOrchestrator {
             enforce_managed_network: attempt.enforce_managed_network,
             manager: attempt.manager,
             sandbox_cwd: attempt.sandbox_cwd,
+            workspace_roots: attempt.workspace_roots,
             codex_linux_sandbox_exe: attempt.codex_linux_sandbox_exe,
             use_legacy_landlock: attempt.use_legacy_landlock,
             windows_sandbox_level: attempt.windows_sandbox_level,
@@ -236,12 +237,14 @@ impl ToolOrchestrator {
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         #[allow(deprecated)]
         let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
+        let workspace_roots = turn_ctx.config.effective_workspace_roots();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             permissions: &turn_ctx.permission_profile,
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
             sandbox_cwd,
+            workspace_roots: workspace_roots.as_slice(),
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -360,6 +363,7 @@ impl ToolOrchestrator {
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd,
+                    workspace_roots: workspace_roots.as_slice(),
                     codex_linux_sandbox_exe: None,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
