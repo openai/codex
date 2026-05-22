@@ -9,7 +9,6 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
 use std::process::Command;
@@ -68,6 +67,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::Config;
+use codex_managed_process::CommandExt;
+use codex_managed_process::ManagedChild;
 use codex_otel::OtelProvider;
 use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -431,7 +432,7 @@ enum Endpoint {
 }
 
 struct BackgroundAppServer {
-    process: Child,
+    process: ManagedChild,
     url: String,
 }
 
@@ -482,7 +483,6 @@ impl BackgroundAppServer {
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
         }
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let process = cmd
             .arg("app-server")
             .arg("--listen")
@@ -490,7 +490,7 @@ impl BackgroundAppServer {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
-            .spawn()
+            .spawn_managed()
             .with_context(|| format!("failed to start `{}` app-server", codex_bin.display()))?;
 
         Ok(Self { process, url })
@@ -536,7 +536,10 @@ fn serve(codex_bin: &Path, config_overrides: &[String], listen: &str, kill: bool
     }
     cmdline.push_str(&format!(" app-server --listen {}", shell_quote(listen)));
 
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "ManagedChild would terminate this intentionally detached app-server."
+    )]
     let child = Command::new("nohup")
         .arg("sh")
         .arg("-c")
@@ -1379,7 +1382,7 @@ fn parse_dynamic_tools_arg(dynamic_tools: &Option<String>) -> Result<Option<Vec<
 
 enum ClientTransport {
     Stdio {
-        child: Child,
+        child: ManagedChild,
         stdin: Option<ChildStdin>,
         stdout: BufReader<ChildStdout>,
     },
@@ -1446,13 +1449,12 @@ impl CodexClient {
         for override_kv in config_overrides {
             cmd.arg("--config").arg(override_kv);
         }
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut codex_app_server = cmd
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .spawn()
+            .spawn_managed()
             .with_context(|| format!("failed to start `{codex_bin_display}` app-server"))?;
 
         let stdin = codex_app_server

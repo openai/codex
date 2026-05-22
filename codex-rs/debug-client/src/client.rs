@@ -2,7 +2,6 @@
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
-use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
 use std::process::Command;
@@ -33,6 +32,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_managed_process::CommandExt;
+use codex_managed_process::ManagedChild;
 use serde::Serialize;
 
 use crate::output::Output;
@@ -42,7 +43,7 @@ use crate::state::ReaderEvent;
 use crate::state::State;
 
 pub struct AppServerClient {
-    child: Child,
+    child: ManagedChild,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stdout: Option<BufReader<ChildStdout>>,
     next_request_id: AtomicI64,
@@ -63,13 +64,12 @@ impl AppServerClient {
             cmd.arg("--config").arg(override_kv);
         }
 
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = cmd
             .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .spawn()
+            .spawn_managed()
             .with_context(|| format!("failed to start `{codex_bin}` app-server"))?;
 
         let stdin = child

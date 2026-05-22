@@ -5,6 +5,7 @@ use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
 
+use codex_managed_process::CommandExt;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
 use reqwest::Client;
@@ -523,12 +524,11 @@ fn run_git_command_with_timeout(
     context: &str,
     timeout: Duration,
 ) -> Result<Output, String> {
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_managed()
         .map_err(|err| format!("failed to run {context}: {err}"))?;
 
     let start = std::time::Instant::now();

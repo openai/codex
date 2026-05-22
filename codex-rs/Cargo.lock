@@ -2041,6 +2041,7 @@ dependencies = [
  "clap",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-managed-process",
  "codex-otel",
  "codex-protocol",
  "codex-utils-cli",
@@ -2238,6 +2239,7 @@ dependencies = [
  "codex-features",
  "codex-install-context",
  "codex-login",
+ "codex-managed-process",
  "codex-mcp",
  "codex-mcp-server",
  "codex-memories-write",
@@ -2508,6 +2510,7 @@ dependencies = [
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
+ "codex-managed-process",
  "codex-mcp",
  "codex-memories-read",
  "codex-model-provider",
@@ -2627,6 +2630,7 @@ dependencies = [
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
+ "codex-managed-process",
  "codex-model-provider",
  "codex-otel",
  "codex-plugin",
@@ -2690,6 +2694,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-app-server-protocol",
+ "codex-managed-process",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3099,6 +3104,14 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
+]
+
+[[package]]
+name = "codex-managed-process"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "tracing",
 ]
 
 [[package]]
@@ -3589,6 +3602,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "codex-managed-process",
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -3631,6 +3645,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "codex-managed-process",
  "codex-protocol",
  "codex-utils-absolute-path",
  "once_cell",
@@ -3703,6 +3718,7 @@ name = "codex-stdio-to-uds"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-managed-process",
  "codex-uds",
  "codex-utils-cargo-bin",
  "pretty_assertions",
@@ -3807,6 +3823,7 @@ dependencies = [
  "codex-git-utils",
  "codex-install-context",
  "codex-login",
+ "codex-managed-process",
  "codex-mcp",
  "codex-message-history",
  "codex-model-provider",
@@ -4083,6 +4100,7 @@ dependencies = [
 name = "codex-utils-sleep-inhibitor"
 version = "0.0.0"
 dependencies = [
+ "codex-managed-process",
  "core-foundation 0.9.4",
  "libc",
  "tracing",

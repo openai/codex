@@ -277,6 +277,7 @@ fn track_descendants(kq: libc::c_int, root_pid: i32) -> HashSet<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_managed_process::CommandExt;
     use std::process::Command;
     use std::process::Stdio;
     use std::time::Duration;
@@ -290,11 +291,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn list_child_pids_includes_spawned_child() {
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new("/bin/sleep")
             .arg("5")
             .stdin(Stdio::null())
-            .spawn()
+            .spawn_managed()
             .expect("failed to spawn child process");
 
         let child_pid = child.id() as i32;
@@ -320,11 +320,10 @@ mod tests {
     async fn pid_tracker_collects_spawned_children() {
         let tracker = PidTracker::new(std::process::id() as i32).expect("failed to create tracker");
 
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new("/bin/sleep")
             .arg("0.1")
             .stdin(Stdio::null())
-            .spawn()
+            .spawn_managed()
             .expect("failed to spawn child process");
 
         let child_pid = child.id() as i32;
@@ -349,14 +348,13 @@ mod tests {
     async fn pid_tracker_collects_bash_subshell_descendants() {
         let tracker = PidTracker::new(std::process::id() as i32).expect("failed to create tracker");
 
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let child = Command::new("/bin/bash")
             .arg("-c")
             .arg("(sleep 0.1 & echo $!; wait)")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
+            .spawn_managed()
             .expect("failed to spawn bash");
 
         let output = child.wait_with_output().unwrap().stdout;

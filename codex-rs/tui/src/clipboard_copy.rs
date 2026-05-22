@@ -19,6 +19,7 @@
 //! no reusable clipboard abstraction. Image paste lives in `clipboard_paste`.
 
 use base64::Engine;
+use codex_managed_process::CommandExt;
 use std::io::Write;
 
 /// Maximum raw bytes we will base64-encode into an OSC 52 sequence.
@@ -262,10 +263,6 @@ fn arboard_copy(_text: &str) -> Result<Option<ClipboardLease>, String> {
 /// Copy text into the Windows clipboard from a WSL process.
 #[cfg(target_os = "linux")]
 fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "Grandfathered-in usage."
-    )]
     let mut child = std::process::Command::new("powershell.exe")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -275,7 +272,7 @@ fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
             "-Command",
             "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text",
         ])
-        .spawn()
+        .spawn_managed()
         .map_err(|e| format!("failed to spawn powershell.exe: {e}"))?;
 
     let Some(mut stdin) = child.stdin.take() else {
@@ -325,13 +322,12 @@ fn tmux_clipboard_copy(text: &str) -> Result<(), String> {
         || tmux_command_output(["info"]),
     )?;
 
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = std::process::Command::new("tmux")
         .args(["load-buffer", "-w", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .spawn()
+        .spawn_managed()
         .map_err(|e| format!("failed to spawn tmux: {e}"))?;
 
     let Some(mut stdin) = child.stdin.take() else {

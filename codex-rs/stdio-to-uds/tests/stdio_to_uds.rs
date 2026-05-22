@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
+use codex_managed_process::CommandExt;
 use codex_uds::UnixListener;
 use pretty_assertions::assert_eq;
 use tokio::io::AsyncReadExt;
@@ -72,13 +73,12 @@ async fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
     let child_task = tokio::task::spawn_blocking(move || -> anyhow::Result<ChildOutput> {
         let stdin =
             std::fs::File::open(&request_path).context("failed to open child stdin fixture")?;
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new(codex_utils_cargo_bin::cargo_bin("codex-stdio-to-uds")?)
             .arg(&socket_path)
             .stdin(Stdio::from(stdin))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
+            .spawn_managed()
             .context("failed to spawn codex-stdio-to-uds")?;
 
         let mut child_stdout = child.stdout.take().context("missing child stdout")?;

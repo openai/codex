@@ -1,5 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_managed_process::CommandExt;
+use codex_managed_process::ManagedChild;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -103,7 +105,7 @@ fn encoded_parser_script() -> &'static str {
 }
 
 struct PowershellParserProcess {
-    child: Child,
+    child: ManagedChild,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     // Request ids are monotonic within one child process so the caller can detect protocol
@@ -113,7 +115,6 @@ struct PowershellParserProcess {
 
 impl PowershellParserProcess {
     fn spawn(executable: &str) -> std::io::Result<Self> {
-        #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
         let mut child = Command::new(executable)
             .args([
                 "-NoLogo",
@@ -125,7 +126,7 @@ impl PowershellParserProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()?;
+            .spawn_managed()?;
         let stdin = match take_child_stdin(&mut child) {
             Ok(stdin) => stdin,
             Err(error) => {

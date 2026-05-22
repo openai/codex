@@ -12,6 +12,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_managed_process::CommandExt;
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const MISSING_BWRAP_WARNING: &str = concat!(
     "Codex could not find bubblewrap on PATH. ",
@@ -72,7 +73,6 @@ fn system_bwrap_warning_for_path(system_bwrap_path: Option<&Path>) -> Option<Str
 }
 
 fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path, timeout: Duration) -> bool {
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
     let mut child = match Command::new(system_bwrap_path)
         .args([
             "--unshare-user",
@@ -84,7 +84,7 @@ fn system_bwrap_has_user_namespace_access(system_bwrap_path: &Path, timeout: Dur
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_managed()
     {
         Ok(child) => child,
         Err(_) => return true,

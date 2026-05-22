@@ -1,5 +1,6 @@
+use codex_managed_process::CommandExt as _;
+use codex_managed_process::ManagedChild;
 use std::os::unix::process::CommandExt;
-use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
 use tracing::warn;
@@ -25,7 +26,7 @@ enum InhibitState {
     Inactive,
     Active {
         backend: LinuxBackend,
-        child: Child,
+        child: ManagedChild,
     },
 }
 
@@ -167,7 +168,7 @@ impl Drop for LinuxSleepInhibitor {
     }
 }
 
-fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
+fn spawn_backend(backend: LinuxBackend) -> Result<ManagedChild, std::io::Error> {
     // Ensure the helper receives SIGTERM when the original parent dies.
     // `parent_pid` is captured before spawn and checked in `pre_exec` to avoid
     // the fork/exec race where the parent exits before PDEATHSIG is armed.
@@ -222,8 +223,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
         });
     }
 
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
-    command.spawn()
+    command.spawn_managed()
 }
 
 fn child_exited(error: &std::io::Error) -> bool {

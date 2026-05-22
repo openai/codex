@@ -5,6 +5,7 @@
 //! `cargo test --test live_cli -- --ignored` provided they set a valid `OPENAI_API_KEY`.
 
 use assert_cmd::prelude::*;
+use codex_managed_process::CommandExt;
 use predicates::prelude::*;
 use std::process::Command;
 use std::process::Stdio;
@@ -60,8 +61,7 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    #[allow(clippy::disallowed_methods, reason = "Grandfathered-in usage.")]
-    let mut child = cmd.spawn().expect("failed to spawn codex-rs");
+    let mut child = cmd.spawn_managed().expect("failed to spawn codex-rs");
 
     // Send the terminating newline so Session::run exits after the first turn.
     child

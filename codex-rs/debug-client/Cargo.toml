@@ -11,6 +11,7 @@ workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol.workspace = true
+codex-managed-process = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 
