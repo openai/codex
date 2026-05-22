@@ -5,6 +5,8 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+#[cfg(target_os = "windows")]
+use codex_config::types::WindowsSandboxModeToml;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -1185,12 +1187,11 @@ impl App {
                         );
                     }
                     let profile = self.active_profile.as_deref();
-                    let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let selected_mode = if elevated_enabled {
-                        codex_config::types::WindowsSandboxModeToml::Elevated
-                    } else {
-                        codex_config::types::WindowsSandboxModeToml::Unelevated
+                    let selected_mode = match mode {
+                        WindowsSandboxEnableMode::Elevated => WindowsSandboxModeToml::Elevated,
+                        WindowsSandboxEnableMode::Legacy => WindowsSandboxModeToml::Unelevated,
                     };
+                    let elevated_enabled = selected_mode == WindowsSandboxModeToml::Elevated;
                     if !self.chat_widget.windows_sandbox_mode_allowed(selected_mode) {
                         tracing::warn!(
                             ?selected_mode,
@@ -1282,7 +1283,6 @@ impl App {
                                 if self.apply_permission_profile_selection(selection).await {
                                     self.chat_widget.submit_initial_user_message_if_pending();
                                 }
-                                let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
@@ -1316,7 +1316,6 @@ impl App {
                                     .send(AppEvent::UpdateActivePermissionProfile(
                                         preset.active_permission_profile.clone(),
                                     ));
-                                let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
