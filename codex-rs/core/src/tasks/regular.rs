@@ -2,12 +2,15 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::session::TurnInput;
 use crate::session::turn::AutoCompactTurnLimiter;
 use crate::session::turn::RunTurnResult;
 use crate::session::turn::run_turn;
 use crate::session::turn_context::TurnContext;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::UserInput;
@@ -98,9 +101,33 @@ impl SessionTask for RegularTask {
                             .map(|active_turn| Arc::clone(&active_turn.turn_state))
                     };
                     if let Some(turn_state) = turn_state {
-                        sess.input_queue
-                            .mark_terminal_and_clear_pending_for_turn_state(turn_state.as_ref())
+                        let pending_input = sess
+                            .input_queue
+                            .mark_terminal_and_take_pending_for_turn_state(turn_state.as_ref())
                             .await;
+                        let mut rejected_user_input = false;
+                        let mut response_items_for_next_turn = Vec::new();
+                        for pending_input_item in pending_input {
+                            match pending_input_item {
+                                TurnInput::UserInput(_) => rejected_user_input = true,
+                                TurnInput::ResponseInputItem(item) => {
+                                    response_items_for_next_turn.push(item);
+                                }
+                            }
+                        }
+                        sess.input_queue
+                            .queue_response_items_for_next_turn(response_items_for_next_turn)
+                            .await;
+                        if rejected_user_input {
+                            sess.send_event(
+                                ctx.as_ref(),
+                                EventMsg::Error(ErrorEvent {
+                                    message: "Pending user input was not processed because Codex stopped this turn after repeated automatic compactions. Submit it again in a new turn or reduce earlier history before retrying.".to_string(),
+                                    codex_error_info: Some(CodexErrorInfo::ContextWindowExceeded),
+                                }),
+                            )
+                            .await;
+                        }
                     }
                     return None;
                 }

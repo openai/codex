@@ -116,14 +116,14 @@ impl InputQueue {
         turn_state.pending_input.items.clear();
     }
 
-    pub(crate) async fn mark_terminal_and_clear_pending_for_turn_state(
+    pub(crate) async fn mark_terminal_and_take_pending_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-    ) {
+    ) -> Vec<TurnInput> {
         let mut turn_state = turn_state.lock().await;
         turn_state.mark_terminal();
         turn_state.clear_pending_waiters();
-        turn_state.pending_input.items.clear();
+        turn_state.pending_input.items.split_off(0)
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(

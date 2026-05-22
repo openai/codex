@@ -8140,9 +8140,39 @@ async fn terminal_active_turn_rejects_new_pending_input() {
         let active_turn = sess.active_turn.lock().await;
         Arc::clone(&active_turn.as_ref().expect("active turn").turn_state)
     };
-    sess.input_queue
-        .mark_terminal_and_clear_pending_for_turn_state(turn_state.as_ref())
+    let pending_user_input = vec![UserInput::Text {
+        text: "pending steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(
+        pending_user_input.clone(),
+        Some(&tc.sub_id),
+        /*responsesapi_client_metadata*/ None,
+    )
+    .await
+    .expect("steer input before terminal");
+    let pending_response_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "pending injected input".to_string(),
+        }],
+        phase: None,
+    };
+    sess.inject_response_items(vec![pending_response_item.clone()])
+        .await
+        .expect("inject input before terminal");
+
+    let terminal_pending_input = sess
+        .input_queue
+        .mark_terminal_and_take_pending_for_turn_state(turn_state.as_ref())
         .await;
+    assert_eq!(
+        terminal_pending_input,
+        vec![
+            TurnInput::UserInput(pending_user_input),
+            TurnInput::ResponseInputItem(pending_response_item)
+        ]
+    );
 
     let steer_input = vec![UserInput::Text {
         text: "late steer".to_string(),

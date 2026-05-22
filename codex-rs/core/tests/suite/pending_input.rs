@@ -798,7 +798,7 @@ async fn steered_user_input_resets_auto_compact_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steered_user_input_is_discarded_when_auto_compact_guard_fires() {
+async fn steered_user_input_is_rejected_when_auto_compact_guard_fires() {
     let (gate_fourth_completed_tx, gate_fourth_completed_rx) = oneshot::channel();
     let token_count_used = 270_000;
     let token_count_used_after_compaction = 80_000;
@@ -873,6 +873,14 @@ async fn steered_user_input_is_discarded_when_auto_compact_guard_fires() {
     steer_user_input(&codex, "late steer").await;
     let _ = gate_fourth_completed_tx.send(());
 
+    wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::Error(error)
+                if error.message.contains("Pending user input was not processed")
+        )
+    })
+    .await;
     wait_for_turn_complete(&codex).await;
     assert_eq!(
         server.requests().await.len(),
@@ -901,7 +909,7 @@ async fn steered_user_input_is_discarded_when_auto_compact_guard_fires() {
         .collect();
     assert!(
         !all_user_texts.iter().any(|text| text == "late steer"),
-        "late steer should be discarded after the terminal compaction guard"
+        "late steer should be rejected after the terminal compaction guard"
     );
     assert!(
         all_user_texts.iter().any(|text| text == "next prompt"),
