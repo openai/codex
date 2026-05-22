@@ -1,6 +1,7 @@
 use super::*;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const SEARCH_SERVICE_WEB_RUN_TOOL_NAME: &str = "search_service._web_run";
 
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
@@ -402,7 +403,7 @@ impl McpRequestProcessor {
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
-        let meta = if should_forward_turn_metadata_to_mcp_server(&params.server) {
+        let meta = if should_forward_turn_metadata_to_mcp_tool(&params.server, &params.tool) {
             with_mcp_tool_call_turn_metadata_meta(
                 meta,
                 thread.current_mcp_request_turn_metadata().await,
@@ -424,8 +425,8 @@ impl McpRequestProcessor {
     }
 }
 
-fn should_forward_turn_metadata_to_mcp_server(server: &str) -> bool {
-    server == CODEX_APPS_MCP_SERVER_NAME
+fn should_forward_turn_metadata_to_mcp_tool(server: &str, tool: &str) -> bool {
+    server == CODEX_APPS_MCP_SERVER_NAME && tool == SEARCH_SERVICE_WEB_RUN_TOOL_NAME
 }
 
 fn with_mcp_tool_call_turn_metadata_meta(
@@ -456,21 +457,6 @@ fn with_mcp_tool_call_turn_metadata_meta(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn turn_metadata_is_forwarded_only_to_codex_apps_mcp_server() {
-        assert!(should_forward_turn_metadata_to_mcp_server(
-            CODEX_APPS_MCP_SERVER_NAME
-        ));
-        assert!(!should_forward_turn_metadata_to_mcp_server(
-            "custom_mcp_server"
-        ));
-    }
-}
-
 fn with_mcp_tool_call_thread_id_meta(
     meta: Option<serde_json::Value>,
     thread_id: &str,
@@ -492,5 +478,26 @@ fn with_mcp_tool_call_thread_id_meta(
             Some(serde_json::Value::Object(map))
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_metadata_is_forwarded_only_to_codex_apps_search_service_web_run() {
+        assert!(should_forward_turn_metadata_to_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            SEARCH_SERVICE_WEB_RUN_TOOL_NAME,
+        ));
+        assert!(!should_forward_turn_metadata_to_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "gmail.send_email",
+        ));
+        assert!(!should_forward_turn_metadata_to_mcp_tool(
+            "custom_mcp_server",
+            SEARCH_SERVICE_WEB_RUN_TOOL_NAME,
+        ));
     }
 }
