@@ -71,6 +71,7 @@ use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_install_context::InstallContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::read_codex_access_token_from_env;
@@ -1557,6 +1558,10 @@ async fn load_exec_server_config(
         .await?)
 }
 
+pub(crate) fn default_zsh_path() -> Option<AbsolutePathBuf> {
+    InstallContext::current().bundled_zsh_path()
+}
+
 async fn load_exec_server_remote_auth(
     config: &codex_core::config::Config,
     missing_auth_error: &'static str,
@@ -1681,6 +1686,7 @@ async fn run_debug_prompt_input_command(
         codex_self_exe: arg0_paths.codex_self_exe,
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe,
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
+        default_zsh_path: default_zsh_path(),
         show_raw_agent_reasoning: shared.oss.then_some(true),
         ephemeral: Some(true),
         bypass_hook_trust: shared.bypass_hook_trust.then_some(true),
