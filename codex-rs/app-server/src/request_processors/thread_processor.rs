@@ -1104,6 +1104,7 @@ impl ThreadRequestProcessor {
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
                 session_source: None,
+                forked_from_thread_id: None,
                 thread_source,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,

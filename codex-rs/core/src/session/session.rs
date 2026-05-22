@@ -18,6 +18,7 @@ use tokio::sync::Semaphore;
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
+    pub(super) forked_from_thread_id: Option<ThreadId>,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
@@ -95,6 +96,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Immediate history source copied into this thread, when this thread was forked.
+    pub(super) forked_from_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
@@ -467,6 +470,10 @@ impl Session {
         self.conversation_id
     }
 
+    pub(crate) fn forked_from_thread_id(&self) -> Option<ThreadId> {
+        self.forked_from_thread_id
+    }
+
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
         self.services.agent_control.session_id()
@@ -505,7 +512,10 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
-        let forked_from_id = initial_history.forked_from_id();
+        let forked_from_id = session_configuration
+            .forked_from_thread_id
+            .or_else(|| initial_history.forked_from_id());
+        session_configuration.forked_from_thread_id = forked_from_id;
 
         let event_persistence_mode = if session_configuration.persist_extended_history {
             ThreadEventPersistenceMode::Extended
@@ -1040,6 +1050,7 @@ impl Session {
 
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
+                forked_from_thread_id: forked_from_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,

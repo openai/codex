@@ -36,6 +36,7 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
+use crate::turn_metadata::ThreadMetadataLineage;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -398,6 +399,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
+    pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -462,6 +464,7 @@ impl Codex {
             extensions,
             conversation_history,
             session_source,
+            forked_from_thread_id,
             thread_source,
             agent_control,
             dynamic_tools,
@@ -617,6 +620,8 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            forked_from_thread_id: forked_from_thread_id
+                .or_else(|| conversation_history.forked_from_id()),
             thread_source,
             dynamic_tools,
             persist_extended_history,

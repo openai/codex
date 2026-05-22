@@ -2411,6 +2411,18 @@ impl InitialHistory {
             }
         }
     }
+
+    pub fn get_resumed_session_source(&self) -> Option<SessionSource> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.source.clone()),
+                    _ => None,
+                })
+            }
+        }
+    }
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
