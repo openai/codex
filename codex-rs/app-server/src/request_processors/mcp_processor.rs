@@ -1,7 +1,7 @@
 use super::*;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
-const SEARCH_SERVICE_WEB_RUN_TOOL_NAME: &str = "search_service._web_run";
+const SEARCH_SERVICE_TOOL_NAME_PREFIX: &str = "search_service.";
 
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
@@ -426,7 +426,7 @@ impl McpRequestProcessor {
 }
 
 fn should_forward_turn_metadata_to_mcp_tool(server: &str, tool: &str) -> bool {
-    server == CODEX_APPS_MCP_SERVER_NAME && tool == SEARCH_SERVICE_WEB_RUN_TOOL_NAME
+    server == CODEX_APPS_MCP_SERVER_NAME && tool.starts_with(SEARCH_SERVICE_TOOL_NAME_PREFIX)
 }
 
 fn with_mcp_tool_call_turn_metadata_meta(
@@ -486,10 +486,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turn_metadata_is_forwarded_only_to_codex_apps_search_service_web_run() {
+    fn turn_metadata_is_forwarded_only_to_codex_apps_search_service_tools() {
         assert!(should_forward_turn_metadata_to_mcp_tool(
             CODEX_APPS_MCP_SERVER_NAME,
-            SEARCH_SERVICE_WEB_RUN_TOOL_NAME,
+            "search_service.web_run",
+        ));
+        assert!(should_forward_turn_metadata_to_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "search_service._web_run",
         ));
         assert!(!should_forward_turn_metadata_to_mcp_tool(
             CODEX_APPS_MCP_SERVER_NAME,
@@ -497,7 +501,7 @@ mod tests {
         ));
         assert!(!should_forward_turn_metadata_to_mcp_tool(
             "custom_mcp_server",
-            SEARCH_SERVICE_WEB_RUN_TOOL_NAME,
+            "search_service.web_run",
         ));
     }
 }
