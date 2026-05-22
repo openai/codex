@@ -714,6 +714,8 @@ async fn run_review_on_session(
             environments: None,
             final_output_json_schema: Some(params.schema.clone()),
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 #[allow(deprecated)]
                 cwd: Some(params.parent_turn.cwd.to_path_buf()),

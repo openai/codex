@@ -367,6 +367,15 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
+        if params
+            .mcp_meta_by_server
+            .as_ref()
+            .is_some_and(|metadata| metadata.contains_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME))
+        {
+            return Err(invalid_request(
+                "`mcpMetaByServer` cannot target `codex_apps`; use `mcpMetaByConnector` to target an individual connector",
+            ));
+        }
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
@@ -419,6 +428,8 @@ impl TurnRequestProcessor {
             environments: environment_selections,
             final_output_json_schema: params.output_schema,
             responsesapi_client_metadata: params.responsesapi_client_metadata,
+            mcp_meta_by_server: params.mcp_meta_by_server.map(Box::new),
+            mcp_meta_by_connector: params.mcp_meta_by_connector.map(Box::new),
             thread_settings,
         };
         let turn_id = self
@@ -752,6 +763,8 @@ impl TurnRequestProcessor {
                 mapped_items,
                 Some(&params.expected_turn_id),
                 params.responsesapi_client_metadata,
+                /*mcp_meta_by_server*/ None,
+                /*mcp_meta_by_connector*/ None,
             )
             .await
             .map_err(|err| {

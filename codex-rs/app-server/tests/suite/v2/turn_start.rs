@@ -1025,6 +1025,61 @@ async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() 
 }
 
 #[tokio::test]
+async fn turn_start_rejects_codex_apps_server_scoped_mcp_metadata() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        "http://localhost/unused",
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            mcp_meta_by_server: Some(HashMap::from([(
+                "codex_apps".to_string(),
+                HashMap::from([("client/location".to_string(), json!("US"))]),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        "`mcpMetaByServer` cannot target `codex_apps`; use `mcpMetaByConnector` to target an individual connector"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_rejects_unknown_environment_before_starting_turn() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -2065,6 +2120,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             cwd: Some(first_cwd.clone()),
             runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -2107,6 +2164,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             cwd: Some(second_cwd.clone()),
             runtime_workspace_roots: None,
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),

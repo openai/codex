@@ -768,6 +768,8 @@ impl TestCodex {
                 environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                     cwd: Some(self.config.cwd.to_path_buf()),
                     approval_policy: Some(approval_policy),

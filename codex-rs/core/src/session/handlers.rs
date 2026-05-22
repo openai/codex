@@ -194,11 +194,15 @@ pub(super) async fn user_input_or_turn_inner(
         environments,
         final_output_json_schema,
         responsesapi_client_metadata,
+        mcp_meta_by_server,
+        mcp_meta_by_connector,
         thread_settings,
     } = op
     else {
         unreachable!();
     };
+    let mcp_meta_by_server = mcp_meta_by_server.map(|metadata| *metadata);
+    let mcp_meta_by_connector = mcp_meta_by_connector.map(|metadata| *metadata);
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
     let mut updates = if emit_thread_settings_applied {
         thread_settings_update(sess, thread_settings).await
@@ -206,6 +210,8 @@ pub(super) async fn user_input_or_turn_inner(
         SessionSettingsUpdate::default()
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
+    updates.mcp_meta_by_server = mcp_meta_by_server.clone();
+    updates.mcp_meta_by_connector = mcp_meta_by_connector.clone();
     updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
@@ -226,6 +232,8 @@ pub(super) async fn user_input_or_turn_inner(
             items.clone(),
             /*expected_turn_id*/ None,
             responsesapi_client_metadata.clone(),
+            mcp_meta_by_server,
+            mcp_meta_by_connector,
         )
         .await
     {

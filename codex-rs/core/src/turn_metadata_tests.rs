@@ -347,6 +347,8 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let meta = state
         .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
         .expect("turn metadata should be present");
+    assert!(meta.get("fiber_run_id").is_none());
+    assert!(meta.get("origin").is_none());
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
 }

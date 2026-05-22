@@ -783,6 +783,8 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await

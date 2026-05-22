@@ -513,6 +513,12 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+        /// Optional turn-scoped MCP request metadata keyed by configured custom server name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp_meta_by_server: Option<Box<HashMap<String, HashMap<String, Value>>>>,
+        /// Optional turn-scoped MCP request metadata keyed by app connector id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp_meta_by_connector: Option<Box<HashMap<String, HashMap<String, Value>>>>,
 
         /// Persistent thread-settings overrides to apply before the input.
         #[serde(default, flatten)]
@@ -655,6 +661,8 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: ThreadSettingsOverrides::default(),
         }
     }
@@ -4924,6 +4932,8 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         };
 
@@ -4944,6 +4954,8 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             }
         );
@@ -4966,6 +4978,8 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         };
 
@@ -4992,6 +5006,8 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         };
 
@@ -5003,6 +5019,47 @@ mod tests {
                 "items": [],
                 "responsesapi_client_metadata": {
                     "fiber_run_id": "fiber-123",
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_with_mcp_metadata_round_trips() -> Result<()> {
+        let op = Op::UserInput {
+            environments: None,
+            items: Vec::new(),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            mcp_meta_by_server: Some(Box::new(HashMap::from([(
+                "search_service".to_string(),
+                HashMap::from([("client/location".to_string(), json!({ "country": "US" }))]),
+            )]))),
+            mcp_meta_by_connector: Some(Box::new(HashMap::from([(
+                "connector_openai_search_service".to_string(),
+                HashMap::from([("client/location".to_string(), json!({ "country": "CA" }))]),
+            )]))),
+            thread_settings: Default::default(),
+        };
+
+        let json_op = serde_json::to_value(&op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "mcp_meta_by_server": {
+                    "search_service": {
+                        "client/location": { "country": "US" },
+                    }
+                },
+                "mcp_meta_by_connector": {
+                    "connector_openai_search_service": {
+                        "client/location": { "country": "CA" },
+                    }
                 }
             })
         );

@@ -3560,6 +3560,8 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         thread_id: "thread_123".to_string(),
         input: vec![],
         responsesapi_client_metadata: None,
+        mcp_meta_by_server: None,
+        mcp_meta_by_connector: None,
         environments: None,
         cwd: None,
         runtime_workspace_roots: None,
@@ -3687,6 +3689,76 @@ fn turn_start_params_round_trip_environments() {
                 "cwd": cwd
             }
         ]))
+    );
+}
+
+#[test]
+fn turn_start_params_round_trip_mcp_meta_by_server() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "mcpMetaByServer": {
+            "search_service": {
+                "client/location": {
+                    "country": "US"
+                }
+            }
+        },
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.mcp_meta_by_server,
+        Some(HashMap::from([(
+            "search_service".to_string(),
+            HashMap::from([("client/location".to_string(), json!({ "country": "US" }),)]),
+        )]))
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.mcpMetaByServer")
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.pointer("/mcpMetaByServer/search_service/client~1location/country"),
+        Some(&json!("US"))
+    );
+}
+
+#[test]
+fn turn_start_params_round_trip_mcp_meta_by_connector() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "mcpMetaByConnector": {
+            "connector_openai_search_service": {
+                "client/location": {
+                    "country": "US"
+                }
+            }
+        },
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.mcp_meta_by_connector,
+        Some(HashMap::from([(
+            "connector_openai_search_service".to_string(),
+            HashMap::from([("client/location".to_string(), json!({ "country": "US" }),)]),
+        )]))
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.mcpMetaByConnector")
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.pointer(
+            "/mcpMetaByConnector/connector_openai_search_service/client~1location/country"
+        ),
+        Some(&json!("US"))
     );
 }
 

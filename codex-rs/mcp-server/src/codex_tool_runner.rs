@@ -116,6 +116,8 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         },
         trace: None,
@@ -166,6 +168,8 @@ pub async fn run_codex_tool_session_reply(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await

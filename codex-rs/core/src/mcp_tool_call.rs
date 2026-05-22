@@ -971,6 +971,18 @@ const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
+fn is_codex_owned_mcp_request_meta_key(key: &str) -> bool {
+    [
+        crate::X_CODEX_TURN_METADATA_HEADER,
+        MCP_TOOL_CODEX_APPS_META_KEY,
+        MCP_TOOL_PLUGIN_ID_META_KEY,
+        MCP_TOOL_THREAD_ID_META_KEY,
+        codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY,
+        codex_rollout_trace::MCP_CALL_ID_META_KEY,
+    ]
+    .contains(&key)
+}
+
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1027,6 +1039,24 @@ fn build_mcp_tool_call_request_meta(
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
+
+    let client_meta = if server == CODEX_APPS_MCP_SERVER_NAME {
+        metadata
+            .and_then(|metadata| metadata.connector_id.as_deref())
+            .and_then(|connector_id| {
+                turn_context
+                    .turn_metadata_state
+                    .mcp_meta_for_connector(connector_id)
+            })
+    } else {
+        turn_context.turn_metadata_state.mcp_meta_for_server(server)
+    };
+    if let Some(meta) = client_meta {
+        request_meta.extend(
+            meta.into_iter()
+                .filter(|(key, _)| !is_codex_owned_mcp_request_meta_key(key)),
+        );
+    }
 
     if let Some(turn_metadata) = turn_context
         .turn_metadata_state

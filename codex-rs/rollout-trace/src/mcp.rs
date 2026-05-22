@@ -7,7 +7,7 @@
 use crate::McpCallId;
 use serde_json::Value as JsonValue;
 
-const MCP_CALL_ID_META_KEY: &str = "codex_bridge_mcp_call_id";
+pub const MCP_CALL_ID_META_KEY: &str = "codex_bridge_mcp_call_id";
 
 /// No-op capable handle for one concrete MCP backend call.
 #[derive(Clone, Debug)]

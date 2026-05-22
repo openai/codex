@@ -1090,6 +1090,143 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 }
 
 #[tokio::test]
+async fn mcp_tool_call_request_meta_includes_client_meta_only_for_matching_server() {
+    let (_, turn_context) = make_session_and_context().await;
+    turn_context
+        .turn_metadata_state
+        .set_mcp_meta_by_server(HashMap::from([(
+            "search_service".to_string(),
+            HashMap::from([(
+                "client/location".to_string(),
+                serde_json::json!({ "country": "US" }),
+            )]),
+        )]));
+
+    let matching = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "search_service",
+        "call-search",
+        /*metadata*/ None,
+    )
+    .expect("matching server should receive metadata");
+    let other = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "calendar",
+        "call-calendar",
+        /*metadata*/ None,
+    )
+    .expect("Codex turn metadata remains present");
+
+    assert_eq!(
+        matching.get("client/location"),
+        Some(&serde_json::json!({ "country": "US" }))
+    );
+    assert!(other.get("client/location").is_none());
+}
+
+#[tokio::test]
+async fn codex_apps_tool_call_request_meta_includes_client_meta_only_for_matching_connector() {
+    let (_, turn_context) = make_session_and_context().await;
+    turn_context
+        .turn_metadata_state
+        .set_mcp_meta_by_server(HashMap::from([(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            HashMap::from([("client/location".to_string(), serde_json::json!("broad"))]),
+        )]));
+    turn_context
+        .turn_metadata_state
+        .set_mcp_meta_by_connector(HashMap::from([(
+            "calendar".to_string(),
+            HashMap::from([("client/location".to_string(), serde_json::json!("matched"))]),
+        )]));
+    let calendar = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    let gmail = approval_metadata(
+        Some("gmail"),
+        Some("Gmail"),
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+
+    let matching = build_mcp_tool_call_request_meta(
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        "call-calendar",
+        Some(&calendar),
+    )
+    .expect("matching connector should receive metadata");
+    let other = build_mcp_tool_call_request_meta(
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        "call-gmail",
+        Some(&gmail),
+    )
+    .expect("Codex Apps metadata remains present");
+
+    assert_eq!(
+        matching.get("client/location"),
+        Some(&serde_json::json!("matched"))
+    );
+    assert!(other.get("client/location").is_none());
+}
+
+#[tokio::test]
+async fn mcp_tool_call_request_meta_rejects_client_values_for_codex_owned_keys() {
+    let (_, turn_context) = make_session_and_context().await;
+    turn_context
+        .turn_metadata_state
+        .set_mcp_meta_by_server(HashMap::from([(
+            "custom_server".to_string(),
+            HashMap::from([
+                (
+                    crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
+                    serde_json::json!({ "spoofed": true }),
+                ),
+                (
+                    MCP_TOOL_PLUGIN_ID_META_KEY.to_string(),
+                    serde_json::json!("spoofed"),
+                ),
+                (
+                    MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                    serde_json::json!("spoofed"),
+                ),
+                (
+                    codex_rollout_trace::MCP_CALL_ID_META_KEY.to_string(),
+                    serde_json::json!("spoofed"),
+                ),
+                ("client/location".to_string(), serde_json::json!("US")),
+            ]),
+        )]));
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        "call-custom",
+        /*metadata*/ None,
+    )
+    .expect("Codex turn metadata remains present");
+
+    assert_eq!(meta.get("client/location"), Some(&serde_json::json!("US")));
+    assert!(meta.get(MCP_TOOL_PLUGIN_ID_META_KEY).is_none());
+    assert!(meta.get(MCP_TOOL_THREAD_ID_META_KEY).is_none());
+    assert!(
+        meta.get(codex_rollout_trace::MCP_CALL_ID_META_KEY)
+            .is_none()
+    );
+    assert!(
+        meta.get(crate::X_CODEX_TURN_METADATA_HEADER)
+            .and_then(|value| value.get("spoofed"))
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = turn_context

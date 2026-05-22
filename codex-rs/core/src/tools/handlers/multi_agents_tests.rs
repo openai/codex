@@ -2592,6 +2592,8 @@ async fn send_input_accepts_structured_items() {
         ],
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        mcp_meta_by_server: None,
+        mcp_meta_by_connector: None,
         thread_settings: Default::default(),
     };
     let captured = manager

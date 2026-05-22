@@ -35,6 +35,7 @@ pub use inference::InferenceTraceAttempt;
 /// Shared recorder context for inference attempts within one Codex turn.
 pub use inference::InferenceTraceContext;
 /// Trace-owned MCP execution correlation propagated to bridge request metadata.
+pub use mcp::MCP_CALL_ID_META_KEY;
 pub use mcp::McpCallTraceContext;
 /// Public reduced trace model returned by replay.
 pub use model::*;

@@ -97,6 +97,8 @@ fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: S
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        mcp_meta_by_server: None,
+        mcp_meta_by_connector: None,
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(cwd),
             approval_policy: Some(AskForApproval::Never),
@@ -408,6 +410,8 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -433,6 +437,8 @@ async fn summarize_context_three_requests_and_instructions() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -610,6 +616,8 @@ async fn manual_pre_compact_block_decision_does_not_block_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -683,6 +691,8 @@ async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -753,6 +763,8 @@ async fn manual_compact_uses_custom_prompt() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -900,6 +912,8 @@ async fn manual_compact_emits_context_compaction_items() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1066,6 +1080,8 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1538,6 +1554,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1554,6 +1572,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1570,6 +1590,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1741,6 +1763,8 @@ async fn auto_compact_emits_context_compaction_items() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             })
             .await
@@ -1822,6 +1846,8 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1837,6 +1863,8 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -1852,6 +1880,8 @@ async fn auto_compact_starts_after_turn_started() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2380,6 +2410,8 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2395,6 +2427,8 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2410,6 +2444,8 @@ async fn auto_compact_persists_rollout_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2499,6 +2535,8 @@ async fn manual_compact_retries_after_context_window_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2603,6 +2641,8 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2698,6 +2738,8 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2716,6 +2758,8 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2734,6 +2778,8 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -2898,6 +2944,8 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             })
             .await
@@ -3003,6 +3051,8 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -3434,6 +3484,8 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             })
             .await
@@ -3553,6 +3605,8 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             })
             .await
@@ -3615,6 +3669,8 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                mcp_meta_by_server: None,
+                mcp_meta_by_connector: None,
                 thread_settings: Default::default(),
             })
             .await
@@ -3647,6 +3703,8 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -3836,6 +3894,8 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -3851,6 +3911,8 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -3924,6 +3986,8 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await

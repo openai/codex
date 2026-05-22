@@ -158,7 +158,7 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Experimental `mcpMetaByServer` adds request `_meta` to model-initiated calls routed through matching custom MCP server names, while experimental `mcpMetaByConnector` addresses individual app/connector calls by connector id; Codex-owned metadata fields take precedence. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -634,6 +634,8 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn. Experimental `environments` is turn-scoped: omit it to inherit the thread's sticky environments, pass `[]` to run the turn with no environments, or pass explicit environment ids to override the sticky selection for this turn only.
 
+Experimental `mcpMetaByServer` and `mcpMetaByConnector` are also turn-scoped. Each `mcpMetaByServer` key is a configured custom MCP server name, and its object is merged into `_meta` only on model-initiated calls to that server. Each `mcpMetaByConnector` key is an app/connector id, and its object is merged only on model-initiated `codex_apps` calls whose resolved connector id matches. The aggregate `codex_apps` server cannot be targeted through `mcpMetaByServer`; use `mcpMetaByConnector` so metadata is not exposed to unrelated connectors. Codex-owned `_meta` fields cannot be replaced through either parameter. `responsesapiClientMetadata` remains Responses API request metadata and is not forwarded as MCP request `_meta`.
+
 `approvalsReviewer` accepts:
 
 - `"user"` — default. Review approval requests directly in the client.
@@ -649,6 +651,18 @@ You can optionally specify config overrides on the new turn. If specified, these
     "environments": [
         { "environmentId": "local", "cwd": "/Users/me/project" }
     ],
+    // Experimental: metadata for model-initiated calls to this custom MCP server.
+    "mcpMetaByServer": {
+        "my_custom_server": {
+            "request-id": "request-123"
+        }
+    },
+    // Experimental: metadata for model-initiated calls to this app/connector.
+    "mcpMetaByConnector": {
+        "connector_openai_search_service": {
+            "client/location": { "country": "US" }
+        }
+    },
     "approvalPolicy": "unlessTrusted",
     "sandboxPolicy": {
         "type": "workspaceWrite",

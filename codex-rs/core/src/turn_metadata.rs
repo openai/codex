@@ -189,6 +189,8 @@ pub(crate) struct TurnMetadataState {
     enriched_header: Arc<RwLock<Option<String>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
+    mcp_meta_by_server: Arc<RwLock<HashMap<String, HashMap<String, Value>>>>,
+    mcp_meta_by_connector: Arc<RwLock<HashMap<String, HashMap<String, Value>>>>,
     user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -235,13 +237,15 @@ impl TurnMetadataState {
             enriched_header: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(None)),
+            mcp_meta_by_server: Arc::new(RwLock::new(HashMap::new())),
+            mcp_meta_by_connector: Arc::new(RwLock::new(HashMap::new())),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub(crate) fn current_header_value(&self) -> Option<String> {
-        let header = if let Some(header) = self
+    fn base_or_enriched_header_value(&self) -> String {
+        if let Some(header) = self
             .enriched_header
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -251,7 +255,11 @@ impl TurnMetadataState {
             header
         } else {
             self.base_header.clone()
-        };
+        }
+    }
+
+    pub(crate) fn current_header_value(&self) -> Option<String> {
+        let header = self.base_or_enriched_header_value();
         let turn_started_at_unix_ms = *self
             .turn_started_at_unix_ms
             .read()
@@ -273,7 +281,17 @@ impl TurnMetadataState {
         &self,
         context: McpTurnMetadataContext<'_>,
     ) -> Option<serde_json::Value> {
-        let header = self.current_header_value()?;
+        let header = self.base_or_enriched_header_value();
+        let turn_started_at_unix_ms = *self
+            .turn_started_at_unix_ms
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let header = merge_turn_metadata(
+            &header,
+            turn_started_at_unix_ms,
+            /*responsesapi_client_metadata*/ None,
+        )
+        .unwrap_or(header);
         let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
         metadata.insert(
             MODEL_KEY.to_string(),
@@ -318,6 +336,45 @@ impl TurnMetadataState {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(responsesapi_client_metadata);
+    }
+
+    pub(crate) fn set_mcp_meta_by_server(
+        &self,
+        mcp_meta_by_server: HashMap<String, HashMap<String, Value>>,
+    ) {
+        *self
+            .mcp_meta_by_server
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = mcp_meta_by_server;
+    }
+
+    pub(crate) fn mcp_meta_for_server(&self, server: &str) -> Option<HashMap<String, Value>> {
+        self.mcp_meta_by_server
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(server)
+            .cloned()
+    }
+
+    pub(crate) fn set_mcp_meta_by_connector(
+        &self,
+        mcp_meta_by_connector: HashMap<String, HashMap<String, Value>>,
+    ) {
+        *self
+            .mcp_meta_by_connector
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = mcp_meta_by_connector;
+    }
+
+    pub(crate) fn mcp_meta_for_connector(
+        &self,
+        connector_id: &str,
+    ) -> Option<HashMap<String, Value>> {
+        self.mcp_meta_by_connector
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(connector_id)
+            .cloned()
     }
 
     pub(crate) fn set_turn_started_at_unix_ms(&self, turn_started_at_unix_ms: i64) {

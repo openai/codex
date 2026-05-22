@@ -238,9 +238,17 @@ impl CodexThread {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+        mcp_meta_by_server: Option<HashMap<String, HashMap<String, serde_json::Value>>>,
+        mcp_meta_by_connector: Option<HashMap<String, HashMap<String, serde_json::Value>>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                expected_turn_id,
+                responsesapi_client_metadata,
+                mcp_meta_by_server,
+                mcp_meta_by_connector,
+            )
             .await
     }
 

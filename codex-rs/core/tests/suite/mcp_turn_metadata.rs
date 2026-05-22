@@ -63,6 +63,8 @@ async fn submit_user_turn(
     text: &str,
     approval_policy: AskForApproval,
     collaboration_mode: Option<CollaborationMode>,
+    mcp_meta_by_server: Option<HashMap<String, HashMap<String, serde_json::Value>>>,
+    mcp_meta_by_connector: Option<HashMap<String, HashMap<String, serde_json::Value>>>,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
     let (sandbox_policy, permission_profile) =
@@ -76,6 +78,8 @@ async fn submit_user_turn(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: mcp_meta_by_server.map(Box::new),
+            mcp_meta_by_connector: mcp_meta_by_connector.map(Box::new),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.cwd.path().to_path_buf()),
                 approval_policy: Some(approval_policy),
@@ -146,6 +150,8 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
         "Use [$calendar](app://calendar) to create a calendar event.",
         AskForApproval::OnRequest,
         /*collaboration_mode*/ None,
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/ None,
     )
     .await?;
 
@@ -269,6 +275,8 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
                 developer_instructions: None,
             },
         }),
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/ None,
     )
     .await?;
 
@@ -314,6 +322,73 @@ async fn mcp_tool_call_metadata_records_prior_request_user_input_tool() -> Resul
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/user_input_requested_during_turn"),
         Some(&json!(true))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_tool_call_receives_turn_metadata_for_selected_connector() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let call_id = "calendar-call-targeted-meta";
+    let calendar_args = serde_json::to_string(&json!({
+        "title": "Lunch",
+        "starts_at": "2026-03-10T12:00:00Z"
+    }))?;
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    &calendar_args,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            set_calendar_approval_mode(config, AppToolApproval::Approve);
+        });
+    let test = builder.build(&server).await?;
+
+    submit_user_turn(
+        &test,
+        "Use [$calendar](app://calendar) to create a calendar event.",
+        AskForApproval::Never,
+        /*collaboration_mode*/ None,
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/
+        Some(HashMap::from([(
+            "calendar".to_string(),
+            HashMap::from([("client/location".to_string(), json!({ "country": "US" }))]),
+        )])),
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/client~1location/country"),
+        Some(&json!("US"))
     );
 
     Ok(())

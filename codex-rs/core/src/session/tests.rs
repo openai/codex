@@ -2260,6 +2260,8 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await?;
@@ -2306,6 +2308,8 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::Never),
                 collaboration_mode: Some(collaboration_mode),
@@ -5229,6 +5233,8 @@ fn op_kind_for_input_and_context_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         }
         .kind(),
@@ -5259,6 +5265,8 @@ async fn user_turn_updates_approvals_reviewer() {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
@@ -7842,6 +7850,8 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         pending_user_input.clone(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/ None,
     )
     .await
     .expect("steer pending input into active turn");
@@ -7937,6 +7947,7 @@ async fn steer_input_requires_active_turn() {
     let err = sess
         .steer_input(
             input, /*expected_turn_id*/ None, /*responsesapi_client_metadata*/ None,
+            /*mcp_meta_by_server*/ None, /*mcp_meta_by_connector*/ None,
         )
         .await
         .expect_err("steering without active turn should fail");
@@ -7970,6 +7981,8 @@ async fn steer_input_enforces_expected_turn_id() {
             steer_input,
             Some("different-turn-id"),
             /*responsesapi_client_metadata*/ None,
+            /*mcp_meta_by_server*/ None,
+            /*mcp_meta_by_connector*/ None,
         )
         .await
         .expect_err("mismatched expected turn id should fail");
@@ -8016,6 +8029,8 @@ async fn steer_input_rejects_non_regular_turns() {
                 steer_input,
                 /*expected_turn_id*/ None,
                 /*responsesapi_client_metadata*/ None,
+                /*mcp_meta_by_server*/ None,
+                /*mcp_meta_by_connector*/ None,
             )
             .await
             .expect_err("steering a non-regular turn should fail");
@@ -8052,11 +8067,36 @@ async fn steer_input_returns_active_turn_id() {
             steer_input,
             Some(&tc.sub_id),
             /*responsesapi_client_metadata*/ None,
+            /*mcp_meta_by_server*/
+            Some(HashMap::from([(
+                "search_service".to_string(),
+                HashMap::from([("client/location".to_string(), json!("US"))]),
+            )])),
+            /*mcp_meta_by_connector*/
+            Some(HashMap::from([(
+                "connector_openai_search_service".to_string(),
+                HashMap::from([("client/location".to_string(), json!("CA"))]),
+            )])),
         )
         .await
         .expect("steering with matching expected turn id should succeed");
 
     assert_eq!(turn_id, tc.sub_id);
+    assert_eq!(
+        tc.turn_metadata_state.mcp_meta_for_server("search_service"),
+        Some(HashMap::from([(
+            "client/location".to_string(),
+            json!("US"),
+        )]))
+    );
+    assert_eq!(
+        tc.turn_metadata_state
+            .mcp_meta_for_connector("connector_openai_search_service"),
+        Some(HashMap::from([(
+            "client/location".to_string(),
+            json!("CA"),
+        )]))
+    );
     assert!(sess.input_queue.has_pending_input(&sess.active_turn).await);
 }
 
@@ -8274,6 +8314,8 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await?;
@@ -8379,6 +8421,8 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await?;
@@ -8926,6 +8970,8 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await?;
@@ -9094,6 +9140,8 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         }],
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/ None,
     )
     .await
     .expect("steered input should be accepted");
@@ -9143,6 +9191,8 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         }],
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
+        /*mcp_meta_by_server*/ None,
+        /*mcp_meta_by_connector*/ None,
     )
     .await
     .expect("steered input should be accepted");

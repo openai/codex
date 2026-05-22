@@ -103,6 +103,8 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -121,6 +123,8 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(AskForApproval::Never),
@@ -150,6 +154,8 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
             }],
             /*expected_turn_id*/ None,
             /*responsesapi_client_metadata*/ None,
+            /*mcp_meta_by_server*/ None,
+            /*mcp_meta_by_connector*/ None,
         )
         .await
         .unwrap_or_else(|err| panic!("steer user input: {err:?}"));
@@ -291,6 +297,8 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await
@@ -310,6 +318,8 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            mcp_meta_by_server: None,
+            mcp_meta_by_connector: None,
             thread_settings: Default::default(),
         })
         .await

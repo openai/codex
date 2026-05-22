@@ -392,6 +392,10 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    /// Turn-local MCP request metadata keyed by configured custom MCP server name.
+    pub(crate) mcp_meta_by_server: Option<HashMap<String, HashMap<String, Value>>>,
+    /// Turn-local MCP request metadata keyed by app connector id.
+    pub(crate) mcp_meta_by_connector: Option<HashMap<String, HashMap<String, Value>>>,
     /// Turn-local environment override. `None` inherits the sticky thread
     /// environments stored on `SessionConfiguration`; `Some([])` explicitly
     /// disables environments for this turn.
