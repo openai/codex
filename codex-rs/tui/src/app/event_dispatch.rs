@@ -887,11 +887,11 @@ impl App {
             } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = match self
-                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                    let setup_permissions = match self
+                        .windows_setup_permissions(&preset, profile_selection.as_ref())
                         .await
                     {
-                        Ok(permission_profile) => permission_profile,
+                        Ok(setup_permissions) => setup_permissions,
                         Err(err) => {
                             tracing::warn!(
                                 error = %err,
@@ -903,8 +903,9 @@ impl App {
                             return Ok(AppRunControl::Continue);
                         }
                     };
-                    let permission_profile_cwd = self.config.cwd.clone();
-                    let command_cwd = permission_profile_cwd.clone();
+                    let permission_profile = setup_permissions.permission_profile;
+                    let workspace_roots = setup_permissions.workspace_roots;
+                    let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
@@ -929,7 +930,7 @@ impl App {
                     tokio::task::spawn_blocking(move || {
                         let result = crate::legacy_core::windows_sandbox::run_elevated_setup(
                             &permission_profile,
-                            permission_profile_cwd.as_path(),
+                            workspace_roots.as_slice(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
@@ -996,11 +997,11 @@ impl App {
             } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = match self
-                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                    let setup_permissions = match self
+                        .windows_setup_permissions(&preset, profile_selection.as_ref())
                         .await
                     {
-                        Ok(permission_profile) => permission_profile,
+                        Ok(setup_permissions) => setup_permissions,
                         Err(err) => {
                             tracing::warn!(
                                 error = %err,
@@ -1012,8 +1013,9 @@ impl App {
                             return Ok(AppRunControl::Continue);
                         }
                     };
-                    let permission_profile_cwd = self.config.cwd.clone();
-                    let command_cwd = permission_profile_cwd.clone();
+                    let permission_profile = setup_permissions.permission_profile;
+                    let workspace_roots = setup_permissions.workspace_roots;
+                    let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
@@ -1025,7 +1027,7 @@ impl App {
                         if let Err(err) =
                             crate::legacy_core::windows_sandbox::run_legacy_setup_preflight(
                                 &permission_profile,
-                                permission_profile_cwd.as_path(),
+                                workspace_roots.as_slice(),
                                 command_cwd.as_path(),
                                 &env_map,
                                 codex_home.as_path(),
@@ -1063,7 +1065,7 @@ impl App {
                         ));
 
                     let permission_profile = self.config.permissions.effective_permission_profile();
-                    let permission_profile_cwd = self.config.cwd.clone();
+                    let workspace_roots = self.config.effective_workspace_roots();
                     let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
@@ -1074,7 +1076,7 @@ impl App {
                         let requested_path = PathBuf::from(path);
                         let event = match crate::legacy_core::grant_read_root_non_elevated(
                             &permission_profile,
-                            permission_profile_cwd.as_path(),
+                            workspace_roots.as_slice(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
@@ -1502,6 +1504,7 @@ impl App {
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         let cwd = self.config.cwd.clone();
+                        let workspace_roots = self.config.effective_workspace_roots();
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
@@ -1510,6 +1513,7 @@ impl App {
                             self.config.permissions.effective_permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
+                            workspace_roots,
                             env_map,
                             logs_base_dir,
                             permission_profile,
