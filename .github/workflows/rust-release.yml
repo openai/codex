@@ -180,25 +180,25 @@ jobs:
             binaries: "codex-app-server"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          - runner: ubuntu-24.04
+          - runner: codex-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ubuntu-24.04
+          - runner: codex-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server"
             build_dmg: "false"
-          - runner: ubuntu-24.04-arm
+          - runner: codex-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "codex codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ubuntu-24.04-arm
+          - runner: codex-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
@@ -346,7 +346,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+      - if: ${{ contains(matrix.target, 'linux') }}
         name: Build bwrap and export digest
         shell: bash
         run: |
@@ -569,18 +569,10 @@ jobs:
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
             stage-runtime
             "$stage_dir"
-            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex"
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz"
             --codex-version "${GITHUB_REF_NAME}"
             --platform-tag "$platform_tag"
           )
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            # Keep bwrap in the runtime wheel so Linux sandbox fallback behavior
-            # matches the standalone release bundle on hosts without system bwrap.
-            stage_runtime_args+=(
-              --resource-binary
-              "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/bwrap"
-            )
-          fi
           python3 "${stage_runtime_args[@]}"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
@@ -800,6 +792,20 @@ jobs:
             cp "$dmg_source" "$dest/$dmg_name"
           fi
 
+      - name: Build Codex package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "dist/${TARGET}" \
+            --archive-dir "dist/${TARGET}" \
+            --target-suffixed-entrypoint
+
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
         shell: bash
@@ -828,24 +834,10 @@ jobs:
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "${GITHUB_WORKSPACE}/codex-rs/dist/${{ matrix.target }}/codex-${{ matrix.target }}" \
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
-
-      - name: Build Codex package archive
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-          BUNDLE: ${{ matrix.bundle }}
-        run: |
-          set -euo pipefail
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
-            --target "$TARGET" \
-            --bundle "$BUNDLE" \
-            --entrypoint-dir "dist/${TARGET}" \
-            --archive-dir "dist/${TARGET}" \
-            --target-suffixed-entrypoint
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
@@ -1107,14 +1099,32 @@ jobs:
           # If included in files: dist/**, release upload races on duplicate
           # asset names and can fail with 404s.
           find dist -type f -name 'cargo-timing.html' -delete
-          # Keep package-builder sidecar archives as workflow artifacts only
-          # until distribution channels are ready to consume them.
-          find dist -type f \
-            \( -name 'codex-package-*' -o -name 'codex-app-server-package-*' \) \
-            -delete
           find dist -type d -empty -delete
 
           ls -R dist/
+
+      - name: Add Codex package checksum manifest
+        run: |
+          set -euo pipefail
+
+          manifest="dist/codex-package_SHA256SUMS"
+          tmp_manifest="$(mktemp)"
+          find dist -type f \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$tmp_manifest"
+
+          if [[ ! -s "$tmp_manifest" ]]; then
+            echo "No Codex package archives found for checksum manifest"
+            exit 1
+          fi
+
+          mv "$tmp_manifest" "$manifest"
+          cat "$manifest"
 
       - name: Add config schema release asset
         run: |
@@ -1190,8 +1200,6 @@ jobs:
         if: ${{ env.SIGN_MACOS == 'true' }}
         run: pnpm install --frozen-lockfile
 
-      # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       - name: Stage npm packages
         if: ${{ env.SIGN_MACOS == 'true' }}
         env:

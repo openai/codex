@@ -13,6 +13,7 @@ use codex_tools::ToolOutput;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -134,8 +135,10 @@ async fn read_tool_reads_memory_file() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::READ_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -176,8 +179,10 @@ async fn search_tool_accepts_multiple_queries() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -244,8 +249,10 @@ async fn search_tool_accepts_windowed_all_match_mode() {
 
     let output = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload: payload.clone(),
         })
         .await
@@ -292,8 +299,10 @@ async fn search_tool_rejects_legacy_single_query() {
 
     let result = tool
         .handle(ToolCall {
+            turn_id: "turn-1".to_string(),
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
+            truncation_policy: TruncationPolicy::Bytes(1024),
             payload,
         })
         .await;

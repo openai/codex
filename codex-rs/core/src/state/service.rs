@@ -5,6 +5,7 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
+use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
@@ -15,6 +16,7 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
@@ -65,7 +67,9 @@ pub(crate) struct SessionServices {
     pub(crate) session_extension_data: ExtensionData,
     pub(crate) thread_extension_data: ExtensionData,
     pub(crate) agent_control: AgentControl,
-    pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
+    pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,
+    pub(crate) managed_network_requirements_configured: bool,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) live_thread: Option<LiveThread>,

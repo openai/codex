@@ -1,6 +1,7 @@
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
@@ -31,7 +32,7 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -42,6 +43,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -80,6 +82,11 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::permissions_toml::FilesystemPermissionToml;
+use codex_config::permissions_toml::FilesystemPermissionsToml;
+use codex_config::permissions_toml::NetworkToml;
+use codex_config::permissions_toml::PermissionProfileToml;
+use codex_config::permissions_toml::PermissionsToml;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
@@ -818,7 +825,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
 
 #[tokio::test]
 async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow::Result<()> {
-    let (mut session, _turn_context) = make_session_and_context().await;
+    let (session, _turn_context) = make_session_and_context().await;
     let initial_permission_profile = PermissionProfile::workspace_write();
 
     let mut network_config = NetworkProxyConfig::default();
@@ -873,7 +880,10 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
             .set_permission_profile_for_tests(initial_permission_profile)
             .expect("test setup should allow permission profile");
     }
-    session.services.network_proxy = Some(started_proxy);
+    session
+        .services
+        .network_proxy
+        .store(Some(Arc::new(started_proxy)));
 
     session
         .new_turn_with_sub_id(
@@ -888,7 +898,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let started_proxy = session
         .services
         .network_proxy
-        .as_ref()
+        .load_full()
         .expect("managed network proxy should be present");
     assert_eq!(
         started_proxy
@@ -1918,6 +1928,9 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
 
     #[derive(Debug, PartialEq, Eq)]
     struct RecordedTurnStart {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
         turn_id: String,
         collaboration_mode: CollaborationMode,
         token_usage_at_turn_start: TokenUsage,
@@ -1936,6 +1949,9 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
                 .lock()
                 .expect("turn start records lock")
                 .push(RecordedTurnStart {
+                    session_level_id: input.session_store.level_id().to_string(),
+                    thread_level_id: input.thread_store.level_id().to_string(),
+                    turn_level_id: input.turn_store.level_id().to_string(),
                     turn_id: input.turn_id.to_string(),
                     collaboration_mode: input.collaboration_mode.clone(),
                     token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
@@ -1965,52 +1981,43 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         .insert(ThreadTurnStartMarker);
 
     let token_usage_at_turn_start = TokenUsage {
-        input_tokens: 120,
-        cached_input_tokens: 15,
-        output_tokens: 40,
-        reasoning_output_tokens: 9,
-        total_tokens: 169,
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        output_tokens: 25,
+        reasoning_output_tokens: 5,
+        total_tokens: 130,
     };
-    session
-        .state
-        .lock()
-        .await
-        .set_token_info(Some(TokenUsageInfo {
-            total_token_usage: token_usage_at_turn_start.clone(),
-            last_token_usage: TokenUsage::default(),
-            model_context_window: turn_context.model_context_window(),
-        }));
+    set_total_token_usage(&session, token_usage_at_turn_start.clone()).await;
 
-    let turn_context = Arc::new(turn_context);
-    let session = Arc::new(session);
-    session
-        .spawn_task(
-            Arc::clone(&turn_context),
-            Vec::new(),
-            NeverEndingTask {
-                kind: TaskKind::Regular,
-                listen_to_cancellation_token: true,
-            },
-        )
-        .await;
+    let expected = RecordedTurnStart {
+        session_level_id: session.session_id().to_string(),
+        thread_level_id: session.conversation_id.to_string(),
+        turn_level_id: turn_context.sub_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
+        collaboration_mode: turn_context.collaboration_mode.clone(),
+        token_usage_at_turn_start,
+        saw_session_store: true,
+        saw_thread_store: true,
+    };
 
-    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let sess = Arc::new(session);
+    sess.spawn_task(
+        Arc::new(turn_context),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     let actual = records
         .lock()
         .expect("turn start records lock")
         .drain(..)
         .collect::<Vec<_>>();
-    assert_eq!(
-        vec![RecordedTurnStart {
-            turn_id: turn_context.sub_id.clone(),
-            collaboration_mode: turn_context.collaboration_mode.clone(),
-            token_usage_at_turn_start,
-            saw_session_store: true,
-            saw_thread_store: true,
-        }],
-        actual
-    );
+    assert_eq!(vec![expected], actual);
 }
 
 #[tokio::test]
@@ -3384,92 +3391,143 @@ fn session_telemetry(
     )
 }
 
-#[test]
-fn get_service_tier_defaults_enterprise_accounts_to_fast() {
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Enterprise),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::EnterpriseCbpUsageBased),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Business),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Team),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::SelfServeBusinessUsageBased),
-            /*fast_mode_enabled*/ true,
-        ),
-        Some(ServiceTier::Fast.request_value().to_string())
-    );
+fn model_with_default_service_tier(default_service_tier: Option<&str>) -> ModelInfo {
+    let mut model_info = model_info::model_info_from_slug("gpt-5.4");
+    model_info.service_tiers = vec![ModelServiceTier {
+        id: ServiceTier::Fast.request_value().to_string(),
+        name: "Fast".to_string(),
+        description: "Priority processing.".to_string(),
+    }];
+    model_info.default_service_tier = default_service_tier.map(str::to_string);
+    model_info
 }
 
 #[test]
-fn get_service_tier_respects_fast_default_opt_out() {
+fn get_service_tier_does_not_use_model_default_when_absent_and_fast_mode_enabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ true,
-            Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ true,
+            &model_info,
         ),
         None
     );
 }
 
 #[test]
-fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
+fn get_service_tier_does_not_use_model_default_when_fast_mode_disabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Pro),
-            /*fast_mode_enabled*/ true,
-        ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Enterprise),
             /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_keeps_supported_explicit_tier() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[test]
+fn get_service_tier_does_not_default_when_model_has_no_default() {
+    let model_info = model_with_default_service_tier(/*default_service_tier*/ None);
+
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some("unsupported".to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Flex.request_value().to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
+            /*fast_mode_enabled*/ true,
+            &model_info,
+        ),
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
+}
+
+#[test]
+fn get_service_tier_ignores_configured_tier_when_fast_mode_disabled() {
+    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
+
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            Some("unsupported".to_string()),
+            /*fast_mode_enabled*/ false,
+            &model_info,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_mode_enabled*/ false,
+            &model_info,
         ),
         None
     );
 }
 
 #[tokio::test]
-async fn session_settings_null_service_tier_update_clears_service_tier() {
+async fn session_settings_null_service_tier_update_uses_default_service_tier() {
     let session_configuration = make_session_configuration_for_tests().await;
 
     let updated = session_configuration
@@ -3479,7 +3537,10 @@ async fn session_settings_null_service_tier_update_clears_service_tier() {
         })
         .expect("null service tier update should apply");
 
-    assert_eq!(updated.service_tier, None);
+    assert_eq!(
+        updated.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
 }
 
 #[tokio::test]
@@ -3806,6 +3867,114 @@ async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_up
     assert!(updated_policy.can_write_path_with_cwd(new_root.as_path(), updated.cwd.as_path()));
     assert!(updated_policy.can_write_path_with_cwd(extra_root.as_path(), updated.cwd.as_path()));
     assert!(!updated_policy.can_write_path_with_cwd(old_root.as_path(), updated.cwd.as_path()));
+}
+
+#[tokio::test]
+async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Result<()> {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let cwd = tempfile::tempdir().expect("create cwd");
+    let permissions = PermissionsToml {
+        entries: std::collections::BTreeMap::from([
+            (
+                "locked-down".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    extends: None,
+                    workspace_roots: None,
+                    filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
+                        entries: std::collections::BTreeMap::from([(
+                            ":minimal".to_string(),
+                            FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                        )]),
+                    }),
+                    network: None,
+                },
+            ),
+            (
+                "web-enabled".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    extends: None,
+                    workspace_roots: None,
+                    filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
+                        entries: std::collections::BTreeMap::from([(
+                            ":minimal".to_string(),
+                            FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                        )]),
+                    }),
+                    network: Some(NetworkToml {
+                        enabled: Some(true),
+                        proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                        enable_socks5: Some(false),
+                        ..Default::default()
+                    }),
+                },
+            ),
+        ]),
+    };
+    let base_config = ConfigToml {
+        features: Some(toml::from_str("network_proxy = true").expect("valid features")),
+        default_permissions: Some("locked-down".to_string()),
+        permissions: Some(permissions),
+        ..Default::default()
+    };
+    std::fs::write(
+        codex_home.path().join(codex_config::CONFIG_TOML_FILE),
+        toml::to_string(&base_config).expect("serialize config"),
+    )?;
+    let locked_config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?,
+    );
+    assert_ne!(
+        locked_config
+            .permissions
+            .network
+            .as_ref()
+            .map(crate::config::NetworkProxySpec::proxy_host_and_port)
+            .as_deref(),
+        Some("127.0.0.1:43128")
+    );
+    let selected_config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            default_permissions: Some("web-enabled".to_string()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.permission_profile_state =
+        locked_config.permissions.permission_profile_state().clone();
+    session_configuration.original_config_do_not_use = Arc::clone(&locked_config);
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            permission_profile: Some(selected_config.permissions.permission_profile().clone()),
+            active_permission_profile: selected_config.permissions.active_permission_profile(),
+            ..Default::default()
+        })
+        .expect("active profile update should apply");
+
+    let network = updated
+        .original_config_do_not_use
+        .permissions
+        .network
+        .as_ref()
+        .expect("selected profile proxy should become the session proxy config");
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    Ok(())
 }
 
 #[cfg_attr(windows, ignore)]
@@ -4362,7 +4531,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: arc_swap::ArcSwapOption::from(None),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
@@ -6189,7 +6360,9 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         agent_control,
-        network_proxy: None,
+        network_proxy: arc_swap::ArcSwapOption::from(None),
+        network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
+        managed_network_requirements_configured: false,
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,

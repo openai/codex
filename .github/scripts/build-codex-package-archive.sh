@@ -8,6 +8,9 @@ Usage: build-codex-package-archive.sh \
   --bundle <primary|app-server> \
   --entrypoint-dir <dir> \
   --archive-dir <dir> \
+  [--bwrap-bin <path>] \
+  [--codex-command-runner-bin <path>] \
+  [--codex-windows-sandbox-setup-bin <path>] \
   [--target-suffixed-entrypoint]
 EOF
 }
@@ -17,6 +20,10 @@ bundle=""
 entrypoint_dir=""
 archive_dir=""
 target_suffixed_entrypoint="false"
+resource_args=()
+bwrap_bin_provided="false"
+command_runner_bin_provided="false"
+sandbox_setup_bin_provided="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +41,27 @@ while [[ $# -gt 0 ]]; do
       ;;
     --archive-dir)
       archive_dir="${2:?--archive-dir requires a value}"
+      shift 2
+      ;;
+    --bwrap-bin)
+      resource_args+=(--bwrap-bin "${2:?--bwrap-bin requires a value}")
+      bwrap_bin_provided="true"
+      shift 2
+      ;;
+    --codex-command-runner-bin)
+      resource_args+=(
+        --codex-command-runner-bin
+        "${2:?--codex-command-runner-bin requires a value}"
+      )
+      command_runner_bin_provided="true"
+      shift 2
+      ;;
+    --codex-windows-sandbox-setup-bin)
+      resource_args+=(
+        --codex-windows-sandbox-setup-bin
+        "${2:?--codex-windows-sandbox-setup-bin requires a value}"
+      )
+      sandbox_setup_bin_provided="true"
       shift 2
       ;;
     --target-suffixed-entrypoint)
@@ -86,6 +114,25 @@ if [[ "$target_suffixed_entrypoint" == "true" ]]; then
   entrypoint_name="${entrypoint_name}-${target}"
 fi
 
+case "$target" in
+  *linux*)
+    bwrap_bin="${entrypoint_dir%/}/bwrap"
+    if [[ "$bwrap_bin_provided" == "false" && -f "$bwrap_bin" ]]; then
+      resource_args+=(--bwrap-bin "$bwrap_bin")
+    fi
+    ;;
+  *windows*)
+    command_runner_bin="${entrypoint_dir%/}/codex-command-runner.exe"
+    sandbox_setup_bin="${entrypoint_dir%/}/codex-windows-sandbox-setup.exe"
+    if [[ "$command_runner_bin_provided" == "false" && -f "$command_runner_bin" ]]; then
+      resource_args+=(--codex-command-runner-bin "$command_runner_bin")
+    fi
+    if [[ "$sandbox_setup_bin_provided" == "false" && -f "$sandbox_setup_bin" ]]; then
+      resource_args+=(--codex-windows-sandbox-setup-bin "$sandbox_setup_bin")
+    fi
+    ;;
+esac
+
 repo_root="${GITHUB_WORKSPACE:-}"
 if [[ -z "$repo_root" ]]; then
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -97,16 +144,29 @@ else
   python_bin="python"
 fi
 
+if ! command -v zstd >/dev/null 2>&1 && [[ -x "${repo_root}/.github/workflows/zstd" ]]; then
+  export PATH="${repo_root}/.github/workflows:${PATH}"
+fi
+
 mkdir -p "$archive_dir"
 package_dir="${RUNNER_TEMP:-/tmp}/${archive_stem}-${target}"
-archive_path="${archive_dir}/${archive_stem}-${target}.tar.gz"
+gzip_archive_path="${archive_dir}/${archive_stem}-${target}.tar.gz"
+zstd_archive_path="${archive_dir}/${archive_stem}-${target}.tar.zst"
 rm -rf "$package_dir"
 
-"$python_bin" "${repo_root}/scripts/build_codex_package.py" \
-  --target "$target" \
-  --variant "$variant" \
-  --entrypoint-bin "${entrypoint_dir%/}/${entrypoint_name}${exe_suffix}" \
-  --cargo-profile release \
-  --package-dir "$package_dir" \
-  --archive-output "$archive_path" \
-  --force
+python_args=(
+  "${repo_root}/scripts/build_codex_package.py"
+  --target "$target"
+  --variant "$variant"
+  --entrypoint-bin "${entrypoint_dir%/}/${entrypoint_name}${exe_suffix}"
+  --cargo-profile release
+  --package-dir "$package_dir"
+  --archive-output "$gzip_archive_path"
+  --archive-output "$zstd_archive_path"
+)
+if ((${#resource_args[@]} > 0)); then
+  python_args+=("${resource_args[@]}")
+fi
+python_args+=(--force)
+
+"$python_bin" "${python_args[@]}"

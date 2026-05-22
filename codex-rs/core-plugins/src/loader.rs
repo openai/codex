@@ -112,7 +112,6 @@ pub async fn load_plugins_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
-    plugin_hooks_enabled: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
@@ -129,7 +128,6 @@ pub async fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
-            plugin_hooks_enabled,
         )
         .await;
         for name in loaded_plugin.mcp_servers.keys() {
@@ -499,7 +497,6 @@ async fn load_plugin(
     store: &PluginStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
-    plugin_hooks_enabled: bool,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -597,16 +594,14 @@ async fn load_plugin(
     }
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin.apps = load_plugin_apps(plugin_root.as_path()).await;
-    if plugin_hooks_enabled {
-        let (hook_sources, hook_load_warnings) = load_plugin_hooks(
-            &plugin_root,
-            &loaded_plugin_id,
-            &store.plugin_data_root(&loaded_plugin_id),
-            manifest_paths,
-        );
-        loaded_plugin.hook_sources = hook_sources;
-        loaded_plugin.hook_load_warnings = hook_load_warnings;
-    }
+    let (hook_sources, hook_load_warnings) = load_plugin_hooks(
+        &plugin_root,
+        &loaded_plugin_id,
+        &store.plugin_data_root(&loaded_plugin_id),
+        manifest_paths,
+    );
+    loaded_plugin.hook_sources = hook_sources;
+    loaded_plugin.hook_load_warnings = hook_load_warnings;
     loaded_plugin
 }
 
@@ -660,6 +655,7 @@ pub async fn load_plugin_skills(
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: Some(plugin_id.as_key()),
+            plugin_root: Some(plugin_root.clone()),
         })
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots).await;

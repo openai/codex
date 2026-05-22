@@ -303,8 +303,8 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
         ToolName::plain("apply_patch")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_apply_patch_freeform_tool(self.multi_environment))
+    fn spec(&self) -> ToolSpec {
+        create_apply_patch_freeform_tool(self.multi_environment)
     }
 
     async fn handle(

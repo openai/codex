@@ -11,7 +11,9 @@ use super::TurnEnvironmentParams;
 use super::TurnItemsView;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -217,6 +219,93 @@ pub struct ThreadStartResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdateParams {
+    pub thread_id: String,
+    /// Override the working directory for subsequent turns.
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for subsequent turns.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy for subsequent turns.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Select a named permissions profile id for subsequent turns. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[experimental("thread/settings/update.permissions")]
+    #[ts(optional = nullable)]
+    pub permissions: Option<String>,
+    /// Override the model for subsequent turns.
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    /// Override the service tier for subsequent turns. `null` clears the
+    /// current service tier; omission leaves it unchanged.
+    #[serde(
+        default,
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub service_tier: Option<Option<String>>,
+    /// Override the reasoning effort for subsequent turns.
+    #[ts(optional = nullable)]
+    pub effort: Option<ReasoningEffort>,
+    /// Override the reasoning summary for subsequent turns.
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    /// EXPERIMENTAL - Set a pre-set collaboration mode for subsequent turns.
+    ///
+    /// For `collaboration_mode.settings.developer_instructions`, `null` means
+    /// "use the built-in instructions for the selected mode".
+    #[experimental("thread/settings/update.collaborationMode")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+    /// Override the personality for subsequent turns.
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettings {
+    pub cwd: AbsolutePathBuf,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<String>,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: Option<ReasoningSummary>,
+    pub collaboration_mode: CollaborationMode,
+    pub personality: Option<Personality>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSettingsUpdatedNotification {
+    pub thread_id: String,
+    pub thread_settings: ThreadSettings,
 }
 
 #[derive(
@@ -884,6 +973,34 @@ pub struct ThreadListParams {
     pub search_term: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchParams {
+    /// Opaque pagination cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional sort key; defaults to created_at.
+    #[ts(optional = nullable)]
+    pub sort_key: Option<ThreadSortKey>,
+    /// Optional sort direction; defaults to descending (newest first).
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+    /// Optional source filter; when set, only sessions from these source kinds
+    /// are returned. When omitted or empty, defaults to interactive sources.
+    #[ts(optional = nullable)]
+    pub source_kinds: Option<Vec<ThreadSourceKind>>,
+    /// Optional archived filter; when set to true, only archived threads are returned.
+    /// If false or null, only non-archived threads are returned.
+    #[ts(optional = nullable)]
+    pub archived: Option<bool>,
+    /// Required substring/full-text query for thread search.
+    pub search_term: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum ThreadListCwdFilter {
@@ -930,6 +1047,29 @@ pub enum SortDirection {
 #[ts(export_to = "v2/")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// This is only populated when the page contains at least one thread.
+    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
+    /// at the start of the page timestamp so same-second updates are not skipped.
+    pub backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchResult {
+    pub thread: Thread,
+    pub snippet: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSearchResponse {
+    pub data: Vec<ThreadSearchResult>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,

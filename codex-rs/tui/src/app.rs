@@ -10,6 +10,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
+use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
@@ -49,7 +50,6 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -90,6 +90,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
@@ -112,6 +113,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::SandboxMode as AppServerSandboxMode;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -126,12 +128,17 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+#[cfg(target_os = "windows")]
+use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
+use codex_features::FeaturesToml;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -211,6 +218,7 @@ mod thread_events;
 mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
+mod thread_settings;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -483,7 +491,7 @@ pub(crate) struct App {
     harness_overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
-    runtime_permission_profile_override: Option<PermissionProfile>,
+    runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -543,6 +551,7 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    pending_startup_thread_start: bool,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
@@ -550,6 +559,23 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RuntimePermissionProfileOverride {
+    permission_profile: PermissionProfile,
+    active_permission_profile: Option<ActivePermissionProfile>,
+    network: Option<crate::legacy_core::config::NetworkProxySpec>,
+}
+
+impl RuntimePermissionProfileOverride {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            permission_profile: config.permissions.permission_profile().clone(),
+            active_permission_profile: config.permissions.active_permission_profile(),
+            network: config.permissions.network.clone(),
+        }
+    }
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -573,6 +599,27 @@ async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -
             None
         }
     }
+}
+
+fn spawn_startup_thread_start(
+    app_server: &AppServerSession,
+    config: Config,
+    app_event_tx: AppEventSender,
+) {
+    let request_handle = app_server.request_handle();
+    let thread_params_mode = app_server.thread_params_mode();
+    let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
+    tokio::spawn(async move {
+        let result = crate::app_server_session::start_thread_with_request_handle(
+            request_handle,
+            config,
+            thread_params_mode,
+            remote_cwd_override,
+        )
+        .await
+        .map_err(|err| format!("{err:#}"));
+        app_event_tx.send(AppEvent::StartupThreadStarted { result });
+    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,10 +825,14 @@ impl App {
                 &initial_images,
             );
         let thread_and_widget_started_at = Instant::now();
+        let pending_startup_thread_start = matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
-                // Only count a startup tooltip once the fresh thread can actually render it.
+                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+                // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
@@ -811,7 +862,9 @@ impl App {
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(started))
+                let mut chat_widget = ChatWidget::new_with_app_event(init);
+                chat_widget.set_queue_submissions_until_session_configured(/*queue*/ true);
+                (chat_widget, None)
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
@@ -956,6 +1009,7 @@ See the Codex keymap documentation for supported actions and examples."
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_startup_thread_start,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
