@@ -354,7 +354,7 @@ impl Session {
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.tasks.is_empty());
+            debug_assert!(turn.task.is_none());
             Arc::clone(&turn.turn_state)
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
@@ -372,7 +372,7 @@ impl Session {
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.tasks.is_empty());
+        debug_assert!(turn.task.is_none());
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
@@ -498,10 +498,10 @@ impl Session {
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
         if let Some(mut active_turn) = self.take_active_turn().await {
-            let tasks = active_turn.drain_tasks();
-            aborted_turn = !tasks.is_empty();
-            turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
-            for task in tasks {
+            let task = active_turn.take_task();
+            aborted_turn = task.is_some();
+            turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
+            if let Some(task) = task {
                 self.handle_task_abort(task, reason.clone()).await;
             }
             if aborted_turn {
@@ -541,7 +541,8 @@ impl Session {
             let mut active = self.active_turn.lock().await;
             if active
                 .as_ref()
-                .is_some_and(|active_turn| active_turn.tasks.contains_key(turn_id))
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .is_some_and(|task| task.turn_context.sub_id == turn_id)
             {
                 active.take()
             } else {
@@ -552,9 +553,9 @@ impl Session {
             return false;
         };
 
-        let tasks = active_turn.drain_tasks();
-        let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
-        for task in tasks {
+        let task = active_turn.take_task();
+        let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
+        if let Some(task) = task {
             self.handle_task_abort(task, reason.clone()).await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
@@ -601,13 +602,8 @@ impl Session {
                 && let Some(removed_task) = at.remove_task(&turn_context.sub_id)
             {
                 records_turn_token_usage_on_span = removed_task.records_turn_token_usage_on_span;
-                if removed_task.active_turn_is_empty {
-                    should_clear_active_turn = true;
-                    let turn_state = Arc::clone(&at.turn_state);
-                    Some(turn_state)
-                } else {
-                    None
-                }
+                should_clear_active_turn = true;
+                Some(Arc::clone(&at.turn_state))
             } else {
                 None
             }
@@ -803,7 +799,7 @@ impl Session {
             let cleared_active_turn = {
                 let mut active = self.active_turn.lock().await;
                 if let Some(active_turn) = active.as_ref()
-                    && active_turn.tasks.is_empty()
+                    && active_turn.task.is_none()
                     && turn_state
                         .as_ref()
                         .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
