@@ -49,6 +49,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use codex_rollout::state_db::StateDbHandle;
 
@@ -140,6 +141,24 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    /// Predicts the next prompt for the loaded thread without advancing it.
+    ///
+    /// This is the thread-level entry point for clients that already own a live
+    /// `CodexThread` and need a best-effort composer suggestion. The cancellation
+    /// token lets ephemeral clients stop abandoned hidden sampling without
+    /// interrupting the real thread. `Ok(None)` is the normal result when the
+    /// thread is not at a stable suggestion boundary.
+    pub async fn suggest_next_prompt(
+        &self,
+        cancellation_token: CancellationToken,
+    ) -> CodexResult<Option<String>> {
+        crate::next_prompt_suggestion::suggest_next_prompt(
+            self.codex.session.as_ref(),
+            cancellation_token,
+        )
+        .await
     }
 
     /// Wait until the underlying session loop has terminated.

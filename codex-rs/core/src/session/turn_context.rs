@@ -820,6 +820,56 @@ impl Session {
         turn_context
     }
 
+    async fn new_lightweight_turn_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+        turn_environments: ResolvedTurnEnvironments,
+    ) -> Arc<TurnContext> {
+        let primary_turn_environment = turn_environments.primary();
+        let cwd = primary_turn_environment
+            .map(|turn_environment| turn_environment.cwd.clone())
+            .unwrap_or_else(|| session_configuration.cwd.clone());
+        let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config.to_models_manager_config(),
+            )
+            .await;
+        Arc::new(Self::make_turn_context(
+            self.thread_id(),
+            self.session_id(),
+            Some(Arc::clone(&self.services.auth_manager)),
+            &self.services.session_telemetry,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            self.services.user_shell.as_ref(),
+            self.services.shell_zsh_path.as_ref(),
+            self.services.main_execve_wrapper_exe.as_ref(),
+            per_turn_config,
+            model_info,
+            &self.services.models_manager,
+            self.services
+                .network_proxy
+                .load_full()
+                .as_ref()
+                .and_then(|started_proxy| {
+                    Self::managed_network_proxy_active_for_permission_profile(
+                        &session_configuration.permission_profile(),
+                    )
+                    .then(|| started_proxy.proxy())
+                }),
+            turn_environments,
+            cwd,
+            sub_id,
+            Arc::new(SkillLoadOutcome::default()),
+            /*goal_tools_supported*/ false,
+        ))
+    }
+
     pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
         if tc.model_info.used_fallback_model_metadata {
             self.send_event(
@@ -838,6 +888,39 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    /// Builds an ephemeral turn context without turn-start side effects.
+    ///
+    /// This is for hidden read-only work such as next-prompt prediction that
+    /// needs the current model/provider/cwd configuration but must not load skills,
+    /// mutate MCP permission state, enrich git context, or otherwise behave like a
+    /// user-submitted turn. Callers that need normal turn setup should keep using
+    /// `new_default_turn*` instead.
+    pub(crate) async fn new_lightweight_turn(&self) -> Arc<TurnContext> {
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let mut effective_environments = session_configuration.environments.clone();
+        Self::overlay_runtime_cwd_on_primary_environment(
+            &mut effective_environments,
+            &session_configuration.cwd,
+        );
+        let turn_environments = match self.resolve_turn_environments(&effective_environments) {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                warn!("failed to resolve stored session environments: {err}");
+                ResolvedTurnEnvironments::default()
+            }
+        };
+
+        self.new_lightweight_turn_from_configuration(
+            self.next_internal_sub_id(),
+            session_configuration,
+            turn_environments,
+        )
+        .await
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {

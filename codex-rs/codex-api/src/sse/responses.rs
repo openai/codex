@@ -2,6 +2,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
+use crate::rate_limits::parse_rate_limit_event;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -435,6 +436,17 @@ pub async fn process_sse(
         };
 
         trace!("SSE event: {}", &sse.data);
+
+        if let Some(snapshot) = parse_rate_limit_event(&sse.data) {
+            if tx_event
+                .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            continue;
+        }
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
