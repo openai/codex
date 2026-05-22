@@ -463,7 +463,7 @@ function Test-ReleaseIsComplete {
     $expectedFiles = @(
         "codex.exe",
         "codex-resources\codex-command-runner.exe",
-        "codex-resources\codex-windows-sandbox-setup.exe",
+        "codex-resources\codex-windows-sandbox.exe",
         "codex-resources\rg.exe"
     )
     foreach ($name in $expectedFiles) {
@@ -673,7 +673,7 @@ try {
             $copyMap = @{
                 "codex/codex.exe" = "codex.exe"
                 "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
-                "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                "codex/codex-windows-sandbox.exe" = "codex-resources\codex-windows-sandbox.exe"
                 "path/rg.exe" = "codex-resources\rg.exe"
             }
 

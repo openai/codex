@@ -57,7 +57,7 @@ BINARY_COMPONENTS = {
     "codex-windows-sandbox-setup": BinaryComponent(
         artifact_prefix="codex-windows-sandbox-setup",
         dest_dir="codex",
-        binary_basename="codex-windows-sandbox-setup",
+        binary_basename="codex-windows-sandbox",
         targets=WINDOWS_TARGETS,
     ),
     "codex-command-runner": BinaryComponent(

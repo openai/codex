@@ -556,25 +556,30 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
+    const HELPER_EXE_NAMES: [&str; 2] = [
+        "codex-windows-sandbox.exe",
+        "codex-windows-sandbox-setup.exe",
+    ];
+
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
+        for helper_name in HELPER_EXE_NAMES {
+            let candidate = dir.join(helper_name);
+            if candidate.exists() {
+                return candidate;
+            }
 
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
+            // Standalone installs keep Windows helper binaries under
+            // `codex-resources/` next to `codex.exe`, so elevation needs to
+            // probe that sibling folder before falling back to PATH.
+            let resource_candidate = dir.join("codex-resources").join(helper_name);
+            if resource_candidate.exists() {
+                return resource_candidate;
+            }
         }
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from(HELPER_EXE_NAMES[0])
 }
 
 fn report_helper_failure(
