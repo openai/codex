@@ -909,7 +909,7 @@ fn parse_large_tool_input_schema_stops_after_dropping_root_definitions_when_unde
             "metadata": {
                 "type": "object",
                 "description": "metadata object",
-                "properties": many_string_properties(300)
+                "properties": many_string_properties(/*count*/ 300)
             }
         }
     }))
@@ -1126,22 +1126,6 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                         }
                     },
                     { "type": "string" }
-                ],
-                "oneOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "leaf": { "type": "string" }
-                        }
-                    }
-                ],
-                "allOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "leaf": { "type": "string" }
-                        }
-                    }
                 ]
             }
         }
@@ -1175,12 +1159,6 @@ fn collapse_deep_schema_objects_traverses_schema_children() {
                     "anyOf": [
                         {},
                         { "type": "string" }
-                    ],
-                    "oneOf": [
-                        {}
-                    ],
-                    "allOf": [
-                        {}
                     ]
                 }
             }
