@@ -589,6 +589,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_search(
+        &self,
+        params: ThreadSearchParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_search_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_loaded_list(
         &self,
         params: ThreadLoadedListParams,
@@ -1855,6 +1864,131 @@ impl ThreadRequestProcessor {
             })
             .collect();
         Ok(ThreadListResponse {
+            data,
+            next_cursor,
+            backwards_cursor,
+        })
+    }
+
+    async fn thread_search_response_inner(
+        &self,
+        params: ThreadSearchParams,
+    ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
+        let ThreadSearchParams {
+            cursor,
+            limit,
+            sort_key,
+            sort_direction,
+            source_kinds,
+            archived,
+            search_term,
+        } = params;
+        let search_term = search_term.trim().to_string();
+        let search_term = (!search_term.is_empty())
+            .then_some(search_term)
+            .ok_or_else(|| invalid_request("thread/search requires a non-empty searchTerm"))?;
+        let requested_page_size = limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
+        let store_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
+            ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
+        };
+        let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
+        let mut cursor_obj = cursor;
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut search_results = Vec::with_capacity(requested_page_size);
+        let mut next_cursor = None;
+
+        while remaining > 0 {
+            let page = self
+                .thread_store
+                .search_threads(StoreSearchThreadsParams {
+                    page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
+                    cursor: cursor_obj.clone(),
+                    sort_key: store_sort_key,
+                    sort_direction: match store_sort_direction {
+                        SortDirection::Asc => StoreSortDirection::Asc,
+                        SortDirection::Desc => StoreSortDirection::Desc,
+                    },
+                    allowed_sources: allowed_sources.clone(),
+                    archived: archived.unwrap_or(false),
+                    search_term: search_term.clone(),
+                })
+                .await
+                .map_err(thread_store_list_error)?;
+
+            for result in page.items {
+                let source = with_thread_spawn_agent_metadata(
+                    result.thread.source.clone(),
+                    result.thread.agent_nickname.clone(),
+                    result.thread.agent_role.clone(),
+                );
+                if source_kind_filter
+                    .as_ref()
+                    .is_none_or(|filter| source_kind_matches(&source, filter))
+                {
+                    search_results.push(result);
+                    if search_results.len() >= requested_page_size {
+                        break;
+                    }
+                }
+            }
+
+            remaining = requested_page_size.saturating_sub(search_results.len());
+            next_cursor = page.next_cursor;
+            if remaining == 0 {
+                break;
+            }
+
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
+            }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
+        }
+
+        let backwards_cursor = search_results.first().and_then(|result| {
+            thread_backwards_cursor_for_sort_key(
+                &result.thread,
+                store_sort_key,
+                store_sort_direction,
+            )
+        });
+        let fallback_provider = self.config.model_provider_id.clone();
+        let mut results = Vec::with_capacity(search_results.len());
+        let mut status_ids = Vec::with_capacity(search_results.len());
+        for result in search_results {
+            let (thread, _) = thread_from_stored_thread(
+                result.thread,
+                fallback_provider.as_str(),
+                &self.config.cwd,
+            );
+            status_ids.push(thread.id.clone());
+            results.push((thread, result.snippet));
+        }
+        let statuses = self
+            .thread_watch_manager
+            .loaded_statuses_for_threads(status_ids)
+            .await;
+        let data = results
+            .into_iter()
+            .map(|(mut thread, snippet)| {
+                if let Some(status) = statuses.get(&thread.id) {
+                    thread.status = status.clone();
+                }
+                ThreadSearchResult { thread, snippet }
+            })
+            .collect();
+
+        Ok(ThreadSearchResponse {
             data,
             next_cursor,
             backwards_cursor,

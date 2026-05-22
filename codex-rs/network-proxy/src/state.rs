@@ -5,6 +5,7 @@ use crate::config::NetworkUnixSocketPermissions;
 use crate::mitm::MitmState;
 use crate::mitm::MitmUpstreamConfig;
 use crate::mitm_hook::MitmHookConfig;
+use crate::mitm_hook::compile_mitm_hooks;
 use crate::mitm_hook::validate_mitm_hook_config;
 use crate::policy::DomainPattern;
 use crate::policy::compile_allowlist_globset;
@@ -71,6 +72,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist_globset(&denied_domains)?;
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
+    let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
             allow_upstream_proxy: config.network.allow_upstream_proxy,
@@ -84,6 +86,7 @@ pub fn build_config_state(
         allow_set,
         deny_set,
         mitm,
+        mitm_hooks,
         constraints,
         blocked: std::collections::VecDeque::new(),
         blocked_total: 0,

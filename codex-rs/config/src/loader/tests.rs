@@ -120,7 +120,7 @@ model = "gpt-work"
     );
     let message = err.to_string();
     assert!(
-        message.contains("--profile-v2 `work` cannot be used"),
+        message.contains("--profile `work` cannot be used"),
         "unexpected error message: {message}"
     );
     assert!(
@@ -129,6 +129,10 @@ model = "gpt-work"
     );
     assert!(
         message.contains("[profiles.work]"),
+        "unexpected error message: {message}"
+    );
+    assert!(
+        message.contains("https://developers.openai.com/codex/config-advanced#profiles"),
         "unexpected error message: {message}"
     );
 }

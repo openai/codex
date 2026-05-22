@@ -496,7 +496,6 @@ fn config_overrides_from_interactive(
     };
     ConfigOverrides {
         model: interactive.model.clone(),
-        config_profile: interactive.config_profile.clone(),
         approval_policy,
         sandbox_mode,
         cwd: interactive.cwd.clone(),

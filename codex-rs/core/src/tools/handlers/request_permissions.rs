@@ -22,10 +22,8 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
         ToolName::plain("request_permissions")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_request_permissions_tool(
-            request_permissions_tool_description(),
-        ))
+    fn spec(&self) -> ToolSpec {
+        create_request_permissions_tool(request_permissions_tool_description())
     }
 
     async fn handle(

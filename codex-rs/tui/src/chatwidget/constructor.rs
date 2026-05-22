@@ -64,7 +64,11 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
-        let effective_service_tier = config.service_tier.clone();
+        let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
+            &config,
+            &header_model,
+            &model_catalog.try_list_models().unwrap_or_default(),
+        );
         let current_terminal_info = terminal_info();
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();

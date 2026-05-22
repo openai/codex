@@ -17,6 +17,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -656,6 +657,161 @@ sqlite = true
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids, vec![newer_match, older_match]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_returns_content_matches() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let older_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "match: needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let _non_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "no hit here",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let newer_match = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T12-00-00",
+        "2025-01-02T12:00:00Z",
+        "mixed NEEDLE suffix",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadSearchResponse>(resp)?;
+
+    assert_eq!(next_cursor, None);
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![newer_match, older_match]);
+    assert_eq!(data[0].snippet, "mixed NEEDLE suffix");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_matches_json_escaped_content() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let search_term = r#"quoted "needle" \ path"#;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        search_term,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: None,
+            archived: None,
+            search_term: search_term.to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].thread.id, thread_id);
+    assert_eq!(data[0].snippet, search_term);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_search_filters_by_source_kind() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let cli_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let exec_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "shared needle",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Exec,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            source_kinds: Some(vec![ThreadSourceKind::Exec]),
+            archived: None,
+            search_term: "needle".to_string(),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadSearchResponse { data, .. } = to_response::<ThreadSearchResponse>(resp)?;
+
+    let ids: Vec<_> = data
+        .iter()
+        .map(|result| result.thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![exec_id.as_str()]);
+    assert_ne!(cli_id, exec_id);
 
     Ok(())
 }
