@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_analytics::StartedTimer;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -327,6 +328,7 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) auth_manager: Arc<AuthManager>,
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
+    pub(super) analytics_events_client: AnalyticsEventsClient,
     pub(super) arg0_paths: Arg0DispatchPaths,
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
@@ -347,6 +349,7 @@ impl ThreadRequestProcessor {
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
+        analytics_events_client: AnalyticsEventsClient,
         arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         config_manager: ConfigManager,
@@ -363,6 +366,7 @@ impl ThreadRequestProcessor {
             auth_manager,
             thread_manager,
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             config_manager,
@@ -889,11 +893,13 @@ impl ThreadRequestProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
+        let analytics_events_client = self.analytics_events_client.clone();
         let outgoing = Arc::clone(&listener_task_context.outgoing);
         let error_request_id = request_id.clone();
         let thread_start_task = async move {
             if let Err(error) = Self::thread_start_task(
                 listener_task_context,
+                analytics_events_client,
                 config_manager,
                 request_id,
                 app_server_client_name,
@@ -978,6 +984,7 @@ impl ThreadRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
+        analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
@@ -992,7 +999,7 @@ impl ThreadRequestProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
-        let thread_start_started_at = std::time::Instant::now();
+        let thread_start_timer = StartedTimer::start();
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
@@ -1211,6 +1218,7 @@ impl ThreadRequestProcessor {
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
+        analytics_events_client.track_thread_start_timing(thread.id.clone(), thread_start_timer);
         let notif = thread_started_notification(thread);
         listener_task_context
             .outgoing
@@ -1231,7 +1239,7 @@ impl ThreadRequestProcessor {
             .await;
         session_telemetry.record_startup_phase(
             "thread_start_total",
-            thread_start_started_at.elapsed(),
+            thread_start_timer.elapsed(),
             Some("ready"),
         );
         Ok(())

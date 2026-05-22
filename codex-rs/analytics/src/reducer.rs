@@ -74,6 +74,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -150,6 +151,7 @@ struct ConnectionState {
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
+    thread_start_duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -455,6 +457,9 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
                 }
+                CustomAnalyticsFact::ThreadStartTiming(input) => {
+                    self.ingest_thread_start_timing(input);
+                }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
                 }
@@ -560,6 +565,13 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::ThreadInitialized(
             subagent_thread_started_event_request(input),
         ));
+    }
+
+    fn ingest_thread_start_timing(&mut self, input: ThreadStartTimingFact) {
+        self.threads
+            .entry(input.thread_id)
+            .or_default()
+            .thread_start_duration_ms = Some(input.duration_ms);
     }
 
     fn ingest_guardian_review(
@@ -1264,13 +1276,12 @@ impl AnalyticsReducer {
             thread.thread_source.map(Into::into),
             initialization_mode,
         );
-        self.threads.insert(
-            thread_id.clone(),
-            ThreadAnalyticsState {
-                connection_id: Some(connection_id),
-                metadata: Some(thread_metadata.clone()),
-            },
-        );
+        let thread_state = self.threads.entry(thread_id.clone()).or_default();
+        thread_state.connection_id = Some(connection_id);
+        thread_state.metadata = Some(thread_metadata.clone());
+        let thread_start_duration_ms = matches!(initialization_mode, ThreadInitializationMode::New)
+            .then_some(thread_state.thread_start_duration_ms)
+            .flatten();
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
@@ -1284,6 +1295,7 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
+                    thread_start_duration_ms,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

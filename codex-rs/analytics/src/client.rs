@@ -18,6 +18,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
@@ -60,12 +61,13 @@ impl StartedTimer {
         }
     }
 
+    #[must_use]
+    pub fn elapsed(self) -> Duration {
+        self.started_at.elapsed()
+    }
+
     fn elapsed_ms(self) -> u64 {
-        self.started_at
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
+        self.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
     }
 }
 
@@ -202,6 +204,15 @@ impl AnalyticsEventsClient {
     pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
+        ));
+    }
+
+    pub fn track_thread_start_timing(&self, thread_id: String, timer: StartedTimer) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ThreadStartTiming(ThreadStartTimingFact {
+                thread_id,
+                duration_ms: timer.elapsed_ms(),
+            }),
         ));
     }
 

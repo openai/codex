@@ -64,6 +64,7 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -1328,6 +1329,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
+            thread_start_duration_ms: Some(321),
             created_at: 1,
         },
     });
@@ -1359,6 +1361,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "thread_start_duration_ms": 321,
                 "created_at": 1
             }
         })
@@ -1673,6 +1676,10 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         payload[0]["event_params"]["runtime"]["runtime_arch"],
         "x86_64"
     );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_duration_ms"],
+        json!(null)
+    );
 }
 
 #[tokio::test]
@@ -1711,6 +1718,44 @@ async fn app_server_started_fact_emits_event() {
                 "completed_at": 12
             }
         }])
+    );
+}
+
+#[tokio::test]
+async fn thread_start_timing_fact_enriches_thread_initialized_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadStartTiming(
+                ThreadStartTimingFact {
+                    thread_id: "thread-1".to_string(),
+                    duration_ms: 222,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_start_response(
+                    "thread-1", /*ephemeral*/ true, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload[0]["event_type"], json!("codex_thread_initialized"));
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_duration_ms"],
+        json!(222)
     );
 }
 
