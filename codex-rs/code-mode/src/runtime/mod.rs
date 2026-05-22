@@ -115,7 +115,6 @@ pub enum RuntimeResponse {
     Result {
         cell_id: String,
         content_items: Vec<FunctionCallOutputContentItem>,
-        stored_values: HashMap<String, JsonValue>,
         error_text: Option<String>,
     },
 }
@@ -181,7 +180,6 @@ pub(crate) enum RuntimeEvent {
         text: String,
     },
     Result {
-        stored_values: HashMap<String, JsonValue>,
         stored_value_writes: HashMap<String, JsonValue>,
         error_text: Option<String>,
     },
@@ -261,7 +259,6 @@ pub(super) struct RuntimeState {
 pub(super) enum CompletionState {
     Pending,
     Completed {
-        stored_values: HashMap<String, JsonValue>,
         stored_value_writes: HashMap<String, JsonValue>,
         error_text: Option<String>,
     },
@@ -318,7 +315,7 @@ fn run_runtime(
     });
 
     if let Err(error_text) = globals::install_globals(scope) {
-        send_result(&event_tx, HashMap::new(), HashMap::new(), Some(error_text));
+        send_result(&event_tx, HashMap::new(), Some(error_text));
         return;
     }
 
@@ -334,11 +331,10 @@ fn run_runtime(
 
     match module_loader::completion_state(scope, pending_promise.as_ref()) {
         CompletionState::Completed {
-            stored_values,
             stored_value_writes,
             error_text,
         } => {
-            send_result(&event_tx, stored_values, stored_value_writes, error_text);
+            send_result(&event_tx, stored_value_writes, error_text);
             return;
         }
         CompletionState::Pending => {}
@@ -380,11 +376,10 @@ fn run_runtime(
         scope.perform_microtask_checkpoint();
         match module_loader::completion_state(scope, pending_promise.as_ref()) {
             CompletionState::Completed {
-                stored_values,
                 stored_value_writes,
                 error_text,
             } => {
-                send_result(&event_tx, stored_values, stored_value_writes, error_text);
+                send_result(&event_tx, stored_value_writes, error_text);
                 return;
             }
             CompletionState::Pending => {}
@@ -428,27 +423,20 @@ fn capture_scope_send_error(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     error_text: Option<String>,
 ) {
-    let (stored_values, stored_value_writes) = scope
+    let stored_value_writes = scope
         .get_slot::<RuntimeState>()
-        .map(|state| {
-            (
-                state.stored_values.clone(),
-                state.stored_value_writes.clone(),
-            )
-        })
+        .map(|state| state.stored_value_writes.clone())
         .unwrap_or_default();
 
-    send_result(event_tx, stored_values, stored_value_writes, error_text);
+    send_result(event_tx, stored_value_writes, error_text);
 }
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    stored_values: HashMap<String, JsonValue>,
     stored_value_writes: HashMap<String, JsonValue>,
     error_text: Option<String>,
 ) {
     let _ = event_tx.send(RuntimeEvent::Result {
-        stored_values,
         stored_value_writes,
         error_text,
     });
@@ -504,15 +492,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let RuntimeEvent::Result {
-            stored_values,
-            error_text,
-            ..
-        } = result_event
-        else {
+        let RuntimeEvent::Result { error_text, .. } = result_event else {
             panic!("expected runtime result after termination");
         };
-        assert_eq!(stored_values, HashMap::new());
         assert!(error_text.is_some());
 
         assert!(

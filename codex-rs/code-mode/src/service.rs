@@ -73,12 +73,8 @@ impl CodeModeService {
         }
     }
 
-    pub async fn stored_values(&self) -> HashMap<String, JsonValue> {
+    async fn stored_values(&self) -> HashMap<String, JsonValue> {
         self.inner.stored_values.lock().await.clone()
-    }
-
-    pub async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
-        *self.inner.stored_values.lock().await = values;
     }
 
     /// Reserves the runtime cell id for a future `execute` request.
@@ -350,7 +346,6 @@ enum SessionResponseSender {
 
 struct PendingResult {
     content_items: Vec<FunctionCallOutputContentItem>,
-    stored_values: HashMap<String, JsonValue>,
     error_text: Option<String>,
 }
 
@@ -367,7 +362,6 @@ fn missing_cell_response(cell_id: String) -> RuntimeResponse {
         error_text: Some(format!("exec cell {cell_id} not found")),
         cell_id,
         content_items: Vec::new(),
-        stored_values: HashMap::new(),
     }
 }
 
@@ -375,7 +369,6 @@ fn pending_result_response(cell_id: &str, result: PendingResult) -> RuntimeRespo
     RuntimeResponse::Result {
         cell_id: cell_id.to_string(),
         content_items: result.content_items,
-        stored_values: result.stored_values,
         error_text: result.error_text,
     }
 }
@@ -477,7 +470,6 @@ async fn run_session_control(
                     if pending_result.is_none() {
                         let result = PendingResult {
                             content_items: std::mem::take(&mut content_items),
-                            stored_values: HashMap::new(),
                             error_text: Some("exec runtime ended unexpectedly".to_string()),
                         };
                         if send_or_buffer_result(
@@ -552,7 +544,6 @@ async fn run_session_control(
                             .await;
                     }
                     RuntimeEvent::Result {
-                        stored_values,
                         stored_value_writes,
                         error_text,
                     } => {
@@ -574,7 +565,6 @@ async fn run_session_control(
                             .extend(stored_value_writes);
                         let result = PendingResult {
                             content_items: std::mem::take(&mut content_items),
-                            stored_values,
                             error_text,
                         };
                         if send_or_buffer_result(
@@ -691,7 +681,6 @@ mod tests {
 
     use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
@@ -759,98 +748,8 @@ mod tests {
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "before".to_string(),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
-        );
-    }
-
-    #[tokio::test]
-    async fn completed_cells_merge_only_written_stored_values() {
-        let service = CodeModeService::new();
-        service
-            .replace_stored_values(HashMap::from([
-                ("a".to_string(), json!("old-a")),
-                ("b".to_string(), json!("old-b")),
-            ]))
-            .await;
-
-        assert_eq!(
-            service
-                .execute(ExecuteRequest {
-                    cell_id: "1".to_string(),
-                    source: r#"
-await new Promise((resolve) => setTimeout(resolve, 60_000));
-store("a", "first-cell");
-"#
-                    .to_string(),
-                    ..execute_request("")
-                })
-                .await
-                .unwrap(),
-            RuntimeResponse::Yielded {
-                cell_id: "1".to_string(),
-                content_items: Vec::new(),
-            }
-        );
-
-        assert_eq!(
-            service
-                .execute(ExecuteRequest {
-                    cell_id: "2".to_string(),
-                    source: r#"store("b", "second-cell");"#.to_string(),
-                    ..execute_request("")
-                })
-                .await
-                .unwrap(),
-            RuntimeResponse::Result {
-                cell_id: "2".to_string(),
-                content_items: Vec::new(),
-                stored_values: HashMap::from([
-                    ("a".to_string(), json!("old-a")),
-                    ("b".to_string(), json!("second-cell")),
-                ]),
-                error_text: None,
-            }
-        );
-
-        let runtime_tx = service
-            .inner
-            .sessions
-            .lock()
-            .await
-            .get("1")
-            .unwrap()
-            .runtime_tx
-            .clone();
-        runtime_tx
-            .send(RuntimeCommand::TimeoutFired { id: 1 })
-            .unwrap();
-        assert_eq!(
-            service
-                .wait(WaitRequest {
-                    cell_id: "1".to_string(),
-                    yield_time_ms: 1_000,
-                    terminate: false,
-                })
-                .await
-                .unwrap(),
-            WaitOutcome::LiveCell(RuntimeResponse::Result {
-                cell_id: "1".to_string(),
-                content_items: Vec::new(),
-                stored_values: HashMap::from([
-                    ("a".to_string(), json!("first-cell")),
-                    ("b".to_string(), json!("old-b")),
-                ]),
-                error_text: None,
-            })
-        );
-        assert_eq!(
-            service.stored_values().await,
-            HashMap::from([
-                ("a".to_string(), json!("first-cell")),
-                ("b".to_string(), json!("second-cell")),
-            ])
         );
     }
 
@@ -874,7 +773,6 @@ store("a", "first-cell");
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "done".to_string(),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             })
         );
@@ -1204,7 +1102,6 @@ text("done");
                     content_items: vec![FunctionCallOutputContentItem::InputText {
                         text: "done".to_string(),
                     }],
-                    stored_values: HashMap::new(),
                     error_text: None,
                 }
             ))
@@ -1231,7 +1128,6 @@ text("done");
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "false".to_string(),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1271,7 +1167,6 @@ text(value);
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "jeudi 2 janvier \u{e0} 03:04:05".to_string(),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1310,7 +1205,6 @@ text(formatter.format(new Date("2025-01-02T03:04:05Z")));
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "jeudi 2 janvier \u{e0} 03:04:05".to_string(),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1353,7 +1247,6 @@ text(JSON.stringify(returnsUndefined));
                         text: "[true,true,true]".to_string(),
                     },
                 ],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1388,7 +1281,6 @@ image({
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
                     detail: Some(crate::ImageDetail::Original),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1424,7 +1316,6 @@ image(
                     image_url: "https://example.com/image.jpg".to_string(),
                     detail: Some(crate::ImageDetail::Original),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1462,7 +1353,6 @@ image(
                     image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
                     detail: Some(crate::ImageDetail::High),
                 }],
-                stored_values: HashMap::new(),
                 error_text: None,
             }
         );
@@ -1492,7 +1382,6 @@ image({
             RuntimeResponse::Result {
                 cell_id: "1".to_string(),
                 content_items: Vec::new(),
-                stored_values: HashMap::new(),
                 error_text: Some("image detail must be one of: high, original".to_string()),
             }
         );
@@ -1529,7 +1418,6 @@ image({
             RuntimeResponse::Result {
                 cell_id: "1".to_string(),
                 content_items: Vec::new(),
-                stored_values: HashMap::new(),
                 error_text: Some(
                     "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block".to_string(),
                 ),
@@ -1555,7 +1443,6 @@ image({
             WaitOutcome::MissingCell(RuntimeResponse::Result {
                 cell_id: "missing".to_string(),
                 content_items: Vec::new(),
-                stored_values: HashMap::new(),
                 error_text: Some("exec cell missing not found".to_string()),
             })
         );
