@@ -138,6 +138,7 @@ impl CodeModeService {
         let cell_id = request.cell_id.clone();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let stored_values = self.stored_values().await;
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = {
             let mut sessions = self.inner.sessions.lock().await;
             if sessions.contains_key(&cell_id) {
@@ -145,7 +146,7 @@ impl CodeModeService {
             }
 
             let (runtime_tx, runtime_control_tx, runtime_terminate_handle) =
-                spawn_runtime(request, event_tx, pending_mode)?;
+                spawn_runtime(stored_values, request, event_tx, pending_mode)?;
 
             // Keep the session registry locked through insertion so a
             // caller-owned cell id cannot race with another execute and replace
@@ -552,6 +553,7 @@ async fn run_session_control(
                     }
                     RuntimeEvent::Result {
                         stored_values,
+                        stored_value_writes,
                         error_text,
                     } => {
                         yield_timer = None;
@@ -565,6 +567,11 @@ async fn run_session_control(
                             }
                             break;
                         }
+                        inner
+                            .stored_values
+                            .lock()
+                            .await
+                            .extend(stored_value_writes);
                         let result = PendingResult {
                             content_items: std::mem::take(&mut content_items),
                             stored_values,
@@ -684,6 +691,7 @@ mod tests {
 
     use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
@@ -715,7 +723,6 @@ mod tests {
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),
-            stored_values: HashMap::new(),
             yield_time_ms: Some(1),
             max_output_tokens: None,
         }
@@ -755,6 +762,95 @@ mod tests {
                 stored_values: HashMap::new(),
                 error_text: None,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_cells_merge_only_written_stored_values() {
+        let service = CodeModeService::new();
+        service
+            .replace_stored_values(HashMap::from([
+                ("a".to_string(), json!("old-a")),
+                ("b".to_string(), json!("old-b")),
+            ]))
+            .await;
+
+        assert_eq!(
+            service
+                .execute(ExecuteRequest {
+                    cell_id: "1".to_string(),
+                    source: r#"
+await new Promise((resolve) => setTimeout(resolve, 60_000));
+store("a", "first-cell");
+"#
+                    .to_string(),
+                    ..execute_request("")
+                })
+                .await
+                .unwrap(),
+            RuntimeResponse::Yielded {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+            }
+        );
+
+        assert_eq!(
+            service
+                .execute(ExecuteRequest {
+                    cell_id: "2".to_string(),
+                    source: r#"store("b", "second-cell");"#.to_string(),
+                    ..execute_request("")
+                })
+                .await
+                .unwrap(),
+            RuntimeResponse::Result {
+                cell_id: "2".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::from([
+                    ("a".to_string(), json!("old-a")),
+                    ("b".to_string(), json!("second-cell")),
+                ]),
+                error_text: None,
+            }
+        );
+
+        let runtime_tx = service
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get("1")
+            .unwrap()
+            .runtime_tx
+            .clone();
+        runtime_tx
+            .send(RuntimeCommand::TimeoutFired { id: 1 })
+            .unwrap();
+        assert_eq!(
+            service
+                .wait(WaitRequest {
+                    cell_id: "1".to_string(),
+                    yield_time_ms: 1_000,
+                    terminate: false,
+                })
+                .await
+                .unwrap(),
+            WaitOutcome::LiveCell(RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::from([
+                    ("a".to_string(), json!("first-cell")),
+                    ("b".to_string(), json!("old-b")),
+                ]),
+                error_text: None,
+            })
+        );
+        assert_eq!(
+            service.stored_values().await,
+            HashMap::from([
+                ("a".to_string(), json!("first-cell")),
+                ("b".to_string(), json!("second-cell")),
+            ])
         );
     }
 
@@ -1473,6 +1569,7 @@ image({
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_event_tx, _runtime_event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
+            HashMap::new(),
             ExecuteRequest {
                 source: "await new Promise(() => {})".to_string(),
                 yield_time_ms: None,
