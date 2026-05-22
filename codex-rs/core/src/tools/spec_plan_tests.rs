@@ -265,6 +265,21 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
         ToolName::namespaced("web", "run")
     }
 
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
+            name: "web".to_string(),
+            description: "Test web namespace.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "run".to_string(),
+                description: "Test standalone web search tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })],
+        })
+    }
+
     async fn handle(
         &self,
         _call: ExtensionToolCall,

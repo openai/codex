@@ -24,6 +24,8 @@ impl ToolOutput for EncryptedSearchOutput {
     }
 
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        // TODO: Make standalone search honor memories.disable_on_external_context,
+        // as hosted web search does.
         ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload::from_content_items(vec![

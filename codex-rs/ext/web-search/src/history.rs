@@ -1,10 +1,14 @@
 use codex_api::SearchInput;
+use codex_core::parse_turn_item;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::retain_tail_from_last_n_user_messages;
 use codex_tools::truncate_assistant_output_text_to_token_budget;
 
 const ASSISTANT_CONTEXT_TOKEN_LIMIT: usize = 1_000;
+const ASSISTANT_ROLE: &str = "assistant";
+const USER_ROLE: &str = "user";
 
 /// Builds the conversation tail for standalone web search.
 ///
@@ -23,13 +27,17 @@ pub(crate) fn recent_input(items: &[ResponseItem]) -> Option<SearchInput> {
 
 fn push_visible_message(messages: &mut Vec<ResponseItem>, item: &ResponseItem) {
     match item {
-        ResponseItem::Message { role, .. } if role == "assistant" => messages.push(item.clone()),
+        ResponseItem::Message { role, .. } if role == ASSISTANT_ROLE => {
+            messages.push(item.clone());
+        }
         ResponseItem::Message {
             id,
             role,
             content,
             phase,
-        } if role == "user" => {
+        } if role == USER_ROLE
+            && matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_))) =>
+        {
             let content = content
                 .iter()
                 .filter(|item| matches!(item, ContentItem::InputText { .. }))
@@ -55,13 +63,15 @@ mod tests {
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
+    use super::ASSISTANT_ROLE;
+    use super::USER_ROLE;
     use super::recent_input;
 
     fn message(role: &str, text: &str) -> ResponseItem {
         ResponseItem::Message {
             id: None,
             role: role.to_string(),
-            content: vec![if role == "assistant" {
+            content: vec![if role == ASSISTANT_ROLE {
                 ContentItem::OutputText {
                     text: text.to_string(),
                 }
@@ -78,9 +88,9 @@ mod tests {
     fn keeps_current_user_and_previous_visible_turn() {
         let items = vec![
             message("system", "system"),
-            message("user", "old user"),
-            message("assistant", "old assistant"),
-            message("user", "previous user"),
+            message(USER_ROLE, "old user"),
+            message(ASSISTANT_ROLE, "old assistant"),
+            message(USER_ROLE, "previous user"),
             ResponseItem::FunctionCall {
                 id: None,
                 name: "tool".to_string(),
@@ -88,18 +98,18 @@ mod tests {
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
             },
-            message("assistant", "previous assistant"),
+            message(ASSISTANT_ROLE, "previous assistant"),
             message("developer", "developer"),
-            message("user", "current user"),
-            message("assistant", "current commentary"),
+            message(USER_ROLE, "current user"),
+            message(ASSISTANT_ROLE, "current commentary"),
         ];
 
         assert_eq!(
             recent_input(&items),
             Some(SearchInput::Items(vec![
-                message("user", "previous user"),
-                message("assistant", "previous assistant"),
-                message("user", "current user"),
+                message(USER_ROLE, "previous user"),
+                message(ASSISTANT_ROLE, "previous assistant"),
+                message(USER_ROLE, "current user"),
             ]))
         );
     }
@@ -108,7 +118,7 @@ mod tests {
     fn keeps_only_text_from_recent_user_messages() {
         let previous_user = ResponseItem::Message {
             id: None,
-            role: "user".to_string(),
+            role: USER_ROLE.to_string(),
             content: vec![
                 ContentItem::InputText {
                     text: "previous user".to_string(),
@@ -122,16 +132,38 @@ mod tests {
         };
         let items = vec![
             previous_user,
-            message("assistant", "previous assistant"),
-            message("user", "current user"),
+            message(ASSISTANT_ROLE, "previous assistant"),
+            message(USER_ROLE, "current user"),
         ];
 
         assert_eq!(
             recent_input(&items),
             Some(SearchInput::Items(vec![
-                message("user", "previous user"),
-                message("assistant", "previous assistant"),
-                message("user", "current user"),
+                message(USER_ROLE, "previous user"),
+                message(ASSISTANT_ROLE, "previous assistant"),
+                message(USER_ROLE, "current user"),
+            ]))
+        );
+    }
+
+    #[test]
+    fn ignores_contextual_user_messages_when_selecting_recent_turns() {
+        let items = vec![
+            message(USER_ROLE, "previous user"),
+            message(ASSISTANT_ROLE, "previous assistant"),
+            message(
+                USER_ROLE,
+                "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",
+            ),
+            message(USER_ROLE, "current user"),
+        ];
+
+        assert_eq!(
+            recent_input(&items),
+            Some(SearchInput::Items(vec![
+                message(USER_ROLE, "previous user"),
+                message(ASSISTANT_ROLE, "previous assistant"),
+                message(USER_ROLE, "current user"),
             ]))
         );
     }
