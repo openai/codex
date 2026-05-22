@@ -162,6 +162,7 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::FsChanged(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)
+        | ServerNotification::RuntimeInstallProgress(_)
         | ServerNotification::AccountLoginCompleted(_) => None,
     };
 
@@ -181,6 +182,8 @@ mod tests {
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::GuardianWarningNotification;
+    use codex_app_server_protocol::RuntimeInstallProgressNotification;
+    use codex_app_server_protocol::RuntimeInstallProgressPhase;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ThreadSettings;
     use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -224,6 +227,21 @@ mod tests {
             thread_id: None,
             message: "warning".to_string(),
         });
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Global);
+    }
+
+    #[test]
+    fn runtime_install_progress_notifications_are_global() {
+        let notification =
+            ServerNotification::RuntimeInstallProgress(RuntimeInstallProgressNotification {
+                bundle_version: Some("v1".to_string()),
+                downloaded_bytes: None,
+                phase: RuntimeInstallProgressPhase::Checking,
+                total_bytes: None,
+            });
 
         let target = server_notification_thread_target(&notification);
 

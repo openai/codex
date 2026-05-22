@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "RuntimeInstallManifest": {
+    "RuntimeInstallManifestParams": {
       "properties": {
         "archiveName": {
           "type": [
@@ -65,7 +65,7 @@
       ]
     },
     "manifest": {
-      "$ref": "#/definitions/RuntimeInstallManifest"
+      "$ref": "#/definitions/RuntimeInstallManifestParams"
     },
     "release": {
       "type": "string"

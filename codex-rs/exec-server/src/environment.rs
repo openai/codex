@@ -6,6 +6,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RuntimeInstallParams;
 use codex_app_server_protocol::RuntimeInstallResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use tokio_util::sync::CancellationToken;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -333,14 +334,36 @@ impl RuntimeInstaller {
         &self,
         params: RuntimeInstallParams,
     ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+        self.install_runtime_with_progress(params, /*progress*/ None, CancellationToken::new())
+            .await
+    }
+
+    async fn install_runtime_with_progress(
+        &self,
+        params: RuntimeInstallParams,
+        progress: Option<crate::runtime_install::RuntimeInstallProgressSender>,
+        cancellation: CancellationToken,
+    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
         match self {
-            RuntimeInstaller::Local => crate::runtime_install::install_runtime(params).await,
+            RuntimeInstaller::Local => match progress {
+                Some(progress) => {
+                    crate::runtime_install::install_runtime_with_progress(
+                        params,
+                        progress,
+                        cancellation,
+                    )
+                    .await
+                }
+                None => crate::runtime_install::install_runtime(params).await,
+            },
             RuntimeInstaller::Remote(client) => {
                 let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-                client
-                    .runtime_install(params)
-                    .await
-                    .map_err(exec_server_error_to_jsonrpc)
+                tokio::select! {
+                    _ = cancellation.cancelled() => Err(internal_error("runtime install canceled")),
+                    response = client.runtime_install(params) => {
+                        response.map_err(exec_server_error_to_jsonrpc)
+                    }
+                }
             }
         }
     }
@@ -508,6 +531,17 @@ impl Environment {
         params: RuntimeInstallParams,
     ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
         self.runtime_installer.install_runtime(params).await
+    }
+
+    pub async fn install_runtime_with_progress(
+        &self,
+        params: RuntimeInstallParams,
+        progress: crate::runtime_install::RuntimeInstallProgressSender,
+        cancellation: CancellationToken,
+    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+        self.runtime_installer
+            .install_runtime_with_progress(params, Some(progress), cancellation)
+            .await
     }
 
     pub async fn codex_home(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
