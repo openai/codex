@@ -714,6 +714,109 @@ fn parse_tool_input_schema_preserves_nested_any_of_property() {
 }
 
 #[test]
+fn parse_tool_input_schema_preserves_nested_one_of_property() {
+    // Example schema shape:
+    // {
+    //   "type": "object",
+    //   "properties": {
+    //     "query": {
+    //       "oneOf": [
+    //         { "const": "exact" },
+    //         { "type": "number" }
+    //       ]
+    //     }
+    //   }
+    // }
+    //
+    // Expected normalization behavior:
+    // - The nested `oneOf` is preserved.
+    // - Child variants are recursively sanitized, including `const` to `enum`.
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "oneOf": [
+                    { "const": "exact" },
+                    { "type": "number" }
+                ]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "query".to_string(),
+                JsonSchema::one_of(
+                    vec![
+                        JsonSchema::string_enum(
+                            vec![serde_json::json!("exact")],
+                            /*description*/ None,
+                        ),
+                        JsonSchema::number(/*description*/ None),
+                    ],
+                    /*description*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_preserves_nested_all_of_property() {
+    // Example schema shape:
+    // {
+    //   "type": "object",
+    //   "properties": {
+    //     "query": {
+    //       "allOf": [
+    //         { "type": "string" },
+    //         { "description": "unrecognized by itself" }
+    //       ]
+    //     }
+    //   }
+    // }
+    //
+    // Expected normalization behavior:
+    // - The nested `allOf` is preserved structurally rather than flattened.
+    // - Child variants are recursively sanitized.
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "allOf": [
+                    { "type": "string" },
+                    { "description": "unrecognized by itself" }
+                ]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "query".to_string(),
+                JsonSchema::all_of(
+                    vec![
+                        JsonSchema::string(/*description*/ None),
+                        JsonSchema::default(),
+                    ],
+                    /*description*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_preserves_type_unions_without_rewriting_to_any_of() {
     // Example schema shape:
     // {
@@ -1362,10 +1465,24 @@ fn parse_tool_input_schema_collects_refs_from_schema_child_keywords() {
                     {"$ref": "#/$defs/Choice"},
                     {"type": "string"}
                 ]
+            },
+            "exclusive_choice": {
+                "oneOf": [
+                    {"$ref": "#/$defs/ExclusiveChoice"},
+                    {"type": "integer"}
+                ]
+            },
+            "combined": {
+                "allOf": [
+                    {"$ref": "#/$defs/Combined"},
+                    {"type": "object"}
+                ]
             }
         },
         "$defs": {
+            "Combined": {"type": "object"},
             "Choice": {"type": "boolean"},
+            "ExclusiveChoice": {"type": "null"},
             "Extra": {"type": "number"},
             "Item": {"type": "string"},
             "Unused": {"type": "null"}
@@ -1384,6 +1501,18 @@ fn parse_tool_input_schema_collects_refs_from_schema_child_keywords() {
                         {"type": "string"}
                     ]
                 },
+                "combined": {
+                    "allOf": [
+                        {"$ref": "#/$defs/Combined"},
+                        {"type": "object", "properties": {}}
+                    ]
+                },
+                "exclusive_choice": {
+                    "oneOf": [
+                        {"$ref": "#/$defs/ExclusiveChoice"},
+                        {"type": "integer"}
+                    ]
+                },
                 "items_holder": {
                     "type": "array",
                     "items": {"$ref": "#/$defs/Item"}
@@ -1395,7 +1524,9 @@ fn parse_tool_input_schema_collects_refs_from_schema_child_keywords() {
                 }
             },
             "$defs": {
+                "Combined": {"type": "object", "properties": {}},
                 "Choice": {"type": "boolean"},
+                "ExclusiveChoice": {"type": "null"},
                 "Extra": {"type": "number"},
                 "Item": {"type": "string"}
             }

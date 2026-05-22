@@ -6,13 +6,14 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
-const SCHEMA_CHILD_KEYS: [&str; 2] = ["items", "anyOf"];
+const SCHEMA_CHILD_KEYS: [&str; 4] = ["items", "anyOf", "oneOf", "allOf"];
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
 /// This mirrors the OpenAI Structured Outputs subset for JSON Schema `type`:
 /// string, number, boolean, integer, object, array, and null.
-/// Keywords such as `enum`, `const`, and `anyOf` are modeled separately.
+/// Keywords such as `enum`, `const`, `anyOf`, `oneOf`, and `allOf` are modeled
+/// separately.
 /// See <https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas>.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +59,10 @@ pub struct JsonSchema {
     pub additional_properties: Option<AdditionalProperties>,
     #[serde(rename = "anyOf", skip_serializing_if = "Option::is_none")]
     pub any_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "oneOf", skip_serializing_if = "Option::is_none")]
+    pub one_of: Option<Vec<JsonSchema>>,
+    #[serde(rename = "allOf", skip_serializing_if = "Option::is_none")]
+    pub all_of: Option<Vec<JsonSchema>>,
     #[serde(rename = "$defs", skip_serializing_if = "Option::is_none")]
     pub defs: Option<BTreeMap<String, JsonSchema>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +83,22 @@ impl JsonSchema {
         Self {
             description,
             any_of: Some(variants),
+            ..Default::default()
+        }
+    }
+
+    pub fn one_of(variants: Vec<JsonSchema>, description: Option<String>) -> Self {
+        Self {
+            description,
+            one_of: Some(variants),
+            ..Default::default()
+        }
+    }
+
+    pub fn all_of(variants: Vec<JsonSchema>, description: Option<String>) -> Self {
+        Self {
+            description,
+            all_of: Some(variants),
             ..Default::default()
         }
     }
@@ -380,10 +401,16 @@ fn is_complex_schema_object(map: &serde_json::Map<String, JsonValue>) -> bool {
         || map.contains_key("$ref")
 }
 
+fn has_composition_keyword(map: &serde_json::Map<String, JsonValue>) -> bool {
+    ["anyOf", "oneOf", "allOf"]
+        .into_iter()
+        .any(|key| map.contains_key(key))
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// schema representation. This function:
 /// - Ensures every typed schema object has a `"type"` when required.
-/// - Preserves explicit `anyOf`.
+/// - Preserves explicit `anyOf`, `oneOf`, and `allOf`.
 /// - Preserves `$ref` and reachable local `$defs` / `definitions`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
@@ -419,8 +446,10 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(value) = map.get_mut("prefixItems") {
                 sanitize_json_schema(value);
             }
-            if let Some(value) = map.get_mut("anyOf") {
-                sanitize_json_schema(value);
+            for key in ["anyOf", "oneOf", "allOf"] {
+                if let Some(value) = map.get_mut(key) {
+                    sanitize_json_schema(value);
+                }
             }
             for table in DEFINITION_TABLE_KEYS {
                 sanitize_schema_table(map, table);
@@ -432,7 +461,8 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             let mut schema_types = normalized_schema_types(map);
 
-            if schema_types.is_empty() && (map.contains_key("$ref") || map.contains_key("anyOf")) {
+            if schema_types.is_empty() && (map.contains_key("$ref") || has_composition_keyword(map))
+            {
                 return;
             }
 
