@@ -1,7 +1,6 @@
 use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -65,9 +64,6 @@ pub(crate) enum ConfigManagerError {
         source: toml::de::Error,
     },
 
-    #[error("invalid configuration: {message}")]
-    InvalidConfig { message: String },
-
     #[error("{context}: {source}")]
     Anyhow {
         context: &'static str,
@@ -94,12 +90,6 @@ impl ConfigManagerError {
 
     fn toml(context: &'static str, source: toml::de::Error) -> Self {
         Self::Toml { context, source }
-    }
-
-    fn invalid_config(message: impl Into<String>) -> Self {
-        Self::InvalidConfig {
-            message: message.into(),
-        }
     }
 
     fn anyhow(context: &'static str, source: anyhow::Error) -> Self {
@@ -133,10 +123,7 @@ impl ConfigManager {
             })?,
         };
 
-        reject_legacy_profile_read(&layers)?;
-
-        let mut effective = layers.effective_config();
-        strip_legacy_profile_keys(&mut effective);
+        let effective = layers.effective_config();
         let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
@@ -148,7 +135,7 @@ impl ConfigManager {
 
         Ok(ConfigReadResponse {
             config,
-            origins: origins_without_legacy_profiles(&layers),
+            origins: layers.origins(),
             layers: params.include_layers.then(|| {
                 layers
                     .get_layers(
@@ -156,11 +143,7 @@ impl ConfigManager {
                         /*include_disabled*/ true,
                     )
                     .iter()
-                    .map(|layer| {
-                        let mut layer = layer.as_layer();
-                        strip_json_legacy_profile_keys(&mut layer.config);
-                        layer
-                    })
+                    .map(|layer| layer.as_layer())
                     .collect()
             }),
         })
@@ -254,7 +237,21 @@ impl ConfigManager {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
             if !value.is_null() {
-                reject_legacy_profile_write(&segments)?;
+                match segments.as_slice() {
+                    [segment] if segment == "profile" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    [segment, ..] if segment == "profiles" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    _ => {}
+                }
             }
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
@@ -398,92 +395,6 @@ async fn create_empty_user_layer(
         },
         toml_value,
     ))
-}
-
-fn reject_legacy_profile_read(layers: &ConfigLayerStack) -> Result<(), ConfigManagerError> {
-    let profile_v2_active = layers
-        .get_user_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
-        .iter()
-        .any(|layer| {
-            matches!(
-                &layer.name,
-                ConfigLayerSource::User {
-                    profile: Some(_),
-                    ..
-                }
-            )
-        });
-    let contains_legacy_profiles = layers
-        .get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .iter()
-        .any(|layer| legacy_profile_keys_rejected(layer, profile_v2_active));
-    if !contains_legacy_profiles {
-        return Ok(());
-    }
-
-    Err(ConfigManagerError::invalid_config(
-        "legacy config profiles are no longer supported by config/read; use `--profile <name>` with `<name>.config.toml` instead",
-    ))
-}
-
-fn legacy_profile_keys_rejected(layer: &ConfigLayerEntry, profile_v2_active: bool) -> bool {
-    let Some(config) = layer.config.as_table() else {
-        return false;
-    };
-    if config.contains_key("profile") {
-        return true;
-    }
-    if !config.contains_key("profiles") {
-        return false;
-    }
-
-    !profile_v2_active || !matches!(&layer.name, ConfigLayerSource::User { profile: None, .. })
-}
-
-fn strip_legacy_profile_keys(config: &mut TomlValue) {
-    if let Some(config) = config.as_table_mut() {
-        config.remove("profile");
-        config.remove("profiles");
-    }
-}
-
-fn strip_json_legacy_profile_keys(config: &mut JsonValue) {
-    if let Some(config) = config.as_object_mut() {
-        config.remove("profile");
-        config.remove("profiles");
-    }
-}
-
-fn origins_without_legacy_profiles(
-    layers: &ConfigLayerStack,
-) -> std::collections::HashMap<String, ConfigLayerMetadata> {
-    let mut origins = layers.origins();
-    origins.retain(|path, _| !legacy_profile_origin_path(path));
-    origins
-}
-
-fn legacy_profile_origin_path(path: &str) -> bool {
-    path == "profile" || path == "profiles" || path.starts_with("profiles.")
-}
-
-fn reject_legacy_profile_write(segments: &[String]) -> Result<(), ConfigManagerError> {
-    match segments {
-        [segment] if segment == "profile" => Err(ConfigManagerError::write(
-            ConfigWriteErrorCode::ConfigValidationError,
-            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
-        )),
-        [segment, ..] if segment == "profiles" => Err(ConfigManagerError::write(
-            ConfigWriteErrorCode::ConfigValidationError,
-            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
-        )),
-        _ => Ok(()),
-    }
 }
 
 async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {
