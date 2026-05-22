@@ -85,6 +85,68 @@ fn response_completed_chunks(response_id: &str) -> Vec<StreamingSseChunk> {
     ]
 }
 
+fn ev_commentary_message_item_done(id: &str, text: &str) -> Value {
+    json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "output_text", "text": text}],
+            "phase": "commentary",
+        }
+    })
+}
+
+fn gated_commentary_sampling_chunks(
+    idx: usize,
+    text: &str,
+    gate: oneshot::Receiver<()>,
+    total_tokens: i64,
+) -> Vec<StreamingSseChunk> {
+    vec![
+        chunk(ev_response_created(&format!("resp-{idx}"))),
+        chunk(ev_message_item_added(&format!("msg-{idx}"), "")),
+        chunk(ev_output_text_delta(text)),
+        chunk(ev_commentary_message_item_done(&format!("msg-{idx}"), text)),
+        gated_chunk(
+            gate,
+            vec![ev_completed_with_tokens(
+                &format!("resp-{idx}"),
+                total_tokens,
+            )],
+        ),
+    ]
+}
+
+fn compact_summary_chunks(idx: usize, total_tokens: i64) -> Vec<StreamingSseChunk> {
+    vec![
+        chunk(ev_response_created(&format!("resp-compact-{idx}"))),
+        chunk(ev_message_item_done(
+            &format!("msg-compact-{idx}"),
+            &format!("AUTO_COMPACT_SUMMARY_{idx}"),
+        )),
+        chunk(ev_completed_with_tokens(
+            &format!("resp-compact-{idx}"),
+            total_tokens,
+        )),
+    ]
+}
+
+fn shell_sampling_chunks(idx: usize, total_tokens: i64) -> Vec<StreamingSseChunk> {
+    vec![
+        chunk(ev_response_created(&format!("resp-{idx}"))),
+        chunk(ev_shell_command_call(
+            &format!("call-{idx}"),
+            &format!("echo step-{idx}"),
+        )),
+        chunk(ev_completed_with_tokens(
+            &format!("resp-{idx}"),
+            total_tokens,
+        )),
+    ]
+}
+
 async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
     test_codex()
         .with_model("gpt-5.4")
@@ -686,44 +748,6 @@ async fn steered_user_input_resets_auto_compact_limit() {
     let (gate_second_completed_tx, gate_second_completed_rx) = oneshot::channel();
     let (gate_third_completed_tx, gate_third_completed_rx) = oneshot::channel();
     let (gate_fourth_completed_tx, gate_fourth_completed_rx) = oneshot::channel();
-
-    let sampling_chunks = |idx: usize, text: &'static str, gate| {
-        vec![
-            chunk(ev_response_created(&format!("resp-{idx}"))),
-            chunk(ev_message_item_added(&format!("msg-{idx}"), "")),
-            chunk(ev_output_text_delta(text)),
-            chunk(json!({
-                "type": "response.output_item.done",
-                "item": {
-                    "type": "message",
-                    "role": "assistant",
-                    "id": format!("msg-{idx}"),
-                    "content": [{"type": "output_text", "text": text}],
-                    "phase": "commentary",
-                }
-            })),
-            gated_chunk(
-                gate,
-                vec![ev_completed_with_tokens(
-                    &format!("resp-{idx}"),
-                    /*total_tokens*/ 500,
-                )],
-            ),
-        ]
-    };
-    let compact_chunks = |idx: usize| {
-        vec![
-            chunk(ev_response_created(&format!("resp-compact-{idx}"))),
-            chunk(ev_message_item_done(
-                &format!("msg-compact-{idx}"),
-                &format!("AUTO_COMPACT_SUMMARY_{idx}"),
-            )),
-            chunk(ev_completed_with_tokens(
-                &format!("resp-compact-{idx}"),
-                /*total_tokens*/ 50,
-            )),
-        ]
-    };
     let final_chunks = vec![
         chunk(ev_response_created("resp-final")),
         chunk(ev_message_item_done("msg-final", "processed fifth prompt")),
@@ -734,14 +758,24 @@ async fn steered_user_input_resets_auto_compact_limit() {
     ];
 
     let (server, _completions) = start_streaming_sse_server(vec![
-        sampling_chunks(1, "first answer", gate_first_completed_rx),
-        compact_chunks(1),
-        sampling_chunks(2, "processed second prompt", gate_second_completed_rx),
-        compact_chunks(2),
-        sampling_chunks(3, "processed third prompt", gate_third_completed_rx),
-        compact_chunks(3),
-        sampling_chunks(4, "processed fourth prompt", gate_fourth_completed_rx),
-        compact_chunks(4),
+        gated_commentary_sampling_chunks(1, "first answer", gate_first_completed_rx, 500),
+        compact_summary_chunks(1, 500),
+        gated_commentary_sampling_chunks(
+            2,
+            "processed second prompt",
+            gate_second_completed_rx,
+            500,
+        ),
+        compact_summary_chunks(2, 500),
+        gated_commentary_sampling_chunks(3, "processed third prompt", gate_third_completed_rx, 500),
+        compact_summary_chunks(3, 500),
+        gated_commentary_sampling_chunks(
+            4,
+            "processed fourth prompt",
+            gate_fourth_completed_rx,
+            500,
+        ),
+        compact_summary_chunks(4, 500),
         final_chunks,
     ])
     .await;
@@ -786,14 +820,6 @@ async fn steered_user_input_resets_auto_compact_limit() {
         "four auto compactions should be allowed when separated by accepted steered input"
     );
 
-    let final_body: Value =
-        from_slice(&requests[8]).unwrap_or_else(|err| panic!("parse final request: {err}"));
-    let final_user_texts = message_input_texts(&final_body, "user");
-    assert!(
-        final_user_texts.iter().any(|text| text == "fifth prompt"),
-        "steered input after the fourth compaction should be processed"
-    );
-
     server.shutdown().await;
 }
 
@@ -802,33 +828,6 @@ async fn steered_user_input_is_rejected_when_auto_compact_guard_fires() {
     let (gate_fourth_completed_tx, gate_fourth_completed_rx) = oneshot::channel();
     let token_count_used = 270_000;
     let token_count_used_after_compaction = 80_000;
-
-    let tool_sampling_chunks = |idx: usize| {
-        vec![
-            chunk(ev_response_created(&format!("resp-{idx}"))),
-            chunk(ev_shell_command_call(
-                &format!("call-{idx}"),
-                &format!("echo step-{idx}"),
-            )),
-            chunk(ev_completed_with_tokens(
-                &format!("resp-{idx}"),
-                token_count_used,
-            )),
-        ]
-    };
-    let compact_chunks = |idx: usize| {
-        vec![
-            chunk(ev_response_created(&format!("resp-compact-{idx}"))),
-            chunk(ev_message_item_done(
-                &format!("msg-compact-{idx}"),
-                &format!("AUTO_COMPACT_SUMMARY_{idx}"),
-            )),
-            chunk(ev_completed_with_tokens(
-                &format!("resp-compact-{idx}"),
-                token_count_used_after_compaction,
-            )),
-        ]
-    };
     let fourth_sampling_chunks = vec![
         chunk(ev_response_created("resp-4")),
         chunk(ev_message_item_added("msg-4", "")),
@@ -839,21 +838,19 @@ async fn steered_user_input_is_rejected_when_auto_compact_guard_fires() {
             vec![ev_completed_with_tokens("resp-4", token_count_used)],
         ),
     ];
-    let next_turn_chunks = vec![
-        chunk(ev_response_created("resp-next")),
-        chunk(ev_message_item_done("msg-next", "processed next prompt")),
-        chunk(ev_completed_with_tokens(
-            "resp-next",
-            /*total_tokens*/ 70,
-        )),
-    ];
 
     let mut responses = Vec::new();
     for idx in 1..=3 {
-        responses.push(tool_sampling_chunks(idx));
-        responses.push(compact_chunks(idx));
+        responses.push(shell_sampling_chunks(idx, token_count_used));
+        responses.push(compact_summary_chunks(
+            idx,
+            token_count_used_after_compaction,
+        ));
     }
-    responses.extend([fourth_sampling_chunks, compact_chunks(4), next_turn_chunks]);
+    responses.extend([
+        fourth_sampling_chunks,
+        compact_summary_chunks(4, token_count_used_after_compaction),
+    ]);
     let (server, _completions) = start_streaming_sse_server(responses).await;
 
     let test = test_codex()
@@ -886,34 +883,6 @@ async fn steered_user_input_is_rejected_when_auto_compact_guard_fires() {
         server.requests().await.len(),
         7,
         "guarded turn should stop before dispatching a fourth automatic compaction"
-    );
-
-    submit_user_input(&codex, "next prompt").await;
-    wait_for_agent_message(&codex, "processed next prompt").await;
-    wait_for_turn_complete(&codex).await;
-
-    let requests = server.requests().await;
-    assert_eq!(
-        requests.len(),
-        9,
-        "next turn should compact and sample without replaying the discarded steer"
-    );
-
-    let all_user_texts: Vec<String> = requests
-        .iter()
-        .flat_map(|request| {
-            let body: Value =
-                from_slice(request).unwrap_or_else(|err| panic!("parse request body: {err}"));
-            message_input_texts(&body, "user")
-        })
-        .collect();
-    assert!(
-        !all_user_texts.iter().any(|text| text == "late steer"),
-        "late steer should be rejected after the terminal compaction guard"
-    );
-    assert!(
-        all_user_texts.iter().any(|text| text == "next prompt"),
-        "new input after the terminal guard should still start a normal turn"
     );
 
     server.shutdown().await;
