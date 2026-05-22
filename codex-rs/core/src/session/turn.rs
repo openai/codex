@@ -114,7 +114,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
-const MAX_AUTO_COMPACTIONS_PER_TURN: usize = 3;
+const MAX_CONSECUTIVE_NO_PROGRESS_AUTO_COMPACTIONS: usize = 3;
 
 pub(crate) enum RunTurnResult {
     Continue(Option<String>),
@@ -686,27 +686,31 @@ struct AutoCompactTokenStatus {
 
 #[derive(Default)]
 pub(crate) struct AutoCompactTurnLimiter {
-    attempts: usize,
+    consecutive_no_progress: usize,
 }
 
 impl AutoCompactTurnLimiter {
     fn reset_after_user_input(&mut self) {
-        self.attempts = 0;
+        self.consecutive_no_progress = 0;
     }
 
-    async fn acquire(
+    async fn ensure_can_dispatch(
         &mut self,
         sess: &Session,
         turn_context: &TurnContext,
         reason: CompactionReason,
         phase: CompactionPhase,
     ) -> CodexResult<()> {
-        if self.attempts >= MAX_AUTO_COMPACTIONS_PER_TURN {
+        if self.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS_AUTO_COMPACTIONS {
             let token_status = auto_compact_token_status(sess, turn_context).await;
+            if !token_status.token_limit_reached {
+                self.consecutive_no_progress = 0;
+                return Ok(());
+            }
             warn!(
                 turn_id = %turn_context.sub_id,
-                auto_compactions_attempted = self.attempts,
-                auto_compaction_limit = MAX_AUTO_COMPACTIONS_PER_TURN,
+                consecutive_no_progress_auto_compactions = self.consecutive_no_progress,
+                no_progress_auto_compaction_limit = MAX_CONSECUTIVE_NO_PROGRESS_AUTO_COMPACTIONS,
                 reason = ?reason,
                 phase = ?phase,
                 active_context_tokens = token_status.active_context_tokens,
@@ -720,7 +724,7 @@ impl AutoCompactTurnLimiter {
                 turn_context,
                 EventMsg::Error(ErrorEvent {
                     message: format!(
-                        "Codex stopped after {MAX_AUTO_COMPACTIONS_PER_TURN} automatic compactions in this turn because the context remained too large. Start a new thread or reduce earlier history before retrying."
+                        "Codex stopped after {MAX_CONSECUTIVE_NO_PROGRESS_AUTO_COMPACTIONS} consecutive automatic compactions because the context remained too large. Start a new thread or reduce earlier history before retrying."
                     ),
                     codex_error_info: Some(CodexErrorInfo::ContextWindowExceeded),
                 }),
@@ -729,8 +733,15 @@ impl AutoCompactTurnLimiter {
             return Err(CodexErr::ContextWindowExceeded);
         }
 
-        self.attempts += 1;
         Ok(())
+    }
+
+    fn record_successful_compaction(&mut self, token_status: &AutoCompactTokenStatus) {
+        if token_status.token_limit_reached {
+            self.consecutive_no_progress += 1;
+        } else {
+            self.consecutive_no_progress = 0;
+        }
     }
 }
 
@@ -891,10 +902,10 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<bool> {
     auto_compact_limiter
-        .acquire(sess.as_ref(), turn_context.as_ref(), reason, phase)
+        .ensure_can_dispatch(sess.as_ref(), turn_context.as_ref(), reason, phase)
         .await?;
 
-    if should_use_remote_compact_task(turn_context.provider.info()) {
+    let reset_client_session = if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
@@ -905,16 +916,18 @@ async fn run_auto_compact(
                 phase,
             )
             .await?;
-            return Ok(false);
+            false
+        } else {
+            run_inline_remote_auto_compact_task(
+                Arc::clone(sess),
+                Arc::clone(turn_context),
+                initial_context_injection,
+                reason,
+                phase,
+            )
+            .await?;
+            true
         }
-        run_inline_remote_auto_compact_task(
-            Arc::clone(sess),
-            Arc::clone(turn_context),
-            initial_context_injection,
-            reason,
-            phase,
-        )
-        .await?;
     } else {
         run_inline_auto_compact_task(
             Arc::clone(sess),
@@ -924,8 +937,13 @@ async fn run_auto_compact(
             phase,
         )
         .await?;
-    }
-    Ok(true)
+        true
+    };
+
+    let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
+    auto_compact_limiter.record_successful_compaction(&token_status);
+
+    Ok(reset_client_session)
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(

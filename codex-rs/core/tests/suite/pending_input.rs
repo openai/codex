@@ -801,7 +801,7 @@ async fn steered_user_input_resets_auto_compact_limit() {
 async fn steered_user_input_is_discarded_when_auto_compact_guard_fires() {
     let (gate_fourth_completed_tx, gate_fourth_completed_rx) = oneshot::channel();
     let token_count_used = 270_000;
-    let token_count_used_after_compaction = 80_000;
+    let token_count_used_after_compaction = 260_000;
 
     let tool_sampling_chunks = |idx: usize| {
         vec![

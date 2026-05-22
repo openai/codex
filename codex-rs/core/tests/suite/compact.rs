@@ -1494,7 +1494,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
-async fn auto_compact_stops_after_per_turn_limit() {
+async fn auto_compact_stops_after_consecutive_no_progress_compactions() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -1548,7 +1548,9 @@ async fn auto_compact_stops_after_per_turn_limit() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(200_000);
+            // Force compaction to remain above the configured trigger after each
+            // successful compaction, independent of the token estimator.
+            config.model_auto_compact_token_limit = Some(1);
         })
         .build(&server)
         .await
@@ -1573,7 +1575,7 @@ async fn auto_compact_stops_after_per_turn_limit() {
         EventMsg::Error(err)
             if err
                 .message
-                .contains("Codex stopped after 3 automatic compactions in this turn") =>
+                .contains("Codex stopped after 3 consecutive automatic compactions") =>
         {
             Some(err.clone())
         }
@@ -1595,7 +1597,7 @@ async fn auto_compact_stops_after_per_turn_limit() {
         .count();
     assert_eq!(
         compaction_requests, 3,
-        "fourth automatic compaction should be blocked before dispatch"
+        "fourth no-progress automatic compaction should be blocked before dispatch"
     );
     assert_eq!(
         requests.len(),
