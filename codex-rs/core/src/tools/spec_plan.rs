@@ -94,6 +94,7 @@ pub(crate) fn build_tool_router(
         dynamic_tools,
     } = params;
     let mut tools = ToolRegistry::default();
+
     add_shell_tools(turn_context, &mut tools);
     add_core_utility_tools(turn_context, discoverable_tools.as_deref(), &mut tools);
     add_collaboration_tools(turn_context, &mut tools);
@@ -104,15 +105,15 @@ pub(crate) fn build_tool_router(
     );
     add_dynamic_tools(dynamic_tools, &mut tools);
     append_extension_tool_executors(turn_context, &extension_tool_executors, &mut tools);
-    append_tool_search_executor(turn_context, &mut tools);
-    let deferred_tools_available = search_tool_enabled(turn_context)
-        && tools
-            .iter()
-            .any(|tool| tool.exposure() == ToolExposure::Deferred);
-    let code_mode_executors =
-        build_code_mode_executors(turn_context, &tools, deferred_tools_available);
-    tools.prepend(code_mode_executors);
 
+    append_tool_search_executor(turn_context, &mut tools);
+    prepend_code_mode_executors(turn_context, &mut tools);
+
+    let model_visible_specs = model_visible_specs(turn_context, &tools);
+    ToolRouter::from_parts(tools, model_visible_specs)
+}
+
+fn model_visible_specs(turn_context: &TurnContext, tools: &ToolRegistry) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
     for tool in tools.iter() {
         let tool_name = tool.tool_name();
@@ -132,29 +133,12 @@ pub(crate) fn build_tool_router(
         }
     }
 
-    let model_visible_specs = merge_into_namespaces(specs)
+    merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
             namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
         })
-        .collect();
-
-    ToolRouter::from_parts(tools, model_visible_specs)
-}
-
-fn spec_for_model_request(
-    turn_context: &TurnContext,
-    exposure: ToolExposure,
-    spec: ToolSpec,
-) -> ToolSpec {
-    if code_mode_enabled(turn_context)
-        && exposure != ToolExposure::DirectModelOnly
-        && codex_code_mode::is_code_mode_nested_tool(spec.name())
-    {
-        codex_tools::augment_tool_spec_for_code_mode(spec)
-    } else {
-        spec
-    }
+        .collect()
 }
 
 pub(crate) fn hosted_model_tool_specs(turn_context: &TurnContext) -> Vec<ToolSpec> {
@@ -179,6 +163,21 @@ pub(crate) fn hosted_model_tool_specs(turn_context: &TurnContext) -> Vec<ToolSpe
         specs.push(create_image_generation_tool("png"));
     }
     specs
+}
+
+fn spec_for_model_request(
+    turn_context: &TurnContext,
+    exposure: ToolExposure,
+    spec: ToolSpec,
+) -> ToolSpec {
+    if code_mode_enabled(turn_context)
+        && exposure != ToolExposure::DirectModelOnly
+        && codex_code_mode::is_code_mode_nested_tool(spec.name())
+    {
+        codex_tools::augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
+    }
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
@@ -294,6 +293,16 @@ fn is_hidden_by_code_mode_only(
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
             tool_name,
         ))
+}
+
+fn prepend_code_mode_executors(turn_context: &TurnContext, tools: &mut ToolRegistry) {
+    let deferred_tools_available = search_tool_enabled(turn_context)
+        && tools
+            .iter()
+            .any(|tool| tool.exposure() == ToolExposure::Deferred);
+    let code_mode_executors =
+        build_code_mode_executors(turn_context, tools, deferred_tools_available);
+    tools.prepend(code_mode_executors);
 }
 
 fn build_code_mode_executors(
