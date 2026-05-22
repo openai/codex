@@ -55,6 +55,13 @@ const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".pki",
     ".terraform.d",
 ];
+const USERPROFILE_WRITE_EXPANSION_EXCLUSIONS: &[&str] = &[
+    "AppData",
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "OneDrive",
+];
 const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Windows",
     r"C:\Program Files",
@@ -328,7 +335,7 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
+fn profile_roots_with_exclusions(user_profile: &Path, exclusions: &[&str]) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(user_profile) {
         Ok(entries) => entries,
         Err(_) => return vec![user_profile.to_path_buf()],
@@ -339,12 +346,22 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .map(|entry| (entry.file_name(), entry.path()))
         .filter(|(name, _)| {
             let name = name.to_string_lossy();
-            !USERPROFILE_ROOT_EXCLUSIONS
+            !exclusions
                 .iter()
                 .any(|excluded| name.eq_ignore_ascii_case(excluded))
         })
         .map(|(_, path)| path)
         .collect()
+}
+
+fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
+    profile_roots_with_exclusions(user_profile, USERPROFILE_ROOT_EXCLUSIONS)
+}
+
+fn profile_write_expansion_roots(user_profile: &Path) -> Vec<PathBuf> {
+    let mut exclusions = USERPROFILE_ROOT_EXCLUSIONS.to_vec();
+    exclusions.extend(USERPROFILE_WRITE_EXPANSION_EXCLUSIONS);
+    profile_roots_with_exclusions(user_profile, &exclusions)
 }
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
@@ -762,7 +779,7 @@ fn build_payload_roots(
             request.env_map,
         )
     };
-    let write_roots = expand_user_profile_root(write_roots);
+    let write_roots = expand_user_profile_root_with(write_roots, profile_write_expansion_roots);
     let write_roots = filter_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
@@ -824,12 +841,30 @@ fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     expand_user_profile_root_for(roots, Path::new(&user_profile))
 }
 
+fn expand_user_profile_root_with(
+    roots: Vec<PathBuf>,
+    expand_children: fn(&Path) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return roots;
+    };
+    expand_user_profile_root_for_with(roots, Path::new(&user_profile), expand_children)
+}
+
 fn expand_user_profile_root_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
+    expand_user_profile_root_for_with(roots, user_profile, profile_read_roots)
+}
+
+fn expand_user_profile_root_for_with(
+    roots: Vec<PathBuf>,
+    user_profile: &Path,
+    expand_children: fn(&Path) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
     let user_profile_key = canonical_path_key(user_profile);
     let mut expanded = Vec::new();
     for root in roots {
         if canonical_path_key(&root) == user_profile_key {
-            expanded.extend(profile_read_roots(user_profile));
+            expanded.extend(expand_children(user_profile));
         } else {
             expanded.push(root);
         }
@@ -1128,6 +1163,35 @@ mod tests {
     }
 
     #[test]
+    fn profile_write_expansion_roots_exclude_sensitive_profile_children() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path();
+        let allowed_dir = user_profile.join("Projects");
+        let allowed_file = user_profile.join("settings.json");
+        let app_data = user_profile.join("AppData");
+        let documents = user_profile.join("Documents");
+        let desktop = user_profile.join("Desktop");
+        let downloads = user_profile.join("Downloads");
+        let one_drive = user_profile.join("OneDrive");
+        let hidden_ssh = user_profile.join(".ssh");
+
+        fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        fs::write(&allowed_file, "safe").expect("create allowed file");
+        fs::create_dir_all(&app_data).expect("create appdata");
+        fs::create_dir_all(&documents).expect("create documents");
+        fs::create_dir_all(&desktop).expect("create desktop");
+        fs::create_dir_all(&downloads).expect("create downloads");
+        fs::create_dir_all(&one_drive).expect("create onedrive");
+        fs::create_dir_all(&hidden_ssh).expect("create hidden ssh");
+
+        let roots = super::profile_write_expansion_roots(user_profile);
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> = [allowed_dir, allowed_file].into_iter().collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn profile_read_roots_falls_back_to_profile_root_when_enumeration_fails() {
         let tmp = TempDir::new().expect("tempdir");
         let missing_profile = tmp.path().join("missing-user-profile");
@@ -1247,17 +1311,22 @@ mod tests {
         let user_profile = tmp.path().join("user-profile");
         let codex_home = user_profile.join("CodexHome");
         let documents = user_profile.join("Documents");
+        let projects = user_profile.join("Projects");
         fs::create_dir_all(&codex_home).expect("create codex home");
         fs::create_dir_all(&documents).expect("create documents");
+        fs::create_dir_all(&projects).expect("create projects");
 
-        let mut roots =
-            super::expand_user_profile_root_for(vec![user_profile.clone()], &user_profile);
+        let mut roots = super::expand_user_profile_root_for_with(
+            vec![user_profile.clone()],
+            &user_profile,
+            super::profile_write_expansion_roots,
+        );
         let user_profile_key = super::canonical_path_key(&user_profile);
         roots.retain(|root| super::canonical_path_key(root) != user_profile_key);
         roots.retain(|root| !super::is_user_profile_root_exclusion(root, &user_profile));
         let roots = super::filter_sensitive_write_roots(roots, &codex_home);
 
-        assert_eq!(vec![documents], roots);
+        assert_eq!(vec![projects], roots);
     }
 
     #[test]
