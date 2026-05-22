@@ -70,7 +70,7 @@ fn sandbox_home(name: &str) -> TempDir {
 }
 
 fn sandbox_log(codex_home: &Path) -> String {
-    let log_path = codex_home.join(".sandbox").join("sandbox.log");
+    let log_path = crate::current_log_file_path(&codex_home.join(".sandbox"));
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
 }
