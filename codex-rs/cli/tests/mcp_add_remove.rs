@@ -199,6 +199,42 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
 }
 
 #[tokio::test]
+async fn add_streamable_http_with_oauth_options() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "oauth-server",
+            "--url",
+            "https://example.com/mcp",
+            "--oauth-client-id",
+            "eci-prd-pub-codex-123",
+            "--oauth-resource",
+            "https://resource.example.com",
+        ])
+        .assert()
+        .success();
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let oauth_server = servers
+        .get("oauth-server")
+        .expect("oauth server should exist");
+    assert_eq!(
+        oauth_server.oauth_client_id(),
+        Some("eci-prd-pub-codex-123")
+    );
+    assert_eq!(
+        oauth_server.oauth_resource.as_deref(),
+        Some("https://resource.example.com")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
 
