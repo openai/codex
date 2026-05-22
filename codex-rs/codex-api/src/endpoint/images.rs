@@ -203,7 +203,7 @@ mod tests {
                 &ImageGenerationRequest {
                     prompt: "a red fox in a field".to_string(),
                     background: Some(ImageBackground::Opaque),
-                    model: Some("gpt-image-1.5".to_string()),
+                    model: "gpt-image-1.5".to_string(),
                     n: None,
                     quality: Some(ImageQuality::Medium),
                     size: Some("1024x1536".to_string()),
@@ -266,6 +266,37 @@ mod tests {
                 "prompt": "add a red hat",
                 "model": "gpt-image-1.5",
             }))
+        );
+    }
+
+    #[tokio::test]
+    async fn image_response_requires_image_data() {
+        let transport = CapturingTransport::new(
+            serde_json::to_vec(&json!({"created": 1778832973u64})).expect("serialize response"),
+        );
+        let client = ImagesClient::new(transport, provider(), Arc::new(DummyAuth));
+
+        let error = client
+            .generate(
+                &ImageGenerationRequest {
+                    prompt: "a red fox in a field".to_string(),
+                    background: None,
+                    model: "gpt-image-1.5".to_string(),
+                    n: None,
+                    quality: None,
+                    size: None,
+                },
+                HeaderMap::new(),
+            )
+            .await
+            .expect_err("image response without data should fail");
+
+        let ApiError::Stream(message) = error else {
+            panic!("expected image response decode error");
+        };
+        assert!(
+            message.starts_with("failed to decode image generation response: missing field `data`"),
+            "{message}"
         );
     }
 }

@@ -6,8 +6,7 @@ pub struct ImageGenerationRequest {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<ImageBackground>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,7 +56,6 @@ pub enum ImageQuality {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageResponse {
     pub created: u64,
-    #[serde(default)]
     pub data: Vec<ImageData>,
     #[serde(default)]
     pub background: Option<ImageBackground>,
