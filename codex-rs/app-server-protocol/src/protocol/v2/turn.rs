@@ -46,6 +46,8 @@ pub struct TurnEnvironmentParams {
 #[ts(export_to = "v2/")]
 pub struct AdditionalContextEntry {
     pub value: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_untrusted: bool,
 }
 
 #[derive(

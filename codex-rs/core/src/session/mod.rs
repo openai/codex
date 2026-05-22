@@ -99,6 +99,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -744,7 +745,7 @@ impl Codex {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
-        additional_context: BTreeMap<String, String>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
@@ -3160,7 +3161,7 @@ impl Session {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
-        additional_context: BTreeMap<String, String>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
@@ -3204,11 +3205,11 @@ impl Session {
             };
             let fragments = additional_context_store.merge(additional_context);
             (
-                AdditionalContextFragment::input_item(fragments),
+                AdditionalContextFragment::input_items(fragments),
                 additional_context_store,
             )
         };
-        if input.is_empty() && additional_context_input.is_none() {
+        if input.is_empty() && additional_context_input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
         {

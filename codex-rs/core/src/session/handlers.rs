@@ -255,7 +255,7 @@ pub(super) async fn user_input_or_turn_inner(
                     let mut state = sess.state.lock().await;
                     state.additional_context.merge(additional_context)
                 };
-                AdditionalContextFragment::input_item(fragments)
+                AdditionalContextFragment::input_items(fragments)
             };
             let mut task_input = additional_context_input
                 .into_iter()

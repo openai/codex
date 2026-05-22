@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -32,11 +33,19 @@ fn resolve_runtime_workspace_roots(
 
 fn map_additional_context(
     additional_context: Option<HashMap<String, AdditionalContextEntry>>,
-) -> BTreeMap<String, String> {
+) -> BTreeMap<String, CoreAdditionalContextEntry> {
     additional_context
         .unwrap_or_default()
         .into_iter()
-        .map(|(key, entry)| (key, entry.value))
+        .map(|(key, entry)| {
+            (
+                key,
+                CoreAdditionalContextEntry {
+                    value: entry.value,
+                    is_untrusted: entry.is_untrusted,
+                },
+            )
+        })
         .collect()
 }
 

@@ -418,14 +418,16 @@ async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
 ) -> bool {
     let mut blocked_input = false;
-    let mut accepted_input = false;
+    let mut accepted_user_input = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            accepted_input = true;
+            if matches!(input_item, TurnInput::UserInput(items) if !items.is_empty()) {
+                accepted_user_input = true;
+            }
             record_pending_input(
                 sess,
                 turn_context,
@@ -435,7 +437,7 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_input
+    blocked_input && !accepted_user_input
 }
 
 #[expect(

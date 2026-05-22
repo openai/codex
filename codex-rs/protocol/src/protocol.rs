@@ -472,6 +472,14 @@ pub struct ThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
+/// Client-supplied context keyed by an opaque source identifier.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct AdditionalContextEntry {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_untrusted: bool,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -516,7 +524,7 @@ pub enum Op {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
         /// Client-supplied context fragments keyed by an opaque source identifier.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        additional_context: BTreeMap<String, String>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
 
         /// Persistent thread-settings overrides to apply before the input.
         #[serde(default, flatten)]

@@ -388,6 +388,7 @@ async fn turn_steer_accepts_new_context_only_input_and_rejects_duplicate() -> Re
         "browser_info".to_string(),
         AdditionalContextEntry {
             value: "tab one".to_string(),
+            is_untrusted: true,
         },
     )]));
     let steer_req = mcp
