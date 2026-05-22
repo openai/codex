@@ -2354,6 +2354,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_model = "forked-rollout-model";
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
+        trace_id: turn_context.trace_id.clone(),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
         current_date: turn_context.current_date.clone(),
@@ -5318,7 +5319,7 @@ async fn new_default_turn_captures_current_span_trace_id() {
         &request_parent
     ));
 
-    let turn_trace_id = async {
+    let turn_context_item = async {
         let expected_trace_id = Span::current()
             .context()
             .span()
@@ -5326,14 +5327,15 @@ async fn new_default_turn_captures_current_span_trace_id() {
             .trace_id()
             .to_string();
         let turn_context = session.new_default_turn().await;
-        assert_eq!(turn_context.trace_id, Some(expected_trace_id));
-        turn_context.trace_id.clone()
+        let turn_context_item = turn_context.to_turn_context_item();
+        assert_eq!(turn_context_item.trace_id, Some(expected_trace_id));
+        turn_context_item
     }
     .instrument(request_span)
     .await;
 
     assert_eq!(
-        turn_trace_id.as_deref(),
+        turn_context_item.trace_id.as_deref(),
         Some("00000000000000000000000000000011")
     );
 }
