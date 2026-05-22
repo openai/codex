@@ -17,6 +17,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
@@ -41,6 +42,7 @@ use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
+use codex_analytics::now_unix_seconds;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -428,6 +430,7 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
+    let app_server_start_started_at = Instant::now();
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -698,6 +701,9 @@ pub async fn run_main_with_transport_options(
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+    let analytics_events_client =
+        analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+    let analytics_transport = analytics_rpc_transport(&transport);
 
     let remote_control_requested = runtime_options.remote_control_enabled;
     let remote_control_enabled = remote_control_requested && state_db.is_some();
@@ -786,10 +792,8 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let auth_manager = Arc::clone(&auth_manager);
+        let analytics_events_client = analytics_events_client.clone();
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -810,7 +814,7 @@ pub async fn run_main_with_transport_options(
             session_source,
             auth_manager,
             installation_id,
-            rpc_transport: analytics_rpc_transport(&transport),
+            rpc_transport: analytics_transport,
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
@@ -1066,6 +1070,15 @@ pub async fn run_main_with_transport_options(
             info!("processor task exited (channel closed)");
         }
     });
+    analytics_events_client.track_app_server_started(
+        analytics_transport,
+        app_server_start_started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX),
+        now_unix_seconds(),
+    );
 
     drop(transport_event_tx);
 

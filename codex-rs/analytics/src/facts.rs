@@ -99,6 +99,15 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
+#[derive(Clone)]
+pub struct TurnTimingBreakdownFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub request_start_delay_ms: Option<u64>,
+    pub sampling_duration_ms: u64,
+    pub blocking_tool_critical_path_duration_ms: u64,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
@@ -273,6 +282,18 @@ pub struct CodexCompactionEvent {
     pub duration_ms: Option<u64>,
 }
 
+pub(crate) struct AppServerStartedInput {
+    pub runtime: CodexRuntimeMetadata,
+    pub rpc_transport: AppServerRpcTransport,
+    pub startup_duration_ms: u64,
+    pub completed_at: u64,
+}
+
+pub(crate) struct ThreadStartTimingFact {
+    pub thread_id: String,
+    pub duration_ms: u64,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -322,11 +343,14 @@ pub(crate) enum AnalyticsFact {
 }
 
 pub(crate) enum CustomAnalyticsFact {
+    AppServerStarted(AppServerStartedInput),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
+    ThreadStartTiming(ThreadStartTimingFact),
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnTimingBreakdown(Box<TurnTimingBreakdownFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

@@ -33,6 +33,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_analytics::TurnTimingBreakdownFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -767,10 +768,21 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        let turn_timing_breakdown = turn_context.turn_timing_state.timing_breakdown().await;
         let time_to_first_token_ms = turn_context
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        self.services
+            .analytics_events_client
+            .track_turn_timing(TurnTimingBreakdownFact {
+                turn_id: turn_context.sub_id.clone(),
+                thread_id: self.conversation_id.to_string(),
+                request_start_delay_ms: turn_timing_breakdown.request_start_delay_ms,
+                sampling_duration_ms: turn_timing_breakdown.sampling_duration_ms,
+                blocking_tool_critical_path_duration_ms: turn_timing_breakdown
+                    .blocking_tool_critical_path_duration_ms,
+            });
         if should_clear_active_turn {
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;

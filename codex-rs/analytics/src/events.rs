@@ -56,6 +56,7 @@ pub(crate) struct TrackEventsRequest {
 #[serde(untagged)]
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
+    AppServerStarted(CodexAppServerStartedEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
@@ -145,6 +146,20 @@ pub(crate) struct CodexRuntimeMetadata {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventParams {
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) rpc_transport: AppServerRpcTransport,
+    pub(crate) startup_duration_ms: u64,
+    pub(crate) completed_at: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexAppServerStartedEventParams,
+}
+
+#[derive(Serialize)]
 pub(crate) struct ThreadInitializedEventParams {
     pub(crate) thread_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
@@ -155,6 +170,7 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
+    pub(crate) thread_start_duration_ms: Option<u64>,
     pub(crate) created_at: u64,
 }
 
@@ -808,6 +824,11 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) reasoning_output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
     pub(crate) duration_ms: Option<u64>,
+    pub(crate) request_start_delay_ms: Option<u64>,
+    pub(crate) sampling_duration_ms: Option<u64>,
+    pub(crate) blocking_tool_critical_path_duration_ms: Option<u64>,
+    pub(crate) approval_wait_duration_ms: Option<u64>,
+    pub(crate) finalize_duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,
 }
@@ -1041,6 +1062,7 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
+        thread_start_duration_ms: None,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

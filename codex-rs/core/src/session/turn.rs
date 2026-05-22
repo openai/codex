@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -1733,7 +1734,12 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let mut stream = client_session
+    turn_context
+        .turn_timing_state
+        .mark_model_request_started()
+        .await;
+    let sampling_started_at = Instant::now();
+    let stream_result = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1746,7 +1752,24 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await;
+    let mut stream = match stream_result {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            turn_context
+                .turn_timing_state
+                .record_sampling_duration(sampling_started_at.elapsed())
+                .await;
+            return Err(err);
+        }
+        Err(codex_async_utils::CancelErr::Cancelled) => {
+            turn_context
+                .turn_timing_state
+                .record_sampling_duration(sampling_started_at.elapsed())
+                .await;
+            return Err(CodexErr::TurnAborted);
+        }
+    };
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -2151,6 +2174,10 @@ async fn try_run_sampling_request(
         &mut assistant_message_stream_parsers,
     )
     .await;
+    turn_context
+        .turn_timing_state
+        .record_sampling_duration(sampling_started_at.elapsed())
+        .await;
 
     if sess
         .features
@@ -2161,7 +2188,12 @@ async fn try_run_sampling_request(
         client_session.send_response_processed(response_id).await;
     }
 
+    let blocking_tool_started_at = Instant::now();
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    turn_context
+        .turn_timing_state
+        .record_blocking_tool_critical_path_duration(blocking_tool_started_at.elapsed())
+        .await;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

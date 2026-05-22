@@ -99,6 +99,28 @@ async fn turn_timing_state_records_turn_started_epoch_millis() {
     );
 }
 
+#[tokio::test]
+async fn turn_timing_state_tracks_request_start_and_duration_breakdown() {
+    let state = TurnTimingState::default();
+    state.mark_turn_started(Instant::now()).await;
+    state.mark_model_request_started().await;
+    state
+        .record_sampling_duration(std::time::Duration::from_millis(120))
+        .await;
+    state
+        .record_sampling_duration(std::time::Duration::from_millis(30))
+        .await;
+    state
+        .record_blocking_tool_critical_path_duration(std::time::Duration::from_millis(45))
+        .await;
+
+    let breakdown = state.timing_breakdown().await;
+
+    assert_eq!(breakdown.sampling_duration_ms, 150);
+    assert_eq!(breakdown.blocking_tool_critical_path_duration_ms, 45);
+    assert!(breakdown.request_start_delay_ms.is_some());
+}
+
 #[test]
 fn response_item_records_turn_ttft_for_first_output_signals() {
     assert!(response_item_records_turn_ttft(

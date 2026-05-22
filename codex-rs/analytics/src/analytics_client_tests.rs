@@ -4,6 +4,8 @@ use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppServerStartedEventParams;
+use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
@@ -15,6 +17,7 @@ use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexToolItemEventBase;
+use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
 use crate::events::FinalApprovalOutcome;
 use crate::events::GuardianApprovalRequestSource;
@@ -41,6 +44,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
@@ -61,10 +65,12 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
+use crate::facts::TurnTimingBreakdownFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
@@ -328,6 +334,16 @@ fn sample_turn_token_usage_fact(thread_id: &str, turn_id: &str) -> TurnTokenUsag
             output_tokens: 140,
             reasoning_output_tokens: 13,
         },
+    }
+}
+
+fn sample_turn_timing_breakdown_fact(thread_id: &str, turn_id: &str) -> TurnTimingBreakdownFact {
+    TurnTimingBreakdownFact {
+        turn_id: turn_id.to_string(),
+        thread_id: thread_id.to_string(),
+        request_start_delay_ms: Some(120),
+        sampling_duration_ms: 900,
+        blocking_tool_critical_path_duration_ms: 140,
     }
 }
 
@@ -1317,6 +1333,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
+            thread_start_duration_ms: Some(321),
             created_at: 1,
         },
     });
@@ -1348,7 +1365,41 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "thread_start_duration_ms": 321,
                 "created_at": 1
+            }
+        })
+    );
+}
+
+#[test]
+fn app_server_started_event_serializes_expected_shape() {
+    let event = TrackEventRequest::AppServerStarted(CodexAppServerStartedEventRequest {
+        event_type: "codex_app_server_started",
+        event_params: CodexAppServerStartedEventParams {
+            runtime: sample_runtime_metadata(),
+            rpc_transport: AppServerRpcTransport::Websocket,
+            startup_duration_ms: 987,
+            completed_at: 12,
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize app-server started event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_app_server_started",
+            "event_params": {
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "rpc_transport": "websocket",
+                "startup_duration_ms": 987,
+                "completed_at": 12
             }
         })
     );
@@ -1628,6 +1679,87 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(
         payload[0]["event_params"]["runtime"]["runtime_arch"],
         "x86_64"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_duration_ms"],
+        json!(null)
+    );
+}
+
+#[tokio::test]
+async fn thread_start_timing_fact_enriches_thread_initialized_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadStartTiming(
+                ThreadStartTimingFact {
+                    thread_id: "thread-1".to_string(),
+                    duration_ms: 222,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_start_response(
+                    "thread-1", /*ephemeral*/ true, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload[0]["event_type"], json!("codex_thread_initialized"));
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_duration_ms"],
+        json!(222)
+    );
+}
+
+#[tokio::test]
+async fn app_server_started_fact_emits_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppServerStarted(
+                AppServerStartedInput {
+                    runtime: sample_runtime_metadata(),
+                    rpc_transport: AppServerRpcTransport::Stdio,
+                    startup_duration_ms: 456,
+                    completed_at: 12,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_app_server_started",
+            "event_params": {
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "rpc_transport": "stdio",
+                "startup_duration_ms": 456,
+                "completed_at": 12
+            }
+        }])
     );
 }
 
@@ -3180,7 +3312,7 @@ async fn reducer_ingests_plugin_state_changed_fact() {
 fn turn_event_serializes_expected_shape() {
     let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
         event_type: "codex_turn_event",
-        event_params: crate::events::CodexTurnEventParams {
+        event_params: CodexTurnEventParams {
             thread_id: "thread-2".to_string(),
             turn_id: "turn-2".to_string(),
             app_server_client: sample_app_server_client_metadata(),
@@ -3221,6 +3353,11 @@ fn turn_event_serializes_expected_shape() {
             reasoning_output_tokens: None,
             total_tokens: None,
             duration_ms: Some(1234),
+            request_start_delay_ms: Some(120),
+            sampling_duration_ms: Some(900),
+            blocking_tool_critical_path_duration_ms: Some(140),
+            approval_wait_duration_ms: Some(0),
+            finalize_duration_ms: Some(74),
             started_at: Some(455),
             completed_at: Some(456),
         },
@@ -3282,6 +3419,11 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
                 "duration_ms": 1234,
+                "request_start_delay_ms": 120,
+                "sampling_duration_ms": 900,
+                "blocking_tool_critical_path_duration_ms": 140,
+                "approval_wait_duration_ms": 0,
+                "finalize_duration_ms": 74,
                 "started_at": 455,
                 "completed_at": 456
             }
@@ -3597,6 +3739,164 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+    assert_eq!(
+        payload["event_params"]["request_start_delay_ms"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["sampling_duration_ms"], json!(null));
+    assert_eq!(
+        payload["event_params"]["blocking_tool_critical_path_duration_ms"],
+        json!(null)
+    );
+    assert_eq!(
+        payload["event_params"]["approval_wait_duration_ms"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["finalize_duration_ms"], json!(null));
+}
+
+#[tokio::test]
+async fn turn_timing_breakdown_fact_enriches_turn_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnTimingBreakdown(Box::new(
+                sample_turn_timing_breakdown_fact("thread-2", "turn-2"),
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["request_start_delay_ms"],
+        json!(120)
+    );
+    assert_eq!(payload["event_params"]["sampling_duration_ms"], json!(900));
+    assert_eq!(
+        payload["event_params"]["blocking_tool_critical_path_duration_ms"],
+        json!(140)
+    );
+    assert_eq!(
+        payload["event_params"]["approval_wait_duration_ms"],
+        json!(0)
+    );
+    assert_eq!(payload["event_params"]["finalize_duration_ms"], json!(74));
+}
+
+#[tokio::test]
+async fn review_durations_roll_up_into_turn_approval_wait() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnTimingBreakdown(Box::new(
+                TurnTimingBreakdownFact {
+                    turn_id: "turn-2".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    request_start_delay_ms: Some(100),
+                    sampling_duration_ms: 400,
+                    blocking_tool_critical_path_duration_ms: 700,
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(ServerRequest::CommandExecutionRequestApproval {
+                    request_id: RequestId::Integer(99),
+                    params: CommandExecutionRequestApprovalParams {
+                        thread_id: "thread-2".to_string(),
+                        turn_id: "turn-2".to_string(),
+                        item_id: "item-1".to_string(),
+                        started_at_ms: 1_000,
+                        approval_id: None,
+                        reason: None,
+                        network_approval_context: None,
+                        command: Some("echo hi".to_string()),
+                        cwd: None,
+                        command_actions: None,
+                        additional_permissions: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        available_decisions: None,
+                    },
+                }),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                completed_at_ms: 1_600,
+                response: Box::new(ServerResponse::CommandExecutionRequestApproval {
+                    request_id: RequestId::Integer(99),
+                    response: CommandExecutionRequestApprovalResponse {
+                        decision: CommandExecutionApprovalDecision::AllowOnce,
+                    },
+                }),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    let turn_event = out
+        .iter()
+        .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
+        .expect("turn event should be emitted");
+    let payload = serde_json::to_value(turn_event).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["approval_wait_duration_ms"],
+        json!(600)
+    );
+    assert_eq!(payload["event_params"]["finalize_duration_ms"], json!(34));
 }
 
 #[tokio::test]

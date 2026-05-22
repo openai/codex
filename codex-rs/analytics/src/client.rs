@@ -8,17 +8,22 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
+use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnTimingBreakdownFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
@@ -163,9 +168,34 @@ impl AnalyticsEventsClient {
         });
     }
 
+    pub fn track_app_server_started(
+        &self,
+        rpc_transport: AppServerRpcTransport,
+        startup_duration_ms: u64,
+        completed_at: u64,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::AppServerStarted(AppServerStartedInput {
+                runtime: current_runtime_metadata(),
+                rpc_transport,
+                startup_duration_ms,
+                completed_at,
+            }),
+        ));
+    }
+
     pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
+        ));
+    }
+
+    pub fn track_thread_start_timing(&self, thread_id: String, duration_ms: u64) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ThreadStartTiming(ThreadStartTimingFact {
+                thread_id,
+                duration_ms,
+            }),
         ));
     }
 
@@ -234,11 +264,11 @@ impl AnalyticsEventsClient {
             return;
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
-            crate::facts::PluginUsedInput { tracking, plugin },
+            PluginUsedInput { tracking, plugin },
         )));
     }
 
-    pub fn track_compaction(&self, event: crate::facts::CodexCompactionEvent) {
+    pub fn track_compaction(&self, event: CodexCompactionEvent) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
         )));
@@ -254,6 +284,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
             Box::new(fact),
         )));
+    }
+
+    pub fn track_turn_timing(&self, fact: TurnTimingBreakdownFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnTimingBreakdown(Box::new(fact)),
+        ));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {

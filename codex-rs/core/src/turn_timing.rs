@@ -36,6 +36,13 @@ pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &T
         .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TurnTimingBreakdown {
+    pub(crate) request_start_delay_ms: Option<u64>,
+    pub(crate) sampling_duration_ms: u64,
+    pub(crate) blocking_tool_critical_path_duration_ms: u64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TurnTimingState {
     state: Mutex<TurnTimingStateInner>,
@@ -47,6 +54,9 @@ struct TurnTimingStateInner {
     started_at_unix_secs: Option<i64>,
     first_token_at: Option<Instant>,
     first_message_at: Option<Instant>,
+    first_request_started_at: Option<Instant>,
+    sampling_duration: Duration,
+    blocking_tool_critical_path_duration: Duration,
 }
 
 impl TurnTimingState {
@@ -57,6 +67,9 @@ impl TurnTimingState {
         state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
         state.first_token_at = None;
         state.first_message_at = None;
+        state.first_request_started_at = None;
+        state.sampling_duration = Duration::default();
+        state.blocking_tool_critical_path_duration = Duration::default();
         started_at_unix_ms
     }
 
@@ -98,6 +111,36 @@ impl TurnTimingState {
         let mut state = self.state.lock().await;
         state.record_turn_ttfm()
     }
+
+    pub(crate) async fn mark_model_request_started(&self) {
+        let mut state = self.state.lock().await;
+        if state.first_request_started_at.is_none() {
+            state.first_request_started_at = Some(Instant::now());
+        }
+    }
+
+    pub(crate) async fn record_sampling_duration(&self, duration: Duration) {
+        let mut state = self.state.lock().await;
+        state.sampling_duration = state.sampling_duration.saturating_add(duration);
+    }
+
+    pub(crate) async fn record_blocking_tool_critical_path_duration(&self, duration: Duration) {
+        let mut state = self.state.lock().await;
+        state.blocking_tool_critical_path_duration = state
+            .blocking_tool_critical_path_duration
+            .saturating_add(duration);
+    }
+
+    pub(crate) async fn timing_breakdown(&self) -> TurnTimingBreakdown {
+        let state = self.state.lock().await;
+        TurnTimingBreakdown {
+            request_start_delay_ms: state.request_start_delay_ms(),
+            sampling_duration_ms: duration_to_u64_millis(state.sampling_duration),
+            blocking_tool_critical_path_duration_ms: duration_to_u64_millis(
+                state.blocking_tool_critical_path_duration,
+            ),
+        }
+    }
 }
 
 fn now_unix_timestamp_secs() -> i64 {
@@ -112,6 +155,13 @@ pub(crate) fn now_unix_timestamp_ms() -> i64 {
 }
 
 impl TurnTimingStateInner {
+    fn request_start_delay_ms(&self) -> Option<u64> {
+        let duration = self
+            .first_request_started_at?
+            .duration_since(self.started_at?);
+        Some(duration_to_u64_millis(duration))
+    }
+
     fn time_to_first_token(&self) -> Option<Duration> {
         Some(self.first_token_at?.duration_since(self.started_at?))
     }
@@ -134,6 +184,10 @@ impl TurnTimingStateInner {
         self.first_message_at = Some(first_message_at);
         Some(first_message_at.duration_since(started_at))
     }
+}
+
+fn duration_to_u64_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
