@@ -351,6 +351,7 @@ async fn init_state_db_for_app_server_target(
     }
 }
 
+// TODO(jif) delete after 22/11/2026.
 fn remove_legacy_tui_log_file(codex_home: &Path) {
     // Shared append-only TUI logs could grow without bound. Existing processes
     // may still hold the file open, so startup cleanup is best effort.
@@ -988,7 +989,6 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
-    let tui_file_logging_enabled = config_toml.log_dir.is_some();
 
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
@@ -1177,7 +1177,7 @@ pub async fn run_main(
         }
     }
 
-    let (tui_file_layer, _tui_file_log_guard) = if tui_file_logging_enabled {
+    let (tui_file_layer, _tui_file_log_guard) = if config_toml.log_dir.is_some() {
         let log_dir = config.log_dir.clone();
         std::fs::create_dir_all(&log_dir)?;
         let mut log_file_opts = OpenOptions::new();
