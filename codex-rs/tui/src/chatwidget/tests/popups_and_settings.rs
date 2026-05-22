@@ -112,6 +112,201 @@ async fn plugins_popup_loading_state_snapshot() {
 }
 
 #[tokio::test]
+async fn usage_output_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_usage_output();
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Day,
+        })
+    );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Ok(UsageReadResponse {
+            report: UsageReport {
+                range: UsageRange::Day,
+                generated_at: 1_700_000_000,
+                tracked_from: Some(/*tracked_from*/ 1_699_999_000),
+                total_tokens: 100,
+                headline: Some(UsageHeadline {
+                    entry: usage_entry(
+                        UsageContributorKind::App,
+                        "testmcp",
+                        "testmcp",
+                        /*percent_of_usage*/ 11,
+                    ),
+                    note: Some(
+                        "Tool results stay in context until compaction; compact or disable sources you do not need."
+                            .to_string(),
+                    ),
+                }),
+                skills: vec![
+                    usage_entry(
+                        UsageContributorKind::Skill,
+                        "/skills/tmux",
+                        "/tmux",
+                        /*percent_of_usage*/ 8,
+                    ),
+                    usage_entry(
+                        UsageContributorKind::Skill,
+                        "/skills/babysit",
+                        "/babysit",
+                        /*percent_of_usage*/ 6,
+                    ),
+                ],
+                subagents: vec![
+                    usage_entry(
+                        UsageContributorKind::Subagent,
+                        "babysit",
+                        "babysit",
+                        /*percent_of_usage*/ 13,
+                    ),
+                    usage_entry(
+                        UsageContributorKind::Subagent,
+                        "code-review",
+                        "code-review",
+                        /*percent_of_usage*/ 9,
+                    ),
+                ],
+                agent_tasks: vec![
+                    usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "guardian",
+                        "guardian",
+                        /*percent_of_usage*/ 17,
+                    ),
+                    usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "review",
+                        "review",
+                        /*percent_of_usage*/ 5,
+                    ),
+                ],
+                apps: vec![usage_entry(
+                    UsageContributorKind::App,
+                    "testmcp",
+                    "testmcp",
+                    /*percent_of_usage*/ 11,
+                )],
+                mcp_servers: Vec::new(),
+                plugins: Vec::new(),
+            },
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output", rendered);
+}
+
+#[tokio::test]
+async fn usage_output_reports_unattributed_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_usage_output();
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Day,
+        })
+    );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Ok(UsageReadResponse {
+            report: UsageReport {
+                range: UsageRange::Day,
+                generated_at: 1_700_000_000,
+                tracked_from: Some(/*tracked_from*/ 1_699_999_000),
+                total_tokens: 100,
+                headline: None,
+                skills: Vec::new(),
+                subagents: Vec::new(),
+                agent_tasks: Vec::new(),
+                apps: Vec::new(),
+                mcp_servers: Vec::new(),
+                plugins: Vec::new(),
+            },
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output_unattributed", rendered);
+}
+
+#[tokio::test]
+async fn usage_output_weekly_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Usage, "week".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Week,
+        })
+    );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Ok(UsageReadResponse {
+            report: UsageReport {
+                range: UsageRange::Week,
+                generated_at: 1_700_000_000,
+                tracked_from: Some(/*tracked_from*/ 1_699_395_200),
+                total_tokens: 100,
+                headline: Some(UsageHeadline {
+                    entry: usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "guardian",
+                        "guardian",
+                        /*percent_of_usage*/ 17,
+                    ),
+                    note: None,
+                }),
+                skills: vec![usage_entry(
+                    UsageContributorKind::Skill,
+                    "/skills/tmux",
+                    "/tmux",
+                    /*percent_of_usage*/ 8,
+                )],
+                subagents: vec![usage_entry(
+                    UsageContributorKind::Subagent,
+                    "default",
+                    "default",
+                    /*percent_of_usage*/ 13,
+                )],
+                agent_tasks: vec![usage_entry(
+                    UsageContributorKind::AgentTask,
+                    "guardian",
+                    "guardian",
+                    /*percent_of_usage*/ 17,
+                )],
+                apps: Vec::new(),
+                mcp_servers: Vec::new(),
+                plugins: Vec::new(),
+            },
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output_weekly", rendered);
+}
+
+#[tokio::test]
 async fn marketplace_upgrade_loading_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -129,6 +324,21 @@ async fn marketplace_upgrade_loading_popup_snapshot() {
         upgrade_lines,
         @"Upgrading debug marketplace... | ›    Upgrading debug marketplace...  This updates when marketplace upgrade completes."
     );
+}
+
+fn usage_entry(
+    kind: UsageContributorKind,
+    id: &str,
+    label: &str,
+    percent_of_usage: u8,
+) -> UsageEntry {
+    UsageEntry {
+        kind,
+        id: id.to_string(),
+        label: label.to_string(),
+        attributed_tokens: i64::from(percent_of_usage),
+        percent_of_usage,
+    }
 }
 
 #[tokio::test]

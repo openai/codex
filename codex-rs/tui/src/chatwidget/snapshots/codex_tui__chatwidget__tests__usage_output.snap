@@ -1,0 +1,30 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: rendered
+---
+/usage
+
+╭───────────────────────────────────────────────────╮
+│ Daily usage by token share                        │
+│ Percent of consumed tokens in this selected range │
+│ (/usage week for weekly)                          │
+│                                                   │
+│ 11% of consumed tokens came from app "testmcp"    │
+│  Tool results stay in context until compaction;   │
+│  compact or disable sources you do not need.      │
+│                                                   │
+│  Skills                                           │
+│   ├─ /tmux         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    8%     │
+│   └─ /babysit      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    6%     │
+│                                                   │
+│  Subagents                                        │
+│   ├─ babysit       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   13%     │
+│   └─ code-review   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    9%     │
+│                                                   │
+│  Agent tasks                                      │
+│   ├─ guardian      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   17%     │
+│   └─ review        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    5%     │
+│                                                   │
+│  Apps                                             │
+│   └─ testmcp       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   11%     │
+╰───────────────────────────────────────────────────╯

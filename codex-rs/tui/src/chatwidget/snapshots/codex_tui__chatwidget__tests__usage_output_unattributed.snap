@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: rendered
+---
+/usage
+
+╭───────────────────────────────────────────────────╮
+│ Daily usage by token share                        │
+│ Percent of consumed tokens in this selected range │
+│ (/usage week for weekly)                          │
+│                                                   │
+│  No attributed skills, subagents, agent tasks,    │
+│  apps, MCP servers, or plugins in this range.     │
+╰───────────────────────────────────────────────────╯
