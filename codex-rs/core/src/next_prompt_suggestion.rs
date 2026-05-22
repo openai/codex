@@ -25,6 +25,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenCountEvent;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
 use std::collections::HashSet;
@@ -123,7 +125,7 @@ pub(crate) async fn suggest_next_prompt(
     };
     let mut streamed_text = String::new();
     let mut completed_text = None;
-    let mut should_emit_token_count = false;
+    let mut latest_rate_limits = None;
     let sample_deadline = tokio::time::sleep(NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT);
     tokio::pin!(sample_deadline);
     let completed_response_id = loop {
@@ -165,19 +167,25 @@ pub(crate) async fn suggest_next_prompt(
             }
             ResponseEvent::OutputTextDelta(delta) => streamed_text.push_str(&delta),
             ResponseEvent::RateLimits(snapshot) => {
+                latest_rate_limits = Some(snapshot.clone());
                 sess.record_rate_limits_info(snapshot).await;
-                should_emit_token_count = true;
             }
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
                 ..
             } => {
-                let has_token_usage = token_usage.is_some();
                 sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
-                if has_token_usage || should_emit_token_count {
-                    sess.send_token_count_event(&turn_context).await;
+                if let Some(rate_limits) = latest_rate_limits {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::TokenCount(TokenCountEvent {
+                            info: None,
+                            rate_limits: Some(rate_limits),
+                        }),
+                    )
+                    .await;
                 }
                 break response_id;
             }
@@ -325,6 +333,7 @@ fn has_unpaired_tool_flow(items: &[ResponseItem]) -> bool {
             } => {
                 tool_search_calls.insert(call_id.clone());
             }
+            ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => {}
             ResponseItem::ToolSearchOutput {
                 call_id: Some(call_id),
                 ..
@@ -559,6 +568,26 @@ mod tests {
                 output: FunctionCallOutputPayload::from_text("done".to_string()),
             },
         ]));
+    }
+
+    #[test]
+    fn server_tool_search_output_without_call_is_allowed() {
+        assert!(!has_unpaired_tool_flow(&[ResponseItem::ToolSearchOutput {
+            call_id: Some("call-1".to_string()),
+            status: "completed".to_string(),
+            execution: "server".to_string(),
+            tools: Vec::new(),
+        }]));
+    }
+
+    #[test]
+    fn client_tool_search_output_without_call_is_suppressed() {
+        assert!(has_unpaired_tool_flow(&[ResponseItem::ToolSearchOutput {
+            call_id: Some("call-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: Vec::new(),
+        }]));
     }
 
     #[test]
