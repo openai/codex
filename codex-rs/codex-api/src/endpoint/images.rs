@@ -245,7 +245,7 @@ mod tests {
                     }],
                     prompt: "add a red hat".to_string(),
                     background: None,
-                    model: Some("gpt-image-1.5".to_string()),
+                    model: "gpt-image-1.5".to_string(),
                     n: None,
                     quality: None,
                     size: None,
