@@ -817,6 +817,118 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(2);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ])),
+            ResponseTemplate::new(500).set_body_string("first compact open failed"),
+            responses::sse_response(responses::sse(vec![serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "encrypted_content": "FAILED_COMPACT_SUMMARY",
+                }
+            })])),
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "RETRIED_COMPACT_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact-retry"),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ])),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        5,
+        response_requests.len(),
+        "expected initial turn, failed open, failed stream, compact retry, and follow-up turn"
+    );
+
+    for compact_request in &response_requests[1..=3] {
+        assert_eq!("/v1/responses", compact_request.path());
+        assert!(
+            compact_request
+                .body_json()
+                .to_string()
+                .contains("\"type\":\"compaction_trigger\""),
+            "expected v2 compaction request to include the compaction_trigger item"
+        );
+    }
+
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_body = follow_up_request.body_json().to_string();
+    assert!(
+        follow_up_body.contains("RETRIED_COMPACT_SUMMARY"),
+        "expected follow-up request to include the retried compaction payload"
+    );
+    assert!(
+        !follow_up_body.contains("FAILED_COMPACT_SUMMARY"),
+        "expected failed compaction attempt output to be discarded"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_accepts_additional_output_items_before_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 pub use debug_sandbox::run_command_under_landlock;
 pub use debug_sandbox::run_command_under_seatbelt;
-pub use debug_sandbox::run_command_under_windows;
+pub use debug_sandbox::run_command_under_windows_sandbox;
 pub use login::read_access_token_from_stdin;
 pub use login::read_api_key_from_stdin;
 pub use login::run_login_status;
@@ -20,8 +20,8 @@ pub use login::run_login_with_device_code;
 pub use login::run_login_with_device_code_fallback_to_browser;
 pub use login::run_logout;
 
-// TODO: Deduplicate these shared sandbox options if we remove the explicit
-// `codex sandbox <os>` platform subcommands.
+// These command structs share common sandbox options, but remain separate
+// because each host backend has a slightly different option surface.
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
     /// Named permissions profile to apply from the active configuration stack.

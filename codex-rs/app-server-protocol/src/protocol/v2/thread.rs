@@ -162,13 +162,13 @@ pub struct ThreadStartParams {
     /// If true, opt into emitting raw Responses API items on the event stream.
     /// This is for internal use only (e.g. Codex Cloud).
     #[experimental("thread/start.experimentalRawEvents")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_raw_events: bool,
     /// Deprecated and ignored by app-server. Kept only so older clients can
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/start.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
 
@@ -401,7 +401,7 @@ pub struct ThreadResumeParams {
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/resume.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
 
@@ -518,7 +518,7 @@ pub struct ThreadForkParams {
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
     #[experimental("thread/fork.persistFullHistory")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
 
@@ -1132,7 +1132,7 @@ pub enum ThreadActiveFlag {
 pub struct ThreadReadParams {
     pub thread_id: String,
     /// When true, include turns and their items from rollout history.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_turns: bool,
 }
 

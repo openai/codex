@@ -278,6 +278,8 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
+
 #[cfg(unix)]
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
@@ -347,6 +349,13 @@ async fn init_state_db_for_app_server_target(
             Ok(state_db::get_state_db(config).await)
         }
     }
+}
+
+// TODO(jif) delete after 22/11/2026.
+fn remove_legacy_tui_log_file(codex_home: &Path) {
+    // Shared append-only TUI logs could grow without bound. Existing processes
+    // may still hold the file open, so startup cleanup is best effort.
+    let _ = std::fs::remove_file(codex_home.join("log").join(TUI_LOG_FILE_NAME));
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -1055,6 +1064,8 @@ pub async fn run_main(
     )
     .await;
 
+    remove_legacy_tui_log_file(config.codex_home.as_path());
+
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::legacy_core::otel_init::build_provider(
@@ -1166,46 +1177,39 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = config.log_dir.clone();
-    std::fs::create_dir_all(&log_dir)?;
-    // Open (or create) your log file, appending to it.
-    let mut log_file_opts = OpenOptions::new();
-    log_file_opts.create(true).append(true);
+    let (tui_file_layer, _tui_file_log_guard) = if config_toml.log_dir.is_some() {
+        let log_dir = config.log_dir.clone();
+        std::fs::create_dir_all(&log_dir)?;
+        let mut log_file_opts = OpenOptions::new();
+        log_file_opts.create(true).append(true);
 
-    // Ensure the file is only readable and writable by the current user.
-    // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
-    // and requires the Windows API crates, so we can reconsider that when
-    // Codex CLI is officially supported on Windows.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        log_file_opts.mode(0o600);
-    }
+        // Ensure the file is only readable and writable by the current user.
+        // Doing the equivalent to `chmod 600` on Windows is quite a bit more
+        // code and requires the Windows API crates.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            log_file_opts.mode(0o600);
+        }
 
-    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
-
-    // Wrap file in non‑blocking writer.
-    let (non_blocking, _guard) = non_blocking(log_file);
-
-    // use RUST_LOG env var, default to info for codex crates.
-    let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        let log_file = log_file_opts.open(log_dir.join(TUI_LOG_FILE_NAME))?;
+        let (non_blocking, guard) = non_blocking(log_file);
+        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
-        })
+        });
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_target(true)
+            .with_ansi(false)
+            .with_span_events(
+                tracing_subscriber::fmt::format::FmtSpan::NEW
+                    | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+            )
+            .with_filter(env_filter);
+        (Some(file_layer), Some(guard))
+    } else {
+        (None, None)
     };
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        // `with_target(true)` is the default, but we previously disabled it for file output.
-        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
-        // grep for a specific module/target while troubleshooting.
-        .with_target(true)
-        .with_ansi(false)
-        .with_span_events(
-            tracing_subscriber::fmt::format::FmtSpan::NEW
-                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
-        )
-        .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
     let feedback_layer = feedback.logger_layer();
@@ -1236,7 +1240,7 @@ pub async fn run_main(
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
 
     let _ = tracing_subscriber::registry()
-        .with(file_layer)
+        .with(tui_file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(log_db_layer)
@@ -1915,6 +1919,20 @@ mod tests {
             .await
     }
 
+    #[test]
+    fn startup_removes_legacy_tui_log_file() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let legacy_log_dir = temp_dir.path().join("log");
+        std::fs::create_dir_all(&legacy_log_dir)?;
+        let legacy_log = legacy_log_dir.join(TUI_LOG_FILE_NAME);
+        std::fs::write(&legacy_log, "legacy log")?;
+
+        remove_legacy_tui_log_file(temp_dir.path());
+
+        assert!(!legacy_log.exists());
+        Ok(())
+    }
+
     async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
@@ -2364,7 +2382,7 @@ mod tests {
             let updated_at =
                 chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
             let times = std::fs::FileTimes::new().set_modified(updated_at.into());
-            OpenOptions::new()
+            std::fs::OpenOptions::new()
                 .append(true)
                 .open(rollout_path)?
                 .set_times(times)?;

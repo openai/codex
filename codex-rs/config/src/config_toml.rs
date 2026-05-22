@@ -27,9 +27,6 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
-use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
-use codex_app_server_protocol::Tools;
-use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -103,13 +100,6 @@ impl ForcedChatgptWorkspaceIds {
         match self {
             Self::Single(value) => vec![value],
             Self::Multiple(values) => values,
-        }
-    }
-
-    pub fn into_api(self) -> ApiForcedChatgptWorkspaceIds {
-        match self {
-            Self::Single(value) => ApiForcedChatgptWorkspaceIds::Single(value),
-            Self::Multiple(values) => ApiForcedChatgptWorkspaceIds::Multiple(values),
         }
     }
 }
@@ -319,7 +309,8 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,
 
-    /// Directory where Codex writes log files, for example `codex-tui.log`.
+    /// Directory where Codex writes log files. Setting this value explicitly
+    /// also enables the TUI text log in this directory.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
@@ -552,33 +543,6 @@ pub struct AutoReviewToml {
     pub policy: Option<String>,
 }
 
-impl From<ConfigToml> for UserSavedConfig {
-    fn from(config_toml: ConfigToml) -> Self {
-        let profiles = config_toml
-            .profiles
-            .into_iter()
-            .map(|(k, v)| (k, v.into()))
-            .collect();
-
-        Self {
-            approval_policy: config_toml.approval_policy,
-            sandbox_mode: config_toml.sandbox_mode,
-            sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml
-                .forced_chatgpt_workspace_id
-                .map(ForcedChatgptWorkspaceIds::into_api),
-            forced_login_method: config_toml.forced_login_method,
-            model: config_toml.model,
-            model_reasoning_effort: config_toml.model_reasoning_effort,
-            model_reasoning_summary: config_toml.model_reasoning_summary,
-            model_verbosity: config_toml.model_verbosity,
-            tools: config_toml.tools.map(From::from),
-            profile: config_toml.profile,
-            profiles,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -727,14 +691,6 @@ pub struct AgentRoleToml {
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
-}
-
-impl From<ToolsToml> for Tools {
-    fn from(tools_toml: ToolsToml) -> Self {
-        Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
