@@ -324,7 +324,6 @@ impl TurnContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
-            trace_id: self.trace_id.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),

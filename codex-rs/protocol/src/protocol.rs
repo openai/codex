@@ -1850,6 +1850,10 @@ pub struct TurnCompleteEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    // Persist for rollout consumers that correlate turns with telemetry traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trace_id: Option<String>,
     /// Unix timestamp (in seconds) when the turn started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
@@ -2727,9 +2731,6 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
-    // Persist for rollout consumers that correlate turns with telemetry traces.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trace_id: Option<String>,
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
@@ -5154,7 +5155,6 @@ mod tests {
             "summary": "auto",
         }))?;
 
-        assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         Ok(())
@@ -5164,7 +5164,6 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
-            trace_id: None,
             cwd: test_path_buf("/tmp"),
             current_date: None,
             timezone: None,
