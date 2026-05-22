@@ -22,21 +22,41 @@ class TargetSpec:
         return ".exe" if self.is_windows else ""
 
     @property
-    def codex_name(self) -> str:
-        return f"codex{self.exe_suffix}"
-
-    @property
     def rg_name(self) -> str:
         return f"rg{self.exe_suffix}"
 
 
 @dataclass(frozen=True)
+class PackageVariant:
+    name: str
+    cargo_bin: str
+    executable_stem: str
+
+    def entrypoint_name(self, spec: TargetSpec) -> str:
+        return f"{self.executable_stem}{spec.exe_suffix}"
+
+
+@dataclass(frozen=True)
 class PackageInputs:
-    codex_bin: Path
+    entrypoint_bin: Path
     rg_bin: Path
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None
     codex_windows_sandbox_setup_bin: Path | None
+
+
+PACKAGE_VARIANTS: dict[str, PackageVariant] = {
+    "codex": PackageVariant(
+        name="codex",
+        cargo_bin="codex",
+        executable_stem="codex",
+    ),
+    "codex-app-server": PackageVariant(
+        name="codex-app-server",
+        cargo_bin="codex-app-server",
+        executable_stem="codex-app-server",
+    ),
+}
 
 
 TARGET_SPECS: dict[str, TargetSpec] = {

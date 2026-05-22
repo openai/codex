@@ -6,6 +6,7 @@ import stat
 from pathlib import Path
 
 from .targets import PackageInputs
+from .targets import PackageVariant
 from .targets import TargetSpec
 
 
@@ -30,7 +31,7 @@ def prepare_package_dir(package_dir: Path, *, force: bool) -> None:
 def build_package_dir(
     package_dir: Path,
     version: str,
-    variant: str,
+    variant: PackageVariant,
     spec: TargetSpec,
     inputs: PackageInputs,
 ) -> None:
@@ -41,7 +42,12 @@ def build_package_dir(
     resources_dir.mkdir()
     path_dir.mkdir()
 
-    copy_executable(inputs.codex_bin, bin_dir / spec.codex_name, is_windows=spec.is_windows)
+    entrypoint_name = variant.entrypoint_name(spec)
+    copy_executable(
+        inputs.entrypoint_bin,
+        bin_dir / entrypoint_name,
+        is_windows=spec.is_windows,
+    )
     copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
 
     if inputs.bwrap_bin is not None:
@@ -65,15 +71,19 @@ def build_package_dir(
         "layoutVersion": LAYOUT_VERSION,
         "version": version,
         "target": spec.target,
-        "variant": variant,
-        "entrypoint": f"bin/{spec.codex_name}",
+        "variant": variant.name,
+        "entrypoint": f"bin/{entrypoint_name}",
         "resourcesDir": "codex-resources",
         "pathDir": "codex-path",
     }
     write_json(package_dir / "codex-package.json", metadata)
 
 
-def validate_package_dir(package_dir: Path, spec: TargetSpec) -> None:
+def validate_package_dir(
+    package_dir: Path,
+    variant: PackageVariant,
+    spec: TargetSpec,
+) -> None:
     required_dirs = [
         Path("bin"),
         Path("codex-resources"),
@@ -94,7 +104,8 @@ def validate_package_dir(package_dir: Path, spec: TargetSpec) -> None:
     expected_metadata = {
         "layoutVersion": LAYOUT_VERSION,
         "target": spec.target,
-        "entrypoint": f"bin/{spec.codex_name}",
+        "variant": variant.name,
+        "entrypoint": f"bin/{variant.entrypoint_name(spec)}",
         "resourcesDir": "codex-resources",
         "pathDir": "codex-path",
     }
@@ -106,7 +117,7 @@ def validate_package_dir(package_dir: Path, spec: TargetSpec) -> None:
             )
 
     required_files = [
-        Path("bin") / spec.codex_name,
+        Path("bin") / variant.entrypoint_name(spec),
         Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)

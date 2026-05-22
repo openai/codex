@@ -288,6 +288,14 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
     }
 }
 
+fn invalid_mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
+    let mut tool = mcp_tool(server, namespace, name);
+    tool.tool.input_schema = Arc::new(rmcp::model::object(json!({
+        "type": "null",
+    })));
+    tool
+}
+
 fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> DynamicToolSpec {
     DynamicToolSpec {
         namespace: namespace.map(str::to_string),
@@ -342,7 +350,7 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
     plan.assert_visible_lacks(&["shell_command"]);
     plan.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
-    assert_eq!(plan.exposure("shell_command"), ToolExposure::Direct);
+    assert_eq!(plan.exposure("shell_command"), ToolExposure::Hidden);
 }
 
 #[tokio::test]
@@ -505,6 +513,25 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
     enabled.assert_registered_contains(&["tool_search", "mcp__searchable__lookup"]);
+}
+
+#[tokio::test]
+async fn invalid_mcp_tools_are_not_registered() {
+    let plan = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            mcp_tools: Some(vec![invalid_mcp_tool(
+                "invalid",
+                "mcp__invalid__",
+                "lookup",
+            )]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["mcp__invalid__"]);
+    plan.assert_registered_lacks(&["mcp__invalid__lookup"]);
 }
 
 #[tokio::test]

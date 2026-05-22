@@ -26,6 +26,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
             name: "Fast".to_string(),
             description: "1.5x speed, increased usage".to_string(),
         }],
+        default_service_tier: None,
         is_default: false,
         upgrade: None,
         show_in_picker,

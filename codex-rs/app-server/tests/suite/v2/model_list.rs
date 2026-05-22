@@ -69,6 +69,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
                 description: service_tier.description.clone(),
             })
             .collect(),
+        default_service_tier: preset.default_service_tier.clone(),
         is_default: preset.is_default,
     }
 }

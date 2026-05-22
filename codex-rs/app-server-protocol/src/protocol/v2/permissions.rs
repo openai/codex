@@ -329,8 +329,8 @@ pub struct ActivePermissionProfile {
     /// Identifier from `default_permissions` or the implicit built-in default,
     /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
     pub id: String,
-    /// Parent profile identifier once permissions profiles support
-    /// inheritance. This is currently always `null`.
+    /// Parent profile identifier from the selected permissions profile's
+    /// `extends` setting, when present.
     #[serde(default)]
     pub extends: Option<String>,
 }

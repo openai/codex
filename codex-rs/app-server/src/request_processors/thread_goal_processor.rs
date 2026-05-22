@@ -161,7 +161,7 @@ impl ThreadGoalRequestProcessor {
                     .thread_goals()
                     .update_thread_goal(
                         thread_id,
-                        codex_state::ThreadGoalUpdate {
+                        codex_state::GoalUpdate {
                             objective: Some(objective.to_string()),
                             status,
                             token_budget: params.token_budget,
@@ -206,7 +206,7 @@ impl ThreadGoalRequestProcessor {
                 .thread_goals()
                 .update_thread_goal(
                     thread_id,
-                    codex_state::ThreadGoalUpdate {
+                    codex_state::GoalUpdate {
                         objective: None,
                         status,
                         token_budget: params.token_budget,

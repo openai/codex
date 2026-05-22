@@ -10,6 +10,7 @@
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -22,6 +23,9 @@ use std::path::PathBuf;
 /// This is not a protocol requirement; it simply bounds memory use and rejects
 /// obviously invalid frames.
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
+
+/// Protocol version shared by the parent process and elevated command runner.
+pub const IPC_PROTOCOL_VERSION: u8 = 2;
 
 /// Length-prefixed, JSON-encoded frame.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -55,8 +59,8 @@ pub struct SpawnRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
-    pub policy_json_or_preset: String,
-    pub sandbox_policy_cwd: PathBuf,
+    pub permission_profile: PermissionProfile,
+    pub permission_profile_cwd: PathBuf,
     pub codex_home: PathBuf,
     pub real_codex_home: PathBuf,
     pub cap_sids: Vec<String>,
@@ -164,11 +168,12 @@ pub fn read_frame<R: Read>(mut reader: R) -> Result<Option<FramedMessage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn framed_round_trip() {
         let msg = FramedMessage {
-            version: 1,
+            version: IPC_PROTOCOL_VERSION,
             message: Message::Output {
                 payload: OutputPayload {
                     data_b64: encode_bytes(b"hello"),
@@ -179,7 +184,7 @@ mod tests {
         let mut buf = Vec::new();
         write_frame(&mut buf, &msg).expect("write");
         let decoded = read_frame(buf.as_slice()).expect("read").expect("some");
-        assert_eq!(decoded.version, 1);
+        assert_eq!(decoded.version, IPC_PROTOCOL_VERSION);
         match decoded.message {
             Message::Output { payload } => {
                 assert_eq!(payload.stream, OutputStream::Stdout);
@@ -188,5 +193,44 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn spawn_request_serializes_permission_profile() {
+        let msg = FramedMessage {
+            version: IPC_PROTOCOL_VERSION,
+            message: Message::SpawnRequest {
+                payload: Box::new(SpawnRequest {
+                    command: vec!["cmd.exe".to_string(), "/c".to_string(), "ver".to_string()],
+                    cwd: PathBuf::from(r"C:\workspace"),
+                    env: HashMap::new(),
+                    permission_profile: PermissionProfile::read_only(),
+                    permission_profile_cwd: PathBuf::from(r"C:\workspace"),
+                    codex_home: PathBuf::from(r"C:\codex"),
+                    real_codex_home: PathBuf::from(r"C:\Users\codex"),
+                    cap_sids: vec!["S-1-15-3-1024-1".to_string()],
+                    timeout_ms: Some(1000),
+                    tty: false,
+                    stdin_open: false,
+                    use_private_desktop: false,
+                }),
+            },
+        };
+
+        let encoded = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!("spawn_request", encoded["type"]);
+        assert_eq!("managed", encoded["payload"]["permission_profile"]["type"]);
+        assert_eq!(None, encoded["payload"].get("policy_json_or_preset"));
+        assert_eq!(None, encoded["payload"].get("sandbox_policy_cwd"));
+
+        let decoded: FramedMessage = serde_json::from_value(encoded).expect("deserialize");
+        let Message::SpawnRequest { payload } = decoded.message else {
+            panic!("unexpected message");
+        };
+        assert_eq!(PermissionProfile::read_only(), payload.permission_profile);
+        assert_eq!(
+            PathBuf::from(r"C:\workspace"),
+            payload.permission_profile_cwd
+        );
     }
 }

@@ -21,6 +21,9 @@ pub enum ToolExposure {
     /// In code-mode-only sessions, this keeps the tool callable as a normal
     /// model tool while excluding it from the nested code-mode tool surface.
     DirectModelOnly,
+
+    /// Keep this tool registered for dispatch without exposing it to the model.
+    Hidden,
 }
 
 impl ToolExposure {
@@ -39,9 +42,7 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
     /// The concrete tool name handled by this runtime instance.
     fn tool_name(&self) -> ToolName;
 
-    fn spec(&self) -> Option<ToolSpec> {
-        None
-    }
+    fn spec(&self) -> ToolSpec;
 
     fn exposure(&self) -> ToolExposure {
         ToolExposure::Direct

@@ -25,8 +25,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("wait_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_wait_agent_tool_v2(self.options))
+    fn spec(&self) -> ToolSpec {
+        create_wait_agent_tool_v2(self.options)
     }
 
     async fn handle(

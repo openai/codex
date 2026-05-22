@@ -33,8 +33,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_wait_agent_tool_v1(self.options))
+    fn spec(&self) -> ToolSpec {
+        create_wait_agent_tool_v1(self.options)
     }
 
     async fn handle(
@@ -206,7 +206,7 @@ impl CoreToolRuntime for Handler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         multi_agent_tool_search_info(
             "wait_agent wait agent subagent status final result complete timeout targets",
-            self.spec()?,
+            self.spec(),
         )
     }
 

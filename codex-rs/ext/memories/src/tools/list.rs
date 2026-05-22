@@ -43,11 +43,11 @@ where
         memory_tool_name(LIST_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(memory_function_tool::<ListArgs, ListMemoriesResponse>(
+    fn spec(&self) -> ToolSpec {
+        memory_function_tool::<ListArgs, ListMemoriesResponse>(
             LIST_TOOL_NAME,
             "List immediate files and directories under a path in the Codex memories store.",
-        ))
+        )
     }
 
     async fn handle(

@@ -11,6 +11,7 @@ use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall as ExtensionToolCall;
 use codex_extension_api::ToolExecutor;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -49,8 +50,8 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         ToolName::namespaced("extension/", "echo")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(ToolSpec::Namespace(ResponsesApiNamespace {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(ResponsesApiNamespace {
             name: "extension/".to_string(),
             description: default_namespace_description("extension/"),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -69,7 +70,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
                 output_schema: None,
                 defer_loading: None,
             })],
-        }))
+        })
     }
 
     async fn handle(
@@ -81,6 +82,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
         Ok(Box::new(codex_tools::JsonToolOutput::new(json!({
             "arguments": arguments,
             "callId": call.call_id,
+            "conversationHistory": call.conversation_history.items(),
             "ok": true,
         }))))
     }
@@ -327,6 +329,17 @@ fn mcp_tool_info(
 async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow::Result<()> {
     let (mut session, turn) = make_session_and_context().await;
     session.services.extensions = extension_tool_test_registry();
+    let history_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "extension history".to_string(),
+        }],
+        phase: None,
+    };
+    session
+        .record_into_history(std::slice::from_ref(&history_item), &turn)
+        .await;
 
     let router = ToolRouter::from_turn_context(
         &turn,
@@ -384,6 +397,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
                 json!({
                     "arguments": { "message": "hello" },
                     "callId": "call-extension",
+                    "conversationHistory": [history_item],
                     "ok": true,
                 })
             );
