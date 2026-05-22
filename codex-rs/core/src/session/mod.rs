@@ -3191,6 +3191,17 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
+        self.input_queue
+            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                active_turn.turn_state.as_ref(),
+                TurnInput::UserInput(input),
+            )
+            .await
+            .map_err(|input| match input {
+                TurnInput::UserInput(input) => SteerInputError::NoActiveTurn(input),
+                TurnInput::ResponseInputItem(_) => unreachable!("steer input must be user input"),
+            })?;
+
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
             && let Some((_, active_task)) = active_turn.tasks.first()
         {
@@ -3200,13 +3211,20 @@ impl Session {
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
-        self.input_queue
-            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                TurnInput::UserInput(input),
-            )
-            .await;
         Ok(active_turn_id.clone())
+    }
+
+    pub(crate) async fn has_terminal_active_turn(&self) -> bool {
+        let turn_state = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .map(|active_turn| Arc::clone(&active_turn.turn_state))
+        };
+        let Some(turn_state) = turn_state else {
+            return false;
+        };
+        turn_state.lock().await.is_terminal()
     }
 
     /// Returns the input if there was no task running to inject into.

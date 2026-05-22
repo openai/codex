@@ -8121,6 +8121,62 @@ async fn steer_input_requires_active_turn() {
 }
 
 #[tokio::test]
+async fn terminal_active_turn_rejects_new_pending_input() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    let turn_state = {
+        let active_turn = sess.active_turn.lock().await;
+        Arc::clone(&active_turn.as_ref().expect("active turn").turn_state)
+    };
+    sess.input_queue
+        .mark_terminal_and_clear_pending_for_turn_state(turn_state.as_ref())
+        .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "late steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let err = sess
+        .steer_input(
+            steer_input,
+            Some(&tc.sub_id),
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+        .expect_err("terminal turn should reject steering");
+    assert!(matches!(err, SteerInputError::NoActiveTurn(_)));
+
+    let injected_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "late injected input".to_string(),
+        }],
+        phase: None,
+    };
+    let rejected_items = sess
+        .inject_response_items(vec![injected_item.clone()])
+        .await
+        .expect_err("terminal turn should reject injected input");
+    assert_eq!(rejected_items, vec![injected_item]);
+    assert!(
+        !sess.input_queue.has_pending_input(&sess.active_turn).await,
+        "terminal turn should not accept new pending input"
+    );
+}
+
+#[tokio::test]
 async fn steer_input_enforces_expected_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {

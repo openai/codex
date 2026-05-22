@@ -116,6 +116,16 @@ impl InputQueue {
         turn_state.pending_input.items.clear();
     }
 
+    pub(crate) async fn mark_terminal_and_clear_pending_for_turn_state(
+        &self,
+        turn_state: &Mutex<TurnState>,
+    ) {
+        let mut turn_state = turn_state.lock().await;
+        turn_state.mark_terminal();
+        turn_state.clear_pending_waiters();
+        turn_state.pending_input.items.clear();
+    }
+
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
@@ -159,10 +169,14 @@ impl InputQueue {
         &self,
         turn_state: &Mutex<TurnState>,
         input: TurnInput,
-    ) {
+    ) -> Result<(), TurnInput> {
         let mut turn_state = turn_state.lock().await;
+        if turn_state.is_terminal() {
+            return Err(input);
+        }
         turn_state.pending_input.items.push(input);
         turn_state.accept_mailbox_delivery_for_current_turn();
+        Ok(())
     }
 
     pub(crate) async fn extend_pending_input_for_turn_state(
@@ -192,14 +206,14 @@ impl InputQueue {
         let mut active = active_turn.lock().await;
         match active.as_mut() {
             Some(active_turn) => {
-                self.extend_pending_input_for_turn_state(
-                    active_turn.turn_state.as_ref(),
-                    input
-                        .into_iter()
-                        .map(TurnInput::ResponseInputItem)
-                        .collect(),
-                )
-                .await;
+                let mut turn_state = active_turn.turn_state.lock().await;
+                if turn_state.is_terminal() {
+                    return Err(input);
+                }
+                turn_state
+                    .pending_input
+                    .items
+                    .extend(input.into_iter().map(TurnInput::ResponseInputItem));
                 Ok(())
             }
             None => Err(input),
@@ -219,6 +233,9 @@ impl InputQueue {
             match active.as_mut() {
                 Some(active_turn) => {
                     let mut turn_state = active_turn.turn_state.lock().await;
+                    if turn_state.is_terminal() {
+                        return Vec::new();
+                    }
                     (
                         turn_state.pending_input.items.split_off(0),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),
@@ -254,6 +271,9 @@ impl InputQueue {
             match active.as_ref() {
                 Some(active_turn) => {
                     let turn_state = active_turn.turn_state.lock().await;
+                    if turn_state.is_terminal() {
+                        return false;
+                    }
                     (
                         !turn_state.pending_input.items.is_empty(),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),

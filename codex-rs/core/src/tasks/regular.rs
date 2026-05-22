@@ -98,12 +98,9 @@ impl SessionTask for RegularTask {
                             .map(|active_turn| Arc::clone(&active_turn.turn_state))
                     };
                     if let Some(turn_state) = turn_state {
-                        turn_state.lock().await.clear_pending_waiters();
-                        drop(
-                            sess.input_queue
-                                .take_pending_input_for_turn_state(turn_state.as_ref())
-                                .await,
-                        );
+                        sess.input_queue
+                            .mark_terminal_and_clear_pending_for_turn_state(turn_state.as_ref())
+                            .await;
                     }
                     return None;
                 }

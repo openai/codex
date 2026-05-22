@@ -117,6 +117,7 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
+    terminal: bool,
     granted_permissions: Option<AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
@@ -220,15 +221,27 @@ impl TurnState {
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
+        if self.terminal {
+            return;
+        }
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
 
     pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
-        self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
+        !self.terminal && self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
     }
 
     pub(crate) fn set_mailbox_delivery_phase(&mut self, phase: MailboxDeliveryPhase) {
         self.mailbox_delivery_phase = phase;
+    }
+
+    pub(crate) fn mark_terminal(&mut self) {
+        self.terminal = true;
+        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
+    }
+
+    pub(crate) fn is_terminal(&self) -> bool {
+        self.terminal
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {

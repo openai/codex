@@ -234,6 +234,14 @@ pub(super) async fn user_input_or_turn_inner(
             Some(items)
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
+            if sess.has_terminal_active_turn().await {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(SteerInputError::NoActiveTurn(items).to_error_event()),
+                })
+                .await;
+                return;
+            }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 current_context
                     .turn_metadata_state
