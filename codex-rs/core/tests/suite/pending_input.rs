@@ -150,6 +150,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
+            /*additional_context*/ Default::default(),
             /*expected_turn_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )

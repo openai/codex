@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -18,6 +19,7 @@ use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::connectors;
+use crate::context::AdditionalContextFragment;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
@@ -742,11 +744,17 @@ impl Codex {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, String>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.session
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                responsesapi_client_metadata,
+            )
             .await
     }
 
@@ -3152,6 +3160,7 @@ impl Session {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, String>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
@@ -3188,8 +3197,23 @@ impl Session {
             None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
-        if input.is_empty() {
+        let (additional_context_input, additional_context_store) = {
+            let mut additional_context_store = {
+                let state = self.state.lock().await;
+                state.additional_context.clone()
+            };
+            let fragments = additional_context_store.merge(additional_context);
+            (
+                AdditionalContextFragment::input_item(fragments),
+                additional_context_store,
+            )
+        };
+        if input.is_empty() && additional_context_input.is_none() {
             return Err(SteerInputError::EmptyInput);
+        }
+        {
+            let mut state = self.state.lock().await;
+            state.additional_context = additional_context_store;
         }
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
@@ -3201,10 +3225,17 @@ impl Session {
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
+        let mut pending_input = additional_context_input
+            .into_iter()
+            .map(TurnInput::ResponseInputItem)
+            .collect::<Vec<_>>();
+        if !input.is_empty() {
+            pending_input.push(TurnInput::UserInput(input));
+        }
         self.input_queue
-            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
-                TurnInput::UserInput(input),
+                pending_input,
             )
             .await;
         Ok(active_turn_id.clone())

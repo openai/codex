@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SortDirection": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
+    },
+    "TurnItemsView": {
+      "oneOf": [
+        {
+          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
+          "enum": [
+            "notLoaded"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains only a display summary for this turn.",
+          "enum": [
+            "summary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "cursor": {
+      "description": "Opaque cursor to pass to the next call to continue after the last turn.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "itemsView": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TurnItemsView"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "How much item detail to include for each returned turn; defaults to summary."
+    },
+    "limit": {
+      "description": "Optional turn page size.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sortDirection": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SortDirection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional turn pagination direction; defaults to descending."
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadTurnsListParams",
+  "type": "object"
+}

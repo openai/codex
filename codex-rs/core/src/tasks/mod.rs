@@ -297,6 +297,14 @@ where
     }
 }
 
+fn user_input_to_turn_input(input: Vec<UserInput>) -> Vec<TurnInput> {
+    if input.is_empty() {
+        Vec::new()
+    } else {
+        vec![TurnInput::UserInput(input)]
+    }
+}
+
 impl Session {
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
@@ -304,15 +312,35 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
+        let input = user_input_to_turn_input(input);
+        self.spawn_task_with_input(turn_context, input, task).await;
+    }
+
+    pub(crate) async fn spawn_task_with_input<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: T,
+    ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task_with_input(turn_context, input, task).await;
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
+        task: T,
+    ) {
+        let input = user_input_to_turn_input(input);
+        self.start_task_with_input(turn_context, input, task).await;
+    }
+
+    pub(crate) async fn start_task_with_input<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
         task: T,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
@@ -380,11 +408,7 @@ impl Session {
         ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
-        let task_input = if input.is_empty() {
-            Vec::new()
-        } else {
-            vec![TurnInput::UserInput(input)]
-        };
+        let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.

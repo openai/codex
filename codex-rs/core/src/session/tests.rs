@@ -8046,6 +8046,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     }];
     sess.steer_input(
         pending_user_input.clone(),
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -8142,7 +8143,10 @@ async fn steer_input_requires_active_turn() {
 
     let err = sess
         .steer_input(
-            input, /*expected_turn_id*/ None, /*responsesapi_client_metadata*/ None,
+            input,
+            /*additional_context*/ Default::default(),
+            /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
         )
         .await
         .expect_err("steering without active turn should fail");
@@ -8174,6 +8178,7 @@ async fn steer_input_enforces_expected_turn_id() {
     let err = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some("different-turn-id"),
             /*responsesapi_client_metadata*/ None,
         )
@@ -8220,6 +8225,7 @@ async fn steer_input_rejects_non_regular_turns() {
         let err = sess
             .steer_input(
                 steer_input,
+                /*additional_context*/ Default::default(),
                 /*expected_turn_id*/ None,
                 /*responsesapi_client_metadata*/ None,
             )
@@ -8256,6 +8262,7 @@ async fn steer_input_returns_active_turn_id() {
     let turn_id = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some(&tc.sub_id),
             /*responsesapi_client_metadata*/ None,
         )
@@ -9301,6 +9308,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -9350,6 +9358,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )

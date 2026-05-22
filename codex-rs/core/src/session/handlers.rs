@@ -10,6 +10,7 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::SteerInputError;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
@@ -50,6 +51,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
+use crate::context::AdditionalContextFragment;
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
@@ -194,6 +196,7 @@ pub(super) async fn user_input_or_turn_inner(
         environments,
         final_output_json_schema,
         responsesapi_client_metadata,
+        additional_context,
         thread_settings,
     } = op
     else {
@@ -224,6 +227,7 @@ pub(super) async fn user_input_or_turn_inner(
     let accepted_items = match sess
         .steer_input(
             items.clone(),
+            additional_context.clone(),
             /*expected_turn_id*/ None,
             responsesapi_client_metadata.clone(),
         )
@@ -246,9 +250,23 @@ pub(super) async fn user_input_or_turn_inner(
             )
             .await;
             let accepted_items = items.clone();
-            sess.spawn_task(
+            let additional_context_input = {
+                let fragments = {
+                    let mut state = sess.state.lock().await;
+                    state.additional_context.merge(additional_context)
+                };
+                AdditionalContextFragment::input_item(fragments)
+            };
+            let mut task_input = additional_context_input
+                .into_iter()
+                .map(TurnInput::ResponseInputItem)
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                task_input.push(TurnInput::UserInput(items));
+            }
+            sess.spawn_task_with_input(
                 Arc::clone(&current_context),
-                items,
+                task_input,
                 crate::tasks::RegularTask::new(),
             )
             .await;

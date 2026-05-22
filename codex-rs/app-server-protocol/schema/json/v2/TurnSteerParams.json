@@ -1,6 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AdditionalContextEntry": {
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -194,6 +205,16 @@
     }
   },
   "properties": {
+    "additionalContext": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AdditionalContextEntry"
+      },
+      "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "expectedTurnId": {
       "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
       "type": "string"
@@ -203,6 +224,16 @@
         "$ref": "#/definitions/UserInput"
       },
       "type": "array"
+    },
+    "responsesapiClientMetadata": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Optional turn-scoped Responses API client metadata.",
+      "type": [
+        "object",
+        "null"
+      ]
     },
     "threadId": {
       "type": "string"

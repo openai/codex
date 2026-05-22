@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - append text input to thread realtime.",
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text",
+    "threadId"
+  ],
+  "title": "ThreadRealtimeAppendTextParams",
+  "type": "object"
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RemoteControlConnectionStatus": {
+      "enum": [
+        "disabled",
+        "connecting",
+        "connected",
+        "errored"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "installationId": {
+      "type": "string"
+    },
+    "serverName": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/RemoteControlConnectionStatus"
+    }
+  },
+  "required": [
+    "installationId",
+    "serverName",
+    "status"
+  ],
+  "title": "RemoteControlDisableResponse",
+  "type": "object"
+}

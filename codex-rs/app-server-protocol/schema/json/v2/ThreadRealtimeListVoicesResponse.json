@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RealtimeVoice": {
+      "enum": [
+        "alloy",
+        "arbor",
+        "ash",
+        "ballad",
+        "breeze",
+        "cedar",
+        "coral",
+        "cove",
+        "echo",
+        "ember",
+        "juniper",
+        "maple",
+        "marin",
+        "sage",
+        "shimmer",
+        "sol",
+        "spruce",
+        "vale",
+        "verse"
+      ],
+      "type": "string"
+    },
+    "RealtimeVoicesList": {
+      "properties": {
+        "defaultV1": {
+          "$ref": "#/definitions/RealtimeVoice"
+        },
+        "defaultV2": {
+          "$ref": "#/definitions/RealtimeVoice"
+        },
+        "v1": {
+          "items": {
+            "$ref": "#/definitions/RealtimeVoice"
+          },
+          "type": "array"
+        },
+        "v2": {
+          "items": {
+            "$ref": "#/definitions/RealtimeVoice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "defaultV1",
+        "defaultV2",
+        "v1",
+        "v2"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "EXPERIMENTAL - response for listing supported realtime voices.",
+  "properties": {
+    "voices": {
+      "$ref": "#/definitions/RealtimeVoicesList"
+    }
+  },
+  "required": [
+    "voices"
+  ],
+  "title": "ThreadRealtimeListVoicesResponse",
+  "type": "object"
+}

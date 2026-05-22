@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "value": {
+      "description": "Test-only payload field.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "MockExperimentalMethodParams",
+  "type": "object"
+}

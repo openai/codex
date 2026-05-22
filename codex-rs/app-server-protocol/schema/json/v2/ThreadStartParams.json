@@ -184,9 +184,39 @@
         "null"
       ]
     },
+    "dynamicTools": {
+      "items": {
+        "$ref": "#/definitions/DynamicToolSpec"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "environments": {
+      "description": "Optional sticky environments for this thread.\n\nOmitted selects the default environment when environment access is enabled. Empty disables environment access for turns that do not provide a turn override. Non-empty selects the first environment as the current turn environment.",
+      "items": {
+        "$ref": "#/definitions/TurnEnvironmentParams"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": [
         "boolean",
+        "null"
+      ]
+    },
+    "experimentalRawEvents": {
+      "description": "If true, opt into emitting raw Responses API items on the event stream. This is for internal use only (e.g. Codex Cloud).",
+      "type": "boolean"
+    },
+    "mockExperimentalField": {
+      "description": "Test-only experimental field used to validate experimental gating and schema filtering behavior in a stable way.",
+      "type": [
+        "string",
         "null"
       ]
     },
@@ -202,6 +232,17 @@
         "null"
       ]
     },
+    "permissions": {
+      "description": "Named profile id for this thread. Cannot be combined with `sandbox`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "persistExtendedHistory": {
+      "description": "Deprecated and ignored by app-server. Kept only so older clients can continue sending the field while rollout persistence always uses the limited history policy.",
+      "type": "boolean"
+    },
     "personality": {
       "anyOf": [
         {
@@ -210,6 +251,16 @@
         {
           "type": "null"
         }
+      ]
+    },
+    "runtimeWorkspaceRoots": {
+      "description": "Replace the thread's runtime workspace roots. Relative paths are resolved against the effective cwd for the thread.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
       ]
     },
     "sandbox": {

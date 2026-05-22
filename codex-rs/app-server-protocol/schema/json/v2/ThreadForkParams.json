@@ -128,6 +128,10 @@
     "ephemeral": {
       "type": "boolean"
     },
+    "excludeTurns": {
+      "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
+      "type": "boolean"
+    },
     "model": {
       "description": "Configuration overrides for the forked thread, if any.",
       "type": [
@@ -138,6 +142,35 @@
     "modelProvider": {
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "path": {
+      "default": null,
+      "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permissions": {
+      "description": "Named profile id for the forked thread. Cannot be combined with `sandbox`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "persistExtendedHistory": {
+      "description": "Deprecated and ignored by app-server. Kept only so older clients can continue sending the field while rollout persistence always uses the limited history policy.",
+      "type": "boolean"
+    },
+    "runtimeWorkspaceRoots": {
+      "description": "Replace the thread's runtime workspace roots. Relative paths are resolved against the effective cwd for the thread.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
         "null"
       ]
     },
