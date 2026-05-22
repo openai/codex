@@ -103,6 +103,9 @@ impl CoreToolRuntime for WriteStdinHandler {
     }
 
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        // `write_stdin` is transport for an existing exec session. Empty writes
+        // are background polls, and non-empty writes continue a command that
+        // already ran PreToolUse as Bash, so do not emit a second pre hook here.
         None
     }
 
@@ -111,6 +114,8 @@ impl CoreToolRuntime for WriteStdinHandler {
         invocation: &ToolInvocation,
         result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
+        // A `write_stdin` poll can observe final completion for the original
+        // `exec_command`; emit that command's matching Bash PostToolUse.
         post_unified_exec_tool_use_payload(invocation, result)
     }
 }

@@ -115,6 +115,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
 
 impl CoreToolRuntime for CodeModeWaitHandler {
     fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        // Code-mode `wait` is runtime control for an existing code cell, not a
+        // standalone user action. Tool calls made from code mode still flow
+        // through normal dispatch, but hooks should not block or rewrite the
+        // wait loop itself.
         None
     }
 
@@ -123,6 +127,8 @@ impl CoreToolRuntime for CodeModeWaitHandler {
         _invocation: &ToolInvocation,
         _result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
+        // The wait result feeds code-mode control flow, so do not let
+        // PostToolUse replace it with model-facing hook feedback.
         None
     }
 }
