@@ -52,6 +52,7 @@ pub struct ExecRequest {
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
     pub windows_sandbox_policy_cwd: AbsolutePathBuf,
+    pub windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
@@ -77,6 +78,7 @@ impl ExecRequest {
         arg0: Option<String>,
     ) -> Self {
         let windows_sandbox_policy_cwd = cwd.clone();
+        let windows_sandbox_workspace_roots = vec![cwd.clone()];
         let (file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
         Self {
@@ -89,6 +91,7 @@ impl ExecRequest {
             capture_policy,
             sandbox,
             windows_sandbox_policy_cwd,
+            windows_sandbox_workspace_roots,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,
@@ -112,6 +115,7 @@ impl ExecRequest {
         request: SandboxExecRequest,
         options: ExecOptions,
         windows_sandbox_policy_cwd: AbsolutePathBuf,
+        windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     ) -> Self {
         let SandboxExecRequest {
             command,
@@ -150,6 +154,7 @@ impl ExecRequest {
             capture_policy,
             sandbox,
             windows_sandbox_policy_cwd,
+            windows_sandbox_workspace_roots,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile,

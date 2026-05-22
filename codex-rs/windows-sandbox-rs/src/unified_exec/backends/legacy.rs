@@ -17,6 +17,7 @@ use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
@@ -269,8 +270,8 @@ fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HANDLE>>>, size: TerminalSize)
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_windows_sandbox_session_legacy(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -283,8 +284,8 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
+        permission_profile,
+        workspace_roots,
         codex_home,
         cwd,
         &mut env_map,
@@ -294,7 +295,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             add_git_safe_directory: false,
         },
     )?;
-    if !common.policy.has_full_disk_read_access() {
+    if !common.permissions.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }
     // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
@@ -307,14 +308,17 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
     let capability_roots = legacy_session_capability_roots(
-        &common.policy,
-        sandbox_policy_cwd,
+        &common.permissions,
         &common.current_dir,
         &env_map,
         codex_home,
     );
-    let security =
-        prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
+    let security = prepare_legacy_session_security(
+        common.uses_write_capabilities,
+        codex_home,
+        cwd,
+        capability_roots,
+    )?;
     allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
     apply_legacy_session_acl_rules(

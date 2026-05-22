@@ -4,26 +4,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub struct ElevatedSandboxCaptureRequest<'a> {
-    pub policy_json_or_preset: &'a str,
-    pub sandbox_policy_cwd: &'a Path,
-    pub codex_home: &'a Path,
-    pub command: Vec<String>,
-    pub cwd: &'a Path,
-    pub env_map: HashMap<String, String>,
-    pub timeout_ms: Option<u64>,
-    pub use_private_desktop: bool,
-    pub proxy_enforced: bool,
-    pub read_roots_override: Option<&'a [PathBuf]>,
-    pub read_roots_include_platform_defaults: bool,
-    pub write_roots_override: Option<&'a [PathBuf]>,
-    pub deny_read_paths_override: &'a [AbsolutePathBuf],
-    pub deny_write_paths_override: &'a [AbsolutePathBuf],
-}
-
 pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
-    pub permission_profile_cwd: &'a Path,
+    pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
     pub command: Vec<String>,
     pub cwd: &'a Path,
@@ -39,7 +22,6 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
 }
 
 mod windows_impl {
-    use super::ElevatedSandboxCaptureRequest;
     use super::ElevatedSandboxProfileCaptureRequest;
     use crate::acl::allow_null_device;
     use crate::cap::load_or_create_cap_sids;
@@ -56,7 +38,6 @@ mod windows_impl {
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
-    use crate::policy::parse_policy;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
@@ -64,7 +45,6 @@ mod windows_impl {
     use crate::setup::effective_write_roots_for_permissions;
     use crate::token::LocalSid;
     use anyhow::Result;
-    use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::path::Path;
 
@@ -77,7 +57,7 @@ mod windows_impl {
     ) -> Result<CaptureResult> {
         let ElevatedSandboxProfileCaptureRequest {
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
             codex_home,
             command,
             cwd,
@@ -91,10 +71,11 @@ mod windows_impl {
             deny_read_paths_override,
             deny_write_paths_override,
         } = request;
-        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-            permission_profile,
-            permission_profile_cwd,
-        )?;
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                permission_profile,
+                workspace_roots,
+            )?;
         let deny_read_paths_override = deny_read_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -159,7 +140,7 @@ mod windows_impl {
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
-                permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+                workspace_roots: workspace_roots.to_vec(),
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,
@@ -218,87 +199,13 @@ mod windows_impl {
             })
         })()
     }
-
-    /// Legacy policy-string adapter for callers that have not moved to permission profiles yet.
-    #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture(
-        request: ElevatedSandboxCaptureRequest<'_>,
-    ) -> Result<CaptureResult> {
-        let ElevatedSandboxCaptureRequest {
-            policy_json_or_preset,
-            sandbox_policy_cwd,
-            codex_home,
-            command,
-            cwd,
-            env_map,
-            timeout_ms,
-            use_private_desktop,
-            proxy_enforced,
-            read_roots_override,
-            read_roots_include_platform_defaults,
-            write_roots_override,
-            deny_read_paths_override,
-            deny_write_paths_override,
-        } = request;
-        let policy = parse_policy(policy_json_or_preset)?;
-        let permission_profile =
-            PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, sandbox_policy_cwd);
-        run_windows_sandbox_capture_for_permission_profile(ElevatedSandboxProfileCaptureRequest {
-            permission_profile: &permission_profile,
-            permission_profile_cwd: sandbox_policy_cwd,
-            codex_home,
-            command,
-            cwd,
-            env_map,
-            timeout_ms,
-            use_private_desktop,
-            proxy_enforced,
-            read_roots_override,
-            read_roots_include_platform_defaults,
-            write_roots_override,
-            deny_read_paths_override,
-            deny_write_paths_override,
-        })
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use crate::policy::SandboxPolicy;
-
-        fn workspace_policy(network_access: bool) -> SandboxPolicy {
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        }
-
-        #[test]
-        fn applies_network_block_when_access_is_disabled() {
-            assert!(!workspace_policy(/*network_access*/ false).has_full_network_access());
-        }
-
-        #[test]
-        fn skips_network_block_when_access_is_allowed() {
-            assert!(workspace_policy(/*network_access*/ true).has_full_network_access());
-        }
-
-        #[test]
-        fn applies_network_block_for_read_only() {
-            assert!(!SandboxPolicy::new_read_only_policy().has_full_network_access());
-        }
-    }
 }
 
-#[cfg(target_os = "windows")]
-pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture_for_permission_profile;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use super::ElevatedSandboxCaptureRequest;
     use super::ElevatedSandboxProfileCaptureRequest;
     use anyhow::Result;
     use anyhow::bail;
@@ -313,14 +220,6 @@ mod stub {
 
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture(
-        _request: ElevatedSandboxCaptureRequest<'_>,
-    ) -> Result<CaptureResult> {
-        bail!("Windows sandbox is only available on Windows")
-    }
-
-    /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
-    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture_for_permission_profile(
         _request: ElevatedSandboxProfileCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
@@ -328,7 +227,5 @@ mod stub {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub use stub::run_windows_sandbox_capture;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture_for_permission_profile;
