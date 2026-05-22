@@ -74,6 +74,10 @@ pub fn sandbox_secrets_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox-secrets")
 }
 
+fn helper_launch_dir(codex_home: &Path) -> PathBuf {
+    sandbox_dir(codex_home)
+}
+
 pub fn setup_marker_path(codex_home: &Path) -> PathBuf {
     sandbox_dir(codex_home).join("setup_marker.json")
 }
@@ -190,15 +194,19 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let launch_dir = helper_launch_dir(request.codex_home);
+    std::fs::create_dir_all(&launch_dir)?;
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&launch_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
             exe.display(),
-            cwd.display(),
+            launch_dir.display(),
             b64.len()
         ),
         Some(&sandbox_dir(request.codex_home)),
@@ -615,6 +623,16 @@ fn run_setup_exe(
         )
     })?;
     let payload_b64 = BASE64_STANDARD.encode(payload_json.as_bytes());
+    let launch_dir = helper_launch_dir(codex_home);
+    std::fs::create_dir_all(&launch_dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!(
+                "failed to create helper launch dir {}: {err}",
+                launch_dir.display()
+            ),
+        )
+    })?;
     let cleared_report = match clear_setup_error_report(codex_home) {
         Ok(()) => true,
         Err(err) => {
@@ -631,6 +649,7 @@ fn run_setup_exe(
     if !needs_elevation {
         let status = Command::new(&exe)
             .arg(&payload_b64)
+            .current_dir(&launch_dir)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -670,6 +689,8 @@ fn run_setup_exe(
     sei.lpVerb = verb_w.as_ptr();
     sei.lpFile = exe_w.as_ptr();
     sei.lpParameters = params_w.as_ptr();
+    let launch_dir_w = crate::winutil::to_wide(&launch_dir);
+    sei.lpDirectory = launch_dir_w.as_ptr();
     // Hide the window for the elevated helper.
     sei.nShow = 0; // SW_HIDE
     let ok = unsafe { ShellExecuteExW(&mut sei) };
