@@ -80,6 +80,7 @@ use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::warn;
@@ -146,14 +147,25 @@ pub(crate) fn build_tool_router(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(turn_context, params);
-    ToolRouter::from_parts(registry, model_visible_specs)
+    let (model_visible_specs, registry, usage_contributors, usage_contributors_by_tool_name) =
+        build_tool_specs_and_registry(turn_context, params);
+    ToolRouter::from_parts(
+        registry,
+        model_visible_specs,
+        usage_contributors,
+        usage_contributors_by_tool_name,
+    )
 }
 
 fn build_tool_specs_and_registry(
     turn_context: &TurnContext,
     params: ToolRouterParams<'_>,
-) -> (Vec<ToolSpec>, ToolRegistry) {
+) -> (
+    Vec<ToolSpec>,
+    ToolRegistry,
+    Vec<crate::usage::UsagePromptContributor>,
+    HashMap<ToolName, Vec<codex_protocol::protocol::UsageContributor>>,
+) {
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,
@@ -183,12 +195,19 @@ fn build_tool_specs_and_registry(
 fn build_model_visible_specs_and_registry(
     turn_context: &TurnContext,
     planned_tools: PlannedTools,
-) -> (Vec<ToolSpec>, ToolRegistry) {
+) -> (
+    Vec<ToolSpec>,
+    ToolRegistry,
+    Vec<crate::usage::UsagePromptContributor>,
+    HashMap<ToolName, Vec<codex_protocol::protocol::UsageContributor>>,
+) {
     let PlannedTools {
         runtimes,
         hosted_specs,
     } = planned_tools;
     let mut specs = Vec::new();
+    let mut usage_contributors = Vec::new();
+    let mut usage_contributors_by_tool_name = HashMap::new();
     let mut seen_tool_names = HashSet::new();
     for runtime in &runtimes {
         let tool_name = runtime.tool_name();
@@ -199,6 +218,16 @@ fn build_model_visible_specs_and_registry(
         if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
         {
             let spec = runtime.spec();
+            let estimated_tokens = crate::usage::estimate_serialized_tokens(&spec);
+            let runtime_usage_contributors = runtime.usage_contributors();
+            usage_contributors_by_tool_name
+                .insert(tool_name.clone(), runtime_usage_contributors.clone());
+            usage_contributors.extend(runtime_usage_contributors.into_iter().map(|contributor| {
+                crate::usage::UsagePromptContributor {
+                    contributor,
+                    source_estimated_tokens: estimated_tokens,
+                }
+            }));
             specs.push(spec_for_model_request(turn_context, exposure, spec));
         }
     }
@@ -220,7 +249,12 @@ fn build_model_visible_specs_and_registry(
         })
         .collect();
 
-    (model_visible_specs, registry)
+    (
+        model_visible_specs,
+        registry,
+        usage_contributors,
+        usage_contributors_by_tool_name,
+    )
 }
 
 fn spec_for_model_request(

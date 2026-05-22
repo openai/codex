@@ -17,6 +17,8 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolTelemetryTags;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use codex_mcp::ToolInfo;
+use codex_protocol::protocol::UsageContributor;
+use codex_protocol::protocol::UsageContributorKind;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -131,6 +133,38 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
+    fn usage_contributors(&self) -> Vec<UsageContributor> {
+        let mut contributors = Vec::new();
+        if let Some(connector_id) = self.tool_info.connector_id.as_ref() {
+            contributors.push(UsageContributor {
+                kind: UsageContributorKind::App,
+                id: connector_id.clone(),
+                label: self
+                    .tool_info
+                    .connector_name
+                    .clone()
+                    .unwrap_or_else(|| connector_id.clone()),
+            });
+        } else {
+            contributors.push(UsageContributor {
+                kind: UsageContributorKind::McpServer,
+                id: self.tool_info.server_name.clone(),
+                label: self.tool_info.server_name.clone(),
+            });
+        }
+        contributors.extend(
+            self.tool_info
+                .plugin_display_names
+                .iter()
+                .map(|plugin_name| UsageContributor {
+                    kind: UsageContributorKind::Plugin,
+                    id: plugin_name.clone(),
+                    label: plugin_name.clone(),
+                }),
+        );
+        contributors
+    }
+
     fn search_info(&self) -> Option<ToolSearchInfo> {
         let source_name = self
             .tool_info

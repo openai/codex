@@ -30,6 +30,7 @@ use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::UsageContributor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
@@ -102,6 +103,10 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
                     serde_json::to_value(body).ok()
                 })?,
         })
+    }
+
+    fn usage_contributors(&self) -> Vec<UsageContributor> {
+        Vec::new()
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
