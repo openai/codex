@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
 const SCHEMA_CHILD_KEYS: [&str; 4] = ["items", "anyOf", "oneOf", "allOf"];
+const COMPOSITION_SCHEMA_KEYS: [&str; 3] = ["anyOf", "oneOf", "allOf"];
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
@@ -216,6 +217,7 @@ const LARGE_SCHEMA_COMPACTION_PASSES: &[LargeSchemaCompactionPass] = &[
     strip_schema_descriptions,
     drop_schema_definitions,
     collapse_deep_schema_objects_from_root,
+    prune_schema_compositions,
 ];
 
 fn collapse_deep_schema_objects_from_root(value: &mut JsonValue) {
@@ -394,6 +396,27 @@ fn collapse_deep_schema_objects(value: &mut JsonValue, depth: usize) {
     }
 }
 
+fn prune_schema_compositions(value: &mut JsonValue) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                prune_schema_compositions(value);
+            }
+        }
+        JsonValue::Object(map) => {
+            if has_composition_keyword(map) {
+                *value = json!({});
+                return;
+            }
+
+            for_each_schema_child_mut(map, DefinitionTraversal::Skip, &mut |value| {
+                prune_schema_compositions(value);
+            });
+        }
+        _ => {}
+    }
+}
+
 fn is_complex_schema_object(map: &serde_json::Map<String, JsonValue>) -> bool {
     SCHEMA_CHILD_KEYS.iter().any(|key| map.contains_key(*key))
         || map.contains_key("properties")
@@ -402,7 +425,7 @@ fn is_complex_schema_object(map: &serde_json::Map<String, JsonValue>) -> bool {
 }
 
 fn has_composition_keyword(map: &serde_json::Map<String, JsonValue>) -> bool {
-    ["anyOf", "oneOf", "allOf"]
+    COMPOSITION_SCHEMA_KEYS
         .into_iter()
         .any(|key| map.contains_key(key))
 }
@@ -446,7 +469,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(value) = map.get_mut("prefixItems") {
                 sanitize_json_schema(value);
             }
-            for key in ["anyOf", "oneOf", "allOf"] {
+            for key in COMPOSITION_SCHEMA_KEYS {
                 if let Some(value) = map.get_mut(key) {
                     sanitize_json_schema(value);
                 }

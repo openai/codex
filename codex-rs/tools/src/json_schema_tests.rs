@@ -1139,6 +1139,77 @@ fn parse_large_tool_input_schema_strips_descriptions_without_removing_descriptio
 }
 
 #[test]
+fn parse_large_tool_input_schema_prunes_compositions_as_last_resort() {
+    for composition_key in super::COMPOSITION_SCHEMA_KEYS {
+        let variants = vec![
+            serde_json::json!({
+                "type": "string",
+                "enum": ["first ".repeat(400)]
+            }),
+            serde_json::json!({
+                "type": "string",
+                "enum": ["second ".repeat(400)]
+            }),
+            serde_json::json!({
+                "type": "string",
+                "enum": ["third ".repeat(400)]
+            }),
+        ];
+
+        let mut choice = serde_json::Map::new();
+        choice.insert(
+            composition_key.to_string(),
+            serde_json::Value::Array(variants),
+        );
+        let schema = parse_tool_input_schema(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": choice
+            }
+        }))
+        .expect("parse schema");
+
+        assert_eq!(
+            serde_json::to_value(schema).expect("serialize schema"),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "choice": {}
+                }
+            })
+        );
+    }
+}
+
+#[test]
+fn parse_large_tool_input_schema_prunes_single_composition_variant_if_still_over_budget() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "choice": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "enum": ["x".repeat(4_500)]
+                    }
+                ]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {}
+            }
+        })
+    );
+}
+
+#[test]
 fn parse_large_tool_input_schema_preserves_object_enum_literal_descriptions() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
