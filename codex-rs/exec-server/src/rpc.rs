@@ -80,7 +80,7 @@ impl RpcNotificationSender {
         self.outgoing_tx
             .send(RpcServerOutboundMessage::Response { request_id, result })
             .await
-            .map_err(|_| internal_error("RPC connection closed while sending response".into()))
+            .map_err(|_| internal_error("RPC connection closed while sending response"))
     }
 
     pub(crate) async fn notify<P: Serialize>(
@@ -97,7 +97,7 @@ impl RpcNotificationSender {
                 },
             ))
             .await
-            .map_err(|_| internal_error("RPC connection closed while sending notification".into()))
+            .map_err(|_| internal_error("RPC connection closed while sending notification"))
     }
 }
 
@@ -425,11 +425,11 @@ pub(crate) fn method_not_found(message: String) -> JSONRPCErrorError {
     }
 }
 
-pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
+pub(crate) fn invalid_params(message: impl Into<String>) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32602,
         data: None,
-        message,
+        message: message.into(),
     }
 }
 
@@ -441,11 +441,11 @@ pub(crate) fn not_found(message: String) -> JSONRPCErrorError {
     }
 }
 
-pub(crate) fn internal_error(message: String) -> JSONRPCErrorError {
+pub(crate) fn internal_error(message: impl Into<String>) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32603,
         data: None,
-        message,
+        message: message.into(),
     }
 }
 
