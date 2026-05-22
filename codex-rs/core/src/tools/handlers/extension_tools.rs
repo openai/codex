@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use codex_tools::ConversationHistory;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use codex_tools::ToolCall as ExtensionToolCall;
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
 
 pub(crate) struct ExtensionToolAdapter(Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>);
 
@@ -47,7 +49,7 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        self.0.handle(to_extension_call(&invocation)).await
+        self.0.handle(to_extension_call(&invocation).await).await
     }
 }
 
@@ -57,12 +59,15 @@ impl CoreToolRuntime for ExtensionToolAdapter {
     }
 }
 
-fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+    let conversation_history =
+        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
         truncation_policy: invocation.turn.truncation_policy,
+        conversation_history,
         payload: invocation.payload.clone(),
     }
 }
@@ -71,6 +76,8 @@ fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
 mod tests {
     use std::sync::Arc;
 
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -199,6 +206,17 @@ mod tests {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let turn_id = turn.sub_id.clone();
         let truncation_policy = turn.truncation_policy;
+        let history_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "extension history".to_string(),
+            }],
+            phase: None,
+        };
+        session
+            .record_into_history(std::slice::from_ref(&history_item), &turn)
+            .await;
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
@@ -224,6 +242,10 @@ mod tests {
             codex_tools::ToolName::plain("extension_echo")
         );
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        assert_eq!(
+            captured_call.conversation_history.items(),
+            std::slice::from_ref(&history_item)
+        );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {
                 assert_eq!(arguments, json!({ "message": "hello" }).to_string());
