@@ -82,8 +82,4 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
     }
 }
 
-impl CoreToolRuntime for RequestPermissionsHandler {
-    fn supports_default_function_tool_hooks(&self) -> bool {
-        false
-    }
-}
+impl CoreToolRuntime for RequestPermissionsHandler {}
