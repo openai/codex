@@ -5738,7 +5738,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
-            _input: Vec<UserInput>,
+            _input: Vec<TurnInput>,
             _cancellation_token: CancellationToken,
         ) -> Option<String> {
             let mut trace = self
@@ -7814,7 +7814,7 @@ impl SessionTask for NeverEndingTask {
         self: Arc<Self>,
         _session: Arc<SessionTaskContext>,
         _ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         if self.listen_to_cancellation_token {
@@ -7843,7 +7843,7 @@ impl SessionTask for GuardianDeniedApprovalTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
