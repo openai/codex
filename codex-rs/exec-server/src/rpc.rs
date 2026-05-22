@@ -49,6 +49,22 @@ pub(crate) enum RpcClientEvent {
     Disconnected { reason: Option<String> },
 }
 
+pub(crate) struct RpcPendingResponse {
+    response_rx: oneshot::Receiver<Result<Value, RpcCallError>>,
+}
+
+impl RpcPendingResponse {
+    pub(crate) async fn response<T>(self) -> Result<T, RpcCallError>
+    where
+        T: DeserializeOwned,
+    {
+        let result: Result<Value, RpcCallError> =
+            self.response_rx.await.map_err(|_| RpcCallError::Closed)?;
+        let response = result?;
+        serde_json::from_value(response).map_err(RpcCallError::Json)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RpcServerOutboundMessage {
     Response {
@@ -81,6 +97,17 @@ impl RpcNotificationSender {
             .send(RpcServerOutboundMessage::Response { request_id, result })
             .await
             .map_err(|_| internal_error("RPC connection closed while sending response"))
+    }
+
+    pub(crate) async fn error(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.outgoing_tx
+            .send(RpcServerOutboundMessage::Error { request_id, error })
+            .await
+            .map_err(|_| internal_error("RPC connection closed while sending error"))
     }
 
     pub(crate) async fn notify<P: Serialize>(
@@ -321,6 +348,17 @@ impl RpcClient {
         P: Serialize,
         T: DeserializeOwned,
     {
+        self.start_call(method, params).await?.response().await
+    }
+
+    pub(crate) async fn start_call<P>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<RpcPendingResponse, RpcCallError>
+    where
+        P: Serialize,
+    {
         let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
         {
@@ -356,19 +394,7 @@ impl RpcClient {
             return Err(RpcCallError::Closed);
         }
 
-        // Do not race in-flight requests directly against the transport-close
-        // watch value. The connection reader receives JSON-RPC messages and
-        // the terminal disconnect event on one ordered queue, then drains any
-        // still-pending requests. Awaiting this receiver preserves that order:
-        // responses already read before EOF still win, and truly pending calls
-        // are failed once the reader observes the disconnect.
-        let result: Result<Value, RpcCallError> =
-            response_rx.await.map_err(|_| RpcCallError::Closed)?;
-        let response = match result {
-            Ok(response) => response,
-            Err(error) => return Err(error),
-        };
-        serde_json::from_value(response).map_err(RpcCallError::Json)
+        Ok(RpcPendingResponse { response_rx })
     }
 
     #[cfg(test)]

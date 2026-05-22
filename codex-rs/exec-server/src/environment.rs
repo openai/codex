@@ -358,11 +358,15 @@ impl RuntimeInstaller {
             },
             RuntimeInstaller::Remote(client) => {
                 let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-                tokio::select! {
-                    _ = cancellation.cancelled() => Err(internal_error("runtime install canceled")),
-                    response = client.runtime_install(params) => {
-                        response.map_err(exec_server_error_to_jsonrpc)
-                    }
+                match progress {
+                    Some(progress) => client
+                        .runtime_install_with_progress(params, progress, cancellation)
+                        .await
+                        .map_err(exec_server_error_to_jsonrpc),
+                    None => client
+                        .runtime_install(params)
+                        .await
+                        .map_err(exec_server_error_to_jsonrpc),
                 }
             }
         }

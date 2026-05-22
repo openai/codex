@@ -24,6 +24,7 @@ use crate::protocol::HttpRequestParams;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
+use crate::protocol::RUNTIME_INSTALL_CANCEL_METHOD;
 use crate::protocol::RUNTIME_INSTALL_METHOD;
 use crate::protocol::ReadParams;
 use crate::protocol::TerminateParams;
@@ -116,10 +117,16 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
             handler.fs_copy(params).await
         },
     );
-    router.request(
+    router.request_with_id(
         RUNTIME_INSTALL_METHOD,
-        |handler: Arc<ExecServerHandler>, params: RuntimeInstallParams| async move {
-            handler.runtime_install(params).await
+        |handler: Arc<ExecServerHandler>, request_id, params: RuntimeInstallParams| async move {
+            handler.runtime_install(request_id, params).await
+        },
+    );
+    router.request(
+        RUNTIME_INSTALL_CANCEL_METHOD,
+        |handler: Arc<ExecServerHandler>, _params: serde_json::Value| async move {
+            handler.cancel_runtime_install().await
         },
     );
     router

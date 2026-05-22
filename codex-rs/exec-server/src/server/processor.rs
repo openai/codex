@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
 
@@ -20,6 +22,7 @@ use crate::server::session_registry::SessionRegistry;
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
+    active_runtime_install: Arc<StdMutex<Option<CancellationToken>>>,
     runtime_paths: ExecServerRuntimePaths,
 }
 
@@ -27,6 +30,7 @@ impl ConnectionProcessor {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             session_registry: SessionRegistry::new(),
+            active_runtime_install: Arc::new(StdMutex::new(None)),
             runtime_paths,
         }
     }
@@ -35,6 +39,7 @@ impl ConnectionProcessor {
         run_connection(
             connection,
             Arc::clone(&self.session_registry),
+            Arc::clone(&self.active_runtime_install),
             self.runtime_paths.clone(),
         )
         .await;
@@ -44,6 +49,7 @@ impl ConnectionProcessor {
 async fn run_connection(
     connection: JsonRpcConnection,
     session_registry: Arc<SessionRegistry>,
+    active_runtime_install: Arc<StdMutex<Option<CancellationToken>>>,
     runtime_paths: ExecServerRuntimePaths,
 ) {
     let router = Arc::new(build_router());
@@ -59,6 +65,7 @@ async fn run_connection(
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
+        active_runtime_install,
         notifications,
         runtime_paths,
     ));
@@ -322,7 +329,12 @@ mod tests {
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
+        let task = tokio::spawn(run_connection(
+            connection,
+            registry,
+            Arc::new(std::sync::Mutex::new(None)),
+            test_runtime_paths(),
+        ));
         (client_writer, BufReader::new(client_reader).lines(), task)
     }
 

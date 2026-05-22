@@ -31,6 +31,8 @@ pub const HTTP_REQUEST_METHOD: &str = "http/request";
 /// JSON-RPC notification method for streamed executor HTTP response bodies.
 pub const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
 pub const RUNTIME_INSTALL_METHOD: &str = "runtime/install";
+pub const RUNTIME_INSTALL_CANCEL_METHOD: &str = "runtime/install/cancel";
+pub const RUNTIME_INSTALL_PROGRESS_METHOD: &str = "runtime/install/progress";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]

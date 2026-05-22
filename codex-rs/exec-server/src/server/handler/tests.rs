@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -80,6 +81,7 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
     let registry = SessionRegistry::new();
     let handler = Arc::new(ExecServerHandler::new(
         registry,
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
     ));
@@ -158,6 +160,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let registry = SessionRegistry::new();
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
     ));
@@ -198,6 +201,7 @@ async fn long_poll_read_fails_after_session_resume() {
     let (second_tx, _second_rx) = mpsc::channel(16);
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
     ));
@@ -231,6 +235,7 @@ async fn active_session_resume_is_rejected() {
     let registry = SessionRegistry::new();
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(first_tx),
         test_runtime_paths(),
     ));
@@ -245,6 +250,7 @@ async fn active_session_resume_is_rejected() {
     let (second_tx, _second_rx) = mpsc::channel(16);
     let second_handler = Arc::new(ExecServerHandler::new(
         registry,
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(second_tx),
         test_runtime_paths(),
     ));
@@ -273,6 +279,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let handler = Arc::new(ExecServerHandler::new(
         SessionRegistry::new(),
+        Arc::new(StdMutex::new(None)),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
     ));

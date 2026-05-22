@@ -5,8 +5,9 @@ use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RuntimeInstallCancelResponse;
+use codex_app_server_protocol::RuntimeInstallCancelStatus;
 use codex_app_server_protocol::RuntimeInstallParams;
-use codex_app_server_protocol::RuntimeInstallResponse;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -35,6 +36,7 @@ use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::RUNTIME_INSTALL_PROGRESS_METHOD;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
@@ -51,6 +53,7 @@ use crate::server::session_registry::SessionRegistry;
 
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
+    active_runtime_install: Arc<StdMutex<Option<CancellationToken>>>,
     notifications: RpcNotificationSender,
     session: StdMutex<Option<SessionHandle>>,
     active_body_stream_ids: Mutex<HashSet<String>>,
@@ -64,11 +67,13 @@ pub(crate) struct ExecServerHandler {
 impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
+        active_runtime_install: Arc<StdMutex<Option<CancellationToken>>>,
         notifications: RpcNotificationSender,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
+            active_runtime_install,
             notifications,
             session: StdMutex::new(None),
             active_body_stream_ids: Mutex::new(HashSet::new()),
@@ -270,11 +275,91 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn runtime_install(
-        &self,
+        self: &Arc<Self>,
+        request_id: RequestId,
         params: RuntimeInstallParams,
-    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+    ) -> Result<(), JSONRPCErrorError> {
         self.require_initialized_for("runtime")?;
-        crate::runtime_install::install_runtime(params).await
+        let (cancellation, active_install) = self.begin_runtime_install()?;
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let notifications = self.notifications.clone();
+        self.background_tasks.spawn(async move {
+            let install = crate::runtime_install::install_runtime_with_progress(
+                params,
+                progress_tx,
+                cancellation,
+            );
+            let progress_forwarder = async {
+                while let Some(progress) = progress_rx.recv().await {
+                    if notifications
+                        .notify(RUNTIME_INSTALL_PROGRESS_METHOD, &progress)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+            let (result, ()) = tokio::join!(install, progress_forwarder);
+            let send_result = match result {
+                Ok(response) => match to_value(response) {
+                    Ok(result) => notifications.response(request_id, result).await,
+                    Err(error) => {
+                        notifications
+                            .error(request_id, internal_error(error.to_string()))
+                            .await
+                    }
+                },
+                Err(error) => notifications.error(request_id, error).await,
+            };
+            if let Err(error) = send_result {
+                tracing::warn!("failed to send runtime install result: {error:?}");
+            }
+            drop(active_install);
+        });
+        Ok(())
+    }
+
+    pub(crate) async fn cancel_runtime_install(
+        &self,
+    ) -> Result<RuntimeInstallCancelResponse, JSONRPCErrorError> {
+        self.require_initialized_for("runtime")?;
+        let status = {
+            let active_install = self
+                .active_runtime_install
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match active_install.as_ref() {
+                Some(cancellation) => {
+                    cancellation.cancel();
+                    RuntimeInstallCancelStatus::Canceled
+                }
+                None => RuntimeInstallCancelStatus::NotFound,
+            }
+        };
+        Ok(RuntimeInstallCancelResponse { status })
+    }
+
+    fn begin_runtime_install(
+        &self,
+    ) -> Result<(CancellationToken, ActiveRuntimeInstallGuard), JSONRPCErrorError> {
+        let cancellation = CancellationToken::new();
+        let mut active_install = self
+            .active_runtime_install
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active_install.is_some() {
+            return Err(invalid_request(
+                "runtime install is already in progress".to_string(),
+            ));
+        }
+        *active_install = Some(cancellation.clone());
+        Ok((
+            cancellation,
+            ActiveRuntimeInstallGuard {
+                active_runtime_install: Arc::clone(&self.active_runtime_install),
+            },
+        ))
     }
 
     fn require_initialized_for(
@@ -353,6 +438,19 @@ impl ExecServerHandler {
         }
         active_body_stream_ids.insert(request_id.to_string());
         Ok(())
+    }
+}
+
+struct ActiveRuntimeInstallGuard {
+    active_runtime_install: Arc<StdMutex<Option<CancellationToken>>>,
+}
+
+impl Drop for ActiveRuntimeInstallGuard {
+    fn drop(&mut self) {
+        self.active_runtime_install
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 }
 
