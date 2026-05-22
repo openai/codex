@@ -1931,7 +1931,7 @@ reason up through the containing type:
 
 ```rust
 #[derive(ExperimentalApi)]
-struct ProfileV2 {
+struct Config {
     #[experimental(nested)]
     approval_policy: Option<AskForApproval>,
 }
