@@ -79,6 +79,7 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -133,6 +134,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -170,6 +172,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
@@ -220,6 +223,7 @@ async fn collaboration_instructions_omitted_when_disabled() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
@@ -279,6 +283,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -327,6 +332,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.config.cwd.to_path_buf()),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
@@ -391,6 +397,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -414,6 +421,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -466,6 +474,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -489,6 +498,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -543,6 +553,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -569,6 +580,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -624,6 +636,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -650,6 +663,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -708,6 +722,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -724,6 +739,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -776,6 +792,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
