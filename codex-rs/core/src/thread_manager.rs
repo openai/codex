@@ -17,7 +17,6 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_start_timing::ThreadStartTiming;
 use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::ThreadStartType;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
@@ -1190,12 +1189,7 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
-        let mut thread_start_timing = ThreadStartTiming::start(match &initial_history {
-            InitialHistory::New => ThreadStartType::New,
-            InitialHistory::Cleared => ThreadStartType::Cleared,
-            InitialHistory::Forked(_) => ThreadStartType::Forked,
-            InitialHistory::Resumed(_) => ThreadStartType::Resumed,
-        });
+        let mut thread_start_timing = ThreadStartTiming::start();
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {

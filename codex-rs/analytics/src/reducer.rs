@@ -76,7 +76,6 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::ThreadStartTimingFact;
-use crate::facts::ThreadStartType;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -158,7 +157,6 @@ struct ThreadAnalyticsState {
 
 #[derive(Clone, Copy)]
 struct ThreadStartTimingState {
-    thread_start_type: ThreadStartType,
     duration_ms: u64,
     prepare_duration_ms: u64,
     spawn_duration_ms: u64,
@@ -580,7 +578,6 @@ impl AnalyticsReducer {
 
     fn ingest_thread_start_timing(&mut self, input: ThreadStartTimingFact) {
         let thread_start_timing = ThreadStartTimingState {
-            thread_start_type: input.thread_start_type,
             duration_ms: input.duration_ms,
             prepare_duration_ms: input.prepare_duration_ms,
             spawn_duration_ms: input.spawn_duration_ms,
@@ -1297,7 +1294,9 @@ impl AnalyticsReducer {
         let thread_state = self.threads.entry(thread_id.clone()).or_default();
         thread_state.connection_id = Some(connection_id);
         thread_state.metadata = Some(thread_metadata.clone());
-        let thread_start_timing = thread_state.thread_start_timing;
+        let thread_start_timing = matches!(initialization_mode, ThreadInitializationMode::New)
+            .then_some(thread_state.thread_start_timing)
+            .flatten();
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
@@ -1313,7 +1312,6 @@ impl AnalyticsReducer {
                     parent_thread_id: thread_metadata.parent_thread_id,
                     thread_start_timing: match thread_start_timing {
                         Some(timing) => ThreadStartTimingEventParams {
-                            thread_start_type: Some(timing.thread_start_type),
                             thread_start_duration_ms: Some(timing.duration_ms),
                             thread_start_prepare_duration_ms: Some(timing.prepare_duration_ms),
                             thread_start_spawn_duration_ms: Some(timing.spawn_duration_ms),

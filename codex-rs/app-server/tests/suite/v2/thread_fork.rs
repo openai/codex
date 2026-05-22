@@ -406,22 +406,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let event =
         wait_for_analytics_event(&server, ANALYTICS_TEST_TIMEOUT, "codex_thread_initialized")
             .await?;
-    assert_basic_thread_initialized_event(
-        &event,
-        &thread.id,
-        "mock-model",
-        "forked",
-        "user",
-        "forked",
-    );
-    let thread_start_timings = [
-        "thread_start_duration_ms",
-        "thread_start_prepare_duration_ms",
-        "thread_start_spawn_duration_ms",
-        "thread_start_finalize_duration_ms",
-    ]
-    .map(|field| event["event_params"][field].as_u64().is_some());
-    assert_eq!(thread_start_timings, [true, true, true, true]);
+    assert_basic_thread_initialized_event(&event, &thread.id, "mock-model", "forked", "user");
     Ok(())
 }
 

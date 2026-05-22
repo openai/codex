@@ -2,11 +2,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_analytics::ThreadStartTimingFact;
-use codex_analytics::ThreadStartType;
 
 #[derive(Debug)]
 pub(crate) struct ThreadStartTiming {
-    thread_start_type: ThreadStartType,
     phase_started_at: Instant,
     prepare_duration: Option<Duration>,
     spawn_duration: Option<Duration>,
@@ -14,9 +12,8 @@ pub(crate) struct ThreadStartTiming {
 }
 
 impl ThreadStartTiming {
-    pub(crate) fn start(thread_start_type: ThreadStartType) -> Self {
+    pub(crate) fn start() -> Self {
         Self {
-            thread_start_type,
             phase_started_at: Instant::now(),
             prepare_duration: None,
             spawn_duration: None,
@@ -42,7 +39,6 @@ impl ThreadStartTiming {
         let finalize_duration = self.finalize_duration.unwrap_or_default();
         ThreadStartTimingFact {
             thread_id,
-            thread_start_type: self.thread_start_type,
             duration_ms: duration_ms(prepare_duration + spawn_duration + finalize_duration),
             prepare_duration_ms: duration_ms(prepare_duration),
             spawn_duration_ms: duration_ms(spawn_duration),
