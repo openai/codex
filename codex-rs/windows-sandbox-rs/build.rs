@@ -1,4 +1,11 @@
 fn main() {
+    if !matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("windows")
+    ) {
+        return;
+    }
+
     if std::env::var_os("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER").is_some()
         && matches!(std::env::var("CARGO_CFG_TARGET_ENV").as_deref(), Ok("gnu"))
     {
@@ -11,5 +18,6 @@ fn main() {
 
     let mut res = winres::WindowsResource::new();
     res.set_manifest_file("codex-windows-sandbox-setup.manifest");
-    let _ = res.compile();
+    res.compile()
+        .expect("failed to embed Windows sandbox setup manifest");
 }
