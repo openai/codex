@@ -303,6 +303,50 @@ fn register_root_thread_indexes_root_path() {
 }
 
 #[test]
+fn live_thread_spawn_children_group_registered_children_by_parent() {
+    let registry = Arc::new(AgentRegistry::default());
+    let parent_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    let sibling_thread_id = ThreadId::new();
+    let grandchild_thread_id = ThreadId::new();
+
+    for (thread_id, parent_thread_id) in [
+        (child_thread_id, parent_thread_id),
+        (sibling_thread_id, parent_thread_id),
+        (grandchild_thread_id, child_thread_id),
+    ] {
+        let reservation = registry
+            .reserve_spawn_slot(/*max_threads*/ None)
+            .expect("reserve child slot");
+        reservation.commit(AgentMetadata {
+            agent_id: Some(thread_id),
+            parent_thread_id: Some(parent_thread_id),
+            ..Default::default()
+        });
+    }
+
+    let mut children_by_parent = registry.live_thread_spawn_children();
+    let child_ids = children_by_parent
+        .remove(&parent_thread_id)
+        .expect("parent should have live children")
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .collect::<HashSet<_>>();
+    let grandchild_ids = children_by_parent
+        .remove(&child_thread_id)
+        .expect("child should have live children")
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .collect::<HashSet<_>>();
+
+    assert_eq!(
+        child_ids,
+        HashSet::from([child_thread_id, sibling_thread_id])
+    );
+    assert_eq!(grandchild_ids, HashSet::from([grandchild_thread_id]));
+}
+
+#[test]
 fn reserved_agent_path_is_released_when_spawn_fails() {
     let registry = Arc::new(AgentRegistry::default());
     let mut first = registry
