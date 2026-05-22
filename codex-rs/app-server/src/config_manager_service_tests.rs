@@ -163,6 +163,34 @@ async fn write_value_rejects_legacy_profile_selector() -> Result<()> {
 }
 
 #[tokio::test]
+async fn read_rejects_legacy_profile_tables() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[profiles.work]
+model = "gpt-work"
+"#,
+    )?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .read(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await
+        .expect_err("legacy profile table read should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("legacy config profiles are no longer supported by config/read"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_rejects_legacy_profile_table() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);
@@ -233,35 +261,6 @@ async fn batch_write_rejects_legacy_profile_selector() -> Result<()> {
         "{error}"
     );
     assert_eq!(std::fs::read_to_string(&path)?, "model = \"gpt-main\"\n");
-    Ok(())
-}
-
-#[tokio::test]
-async fn write_value_clears_legacy_profile_table() -> Result<()> {
-    let tmp = tempdir().expect("tempdir");
-    let path = tmp.path().join(CONFIG_TOML_FILE);
-    std::fs::write(
-        &path,
-        r#"[profiles.work]
-model = "gpt-work"
-"#,
-    )?;
-
-    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
-    let response = service
-        .write_value(ConfigValueWriteParams {
-            file_path: Some(path.display().to_string()),
-            key_path: "profiles.work".to_string(),
-            value: serde_json::Value::Null,
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await
-        .expect("legacy profile table clear should succeed");
-
-    assert_eq!(response.status, WriteStatus::Ok);
-    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
-    assert!(config.get("profiles").is_none());
     Ok(())
 }
 
@@ -366,33 +365,6 @@ async fn write_value_supports_custom_mcp_server_default_tool_approval_mode() -> 
         Some(&serde_json::json!("approve"))
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn read_omits_legacy_profile_config() -> Result<()> {
-    let tmp = tempdir().expect("tempdir");
-    std::fs::write(
-        tmp.path().join(CONFIG_TOML_FILE),
-        r#"profile = "work"
-
-[profiles.work]
-model = "gpt-work"
-"#,
-    )?;
-
-    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
-    let read = service
-        .read(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await
-        .expect("config read succeeds");
-
-    let config = serde_json::to_value(read.config).expect("config serializes");
-    assert!(config.get("profile").is_none());
-    assert!(config.get("profiles").is_none());
     Ok(())
 }
 

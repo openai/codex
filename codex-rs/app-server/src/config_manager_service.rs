@@ -65,6 +65,9 @@ pub(crate) enum ConfigManagerError {
         source: toml::de::Error,
     },
 
+    #[error("invalid configuration: {message}")]
+    InvalidConfig { message: String },
+
     #[error("{context}: {source}")]
     Anyhow {
         context: &'static str,
@@ -91,6 +94,12 @@ impl ConfigManagerError {
 
     fn toml(context: &'static str, source: toml::de::Error) -> Self {
         Self::Toml { context, source }
+    }
+
+    fn invalid_config(message: impl Into<String>) -> Self {
+        Self::InvalidConfig {
+            message: message.into(),
+        }
     }
 
     fn anyhow(context: &'static str, source: anyhow::Error) -> Self {
@@ -124,8 +133,9 @@ impl ConfigManager {
             })?,
         };
 
-        let effective = layers.effective_config();
+        reject_legacy_profile_read(&layers)?;
 
+        let effective = layers.effective_config();
         let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
@@ -239,21 +249,7 @@ impl ConfigManager {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
             if !value.is_null() {
-                match segments.as_slice() {
-                    [segment] if segment == "profile" => {
-                        return Err(ConfigManagerError::write(
-                            ConfigWriteErrorCode::ConfigValidationError,
-                            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
-                        ));
-                    }
-                    [segment, ..] if segment == "profiles" => {
-                        return Err(ConfigManagerError::write(
-                            ConfigWriteErrorCode::ConfigValidationError,
-                            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
-                        ));
-                    }
-                    _ => {}
-                }
+                reject_legacy_profile_write(&segments)?;
             }
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
@@ -397,6 +393,43 @@ async fn create_empty_user_layer(
         },
         toml_value,
     ))
+}
+
+fn reject_legacy_profile_read(layers: &ConfigLayerStack) -> Result<(), ConfigManagerError> {
+    let contains_legacy_profiles = layers
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .iter()
+        .any(|layer| legacy_profile_keys_present(&layer.config));
+    if !contains_legacy_profiles {
+        return Ok(());
+    }
+
+    Err(ConfigManagerError::invalid_config(
+        "legacy config profiles are no longer supported by config/read; use `--profile <name>` with `<name>.config.toml` instead",
+    ))
+}
+
+fn legacy_profile_keys_present(config: &TomlValue) -> bool {
+    config
+        .as_table()
+        .is_some_and(|table| table.contains_key("profile") || table.contains_key("profiles"))
+}
+
+fn reject_legacy_profile_write(segments: &[String]) -> Result<(), ConfigManagerError> {
+    match segments {
+        [segment] if segment == "profile" => Err(ConfigManagerError::write(
+            ConfigWriteErrorCode::ConfigValidationError,
+            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+        )),
+        [segment, ..] if segment == "profiles" => Err(ConfigManagerError::write(
+            ConfigWriteErrorCode::ConfigValidationError,
+            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+        )),
+        _ => Ok(()),
+    }
 }
 
 async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {

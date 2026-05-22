@@ -254,20 +254,8 @@ pub struct Config {
     #[serde(default)]
     pub apps: Option<AppsConfig>,
     pub desktop: Option<HashMap<String, JsonValue>>,
-    #[serde(default, flatten, deserialize_with = "deserialize_config_additional")]
+    #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
-}
-
-fn deserialize_config_additional<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, JsonValue>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let mut additional = HashMap::<String, JsonValue>::deserialize(deserializer)?;
-    additional.remove("profile");
-    additional.remove("profiles");
-    Ok(additional)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
