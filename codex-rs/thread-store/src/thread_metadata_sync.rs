@@ -278,7 +278,6 @@ impl ThreadMetadataSync {
                 RolloutItem::SessionMeta(_)
                 | RolloutItem::EventMsg(_)
                 | RolloutItem::ResponseItem(_)
-                | RolloutItem::UsageAttribution(_)
                 | RolloutItem::Compacted(_) => {}
             }
         }

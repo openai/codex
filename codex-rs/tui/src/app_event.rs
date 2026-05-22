@@ -371,10 +371,6 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
-    OpenUsage {
-        range: codex_app_server_protocol::UsageRange,
-    },
-
     FetchUsage {
         request_id: u64,
         range: codex_app_server_protocol::UsageRange,
@@ -382,7 +378,6 @@ pub(crate) enum AppEvent {
 
     UsageLoaded {
         request_id: u64,
-        range: codex_app_server_protocol::UsageRange,
         result: Result<codex_app_server_protocol::UsageReadResponse, String>,
     },
 

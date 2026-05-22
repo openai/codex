@@ -3019,8 +3019,6 @@ impl Session {
             occurred_at,
             token_usage.clone(),
         );
-        self.persist_rollout_items(&[RolloutItem::UsageAttribution(attribution.clone())])
-            .await;
         if let Some(state_db) = self.state_db()
             && let Err(err) = state_db
                 .record_usage_sample(&codex_state::UsageSample {

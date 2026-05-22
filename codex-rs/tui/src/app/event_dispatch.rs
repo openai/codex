@@ -436,18 +436,11 @@ impl App {
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
-            AppEvent::OpenUsage { range } => {
-                self.chat_widget.open_usage(range);
-            }
             AppEvent::FetchUsage { request_id, range } => {
                 self.fetch_usage(app_server, request_id, range);
             }
-            AppEvent::UsageLoaded {
-                request_id,
-                range,
-                result,
-            } => {
-                self.chat_widget.on_usage_loaded(request_id, range, result);
+            AppEvent::UsageLoaded { request_id, result } => {
+                self.chat_widget.on_usage_loaded(request_id, result);
             }
             AppEvent::FetchHooksList { cwd } => {
                 self.fetch_hooks_list(app_server, cwd);

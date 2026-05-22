@@ -238,6 +238,12 @@ impl StateRuntime {
                 logs_path.display(),
             );
         }
+        if let Err(err) = runtime.run_usage_startup_maintenance().await {
+            warn!(
+                "failed to run startup maintenance for usage data in state db at {}: {err}",
+                state_path.display(),
+            );
+        }
         Ok(runtime)
     }
 

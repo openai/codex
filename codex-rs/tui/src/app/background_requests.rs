@@ -142,11 +142,7 @@ impl App {
             let result = fetch_usage(request_handle, range)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::UsageLoaded {
-                request_id,
-                range,
-                result,
-            });
+            app_event_tx.send(AppEvent::UsageLoaded { request_id, result });
         });
     }
 

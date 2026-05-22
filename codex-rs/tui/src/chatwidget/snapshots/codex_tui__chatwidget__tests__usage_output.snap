@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-expression: "render_bottom_popup(&chat, 100)"
+expression: rendered
 ---
-Usage
+• Usage
+
 11% of your usage came from app "testmcp"
 Tool results stay in context until compaction; compact or disable sources you do not need.
 
@@ -16,5 +17,3 @@ code-review                9%
 
 Apps
 testmcp                   11%
-
-d to day | w to week

@@ -112,10 +112,10 @@ async fn plugins_popup_loading_state_snapshot() {
 }
 
 #[tokio::test]
-async fn usage_popup_snapshot() {
+async fn usage_output_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.open_usage(UsageRange::Day);
+    chat.add_usage_output();
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::FetchUsage {
@@ -125,12 +125,11 @@ async fn usage_popup_snapshot() {
     );
     chat.on_usage_loaded(
         /*request_id*/ 0,
-        UsageRange::Day,
         Ok(UsageReadResponse {
             report: UsageReport {
                 range: UsageRange::Day,
                 generated_at: 1_700_000_000,
-                tracked_from: Some(1_699_999_000),
+                tracked_from: Some(/*tracked_from*/ 1_699_999_000),
                 total_tokens: 100,
                 headline: Some(UsageHeadline {
                     entry: usage_entry(
@@ -184,7 +183,55 @@ async fn usage_popup_snapshot() {
         }),
     );
 
-    assert_chatwidget_snapshot!("usage_popup", render_bottom_popup(&chat, /*width*/ 100));
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output", rendered);
+}
+
+#[tokio::test]
+async fn usage_output_reports_unattributed_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_usage_output();
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Day,
+        })
+    );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Ok(UsageReadResponse {
+            report: UsageReport {
+                range: UsageRange::Day,
+                generated_at: 1_700_000_000,
+                tracked_from: Some(/*tracked_from*/ 1_699_999_000),
+                total_tokens: 100,
+                headline: None,
+                skills: Vec::new(),
+                subagents: Vec::new(),
+                apps: Vec::new(),
+                mcp_servers: Vec::new(),
+                plugins: Vec::new(),
+            },
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "• Usage\n\nNo attributed skills, subagents, apps, MCP servers, or plugins in this range.\n"
+                .to_string()
+        ]
+    );
 }
 
 #[tokio::test]

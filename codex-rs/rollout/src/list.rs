@@ -1135,9 +1135,6 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
-            RolloutItem::UsageAttribution(_) => {
-                // Not included in `head`; skip.
-            }
             RolloutItem::EventMsg(ev) => {
                 if let Some(preview) = event_msg_preview(&ev) {
                     if summary.preview.is_none() {
@@ -1195,7 +1192,6 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                 }
                 RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
-                | RolloutItem::UsageAttribution(_)
                 | RolloutItem::EventMsg(_) => {}
             }
         }

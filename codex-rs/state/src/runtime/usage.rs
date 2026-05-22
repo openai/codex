@@ -6,10 +6,14 @@ use crate::UsageReport;
 use crate::UsageSample;
 use codex_protocol::protocol::UsageContributorKind;
 
+const USAGE_RETENTION_DAYS: i64 = 14;
+const USAGE_RETENTION_SECONDS: i64 = USAGE_RETENTION_DAYS * 24 * 60 * 60;
+
 impl StateRuntime {
     pub async fn record_usage_sample(&self, sample: &UsageSample) -> anyhow::Result<()> {
         let usage = &sample.attribution;
         let token_usage = &usage.token_usage;
+        let retention_cutoff = usage_retention_cutoff(Utc::now().timestamp());
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
@@ -84,7 +88,24 @@ INSERT INTO usage_sample_contributors (
             .execute(&mut *tx)
             .await?;
         }
+        prune_usage_samples_before(retention_cutoff, &mut tx).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn run_usage_startup_maintenance(&self) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        prune_usage_samples_before(usage_retention_cutoff(Utc::now().timestamp()), &mut tx).await?;
+        tx.commit().await?;
+        // PASSIVE checkpoints copy whatever is immediately available and skip
+        // frames that would require waiting on active readers or writers.
+        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+            .execute(self.pool.as_ref())
+            .await?;
+        // Reclaim any free pages left by retention pruning when incremental auto-vacuum is active.
+        sqlx::query("PRAGMA incremental_vacuum")
+            .execute(self.pool.as_ref())
+            .await?;
         Ok(())
     }
 
@@ -172,8 +193,8 @@ ORDER BY attributed_tokens DESC, label ASC
         let rows = sqlx::query(
             r#"
 SELECT
-    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'subagent') AS label,
-    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'subagent') AS contributor_id,
+    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'unnamed') AS label,
+    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'unnamed') AS contributor_id,
     SUM(usage_samples.blended_tokens) AS attributed_tokens
 FROM usage_samples
 JOIN threads ON threads.id = usage_samples.thread_id
@@ -200,6 +221,21 @@ ORDER BY attributed_tokens DESC, label ASC
             })
             .collect()
     }
+}
+
+async fn prune_usage_samples_before(
+    cutoff_ts: i64,
+    tx: &mut SqliteConnection,
+) -> anyhow::Result<u64> {
+    let result = sqlx::query("DELETE FROM usage_samples WHERE occurred_at < ?")
+        .bind(cutoff_ts)
+        .execute(&mut *tx)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+fn usage_retention_cutoff(now: i64) -> i64 {
+    now.saturating_sub(USAGE_RETENTION_SECONDS)
 }
 
 fn usage_kind_key(kind: UsageContributorKind) -> &'static str {
@@ -271,7 +307,7 @@ mod tests {
             ThreadId::from_string("00000000-0000-0000-0000-000000000901").expect("valid thread id");
         let subagent_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000902").expect("valid thread id");
-        let now = 1_700_000_200;
+        let now = Utc::now().timestamp();
 
         runtime
             .upsert_thread(&test_thread_metadata(
@@ -407,6 +443,176 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn usage_report_labels_unnamed_subagents_as_unnamed() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let subagent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000905").expect("valid thread id");
+        let mut subagent_metadata =
+            test_thread_metadata(&codex_home, subagent_thread_id, codex_home.clone());
+        subagent_metadata.thread_source = Some(ThreadSource::Subagent);
+        runtime
+            .upsert_thread(&subagent_metadata)
+            .await
+            .expect("subagent thread insert should succeed");
+        let now = Utc::now().timestamp();
+
+        runtime
+            .record_usage_sample(&usage_sample(
+                subagent_thread_id,
+                "unnamed-subagent",
+                /*occurred_at*/ now,
+                TokenUsage {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 15,
+                },
+                Vec::new(),
+            ))
+            .await
+            .expect("subagent usage sample should persist");
+
+        let report = runtime
+            .read_usage_report(UsageRange::Day, now)
+            .await
+            .expect("usage report should load");
+
+        assert_eq!(
+            report.subagents,
+            vec![UsageEntry {
+                kind: UsageContributorKind::Subagent,
+                id: "unnamed".to_string(),
+                label: "unnamed".to_string(),
+                attributed_tokens: 15,
+                percent_of_usage: 100,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn record_usage_sample_prunes_samples_older_than_retention() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000903").expect("valid thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("thread insert should succeed");
+        let now = Utc::now().timestamp();
+
+        runtime
+            .record_usage_sample(&usage_sample(
+                thread_id,
+                "stale",
+                /*occurred_at*/ now - USAGE_RETENTION_SECONDS - 1,
+                TokenUsage {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 15,
+                },
+                vec![contributor(
+                    UsageContributorKind::Skill,
+                    "/skills/stale",
+                    "stale",
+                    /*attributed_tokens*/ 10,
+                )],
+            ))
+            .await
+            .expect("stale usage sample should persist then prune");
+        runtime
+            .record_usage_sample(&usage_sample(
+                thread_id,
+                "retained",
+                /*occurred_at*/ now - UsageRange::Week.seconds(),
+                TokenUsage {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 15,
+                },
+                vec![contributor(
+                    UsageContributorKind::Skill,
+                    "/skills/retained",
+                    "retained",
+                    /*attributed_tokens*/ 10,
+                )],
+            ))
+            .await
+            .expect("retained usage sample should persist");
+
+        assert_eq!(usage_sample_count(&runtime).await, 1);
+        assert_eq!(usage_contributor_count(&runtime).await, 1);
+    }
+
+    #[tokio::test]
+    async fn usage_startup_maintenance_prunes_stale_samples() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000904").expect("valid thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("thread insert should succeed");
+        let now = Utc::now().timestamp();
+        runtime
+            .record_usage_sample(&usage_sample(
+                thread_id,
+                "stale-after-write",
+                /*occurred_at*/ now,
+                TokenUsage {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 15,
+                },
+                vec![contributor(
+                    UsageContributorKind::Skill,
+                    "/skills/stale",
+                    "stale",
+                    /*attributed_tokens*/ 10,
+                )],
+            ))
+            .await
+            .expect("usage sample should persist");
+        sqlx::query("UPDATE usage_samples SET occurred_at = ? WHERE sample_id = ?")
+            .bind(/*value*/ now - USAGE_RETENTION_SECONDS - 1)
+            .bind("stale-after-write")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("usage sample should age");
+
+        runtime
+            .run_usage_startup_maintenance()
+            .await
+            .expect("usage startup maintenance should succeed");
+
+        assert_eq!(usage_sample_count(&runtime).await, 0);
+        assert_eq!(usage_contributor_count(&runtime).await, 0);
+    }
+
     fn usage_sample(
         thread_id: ThreadId,
         sample_id: &str,
@@ -443,5 +649,19 @@ mod tests {
             source_estimated_tokens: attributed_tokens,
             attributed_tokens,
         }
+    }
+
+    async fn usage_sample_count(runtime: &StateRuntime) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM usage_samples")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("usage sample count should load")
+    }
+
+    async fn usage_contributor_count(runtime: &StateRuntime) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM usage_sample_contributors")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("usage contributor count should load")
     }
 }

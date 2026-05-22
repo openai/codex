@@ -125,7 +125,6 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         // so they must rebuild context on their first child turn.
         RolloutItem::TurnContext(_) => preserve_reference_context_item,
         RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
-        RolloutItem::UsageAttribution(_) => false,
     }
 }
 

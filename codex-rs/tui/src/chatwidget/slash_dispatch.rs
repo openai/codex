@@ -383,7 +383,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Usage => {
-                self.open_usage(codex_app_server_protocol::UsageRange::Day);
+                self.add_usage_output();
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
